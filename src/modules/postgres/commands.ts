@@ -6,6 +6,7 @@ import { POSTGRES_KIND } from "./types";
 import { postgresApi } from "./api";
 import { usePostgresForm } from "./FormController";
 import { useActiveConnections } from "./useActiveConnections";
+import { emitSchemaEvent } from "./schema/events";
 
 interface SelectionApi {
   selectedConnectionId: string | null;
@@ -99,6 +100,47 @@ export function usePostgresCommands(selection: SelectionApi = NOOP_SELECTION) {
           } catch (e) {
             console.error("[argus] disconnect failed:", e);
           }
+        },
+      }),
+    );
+
+    function pickActiveConnection(): Connection | undefined {
+      const c = pickConnection();
+      if (!c) return undefined;
+      if (!isActive(c.id)) return undefined;
+      return c;
+    }
+
+    unregisters.push(
+      CommandRegistry.register({
+        id: "argus.schema.refresh",
+        label: "Schema: Refresh",
+        group: "Schema",
+        keywords: ["postgres", "reload", "catalog"],
+        run: () => {
+          const c = pickActiveConnection();
+          if (!c) {
+            console.warn("[argus] schema refresh: no active connection");
+            return;
+          }
+          emitSchemaEvent({ type: "invalidate", connectionId: c.id });
+        },
+      }),
+    );
+
+    unregisters.push(
+      CommandRegistry.register({
+        id: "argus.schema.filter",
+        label: "Schema: Filter Visible…",
+        group: "Schema",
+        keywords: ["postgres", "schemas", "filter", "show"],
+        run: () => {
+          const c = pickActiveConnection();
+          if (!c) {
+            console.warn("[argus] schema filter: no active connection");
+            return;
+          }
+          emitSchemaEvent({ type: "openPicker", connectionId: c.id });
         },
       }),
     );

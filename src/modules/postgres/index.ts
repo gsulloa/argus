@@ -13,3 +13,22 @@ export type {
   SslMode,
   TestResult,
 } from "./types";
+export { SchemaTree, SchemaToolbar } from "./schema/SchemaTree";
+export { useSchemaTree } from "./schema/useSchemaTree";
+export { useVisibleSchemas } from "./schema/useVisibleSchemas";
+export { schemaApi } from "./schema/api";
+export type {
+  ExtensionInfo,
+  FunctionInfo,
+  IndexInfo,
+  SchemaObjects,
+  SchemaSummary,
+  TableInfo,
+  TableKind,
+  TriggerEvent,
+  TriggerInfo,
+  TriggerTiming,
+  TypeInfo,
+  TypeKind,
+  ViewInfo,
+} from "./schema/types";

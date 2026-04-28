@@ -9,10 +9,11 @@ Plan de alto nivel de los `change` de OpenSpec que conforman la versión 1 (Post
 ## V1 — Postgres
 
 ```
-1. bootstrap-tauri-shell        ← propuesto, listo para apply
-2. add-postgres-connection
-3. browse-postgres-schema
-4. view-table-data
+1. bootstrap-tauri-shell        ✅ archivado
+2. add-postgres-connection      ✅ archivado
+3. browse-postgres-schema       ✅ archivado
+3.5. refine-schema-browser-ux   ✅ archivado (UX iteration sobre #3)
+4. view-table-data              ← siguiente
 5. edit-table-data
 6. run-sql
 7. query-history
@@ -21,16 +22,16 @@ Plan de alto nivel de los `change` de OpenSpec que conforman la versión 1 (Post
 
 Después del #5 ya tienes una herramienta utilizable para reemplazar TablePlus en tu uso diario.
 
-### 1. `bootstrap-tauri-shell` ✅ propuesto
+### 1. `bootstrap-tauri-shell` ✅ archivado
 
 **Meta**: Esqueleto Tauri 2 + React + Vite. Layout, paleta vacía, registry de conexiones, theming, atajos base.
 **Capacidades**: `app-shell`, `command-palette`, `connection-registry`.
 **Depende de**: nada.
-**Estado**: artefactos generados, falta `apply`.
+**Estado**: archivado en `openspec/changes/archive/2026-04-28-bootstrap-tauri-shell` (PR #2).
 
 ---
 
-### 2. `add-postgres-connection`
+### 2. `add-postgres-connection` ✅ archivado
 
 **Meta**: Crear/editar/borrar conexiones reales de Postgres. Test de conexión sincrónico. Toggle read-only por conexión.
 **Capacidades nuevas**: `postgres-connection` (módulo Postgres en `src/modules/postgres/` y `src-tauri/src/modules/postgres/`).
@@ -45,22 +46,25 @@ Después del #5 ya tienes una herramienta utilizable para reemplazar TablePlus e
 - UI: dialog desde el "+" del sidebar; estados loading/error/success en el test.
   **Out of scope**: SSH tunnel, certificados cliente, opciones avanzadas tipo `connect_timeout` (futuro change si hace falta).
   **Depende de**: 1.
+**Estado**: archivado en `openspec/changes/archive/2026-04-28-add-postgres-connection` (PR #4).
 
 ---
 
-### 3. `browse-postgres-schema`
+### 3. `browse-postgres-schema` ✅ archivado
 
-**Meta**: Sidebar muestra schemas → tablas, vistas, vistas materializadas, funciones, secuencias, tipos, extensiones. Filtrable + selector de schemas visibles.
+**Meta**: Sidebar muestra schemas → tablas, vistas, vistas materializadas, funciones, tipos, extensiones (sequences quedaron fuera tras `refine-schema-browser-ux`). Filtrable + selector de schemas visibles.
 **Capacidades nuevas**: `postgres-schema-browser`.
 **Capacidades modificadas**: `app-shell` (sidebar admite secciones jerárquicas con búsqueda).
 **Incluye**:
 
-- Comando `postgres.listSchemas(connectionId)`.
-- Comando `postgres.listObjects(connectionId, schema)` → tablas, vistas, mat-views, funciones, secuencias, tipos, triggers, índices.
-- UI: árbol colapsable con iconos por tipo, search box arriba, multi-select de schemas a mostrar (persiste en `settings`).
-- Click en un objeto abre una pestaña vacía en el área central — el contenido vive en el siguiente change.
+- Comando `postgres_list_schemas(id)`.
+- Comando `postgres_list_objects(id, schema)` → tablas, vistas, mat-views, funciones, tipos, extensiones, triggers, índices.
+- UI: árbol bajo cada conexión activa con dos grupos planos `Data` y `Structure`, search box, picker de schemas visibles (persiste en `settings`).
+- Click en un objeto abre una pestaña placeholder en el área central — el viewer real vive en changes posteriores.
+- Timeout 15s con `pg_cancel_backend` real + auto-retry una vez en SQLSTATE 57014, botón manual de retry para el resto (de `refine-schema-browser-ux`).
   **Out of scope**: edición del schema (DDL), diff de schemas, ER diagrams.
   **Depende de**: 2.
+**Estado**: archivado en `openspec/changes/archive/2026-04-28-browse-postgres-schema` y refinado en `openspec/changes/archive/2026-04-28-refine-schema-browser-ux`.
 
 ---
 
