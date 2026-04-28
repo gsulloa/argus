@@ -10,8 +10,8 @@ use tracing::error;
 use tracing_subscriber::EnvFilter;
 
 use crate::modules::postgres::{
-    postgres_connect, postgres_disconnect, postgres_list_active, postgres_parse_url,
-    postgres_test_connection, PgPoolRegistry,
+    postgres_connect, postgres_disconnect, postgres_list_active, postgres_list_objects,
+    postgres_list_schemas, postgres_parse_url, postgres_test_connection, PgPoolRegistry,
 };
 use crate::platform::{
     connections::{
@@ -88,6 +88,8 @@ pub fn run() {
             postgres_disconnect,
             postgres_list_active,
             postgres_parse_url,
+            postgres_list_schemas,
+            postgres_list_objects,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

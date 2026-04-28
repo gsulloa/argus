@@ -1,0 +1,62 @@
+.root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 32px;
+  background: var(--bg);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  text-align: center;
+  max-width: 540px;
+  padding: 24px 32px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
+.kind {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-subtle);
+  font-weight: 600;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.schema {
+  color: var(--text-muted);
+}
+
+.name {
+  color: var(--text);
+}
+
+.signature {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  margin-left: 4px;
+}
+
+.connection {
+  font-size: 11px;
+  color: var(--text-subtle);
+}
+
+.message {
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}

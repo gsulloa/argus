@@ -8,6 +8,8 @@ import {
   POSTGRES_KIND,
   PostgresIcon,
   postgresApi,
+  SchemaToolbar,
+  SchemaTree,
   useActiveConnections,
   usePostgresForm,
 } from "@/modules/postgres";
@@ -107,27 +109,34 @@ function ConnectionRow({ connection }: { connection: Connection }) {
     <>
       <ContextMenu.Root>
         <ContextMenu.Trigger asChild>
-          <button
-            type="button"
-            className={styles.item}
-            onClick={toggleConnect}
-            title={active ? "Disconnect" : "Connect"}
-          >
-            <span className={styles.icon}>
-              {isPostgres ? (
-                <PostgresIcon size={14} />
-              ) : (
-                <span className={styles.itemKind}>{connection.kind}</span>
-              )}
-            </span>
-            <span className={styles.itemName}>{connection.name}</span>
-            {readOnly && <span className={styles.roBadge}>RO</span>}
-            <span
-              className={styles.activeDot}
-              data-active={active}
-              aria-label={active ? "active" : "inactive"}
-            />
-          </button>
+          <div className={styles.row}>
+            <button
+              type="button"
+              className={styles.item}
+              onClick={toggleConnect}
+              title={active ? "Disconnect" : "Connect"}
+            >
+              <span className={styles.icon}>
+                {isPostgres ? (
+                  <PostgresIcon size={14} />
+                ) : (
+                  <span className={styles.itemKind}>{connection.kind}</span>
+                )}
+              </span>
+              <span className={styles.itemName}>{connection.name}</span>
+              {readOnly && <span className={styles.roBadge}>RO</span>}
+              <span
+                className={styles.activeDot}
+                data-active={active}
+                aria-label={active ? "active" : "inactive"}
+              />
+            </button>
+            {isPostgres && active && (
+              <span className={styles.rowToolbar}>
+                <SchemaToolbar connectionId={connection.id} />
+              </span>
+            )}
+          </div>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
           <ContextMenu.Content className={styles.contextMenu}>
@@ -152,6 +161,12 @@ function ConnectionRow({ connection }: { connection: Connection }) {
           </ContextMenu.Content>
         </ContextMenu.Portal>
       </ContextMenu.Root>
+
+      {isPostgres && active && (
+        <div className={styles.subtree}>
+          <SchemaTree connectionId={connection.id} />
+        </div>
+      )}
 
       <Dialog.Root open={confirmDelete} onOpenChange={setConfirmDelete}>
         <Dialog.Portal>

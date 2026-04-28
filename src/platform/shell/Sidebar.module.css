@@ -64,6 +64,31 @@
   padding: 0 4px 8px;
 }
 
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 4px;
+  border-radius: 4px;
+}
+.row:hover .rowToolbar {
+  opacity: 1;
+}
+.rowToolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 100ms;
+  flex-shrink: 0;
+}
+
+.subtree {
+  padding-left: 12px;
+  padding-right: 4px;
+  padding-bottom: 6px;
+}
+
 .item {
   display: flex;
   align-items: center;

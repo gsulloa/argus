@@ -10,7 +10,7 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::modules::postgres::params::PostgresParams;
+use crate::modules::postgres::params::{PostgresParams, SslMode};
 use crate::modules::postgres::tls::{apply_tls_to_pg_config, client_config_for};
 use crate::platform::{connections, secrets};
 
@@ -25,6 +25,10 @@ pub(crate) struct ActivePool {
     pub server_version: String,
     pub read_only: bool,
     pub connected_at_unix_ms: i64,
+    /// Stored so that the schema browser can rebuild a TLS connector for the
+    /// `pg_cancel_backend`-style cancellation path without re-reading params
+    /// from SQLite. Cheap copy (one-byte enum) per active connection.
+    pub(super) sslmode: SslMode,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,6 +115,7 @@ impl PgPoolRegistry {
             server_version: server_version.clone(),
             read_only: params.read_only,
             connected_at_unix_ms: now_ms,
+            sslmode: params.sslmode,
         };
         let mut guard = self.pools.write().await;
         // Re-check in case of concurrent connect.
@@ -130,6 +135,35 @@ impl PgPoolRegistry {
     /// Remove the pool. Idle connections close on drop; in-flight ones complete.
     pub async fn disconnect(&self, id: &Uuid) -> bool {
         self.pools.write().await.remove(id).is_some()
+    }
+
+    /// Borrow a client from the registered pool. `pub(crate)` so only modules
+    /// inside `modules::postgres` can use it (the schema browser shares one
+    /// client across multiple introspection queries). External callers must go
+    /// through `execute_query` / `execute_mutation`, which preserve the
+    /// read-only mutation gate.
+    pub(crate) async fn acquire(&self, id: &Uuid) -> AppResult<deadpool_postgres::Object> {
+        let guard = self.pools.read().await;
+        let entry = guard
+            .get(id)
+            .ok_or_else(|| AppError::NotFound(format!("no active pool for {id}")))?;
+        entry
+            .pool
+            .get()
+            .await
+            .map_err(|e| AppError::postgres(format!("acquire from pool: {e}")))
+    }
+
+    /// Read the stored `SslMode` for an active pool. Used by the schema
+    /// browser's cancellation path: a `pg_cancel_backend`-style cancel opens
+    /// a fresh short-lived connection, which needs a TLS connector that
+    /// matches the original connection's mode.
+    pub(crate) async fn sslmode_for(&self, id: &Uuid) -> AppResult<SslMode> {
+        let guard = self.pools.read().await;
+        let entry = guard
+            .get(id)
+            .ok_or_else(|| AppError::NotFound(format!("no active pool for {id}")))?;
+        Ok(entry.sslmode)
     }
 
     /// Run a SELECT-style query against the pool. Always allowed.
