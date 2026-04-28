@@ -23,7 +23,8 @@
       "@/modules/*": ["src/modules/*"],
       "@/components/*": ["src/components/*"],
       "@/app/*": ["src/app/*"],
-      "@/styles/*": ["src/styles/*"]
+      "@/styles/*": ["src/styles/*"],
+      "@/assets/*": ["src/assets/*"]
     }
   },
   "include": ["src"],
