@@ -1,4 +1,5 @@
 pub mod error;
+pub mod modules;
 pub mod platform;
 
 use std::sync::Mutex;
@@ -8,6 +9,10 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
+use crate::modules::postgres::{
+    postgres_connect, postgres_disconnect, postgres_list_active, postgres_parse_url,
+    postgres_test_connection, PgPoolRegistry,
+};
 use crate::platform::{
     connections::{
         connections_create, connections_delete, connections_get_secret, connections_list,
@@ -66,6 +71,8 @@ pub fn run() {
                 }
             }
 
+            app.manage(PgPoolRegistry::new());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -76,6 +83,11 @@ pub fn run() {
             connections_get_secret,
             settings_get,
             settings_set,
+            postgres_test_connection,
+            postgres_connect,
+            postgres_disconnect,
+            postgres_list_active,
+            postgres_parse_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

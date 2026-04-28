@@ -22,13 +22,19 @@ import {
   useCommandHotkeys,
   usePalette,
 } from "@/platform/command-palette";
+import { ConnectionsProvider } from "@/platform/connection-registry/useConnections";
+import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
 
 export function App() {
   return (
     <ThemeProvider>
       <PaletteProvider>
         <TabsProvider>
-          <Shell />
+          <ConnectionsProvider>
+            <PostgresFormProvider>
+              <Shell />
+            </PostgresFormProvider>
+          </ConnectionsProvider>
         </TabsProvider>
       </PaletteProvider>
     </ThemeProvider>
@@ -48,12 +54,18 @@ function ShellMain() {
     <>
       <ShortcutBindings />
       <DevCommands />
+      <PostgresCommands />
       <BootstrapTabs />
       <TabStrip />
       <TabContent />
       <Palette />
     </>
   );
+}
+
+function PostgresCommands() {
+  usePostgresCommands();
+  return null;
 }
 
 function ShortcutBindings() {

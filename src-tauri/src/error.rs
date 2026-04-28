@@ -1,6 +1,12 @@
 use serde::Serialize;
 use thiserror::Error;
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PostgresErrorBody {
+    pub code: Option<String>,
+    pub message: String,
+}
+
 #[derive(Debug, Error, Serialize)]
 #[serde(tag = "kind", content = "message")]
 pub enum AppError {
@@ -18,6 +24,25 @@ pub enum AppError {
 
     #[error("internal: {0}")]
     Internal(String),
+
+    #[error("postgres: {}", .0.message)]
+    Postgres(PostgresErrorBody),
+}
+
+impl AppError {
+    pub fn postgres(message: impl Into<String>) -> Self {
+        AppError::Postgres(PostgresErrorBody {
+            code: None,
+            message: message.into(),
+        })
+    }
+
+    pub fn postgres_with_code(code: impl Into<String>, message: impl Into<String>) -> Self {
+        AppError::Postgres(PostgresErrorBody {
+            code: Some(code.into()),
+            message: message.into(),
+        })
+    }
 }
 
 impl From<rusqlite::Error> for AppError {
@@ -44,6 +69,19 @@ impl From<keyring::Error> for AppError {
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
         AppError::Storage(format!("io: {e}"))
+    }
+}
+
+impl From<tokio_postgres::Error> for AppError {
+    fn from(e: tokio_postgres::Error) -> Self {
+        let code = e
+            .code()
+            .map(|c| c.code().to_string())
+            .or_else(|| e.as_db_error().map(|d| d.code().code().to_string()));
+        AppError::Postgres(PostgresErrorBody {
+            code,
+            message: e.to_string(),
+        })
     }
 }
 

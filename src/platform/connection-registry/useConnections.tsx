@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { connectionsApi } from "./api";
 import type { Connection, ConnectionInput, ConnectionUpdate } from "./types";
 
@@ -9,7 +17,19 @@ function isTauriRuntime() {
   );
 }
 
-export function useConnections() {
+interface ConnectionsContextValue {
+  items: Connection[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => Promise<void>;
+  create: (input: ConnectionInput) => Promise<Connection>;
+  update: (id: string, patch: ConnectionUpdate) => Promise<Connection>;
+  remove: (id: string) => Promise<void>;
+}
+
+const Ctx = createContext<ConnectionsContextValue | null>(null);
+
+export function ConnectionsProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<Connection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,5 +82,18 @@ export function useConnections() {
     [refresh],
   );
 
-  return { items, loading, error, refresh, create, update, remove };
+  const value = useMemo(
+    () => ({ items, loading, error, refresh, create, update, remove }),
+    [items, loading, error, refresh, create, update, remove],
+  );
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}
+
+export function useConnections(): ConnectionsContextValue {
+  const v = useContext(Ctx);
+  if (!v) {
+    throw new Error("useConnections must be used within ConnectionsProvider");
+  }
+  return v;
 }
