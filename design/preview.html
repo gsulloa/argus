@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Argus — Design System Preview</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" />
+    <style>
+      :root[data-theme="dark"] {
+        --canvas:#0b0b0f; --elevated:#15151b; --surface:#1c1c24; --surface-2:#23232c;
+        --text:#f2f3f7; --text-muted:#a0a2ad; --text-subtle:#6b6e7b; --text-inverse:#0b0b0f;
+        --border:#23232c; --border-strong:#2e2f3a; --hairline:rgba(255,255,255,.04);
+        --accent:#a855f7; --accent-hover:#c084fc; --accent-soft:rgba(168,85,247,.12); --accent-glow:rgba(168,85,247,.18);
+        --danger:#f87171; --warning:#fbbf24; --success:#4ade80; --info:#60a5fa;
+        --syntax-keyword:#c084fc; --syntax-string:#86efac; --syntax-number:#f2f3f7; --syntax-comment:#6b6e7b; --syntax-fn:#93c5fd;
+        --shadow-lg:0 24px 64px rgba(0,0,0,.6);
+      }
+      :root[data-theme="light"] {
+        --canvas:#fafaf9; --elevated:#fff; --surface:#fff; --surface-2:#f4f4f3;
+        --text:#0f0f12; --text-muted:#5b5d68; --text-subtle:#8d8f9b; --text-inverse:#fff;
+        --border:#e7e7e4; --border-strong:#d4d4d0; --hairline:rgba(0,0,0,.04);
+        --accent:#7c3aed; --accent-hover:#6d28d9; --accent-soft:rgba(124,58,237,.10); --accent-glow:rgba(124,58,237,.14);
+        --danger:#dc2626; --warning:#d97706; --success:#16a34a; --info:#2563eb;
+        --syntax-keyword:#7c3aed; --syntax-string:#15803d; --syntax-number:#0f0f12; --syntax-comment:#8d8f9b; --syntax-fn:#2563eb;
+        --shadow-lg:0 24px 64px rgba(0,0,0,.08);
+      }
+      * { box-sizing:border-box }
+      html,body { margin:0; padding:0 }
+      body {
+        font-family:"Geist",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+        font-size:13px; line-height:1.45; color:var(--text); background:var(--canvas);
+        -webkit-font-smoothing:antialiased; font-feature-settings:"tnum" on,"ss01" on;
+      }
+      .mono { font-family:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace; font-feature-settings:"zero" on }
+      .page { max-width:1280px; margin:0 auto; padding:64px 32px 96px }
+      .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:56px; gap:24px }
+      .brand { display:flex; align-items:center; gap:12px }
+      .brand-mark { width:32px; height:32px; flex-shrink:0 }
+      .brand-name { font-size:22px; font-weight:600; letter-spacing:-.02em }
+      .brand-sub { font-size:12px; color:var(--text-muted); margin-top:2px }
+      .theme-toggle {
+        display:inline-flex; align-items:center; gap:6px;
+        background:var(--surface); border:1px solid var(--border);
+        border-radius:5px; padding:6px 10px; color:var(--text-muted);
+        cursor:pointer; font:inherit; font-size:12px;
+      }
+      .theme-toggle:hover { color:var(--text); border-color:var(--border-strong) }
+      h2.section {
+        font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.14em;
+        color:var(--text-subtle); margin:80px 0 16px;
+        padding-bottom:12px; border-bottom:1px solid var(--border);
+      }
+      h2.section:first-of-type { margin-top:24px }
+      p.lede { color:var(--text-muted); font-size:14px; max-width:64ch; margin:0 0 20px }
+      .small { font-size:12px; color:var(--text-muted) }
+      .hero { display:grid; grid-template-columns:1.1fr 1fr; gap:48px; align-items:center; padding:48px 0 24px }
+      .hero-display { font-size:56px; font-weight:600; letter-spacing:-.035em; line-height:1.02; margin:0 0 16px }
+      .hero-display em { font-style:normal; color:var(--accent) }
+      .hero-tag { font-size:15px; color:var(--text-muted); max-width:50ch; line-height:1.5 }
+      .hero-mark { display:flex; align-items:center; justify-content:center; position:relative }
+      .hero-mark svg { width:220px; height:220px; filter:drop-shadow(0 24px 64px rgba(168,85,247,.25)) }
+      .hero-mark::after {
+        content:""; position:absolute; inset:-40px;
+        background:radial-gradient(circle at center,var(--accent-glow),transparent 60%);
+        z-index:-1; pointer-events:none;
+      }
+      .swatches { display:grid; grid-template-columns:repeat(6,1fr); gap:10px }
+      .swatch { background:var(--surface); border:1px solid var(--border); border-radius:5px; padding:12px }
+      .swatch-chip { height:56px; border-radius:3px; border:1px solid var(--hairline); margin-bottom:10px }
+      .swatch-name { font-size:11px; font-weight:500; margin-bottom:2px }
+      .swatch-hex { font-family:"Geist Mono",monospace; font-size:11px; color:var(--text-muted) }
+      .specimen { background:var(--elevated); border:1px solid var(--border); border-radius:8px; padding:24px; margin-bottom:12px }
+      .specimen-label {
+        font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.14em;
+        color:var(--text-subtle); margin-bottom:8px;
+      }
+      .specimen-row {
+        display:flex; align-items:baseline; justify-content:space-between; gap:24px;
+        padding:6px 0; border-bottom:1px solid var(--hairline);
+      }
+      .specimen-row:last-child { border-bottom:0 }
+      .specimen-row .meta { font-family:"Geist Mono",monospace; font-size:11px; color:var(--text-subtle); white-space:nowrap }
+      .components-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:16px }
+      .component-card { background:var(--elevated); border:1px solid var(--border); border-radius:8px; padding:20px }
+      .component-card h4 {
+        font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.14em;
+        color:var(--text-subtle); margin:0 0 14px;
+      }
+      .row-stack { display:flex; flex-wrap:wrap; gap:8px; align-items:center }
+      .btn {
+        font:inherit; font-size:13px; font-weight:500; padding:6px 12px;
+        border-radius:5px; border:1px solid transparent; cursor:pointer;
+        display:inline-flex; align-items:center; gap:6px; transition:background 80ms ease-out;
+      }
+      .btn-primary { background:var(--accent); color:white; border-color:var(--accent) }
+      .btn-primary:hover { background:var(--accent-hover); border-color:var(--accent-hover) }
+      .btn-secondary { background:var(--surface); color:var(--text); border-color:var(--border-strong) }
+      .btn-secondary:hover { background:var(--surface-2) }
+      .btn-ghost { background:transparent; color:var(--text-muted) }
+      .btn-ghost:hover { background:var(--surface); color:var(--text) }
+      .btn-danger { background:transparent; color:var(--danger); border-color:var(--border-strong) }
+      .btn-danger:hover { background:rgba(248,113,113,.08) }
+      .input {
+        font:inherit; font-size:13px; background:var(--canvas); border:1px solid var(--border-strong);
+        border-radius:5px; padding:6px 10px; color:var(--text); width:100%; outline:none;
+      }
+      .input:focus-visible { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft) }
+      .input-label {
+        font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:.1em;
+        color:var(--text-subtle); display:block; margin-bottom:4px;
+      }
+      .pill {
+        display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:500;
+        padding:2px 8px; border-radius:999px; line-height:1.4;
+      }
+      .pill-success { background:rgba(74,222,128,.10); color:var(--success) }
+      .pill-warning { background:rgba(251,191,36,.10); color:var(--warning) }
+      .pill-danger { background:rgba(248,113,113,.10); color:var(--danger) }
+      .pill-info { background:rgba(96,165,250,.10); color:var(--info) }
+      .pill-neutral { background:var(--surface-2); color:var(--text-muted); border:1px solid var(--border) }
+      .mockup-frame {
+        background:var(--elevated); border-radius:12px; border:1px solid var(--border);
+        overflow:hidden; box-shadow:var(--shadow-lg);
+      }
+      .mockup-titlebar {
+        background:var(--surface); height:36px; display:flex; align-items:center;
+        padding:0 12px; border-bottom:1px solid var(--border); gap:10px;
+      }
+      .traffic { display:flex; gap:6px }
+      .traffic span { width:11px; height:11px; border-radius:50%; background:var(--surface-2) }
+      .traffic span:nth-child(1) { background:#ff5f56 }
+      .traffic span:nth-child(2) { background:#ffbd2e }
+      .traffic span:nth-child(3) { background:#27c93f }
+      .titlebar-title { font-size:12px; color:var(--text-muted); margin:0 auto }
+      .titlebar-title strong { color:var(--text); font-weight:500 }
+      .mockup-body { display:grid; grid-template-columns:220px 1fr 280px; height:560px }
+      .sidebar { background:var(--canvas); border-right:1px solid var(--border); display:flex; flex-direction:column }
+      .sidebar-header { padding:12px 14px 8px; display:flex; align-items:center; justify-content:space-between }
+      .sidebar-title {
+        font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.16em;
+        color:var(--text-subtle);
+      }
+      .icon-btn {
+        background:transparent; border:0; color:var(--text-subtle);
+        cursor:pointer; padding:2px; border-radius:3px; display:inline-flex;
+      }
+      .icon-btn:hover { background:var(--surface-2); color:var(--text) }
+      .sidebar-section { padding:4px 6px }
+      .sidebar-group { font-size:11px; color:var(--text-subtle); padding:6px 8px 4px; font-weight:500 }
+      .conn {
+        display:flex; align-items:center; gap:8px; padding:5px 8px;
+        border-radius:4px; font-size:12.5px; cursor:pointer; position:relative; color:var(--text);
+      }
+      .conn:hover { background:var(--surface) }
+      .conn.active { background:var(--accent-soft); color:var(--text) }
+      .conn.active::before {
+        content:""; position:absolute; left:-6px; top:4px; bottom:4px;
+        width:2px; background:var(--accent); border-radius:2px;
+        box-shadow:0 0 12px var(--accent-glow);
+      }
+      .conn .dot { width:6px; height:6px; border-radius:50%; flex-shrink:0 }
+      .conn .dot.green { background:var(--success); box-shadow:0 0 6px rgba(74,222,128,.6) }
+      .conn .dot.amber { background:var(--warning) }
+      .conn .dot.gray { background:var(--text-subtle) }
+      .conn .name { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+      .conn .meta { font-family:"Geist Mono",monospace; font-size:10px; color:var(--text-subtle) }
+      .main { display:flex; flex-direction:column; background:var(--canvas); min-width:0 }
+      .tabstrip { height:32px; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:stretch }
+      .tab {
+        display:inline-flex; align-items:center; gap:8px; padding:0 12px;
+        font-size:12px; color:var(--text-muted);
+        border-right:1px solid var(--border); cursor:pointer; position:relative;
+      }
+      .tab .x { opacity:0; font-size:14px; line-height:1; color:var(--text-subtle) }
+      .tab:hover .x { opacity:1 }
+      .tab.active { background:var(--canvas); color:var(--text) }
+      .tab.active::after {
+        content:""; position:absolute; left:0; right:0; bottom:-1px;
+        height:1px; background:var(--accent); box-shadow:0 0 10px var(--accent-glow);
+      }
+      .tab .icon { color:var(--text-subtle) }
+      .editor {
+        background:var(--canvas); padding:14px 16px 12px; border-bottom:1px solid var(--border);
+        font-family:"Geist Mono",monospace; font-size:12.5px; line-height:1.6; color:var(--text);
+      }
+      .editor .ln { color:var(--text-subtle); display:inline-block; width:22px; user-select:none }
+      .editor .kw { color:var(--syntax-keyword) }
+      .editor .str { color:var(--syntax-string) }
+      .editor .num { color:var(--syntax-number) }
+      .editor .com { color:var(--syntax-comment) }
+      .editor .fn { color:var(--syntax-fn) }
+      .results-toolbar {
+        display:flex; align-items:center; justify-content:space-between;
+        padding:6px 14px; border-bottom:1px solid var(--border); background:var(--canvas);
+      }
+      .results-meta { font-family:"Geist Mono",monospace; font-size:11px; color:var(--text-muted) }
+      .results-meta strong { color:var(--text); font-weight:500 }
+      .data-table { flex:1; overflow:auto; background:var(--canvas) }
+      .data-table table { width:100%; border-collapse:collapse; font-size:12px }
+      .data-table th {
+        position:sticky; top:0; background:var(--surface); text-align:left;
+        font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+        color:var(--text-muted); padding:6px 12px;
+        border-bottom:1px solid var(--border); border-right:1px solid var(--border); white-space:nowrap;
+      }
+      .data-table td {
+        padding:5px 12px; border-bottom:1px solid var(--hairline); border-right:1px solid var(--hairline);
+        font-feature-settings:"tnum" on; white-space:nowrap;
+      }
+      .data-table .num,.data-table .id-cell,.data-table .ts {
+        font-family:"Geist Mono",monospace; font-size:11.5px;
+      }
+      .data-table .num { text-align:right }
+      .data-table .id-cell { color:var(--text-subtle) }
+      .data-table .ts { color:var(--text-muted) }
+      .data-table tr.row-active { background:var(--accent-soft); position:relative }
+      .data-table tr.row-active td:first-child::before {
+        content:""; position:absolute; left:0; top:0; bottom:0; width:2px;
+        background:var(--accent); box-shadow:0 0 14px var(--accent-glow);
+      }
+      .data-table tr:hover:not(.row-active) { background:var(--surface) }
+      .null { color:var(--text-subtle); font-style:italic }
+      .inspector { background:var(--canvas); border-left:1px solid var(--border); padding:14px; overflow:auto }
+      .inspector h4 {
+        font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.16em;
+        color:var(--text-subtle); margin:0 0 10px;
+      }
+      .inspector h3 { font-size:14px; font-weight:600; margin:0 0 4px; letter-spacing:-.01em }
+      .inspector .breadcrumb {
+        font-family:"Geist Mono",monospace; font-size:11px;
+        color:var(--text-muted); margin-bottom:18px;
+      }
+      .inspector .breadcrumb .sep { color:var(--text-subtle); margin:0 4px }
+      .inspector-section { margin-top:20px }
+      .col-row {
+        display:grid; grid-template-columns:1fr auto; gap:8px; padding:6px 0;
+        border-bottom:1px solid var(--hairline); font-size:12px;
+      }
+      .col-row:last-child { border-bottom:0 }
+      .col-row .col-name { font-family:"Geist Mono",monospace; font-size:12px; color:var(--text) }
+      .col-row .col-name .pk { color:var(--accent); margin-right:6px; font-weight:600 }
+      .col-row .col-meta { font-family:"Geist Mono",monospace; font-size:11px; color:var(--text-subtle) }
+      .col-row .col-meta .nullable { color:var(--warning) }
+      .statusbar {
+        height:24px; background:var(--surface); border-top:1px solid var(--border);
+        display:flex; align-items:center; padding:0 12px; gap:16px;
+        font-size:11px; font-family:"Geist Mono",monospace; color:var(--text-muted);
+      }
+      .statusbar .item { display:inline-flex; align-items:center; gap:6px }
+      .statusbar .spacer { flex:1 }
+      .statusbar .item .dot {
+        width:6px; height:6px; border-radius:50%;
+        background:var(--success); box-shadow:0 0 6px rgba(74,222,128,.5);
+      }
+      .palette {
+        background:var(--elevated); border:1px solid var(--border-strong);
+        border-radius:10px; max-width:560px; margin:0 auto;
+        overflow:hidden; box-shadow:var(--shadow-lg);
+      }
+      .palette-input {
+        padding:14px 16px; font-size:14px; border-bottom:1px solid var(--border);
+        display:flex; align-items:center; gap:10px;
+      }
+      .palette-input .prompt { color:var(--accent); font-family:"Geist Mono",monospace }
+      .palette-input input { flex:1; background:transparent; border:0; outline:0; color:var(--text); font:inherit }
+      .palette-input .kbd {
+        font-family:"Geist Mono",monospace; font-size:11px; background:var(--surface);
+        border:1px solid var(--border); padding:2px 6px; border-radius:3px; color:var(--text-muted);
+      }
+      .palette-list { padding:4px }
+      .palette-row {
+        display:flex; align-items:center; gap:12px; padding:8px 12px;
+        font-size:13px; border-radius:6px; cursor:pointer;
+      }
+      .palette-row.active { background:var(--accent-soft); position:relative }
+      .palette-row.active::before {
+        content:""; position:absolute; left:4px; top:8px; bottom:8px;
+        width:2px; background:var(--accent); border-radius:2px;
+      }
+      .palette-row .icon { color:var(--text-muted) }
+      .palette-row.active .icon { color:var(--accent) }
+      .palette-row .label { flex:1 }
+      .palette-row .label mark { background:transparent; color:var(--accent); font-weight:600 }
+      .palette-row .group { font-size:11px; color:var(--text-subtle); font-family:"Geist Mono",monospace }
+      .cards-row { display:grid; grid-template-columns:repeat(4,1fr); gap:10px }
+      .stat-card {
+        background:var(--elevated); border:1px solid var(--border);
+        border-radius:6px; padding:12px 14px;
+      }
+      .stat-card .label {
+        font-size:10px; text-transform:uppercase; letter-spacing:.16em;
+        color:var(--text-subtle); font-weight:500;
+      }
+      .stat-card .value {
+        font-family:"Geist Mono",monospace; font-size:22px;
+        font-weight:500; margin-top:4px;
+      }
+      .stat-card .delta { font-size:11px; margin-top:2px }
+      .delta-up { color:var(--success) }
+      .delta-down { color:var(--danger) }
+      .alert {
+        border:1px solid var(--border); border-left:3px solid; background:var(--surface);
+        padding:10px 14px; border-radius:5px; font-size:12.5px; margin-top:8px;
+        display:flex; gap:10px; align-items:flex-start;
+      }
+      .alert.alert-info { border-left-color:var(--info) }
+      .alert.alert-warning { border-left-color:var(--warning) }
+      .alert .alert-title { font-weight:500 }
+      .alert .alert-body { color:var(--text-muted); margin-top:2px }
+      .scale-row {
+        display:flex; align-items:center; gap:16px;
+        padding:6px 0; border-bottom:1px solid var(--hairline);
+      }
+      .scale-row:last-child { border-bottom:0 }
+      .scale-token { width:80px; font-family:"Geist Mono",monospace; font-size:11px; color:var(--text-muted) }
+      .scale-bar { height:6px; background:var(--accent); border-radius:1px }
+      .footer {
+        margin-top:80px; padding-top:24px; border-top:1px solid var(--border);
+        font-size:11px; color:var(--text-subtle); font-family:"Geist Mono",monospace;
+        display:flex; justify-content:space-between;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="page-header">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+            <defs><linearGradient id="g1" x1="263" y1="463" x2="826" y2="494" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#AA41F6"/><stop offset="1" stop-color="#D370FF"/></linearGradient></defs>
+            <path fill="url(#g1)" d="M513 178c5 7 15 28 19 36l37 72c41 81 82 162 123 243l83 167 26 53c4 8 10 19 13 27v1l-1 1c-2 0-18-6-21-8l-73-26-147-52-36-13c-8-3-18-6-25-9l-6 2c-53 20-108 39-161 60-26 9-53 19-79 29-7 3-15 6-22 8-7 3-14 5-21 8-3 1-7 3-11 4l-1-1 1-1c1-2 5-11 7-13l14-29 49-100C338 522 394 410 451 299c14-27 27-53 41-80 2-3 13-26 15-28z"/>
+          </svg>
+          <div>
+            <div class="brand-name">Argus</div>
+            <div class="brand-sub">Design system preview</div>
+          </div>
+        </div>
+        <button class="theme-toggle" id="theme-toggle">
+          <span id="theme-icon">◐</span>
+          <span id="theme-label">Dark</span>
+        </button>
+      </header>
+
+      <section class="hero">
+        <div>
+          <h1 class="hero-display">Watchful precision.<br><em>One hundred eyes</em><br>on your data.</h1>
+          <p class="hero-tag">Argus inspects and edits data across Postgres, DynamoDB, and CloudWatch from a single desktop. The design system below makes the mythology operational: dark-first, hairline-precise, opinionated.</p>
+        </div>
+        <div class="hero-mark">
+          <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+            <defs><linearGradient id="g2" x1="263" y1="463" x2="826" y2="494" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#AA41F6"/><stop offset="1" stop-color="#D370FF"/></linearGradient></defs>
+            <path fill="url(#g2)" d="M513 178c5 7 15 28 19 36l37 72c41 81 82 162 123 243l83 167 26 53c4 8 10 19 13 27v1l-1 1c-2 0-18-6-21-8l-73-26-147-52-36-13c-8-3-18-6-25-9l-6 2c-53 20-108 39-161 60-26 9-53 19-79 29-7 3-15 6-22 8-7 3-14 5-21 8-3 1-7 3-11 4l-1-1 1-1c1-2 5-11 7-13l14-29 49-100C338 522 394 410 451 299c14-27 27-53 41-80 2-3 13-26 15-28z"/>
+          </svg>
+        </div>
+      </section>
+
+      <h2 class="section">Color · Argus violet on a near-black canvas</h2>
+      <p class="lede">Single accent. Restrained semantics. The accent is pulled from the logo gradient (#A855F7) so the brand earns its place in the product, not just on the marketing page. Light mode shifts to #7C3AED for AA contrast on warm-white surfaces.</p>
+      <div class="swatches">
+        <div class="swatch"><div class="swatch-chip" style="background:var(--canvas)"></div><div class="swatch-name">canvas</div><div class="swatch-hex" id="hex-canvas">#0B0B0F</div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--elevated)"></div><div class="swatch-name">elevated</div><div class="swatch-hex" id="hex-elevated">#15151B</div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--surface)"></div><div class="swatch-name">surface</div><div class="swatch-hex" id="hex-surface">#1C1C24</div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--accent)"></div><div class="swatch-name">accent · violet</div><div class="swatch-hex" id="hex-accent">#A855F7</div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--text)"></div><div class="swatch-name">text</div><div class="swatch-hex" id="hex-text">#F2F3F7</div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--text-muted)"></div><div class="swatch-name">text-muted</div><div class="swatch-hex" id="hex-muted">#A0A2AD</div></div>
+      </div>
+      <div class="swatches" style="margin-top:10px">
+        <div class="swatch"><div class="swatch-chip" style="background:var(--success)"></div><div class="swatch-name">success</div><div class="swatch-hex" id="hex-success">#4ADE80</div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--warning)"></div><div class="swatch-name">warning</div><div class="swatch-hex" id="hex-warning">#FBBF24</div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--danger)"></div><div class="swatch-name">danger</div><div class="swatch-hex" id="hex-danger">#F87171</div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--info)"></div><div class="swatch-name">info</div><div class="swatch-hex" id="hex-info">#60A5FA</div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--border)"></div><div class="swatch-name">border</div><div class="swatch-hex" id="hex-border">#23232C</div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--border-strong)"></div><div class="swatch-name">border-strong</div><div class="swatch-hex" id="hex-border-strong">#2E2F3A</div></div>
+      </div>
+
+      <h2 class="section">Typography · Geist + Geist Mono</h2>
+      <p class="lede">One family, two faces. Geist for everything UI; Geist Mono everywhere data lives. Tabular numerals are on by default so columns of numbers line up without effort. No Inter, no SF Pro, no Söhne — Geist is free, crisp at 13px on macOS, and signals taste without screaming.</p>
+
+      <div class="specimen">
+        <div class="specimen-label">Geist · UI · 11–28 px</div>
+        <div class="specimen-row"><span style="font-size:28px;font-weight:600;letter-spacing:-.02em">Connection · production-readonly</span><span class="meta">28 / 600</span></div>
+        <div class="specimen-row"><span style="font-size:20px;font-weight:600;letter-spacing:-.01em">orders.public</span><span class="meta">20 / 600</span></div>
+        <div class="specimen-row"><span style="font-size:16px;font-weight:500">Schema inspector</span><span class="meta">16 / 500</span></div>
+        <div class="specimen-row"><span style="font-size:14px">The query returned 247 rows in 81ms.</span><span class="meta">14 / 400</span></div>
+        <div class="specimen-row"><span style="font-size:13px">Standard body and UI size — every label, button, and table cell.</span><span class="meta">13 / 400</span></div>
+        <div class="specimen-row"><span style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.14em;color:var(--text-subtle)">SECTION HEADER</span><span class="meta">11 / 500 · upper</span></div>
+      </div>
+
+      <div class="specimen">
+        <div class="specimen-label">Geist Mono · Data &amp; code · tabular nums</div>
+        <div class="specimen-row"><span class="mono" style="font-size:14px">SELECT count(*) FROM orders WHERE total &gt; 100;</span><span class="meta">14 · code</span></div>
+        <div class="specimen-row"><span class="mono" style="font-size:12.5px">ord_8f2a1b · $1,247.93 · 2026-04-22 14:08:11</span><span class="meta">12.5 · table row</span></div>
+        <div class="specimen-row"><span class="mono" style="font-size:12px;color:var(--text-muted)">0123456789 · 0123456789 · 0123456789</span><span class="meta">12 · numerals · zero ✓</span></div>
+        <div class="specimen-row"><span class="mono" style="font-size:11px;color:var(--text-subtle)">argus@local · 247 rows · 81 ms · postgres 16.4</span><span class="meta">11 · status bar</span></div>
+      </div>
+
+      <h2 class="section">Components · the kit, dogfooded</h2>
+      <p class="lede">Buttons, inputs, alerts, status pills, stat cards. Everything uses the same accent, the same hairline borders, the same 4px rhythm. Notice: nothing is round, nothing is gradient, nothing is bubbly.</p>
+      <div class="components-grid">
+        <div class="component-card"><h4>Buttons</h4><div class="row-stack"><button class="btn btn-primary">Run query · ⌘↵</button><button class="btn btn-secondary">Cancel</button><button class="btn btn-ghost">Format SQL</button><button class="btn btn-danger">Drop table</button></div></div>
+        <div class="component-card"><h4>Inputs &amp; focus</h4><label class="input-label" for="i1">Connection name</label><input id="i1" class="input" value="production-readonly"><div style="height:8px"></div><label class="input-label" for="i2">Hostname</label><input id="i2" class="input mono" value="db-prod-readonly.argus.internal"></div>
+        <div class="component-card"><h4>Status pills</h4><div class="row-stack"><span class="pill pill-success">● paid</span><span class="pill pill-warning">● pending</span><span class="pill pill-danger">● refunded</span><span class="pill pill-info">● shipped</span><span class="pill pill-neutral">● draft</span></div></div>
+        <div class="component-card"><h4>Alerts</h4><div class="alert alert-info"><div><div class="alert-title">Read-only connection</div><div class="alert-body">Edits are disabled for production-readonly.</div></div></div><div class="alert alert-warning"><div><div class="alert-title">Schema drift detected</div><div class="alert-body">3 columns differ from staging. Inspect to compare.</div></div></div></div>
+      </div>
+
+      <div style="height:12px"></div>
+      <div class="cards-row">
+        <div class="stat-card"><div class="label">Connections</div><div class="value">7</div><div class="delta delta-up">+2 this week</div></div>
+        <div class="stat-card"><div class="label">Active queries</div><div class="value">3</div><div class="delta">81 ms p95</div></div>
+        <div class="stat-card"><div class="label">Rows scanned</div><div class="value">12,847,302</div><div class="delta delta-up">+18.4%</div></div>
+        <div class="stat-card"><div class="label">Errors · 24h</div><div class="value">0</div><div class="delta delta-down">-100%</div></div>
+      </div>
+
+      <h2 class="section">Spacing &amp; radius · 4px base, small radii</h2>
+      <p class="lede">Compact density. Pills get 999px, everything else gets 3 / 5 / 8 px. Power tools shouldn't look like marketing landing pages.</p>
+      <div class="component-card">
+        <div class="scale-row"><span class="scale-token">--space-2xs</span><span class="scale-bar" style="width:4px"></span><span class="small mono">4px</span></div>
+        <div class="scale-row"><span class="scale-token">--space-xs</span><span class="scale-bar" style="width:8px"></span><span class="small mono">8px</span></div>
+        <div class="scale-row"><span class="scale-token">--space-sm</span><span class="scale-bar" style="width:12px"></span><span class="small mono">12px</span></div>
+        <div class="scale-row"><span class="scale-token">--space-md</span><span class="scale-bar" style="width:16px"></span><span class="small mono">16px</span></div>
+        <div class="scale-row"><span class="scale-token">--space-lg</span><span class="scale-bar" style="width:24px"></span><span class="small mono">24px</span></div>
+        <div class="scale-row"><span class="scale-token">--space-xl</span><span class="scale-bar" style="width:32px"></span><span class="small mono">32px</span></div>
+        <div class="scale-row"><span class="scale-token">--space-2xl</span><span class="scale-bar" style="width:48px"></span><span class="small mono">48px</span></div>
+      </div>
+
+      <h2 class="section">The shell · this is what Argus looks like now</h2>
+      <p class="lede">Three-pane layout you already have, dressed in the proposed system. Sidebar on the left lists connections (active row glows violet at the edge — the only place the accent is loud). Tabs across the top with the active tab underlined in violet. Data table uses Geist Mono for IDs and timestamps, Geist for everything else. Inspector on the right shows schema for the focused row. Status bar bottom, monospace, native.</p>
+
+      <div class="mockup-frame">
+        <div class="mockup-titlebar">
+          <div class="traffic"><span></span><span></span><span></span></div>
+          <div class="titlebar-title"><strong>Argus</strong> &nbsp;·&nbsp; production-readonly &nbsp;·&nbsp; orders</div>
+        </div>
+        <div class="mockup-body">
+          <aside class="sidebar">
+            <div class="sidebar-header">
+              <span class="sidebar-title">Connections</span>
+              <button class="icon-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+            </div>
+            <div class="sidebar-section">
+              <div class="sidebar-group">Postgres</div>
+              <div class="conn active"><span class="dot green"></span><span class="name">production-readonly</span><span class="meta">v16</span></div>
+              <div class="conn"><span class="dot green"></span><span class="name">staging-analytics</span><span class="meta">v15</span></div>
+              <div class="conn"><span class="dot amber"></span><span class="name">eu-replica</span><span class="meta">v16</span></div>
+              <div class="conn"><span class="dot green"></span><span class="name">local-dev</span><span class="meta">v16</span></div>
+              <div class="conn"><span class="dot gray"></span><span class="name">archive-2024</span><span class="meta">v14</span></div>
+              <div class="sidebar-group" style="margin-top:12px">DynamoDB · soon</div>
+              <div class="conn" style="opacity:.4"><span class="dot gray"></span><span class="name">events-prod</span><span class="meta">—</span></div>
+              <div class="sidebar-group" style="margin-top:12px">CloudWatch · soon</div>
+              <div class="conn" style="opacity:.4"><span class="dot gray"></span><span class="name">api-logs</span><span class="meta">—</span></div>
+            </div>
+          </aside>
+
+          <section class="main">
+            <div class="tabstrip">
+              <div class="tab active"><span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg></span><span>orders.sql</span><span class="x">×</span></div>
+              <div class="tab"><span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/></svg></span><span>customers · table</span><span class="x">×</span></div>
+              <div class="tab"><span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg></span><span>refund_audit · query</span><span class="x">×</span></div>
+            </div>
+
+            <div class="editor">
+              <div><span class="ln"> 1</span><span class="com">-- Recent paid orders, last 30 days</span></div>
+              <div><span class="ln"> 2</span><span class="kw">SELECT</span> id, customer_email, total_cents, status, created_at</div>
+              <div><span class="ln"> 3</span><span class="kw">FROM</span> orders</div>
+              <div><span class="ln"> 4</span><span class="kw">WHERE</span> status <span class="kw">IN</span> (<span class="str">'paid'</span>, <span class="str">'shipped'</span>)</div>
+              <div><span class="ln"> 5</span>&nbsp;&nbsp;<span class="kw">AND</span> created_at <span class="kw">&gt;=</span> <span class="fn">now</span>() <span class="kw">-</span> <span class="kw">interval</span> <span class="str">'30 days'</span></div>
+              <div><span class="ln"> 6</span><span class="kw">ORDER BY</span> created_at <span class="kw">DESC</span></div>
+              <div><span class="ln"> 7</span><span class="kw">LIMIT</span> <span class="num">12</span>;</div>
+            </div>
+
+            <div class="results-toolbar">
+              <div class="results-meta"><strong>12</strong> rows <span style="color:var(--text-subtle)">·</span> <strong>81 ms</strong> <span style="color:var(--text-subtle)">·</span> <span>read-only</span></div>
+              <div class="row-stack"><button class="btn btn-ghost">Export</button><button class="btn btn-secondary">Refresh</button><button class="btn btn-primary">Run · ⌘↵</button></div>
+            </div>
+
+            <div class="data-table">
+              <table>
+                <thead><tr><th>id</th><th>customer_email</th><th class="num">total</th><th>status</th><th>created_at</th></tr></thead>
+                <tbody>
+                  <tr><td class="id-cell">ord_8f2a1b</td><td>amelia.tan@example.com</td><td class="num">$1,247.93</td><td><span class="pill pill-success">● paid</span></td><td class="ts">2026-04-22 14:08:11</td></tr>
+                  <tr class="row-active"><td class="id-cell">ord_3c19fe</td><td>jordan.li@example.com</td><td class="num">$84.20</td><td><span class="pill pill-info">● shipped</span></td><td class="ts">2026-04-22 13:51:02</td></tr>
+                  <tr><td class="id-cell">ord_e0114a</td><td>r.fernandez@example.com</td><td class="num">$312.00</td><td><span class="pill pill-success">● paid</span></td><td class="ts">2026-04-22 13:42:48</td></tr>
+                  <tr><td class="id-cell">ord_2b87cd</td><td>k.nakamura@example.com</td><td class="num">$2,099.00</td><td><span class="pill pill-info">● shipped</span></td><td class="ts">2026-04-22 13:14:09</td></tr>
+                  <tr><td class="id-cell">ord_4dd910</td><td><span class="null">NULL</span></td><td class="num">$45.00</td><td><span class="pill pill-warning">● pending</span></td><td class="ts">2026-04-22 12:58:33</td></tr>
+                  <tr><td class="id-cell">ord_71fa05</td><td>p.sato@example.com</td><td class="num">$729.50</td><td><span class="pill pill-success">● paid</span></td><td class="ts">2026-04-22 12:31:17</td></tr>
+                  <tr><td class="id-cell">ord_a4c293</td><td>m.larsson@example.com</td><td class="num">$1,840.00</td><td><span class="pill pill-success">● paid</span></td><td class="ts">2026-04-22 11:48:50</td></tr>
+                  <tr><td class="id-cell">ord_5e6cd1</td><td>e.dubois@example.com</td><td class="num">$56.75</td><td><span class="pill pill-danger">● refunded</span></td><td class="ts">2026-04-22 10:22:04</td></tr>
+                  <tr><td class="id-cell">ord_99f037</td><td>z.alvarez@example.com</td><td class="num">$214.10</td><td><span class="pill pill-info">● shipped</span></td><td class="ts">2026-04-22 09:55:42</td></tr>
+                  <tr><td class="id-cell">ord_6b40a8</td><td>w.kim@example.com</td><td class="num">$3,402.99</td><td><span class="pill pill-success">● paid</span></td><td class="ts">2026-04-22 09:01:18</td></tr>
+                  <tr><td class="id-cell">ord_c80b15</td><td>n.oconnor@example.com</td><td class="num">$98.40</td><td><span class="pill pill-warning">● pending</span></td><td class="ts">2026-04-22 08:14:55</td></tr>
+                  <tr><td class="id-cell">ord_18d72f</td><td>s.patel@example.com</td><td class="num">$671.20</td><td><span class="pill pill-success">● paid</span></td><td class="ts">2026-04-22 07:48:09</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <aside class="inspector">
+            <h4>Selected row</h4>
+            <h3>ord_3c19fe</h3>
+            <div class="breadcrumb">production-readonly<span class="sep">/</span>public<span class="sep">/</span>orders</div>
+            <div class="inspector-section">
+              <h4>Columns · 12</h4>
+              <div class="col-row"><span class="col-name"><span class="pk">PK</span>id</span><span class="col-meta">uuid</span></div>
+              <div class="col-row"><span class="col-name">customer_email</span><span class="col-meta">text</span></div>
+              <div class="col-row"><span class="col-name">total_cents</span><span class="col-meta">int8</span></div>
+              <div class="col-row"><span class="col-name">status</span><span class="col-meta">order_status</span></div>
+              <div class="col-row"><span class="col-name">shipping_addr</span><span class="col-meta">jsonb <span class="nullable">· null</span></span></div>
+              <div class="col-row"><span class="col-name">created_at</span><span class="col-meta">timestamptz</span></div>
+              <div class="col-row"><span class="col-name">updated_at</span><span class="col-meta">timestamptz</span></div>
+            </div>
+            <div class="inspector-section">
+              <h4>Indexes · 3</h4>
+              <div class="col-row"><span class="col-name">orders_pkey</span><span class="col-meta">btree(id)</span></div>
+              <div class="col-row"><span class="col-name">orders_email_idx</span><span class="col-meta">btree(customer_email)</span></div>
+              <div class="col-row"><span class="col-name">orders_status_created_idx</span><span class="col-meta">btree(status, created_at)</span></div>
+            </div>
+          </aside>
+        </div>
+        <div class="statusbar">
+          <span class="item"><span class="dot"></span>production-readonly</span>
+          <span class="item">postgres 16.4</span>
+          <span class="item">read-only</span>
+          <span class="spacer"></span>
+          <span class="item">12 rows</span>
+          <span class="item">81 ms</span>
+          <span class="item">UTF-8</span>
+          <span class="item">⌘K to search</span>
+        </div>
+      </div>
+
+      <h2 class="section">Command palette · ⌘K</h2>
+      <p class="lede">The accent earns another loud moment here. Active row gets the violet edge + soft glow; matched substring gets violet text. Everything else stays quiet so the focus actually lands.</p>
+      <div class="palette">
+        <div class="palette-input">
+          <span class="prompt mono">›</span>
+          <input value="conn pro">
+          <span class="kbd">⌘K</span>
+        </div>
+        <div class="palette-list">
+          <div class="palette-row active"><span class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/></svg></span><span class="label">Open <mark>conn</mark>ection · <mark>pro</mark>duction-readonly</span><span class="group">connections</span></div>
+          <div class="palette-row"><span class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h18M3 12h18M3 18h18"/></svg></span><span class="label">Switch <mark>conn</mark>ection · <mark>pro</mark>duction-readonly</span><span class="group">switch</span></div>
+          <div class="palette-row"><span class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 5v14M5 12h14"/></svg></span><span class="label">New <mark>conn</mark>ection · <mark>Pro</mark>file…</span><span class="group">connections</span></div>
+          <div class="palette-row"><span class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="label">Test <mark>conn</mark>ection · <mark>pro</mark>duction-readonly</span><span class="group">connections</span></div>
+        </div>
+      </div>
+
+      <footer class="footer">
+        <span>argus · design system v0.1 · /design-consultation</span>
+        <span id="footer-time"></span>
+      </footer>
+    </div>
+
+    <script>
+      const root = document.documentElement;
+      const toggle = document.getElementById("theme-toggle");
+      const label = document.getElementById("theme-label");
+      const icon = document.getElementById("theme-icon");
+      const HEX = {
+        dark:{ canvas:"#0B0B0F", elevated:"#15151B", surface:"#1C1C24", accent:"#A855F7", text:"#F2F3F7", muted:"#A0A2AD", border:"#23232C", borderStrong:"#2E2F3A", success:"#4ADE80", warning:"#FBBF24", danger:"#F87171", info:"#60A5FA" },
+        light:{ canvas:"#FAFAF9", elevated:"#FFFFFF", surface:"#FFFFFF", accent:"#7C3AED", text:"#0F0F12", muted:"#5B5D68", border:"#E7E7E4", borderStrong:"#D4D4D0", success:"#16A34A", warning:"#D97706", danger:"#DC2626", info:"#2563EB" }
+      };
+      function setTheme(t) {
+        root.dataset.theme = t;
+        label.textContent = t === "dark" ? "Dark" : "Light";
+        icon.textContent = t === "dark" ? "◐" : "◑";
+        const h = HEX[t];
+        const m = (id,v)=>{ const el = document.getElementById(id); if (el) el.textContent = v; };
+        m("hex-canvas",h.canvas); m("hex-elevated",h.elevated); m("hex-surface",h.surface); m("hex-accent",h.accent);
+        m("hex-text",h.text); m("hex-muted",h.muted); m("hex-border",h.border); m("hex-border-strong",h.borderStrong);
+        m("hex-success",h.success); m("hex-warning",h.warning); m("hex-danger",h.danger); m("hex-info",h.info);
+      }
+      toggle.addEventListener("click", () => setTheme(root.dataset.theme === "dark" ? "light" : "dark"));
+      document.getElementById("footer-time").textContent = new Date().toISOString().replace("T"," ").slice(0,19);
+    </script>
+  </body>
+</html>
