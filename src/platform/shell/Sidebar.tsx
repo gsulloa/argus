@@ -2,12 +2,17 @@ import { Plus } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import logoUrl from "@/assets/logo.svg";
 import styles from "./Sidebar.module.css";
 import dialogStyles from "./Dialog.module.css";
 
 export function Sidebar() {
   return (
     <div className={styles.root}>
+      <header className={styles.brand}>
+        <img src={logoUrl} alt="" className={styles.brandMark} />
+        <span className={styles.brandName}>Argus</span>
+      </header>
       <ConnectionsSection />
     </div>
   );

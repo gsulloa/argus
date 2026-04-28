@@ -14,6 +14,42 @@
   font-size: 14px;
   line-height: 1.55;
 }
+.lore {
+  max-width: 640px;
+  margin: 0 0 28px;
+  padding: 16px 20px;
+  border-left: 2px solid var(--border-strong);
+  background: var(--surface-2);
+  border-radius: 4px;
+}
+.lore h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.lore p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.lore p:last-child {
+  margin-bottom: 0;
+}
+.lore em {
+  font-style: italic;
+  color: var(--text);
+}
+.shortcutsHeading {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
 .shortcuts {
   list-style: none;
   padding: 0;
