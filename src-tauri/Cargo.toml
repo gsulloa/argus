@@ -28,10 +28,22 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 uuid = { version = "1", features = ["v4", "serde"] }
 directories = "5"
+tokio-postgres = "0.7"
+deadpool-postgres = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-postgres-rustls = "0.13"
+webpki-roots = "0.26"
+rustls-pki-types = "1"
+url = "2"
+percent-encoding = "2"
+time = { version = "0.3", features = ["formatting", "macros", "serde"] }
+async-trait = "0.1"
 
 [features]
 # disabled in tests so we can avoid hitting the OS keychain
 keychain = []
+# Live Postgres tests — opt-in, requires a reachable server (PG_TEST_URL env var).
+live-pg-tests = []
 
 [dev-dependencies]
 tempfile = "3"
