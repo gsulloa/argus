@@ -12,4 +12,7 @@ pub use commands::{
     postgres_test_connection,
 };
 pub use pool::PgPoolRegistry;
-pub use schema_commands::{postgres_list_objects, postgres_list_schemas};
+pub use schema_commands::{
+    postgres_get_function_signature, postgres_list_relations, postgres_list_schemas,
+    postgres_list_structure, postgres_list_table_extras,
+};

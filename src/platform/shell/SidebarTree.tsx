@@ -60,6 +60,12 @@ export interface SidebarTreeProps {
   className?: string;
   /** Approximate row height in px (used by the virtualizer). */
   rowHeight?: number;
+  /**
+   * Optional callback fired whenever a node's expansion state toggles. Used by
+   * consumers that need to lazy-load children on first expand. Fires after the
+   * tree's internal state has been updated; receives the new state.
+   */
+  onToggle?: (node: TreeNode, expanded: boolean) => void;
 }
 
 interface FlatNode {
@@ -98,9 +104,12 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
     ariaLabel,
     className,
     rowHeight = DEFAULT_ROW_HEIGHT,
+    onToggle,
   },
   ref,
 ) {
+  const onToggleRef = useRef(onToggle);
+  onToggleRef.current = onToggle;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(defaultExpanded ?? []));
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -116,6 +125,20 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
     flatten(nodes, isExpanded, out);
     return out;
   }, [nodes, isExpanded]);
+
+  // Build a flat id → node map for `onToggle` callbacks. Walks the full tree
+  // (not just expanded subtree) so deep collapses can still resolve the node.
+  const nodeIndex = useMemo(() => {
+    const map = new Map<string, TreeNode>();
+    function walk(ns: TreeNode[]) {
+      for (const n of ns) {
+        map.set(n.id, n);
+        if (n.children) walk(n.children);
+      }
+    }
+    walk(nodes);
+    return map;
+  }, [nodes]);
 
   // When the focused id no longer exists in the visible flat list, reset to the first.
   useEffect(() => {
@@ -151,34 +174,63 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
     [flat],
   );
 
-  const expandNode = useCallback((id: string) => {
-    setExpanded((prev) => {
-      if (prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-  }, []);
+  const fireToggle = useCallback(
+    (id: string, expanded: boolean) => {
+      const cb = onToggleRef.current;
+      if (!cb) return;
+      const node = nodeIndex.get(id);
+      if (node) cb(node, expanded);
+    },
+    [nodeIndex],
+  );
 
-  const collapseNode = useCallback((id: string) => {
-    setExpanded((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-  }, []);
+  const expandNode = useCallback(
+    (id: string) => {
+      let didExpand = false;
+      setExpanded((prev) => {
+        if (prev.has(id)) return prev;
+        didExpand = true;
+        const next = new Set(prev);
+        next.add(id);
+        return next;
+      });
+      if (didExpand) fireToggle(id, true);
+    },
+    [fireToggle],
+  );
+
+  const collapseNode = useCallback(
+    (id: string) => {
+      let didCollapse = false;
+      setExpanded((prev) => {
+        if (!prev.has(id)) return prev;
+        didCollapse = true;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      if (didCollapse) fireToggle(id, false);
+    },
+    [fireToggle],
+  );
 
   const toggleNode = useCallback(
     (id: string) => {
+      let nowExpanded = false;
       setExpanded((prev) => {
         const next = new Set(prev);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
+        if (next.has(id)) {
+          next.delete(id);
+          nowExpanded = false;
+        } else {
+          next.add(id);
+          nowExpanded = true;
+        }
         return next;
       });
+      fireToggle(id, nowExpanded);
     },
-    [],
+    [fireToggle],
   );
 
   useImperativeHandle(ref, () => ({

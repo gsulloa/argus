@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { toAppError } from "@/platform/errors/AppError";
-import type { SchemaObjects, SchemaSummary } from "./types";
+import type {
+  FunctionSignature,
+  RelationsResult,
+  SchemaSummary,
+  StructureResult,
+  TableExtrasResult,
+} from "./types";
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const started = performance.now();
@@ -19,6 +25,21 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 
 export const schemaApi = {
   listSchemas: (id: string) => call<SchemaSummary[]>("postgres_list_schemas", { id }),
-  listObjects: (id: string, schema: string) =>
-    call<SchemaObjects>("postgres_list_objects", { id, schemaName: schema }),
+  listRelations: (id: string, schema: string) =>
+    call<RelationsResult>("postgres_list_relations", { id, schemaName: schema }),
+  listStructure: (id: string, schema: string) =>
+    call<StructureResult>("postgres_list_structure", { id, schemaName: schema }),
+  listTableExtras: (id: string, schema: string, relation: string) =>
+    call<TableExtrasResult>("postgres_list_table_extras", {
+      id,
+      schemaName: schema,
+      relation,
+    }),
+  getFunctionSignature: (id: string, schema: string, name: string, oid: number) =>
+    call<FunctionSignature>("postgres_get_function_signature", {
+      id,
+      schemaName: schema,
+      name,
+      oid,
+    }),
 };

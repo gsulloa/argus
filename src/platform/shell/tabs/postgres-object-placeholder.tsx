@@ -1,5 +1,8 @@
+import { useEffect, useState } from "react";
 import type { Tab } from "./types";
 import { TabRegistry } from "./TabRegistry";
+import { schemaApi } from "@/modules/postgres/schema/api";
+import { AppError } from "@/platform/errors/AppError";
 import styles from "./postgres-object-placeholder.module.css";
 
 export const POSTGRES_OBJECT_PLACEHOLDER_KIND = "postgres-object-placeholder";
@@ -10,8 +13,11 @@ export interface PostgresObjectPlaceholderPayload {
   schema: string;
   kind: string;
   name: string;
-  /** Set for functions, where overload signatures are part of identity. */
-  signature?: string;
+  /**
+   * Function OID — distinguishes overloads in the tab id. When set, the tab
+   * lazily resolves the signature via `schemaApi.getFunctionSignature`.
+   */
+  oid?: number;
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -38,6 +44,60 @@ function isPayload(v: unknown): v is PostgresObjectPlaceholderPayload {
   );
 }
 
+interface SignatureState {
+  status: "idle" | "loading" | "loaded" | "error";
+  args?: string;
+  returnType?: string | null;
+  errorMessage?: string;
+}
+
+function FunctionSignatureLine({
+  payload,
+}: {
+  payload: PostgresObjectPlaceholderPayload;
+}) {
+  const [state, setState] = useState<SignatureState>({ status: "idle" });
+  useEffect(() => {
+    if (payload.kind !== "function" || payload.oid === undefined) return;
+    let cancelled = false;
+    setState({ status: "loading" });
+    schemaApi
+      .getFunctionSignature(payload.connectionId, payload.schema, payload.name, payload.oid)
+      .then((sig) => {
+        if (cancelled) return;
+        setState({
+          status: "loaded",
+          args: sig.args_signature,
+          returnType: sig.return_type,
+        });
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        const err = e instanceof AppError ? e : new AppError("Internal", String(e));
+        setState({ status: "error", errorMessage: err.message });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [payload.connectionId, payload.schema, payload.name, payload.oid, payload.kind]);
+
+  if (payload.kind !== "function" || payload.oid === undefined) return null;
+  if (state.status === "loading") {
+    return <span className={styles.signature}>(loading…)</span>;
+  }
+  if (state.status === "error") {
+    return (
+      <span className={styles.signature} title={state.errorMessage}>
+        (signature unavailable)
+      </span>
+    );
+  }
+  if (state.status === "loaded" && state.args !== undefined) {
+    return <span className={styles.signature}>({state.args})</span>;
+  }
+  return null;
+}
+
 function PostgresObjectPlaceholderTab({ tab }: { tab: Tab }) {
   if (!isPayload(tab.payload)) {
     return <div className={styles.root}>Invalid placeholder payload.</div>;
@@ -51,9 +111,7 @@ function PostgresObjectPlaceholderTab({ tab }: { tab: Tab }) {
         <h2 className={styles.title}>
           <span className={styles.schema}>{p.schema}.</span>
           <span className={styles.name}>{p.name}</span>
-          {p.signature !== undefined && (
-            <span className={styles.signature}>({p.signature})</span>
-          )}
+          <FunctionSignatureLine payload={p} />
         </h2>
         <div className={styles.connection}>via {p.connectionName}</div>
         <p className={styles.message}>
