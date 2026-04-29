@@ -1,0 +1,210 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+  font-variant-numeric: tabular-nums;
+}
+
+.table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+}
+
+.thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-elevated);
+}
+
+.headerRow {
+  display: flex;
+}
+
+.headerCell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  height: 28px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  position: relative;
+  flex: 0 0 auto;
+}
+.headerCell:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.headerCell:last-child {
+  border-right: 0;
+}
+
+.colName {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sortBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  font-size: 10px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sortIndex {
+  font-size: 9px;
+  background: var(--accent-soft, var(--bg-active));
+  color: var(--accent);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+.colType {
+  color: var(--text-subtle);
+  font-size: 10px;
+  margin-left: 4px;
+}
+
+.body {
+  position: relative;
+}
+
+.row {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.row:hover {
+  background: var(--bg-hover);
+}
+.row[data-selected="true"] {
+  background: var(--accent-soft, rgba(168, 85, 247, 0.12));
+}
+.row[data-selected="true"]:hover {
+  background: var(--accent-soft, rgba(168, 85, 247, 0.18));
+}
+.row[data-selected="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--accent);
+}
+
+.cell {
+  padding: 5px 12px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  border-right: 1px solid var(--hairline, rgba(255, 255, 255, 0.04));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
+  color: var(--text);
+  min-width: 0;
+}
+.cell:last-child {
+  border-right: 0;
+}
+
+.cellValue {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.cellMono {
+  font-family: var(--font-mono);
+}
+
+.cellNull {
+  color: var(--text-subtle);
+  font-style: italic;
+}
+
+.envelopeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  color: var(--text-muted);
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  font-size: 11px;
+  color: var(--text-subtle);
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+
+.errorRow {
+  color: var(--danger);
+}
+
+.retryButton {
+  font-size: 11px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.retryButton:hover {
+  background: var(--bg-hover);
+}
+
+.spinner {
+  display: inline-flex;
+  animation: dg-spin 1s linear infinite;
+  color: var(--text-subtle);
+}
+
+@keyframes dg-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-subtle);
+}

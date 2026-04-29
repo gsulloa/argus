@@ -1,0 +1,104 @@
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.trigger:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.trigger[data-active="true"] {
+  color: var(--accent);
+}
+
+.popover {
+  position: absolute;
+  z-index: 50;
+  min-width: 240px;
+  padding: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-subtle);
+}
+
+.input,
+.select {
+  width: 100%;
+  font-size: 12px;
+  padding: 5px 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+.input:focus-visible,
+.select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+.range {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn:hover {
+  background: var(--bg-hover);
+}
+
+.btnPrimary {
+  background: var(--accent);
+  color: var(--accent-text, white);
+  border-color: var(--accent);
+}
+.btnPrimary:hover {
+  background: var(--accent-hover);
+}
+
+.error {
+  font-size: 11px;
+  color: var(--danger);
+}

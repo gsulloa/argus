@@ -864,6 +864,7 @@ export function SchemaTree({ connectionId }: Props) {
             nodes={filtered.nodes}
             onActivate={onActivate}
             onToggle={onToggle}
+            isActivatable={(n) => (n.data as NodeData | undefined)?.kind === "leaf"}
             renderIcon={renderIcon}
             renderBadge={renderBadge}
             renderLabel={renderLabel}

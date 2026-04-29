@@ -61,6 +61,13 @@ export interface SidebarTreeProps {
   /** Approximate row height in px (used by the virtualizer). */
   rowHeight?: number;
   /**
+   * Whether a node should be treated as activatable on row click / Enter.
+   * Defaults to "leaves only" (`!node.hasChildren`). Consumers can opt in
+   * activatable-with-children nodes (e.g. a table that activates on click
+   * but still expands its indexes/triggers via the caret).
+   */
+  isActivatable?: (node: TreeNode) => boolean;
+  /**
    * Optional callback fired whenever a node's expansion state toggles. Used by
    * consumers that need to lazy-load children on first expand. Fires after the
    * tree's internal state has been updated; receives the new state.
@@ -104,10 +111,16 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
     ariaLabel,
     className,
     rowHeight = DEFAULT_ROW_HEIGHT,
+    isActivatable,
     onToggle,
   },
   ref,
 ) {
+  const canActivate = useCallback(
+    (node: TreeNode) =>
+      isActivatable ? isActivatable(node) : !node.hasChildren,
+    [isActivatable],
+  );
   const onToggleRef = useRef(onToggle);
   onToggleRef.current = onToggle;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(defaultExpanded ?? []));
@@ -299,10 +312,10 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         if (!current) return;
-        if (current.node.hasChildren) {
-          toggleNode(current.node.id);
-        } else {
+        if (canActivate(current.node)) {
           onActivate(current.node);
+        } else if (current.node.hasChildren) {
+          toggleNode(current.node.id);
         }
         return;
       }
@@ -340,6 +353,7 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
       collapseNode,
       toggleNode,
       onActivate,
+      canActivate,
     ],
   );
 
@@ -354,13 +368,13 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
   const onRowClick = useCallback(
     (flatNode: FlatNode) => {
       setFocusedId(flatNode.node.id);
-      if (flatNode.node.hasChildren) {
-        toggleNode(flatNode.node.id);
-      } else {
+      if (canActivate(flatNode.node)) {
         onActivate(flatNode.node);
+      } else if (flatNode.node.hasChildren) {
+        toggleNode(flatNode.node.id);
       }
     },
-    [toggleNode, onActivate],
+    [toggleNode, onActivate, canActivate],
   );
 
   const shouldVirtualize = flat.length > virtualizationThreshold;

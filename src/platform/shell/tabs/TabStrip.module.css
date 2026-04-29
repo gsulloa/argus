@@ -1,6 +1,7 @@
 .root {
   display: flex;
   align-items: stretch;
+  flex: 0 0 32px;
   height: 32px;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
