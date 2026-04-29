@@ -82,6 +82,17 @@
   transition: opacity 100ms;
   flex-shrink: 0;
 }
+.rowPrimary {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.contextSeparator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
 
 .subtree {
   padding-left: 12px;

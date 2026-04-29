@@ -11,9 +11,10 @@ use tracing_subscriber::EnvFilter;
 
 use crate::modules::postgres::{
     postgres_apply_table_edits, postgres_connect, postgres_count_table, postgres_disconnect,
-    postgres_get_function_signature, postgres_list_active, postgres_list_relations,
-    postgres_list_schemas, postgres_list_structure, postgres_list_table_extras, postgres_parse_url,
-    postgres_query_table, postgres_table_primary_key, postgres_test_connection, PgPoolRegistry,
+    postgres_get_function_signature, postgres_list_active, postgres_list_columns_bulk,
+    postgres_list_relations, postgres_list_schemas, postgres_list_structure,
+    postgres_list_table_extras, postgres_parse_url, postgres_query_table, postgres_run_sql,
+    postgres_run_sql_many, postgres_table_primary_key, postgres_test_connection, PgPoolRegistry,
 };
 use crate::platform::{
     connections::{
@@ -99,6 +100,9 @@ pub fn run() {
             postgres_count_table,
             postgres_table_primary_key,
             postgres_apply_table_edits,
+            postgres_run_sql,
+            postgres_run_sql_many,
+            postgres_list_columns_bulk,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

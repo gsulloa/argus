@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { Loader2, RotateCw } from "lucide-react";
+import { Loader2, RotateCw, Terminal } from "lucide-react";
 import { useTabs } from "@/platform/shell/tabs";
 import { SidebarTree, type TreeNode } from "@/platform/shell/SidebarTree";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { openQueryTab } from "../sql";
 import { GroupIcon, LeafIcon, type GroupKind, type LeafKind } from "./objectIcons";
 import { SchemaSearch } from "./SchemaSearch";
 import { useSchemaTree, type PublicGroupState } from "./useSchemaTree";
@@ -883,9 +884,37 @@ interface ToolbarProps {
 }
 
 /**
- * Renders the connection-row hover toolbar items (refresh + visibility picker).
- * Shipped here so the Sidebar doesn't have to know about the schema browser
- * internals.
+ * Primary actions for an active connection — currently the "+ Query" button
+ * that opens a new SQL editor tab. Rendered in a dedicated always-visible
+ * slot in the sidebar (not behind hover) since this is the most common
+ * action for a connected database.
+ */
+export function SchemaPrimaryActions({ connectionId }: ToolbarProps) {
+  const tabs = useTabs();
+  const { items: connections } = useConnections();
+  const connectionName =
+    connections.find((c) => c.id === connectionId)?.name ?? connectionId;
+
+  return (
+    <button
+      type="button"
+      aria-label="New SQL query"
+      title="New SQL query · ⌘↩ runs"
+      onClick={(e) => {
+        e.stopPropagation();
+        openQueryTab(tabs, { connectionId, connectionName });
+      }}
+      className={styles.toolbarBtn}
+    >
+      <Terminal size={13} />
+    </button>
+  );
+}
+
+/**
+ * Secondary toolbar items for an active connection (refresh + visibility
+ * picker). Rendered in the hover-only slot of the sidebar since these are
+ * maintenance actions that don't need to compete for visual attention.
  */
 export function SchemaToolbar({ connectionId }: ToolbarProps) {
   const tree = useSchemaTree(connectionId);

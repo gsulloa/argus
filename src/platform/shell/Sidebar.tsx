@@ -5,14 +5,17 @@ import { useState } from "react";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import type { Connection } from "@/platform/connection-registry/types";
 import {
+  openQueryTab,
   POSTGRES_KIND,
   PostgresIcon,
   postgresApi,
+  SchemaPrimaryActions,
   SchemaToolbar,
   SchemaTree,
   useActiveConnections,
   usePostgresForm,
 } from "@/modules/postgres";
+import { useTabs } from "@/platform/shell/tabs";
 import logoUrl from "@/assets/logo.svg";
 import styles from "./Sidebar.module.css";
 import dialogStyles from "./Dialog.module.css";
@@ -72,6 +75,7 @@ function ConnectionRow({ connection }: { connection: Connection }) {
   const { isActive } = useActiveConnections();
   const { remove } = useConnections();
   const form = usePostgresForm();
+  const tabs = useTabs();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const isPostgres = connection.kind === POSTGRES_KIND;
   const active = isActive(connection.id);
@@ -132,14 +136,35 @@ function ConnectionRow({ connection }: { connection: Connection }) {
               />
             </button>
             {isPostgres && active && (
-              <span className={styles.rowToolbar}>
-                <SchemaToolbar connectionId={connection.id} />
-              </span>
+              <>
+                <span className={styles.rowPrimary}>
+                  <SchemaPrimaryActions connectionId={connection.id} />
+                </span>
+                <span className={styles.rowToolbar}>
+                  <SchemaToolbar connectionId={connection.id} />
+                </span>
+              </>
             )}
           </div>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
           <ContextMenu.Content className={styles.contextMenu}>
+            {isPostgres && active && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() =>
+                    openQueryTab(tabs, {
+                      connectionId: connection.id,
+                      connectionName: connection.name,
+                    })
+                  }
+                >
+                  New SQL Query
+                </ContextMenu.Item>
+                <ContextMenu.Separator className={styles.contextSeparator} />
+              </>
+            )}
             <ContextMenu.Item
               className={styles.contextItem}
               onSelect={() => form.openEdit(connection)}

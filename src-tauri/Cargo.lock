@@ -2783,6 +2783,10 @@ dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
  "postgres-protocol",
+ "serde_core",
+ "serde_json",
+ "time",
+ "uuid",
 ]
 
 [[package]]

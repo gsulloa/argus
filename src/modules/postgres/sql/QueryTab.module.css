@@ -1,0 +1,94 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.invalid {
+  padding: 16px;
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.readOnlyBanner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--accent-soft, rgba(168, 85, 247, 0.1));
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.editorArea {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.editorPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-subtle);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.handle {
+  height: 4px;
+  width: 100%;
+  background: var(--border);
+  border: none;
+  cursor: row-resize;
+  padding: 0;
+  flex: 0 0 4px;
+}
+.handle:hover {
+  background: var(--accent);
+}
+
+.resultArea {
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.resultHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.connectionLabel {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.runSummary {
+  color: var(--text-muted);
+}
+
+.resultBody {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}

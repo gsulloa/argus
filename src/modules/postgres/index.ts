@@ -13,10 +13,11 @@ export type {
   SslMode,
   TestResult,
 } from "./types";
-export { SchemaTree, SchemaToolbar } from "./schema/SchemaTree";
+export { SchemaTree, SchemaToolbar, SchemaPrimaryActions } from "./schema/SchemaTree";
 export { useSchemaTree } from "./schema/useSchemaTree";
 export { useVisibleSchemas } from "./schema/useVisibleSchemas";
 export { schemaApi } from "./schema/api";
+export { openQueryTab, POSTGRES_QUERY_KIND } from "./sql";
 export type {
   ExtensionInfo,
   FunctionInfo,

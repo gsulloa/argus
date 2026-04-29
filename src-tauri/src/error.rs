@@ -5,6 +5,12 @@ use thiserror::Error;
 pub struct PostgresErrorBody {
     pub code: Option<String>,
     pub message: String,
+    /// 1-based character offset into the SQL where Postgres detected the error.
+    /// Populated only when the underlying `tokio_postgres::Error` carries a
+    /// DB error with a position; `None` for everything else (network, timeout,
+    /// internal validation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<i32>,
 }
 
 #[derive(Debug, Error, Serialize)]
@@ -34,6 +40,7 @@ impl AppError {
         AppError::Postgres(PostgresErrorBody {
             code: None,
             message: message.into(),
+            position: None,
         })
     }
 
@@ -41,6 +48,7 @@ impl AppError {
         AppError::Postgres(PostgresErrorBody {
             code: Some(code.into()),
             message: message.into(),
+            position: None,
         })
     }
 }
@@ -78,9 +86,17 @@ impl From<tokio_postgres::Error> for AppError {
             .code()
             .map(|c| c.code().to_string())
             .or_else(|| e.as_db_error().map(|d| d.code().code().to_string()));
+        let position = e.as_db_error().and_then(|d| match d.position() {
+            Some(tokio_postgres::error::ErrorPosition::Original(p)) => Some(*p as i32),
+            Some(tokio_postgres::error::ErrorPosition::Internal { position, .. }) => {
+                Some(*position as i32)
+            }
+            None => None,
+        });
         AppError::Postgres(PostgresErrorBody {
             code,
             message: e.to_string(),
+            position,
         })
     }
 }

@@ -4,12 +4,43 @@ import { AppError } from "@/platform/errors/AppError";
 import { isPostgresTimeout } from "../errors";
 import { schemaApi } from "./api";
 import { subscribeSchemaEvent } from "./events";
+import { globalSchemaCache, isSystemSchema } from "./globalSchemaCache";
 import type {
   RelationsResult,
   SchemaSummary,
   StructureResult,
   TableExtrasResult,
 } from "./types";
+
+/**
+ * Background fire-and-forget bulk fetch of every column in `schema` for
+ * autocomplete pre-population. Skipped for system schemas. Idempotent
+ * (no-op if cache already has the bulk or it's in flight).
+ */
+function triggerColumnsBulk(connectionId: string, schema: string): void {
+  if (isSystemSchema(schema)) return;
+  if (globalSchemaCache.hasBulkColumns(connectionId, schema)) return;
+  if (globalSchemaCache.isBulkInflight(connectionId, schema)) return;
+  globalSchemaCache.markBulkInflight(connectionId, schema);
+  schemaApi
+    .listColumnsBulk(connectionId, schema, "auto")
+    .then((result) => {
+      const map = new Map(Object.entries(result.columns_by_relation));
+      globalSchemaCache.recordColumnsBulk(connectionId, schema, map);
+    })
+    .catch((e) => {
+      console.warn(
+        "[argus.schema] listColumnsBulk failed for",
+        connectionId,
+        "/",
+        schema,
+        e,
+      );
+    })
+    .finally(() => {
+      globalSchemaCache.clearBulkInflight(connectionId, schema);
+    });
+}
 
 const ACTIVE_EVENT = "postgres:active-changed";
 
@@ -153,7 +184,10 @@ function reducer(state: CacheState, action: Action): CacheState {
         return { ...e, tableExtras: next };
       });
 
-    case "invalidate":
+    case "invalidate": {
+      // The reducer doesn't know the connectionId — that's owned by the
+      // caller. The hook clears `globalSchemaCache` adjacent to dispatching
+      // this action (see `invalidate` returned below).
       return {
         schemasState: "idle",
         schemas: [],
@@ -161,6 +195,7 @@ function reducer(state: CacheState, action: Action): CacheState {
         objects: new Map(),
         generation: state.generation + 1,
       };
+    }
     case "invalidateSchema": {
       const next = new Map(state.objects);
       next.delete(action.schema);
@@ -283,6 +318,7 @@ export function useSchemaTree(connectionId: string | null): UseSchemaTreeResult 
           "schemas for",
           connectionId,
         );
+        globalSchemaCache.recordSchemas(connectionId, schemas);
         dispatch({ type: "schemasLoaded", schemas });
       })
       .catch((e: unknown) => {
@@ -358,7 +394,11 @@ export function useSchemaTree(connectionId: string | null): UseSchemaTreeResult 
             mat_views: payload.materialized_views.length,
           },
         );
+        globalSchemaCache.recordRelations(connectionId, schema, payload);
         dispatch({ type: "relationsLoaded", schema, payload });
+        // Fire-and-forget bulk fetch of every column in this schema —
+        // pre-populates the autocomplete cache for the SQL editor.
+        triggerColumnsBulk(connectionId, schema);
       } catch (e) {
         const err = e instanceof AppError ? e : new AppError("Internal", String(e));
         if (!isRetry && isPostgresTimeout(err)) {
@@ -597,8 +637,9 @@ export function useSchemaTree(connectionId: string | null): UseSchemaTreeResult 
   );
 
   const invalidate = useCallback(() => {
+    if (connectionId) globalSchemaCache.invalidate(connectionId);
     dispatch({ type: "invalidate" });
-  }, []);
+  }, [connectionId]);
 
   const invalidateSchema = useCallback((schema: string) => {
     dispatch({ type: "invalidateSchema", schema });

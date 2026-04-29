@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { AppError } from "@/platform/errors/AppError";
 import { isPostgresTimeout } from "../errors";
+import { globalSchemaCache } from "../schema/globalSchemaCache";
 import { dataApi } from "./api";
 import type {
   CellValue,
@@ -206,6 +207,7 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
           "user",
         );
         if (stateRef.current.generation !== generation) return;
+        globalSchemaCache.recordColumns(connectionId, schema, relation, result.columns);
         dispatch({ type: "first-loaded", result, pageSize: pageSizeRef.current });
       } catch (e) {
         const err = asAppError(e);
@@ -227,6 +229,12 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
               "user",
             );
             if (stateRef.current.generation !== generation) return;
+            globalSchemaCache.recordColumns(
+              connectionId,
+              schema,
+              relation,
+              result.columns,
+            );
             dispatch({
               type: "first-loaded",
               result,
