@@ -37,7 +37,13 @@ interface State {
   highestLoadedPage: number;
   /** True when the most recent page came back with fewer than `pageSize` rows. */
   reachedEnd: boolean;
-  /** Bumped whenever the buffer resets — used to invalidate in-flight loaders. */
+  /**
+   * Cancellation token for in-flight loaders. Bumped on every reset so that
+   * stale responses can be detected via `stateRef.current.generation !== generation`.
+   * Initial value is 1 (not 0) so the first-mount fetch's closure matches
+   * `stateRef` without depending on the reset effect dispatching first; the
+   * reset effect skips its first run via `isFirstMount` to keep this invariant.
+   */
   generation: number;
   truncatedColumns: Set<string>;
 }
@@ -60,7 +66,7 @@ function initialState(): State {
     queryMs: null,
     highestLoadedPage: 0,
     reachedEnd: false,
-    generation: 0,
+    generation: 1,
     truncatedColumns: new Set(),
   };
 }
@@ -184,10 +190,19 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
   const orderKey = useMemo(() => JSON.stringify(orderBy), [orderBy]);
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
 
-  // Reset buffer whenever paging inputs change.
+  // Reset buffer when paging inputs actually change. The fingerprint ref makes
+  // this effect idempotent under React 18 StrictMode (which runs effects
+  // mount → cleanup → mount on initial render). On first mount the ref is
+  // initialized to the current deps, so the effect's first body and its
+  // dev-only replay both compare equal and return without dispatching;
+  // `initialState()` already represents the post-reset shape (`generation: 1`).
+  const depsKey = `${connectionId}|${schema}|${relation}|${pageSize}|${orderKey}|${filtersKey}`;
+  const lastDepsKeyRef = useRef(depsKey);
   useEffect(() => {
+    if (lastDepsKeyRef.current === depsKey) return;
+    lastDepsKeyRef.current = depsKey;
     dispatch({ type: "reset", pageSize });
-  }, [connectionId, schema, relation, pageSize, orderKey, filtersKey]);
+  }, [depsKey, pageSize]);
 
   const fetchFirstPage = useCallback(
     async (generation: number) => {
