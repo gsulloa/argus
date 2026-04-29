@@ -23,6 +23,8 @@ import {
   usePalette,
 } from "@/platform/command-palette";
 import { ConnectionsProvider } from "@/platform/connection-registry/useConnections";
+import { ActivityLogProvider } from "@/platform/activity-log/store";
+import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
 import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
 
 export function App() {
@@ -31,9 +33,11 @@ export function App() {
       <PaletteProvider>
         <TabsProvider>
           <ConnectionsProvider>
-            <PostgresFormProvider>
-              <Shell />
-            </PostgresFormProvider>
+            <ActivityLogProvider>
+              <PostgresFormProvider>
+                <Shell />
+              </PostgresFormProvider>
+            </ActivityLogProvider>
           </ConnectionsProvider>
         </TabsProvider>
       </PaletteProvider>
@@ -43,7 +47,12 @@ export function App() {
 
 function Shell() {
   return (
-    <Layout sidebar={<Sidebar />} inspector={<Inspector />} statusBar={<StatusBar />}>
+    <Layout
+      sidebar={<Sidebar />}
+      inspector={<Inspector />}
+      statusBar={<StatusBar />}
+      bottomPanel={<ActivityLogPanel />}
+    >
       <ShellMain />
     </Layout>
   );

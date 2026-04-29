@@ -193,12 +193,18 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
       if (!isTauriRuntime()) return;
       dispatch({ type: "first-loading", isRetry: false });
       try {
-        const result = await dataApi.queryTable(connectionId, schema, relation, {
-          limit: pageSizeRef.current,
-          offset: 0,
-          order_by: orderByRef.current,
-          filters: filtersRef.current,
-        });
+        const result = await dataApi.queryTable(
+          connectionId,
+          schema,
+          relation,
+          {
+            limit: pageSizeRef.current,
+            offset: 0,
+            order_by: orderByRef.current,
+            filters: filtersRef.current,
+          },
+          "user",
+        );
         if (stateRef.current.generation !== generation) return;
         dispatch({ type: "first-loaded", result, pageSize: pageSizeRef.current });
       } catch (e) {
@@ -218,6 +224,7 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
                 order_by: orderByRef.current,
                 filters: filtersRef.current,
               },
+              "user",
             );
             if (stateRef.current.generation !== generation) return;
             dispatch({
@@ -253,12 +260,18 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
       const offset = cur.rows.length;
       dispatch({ type: "next-loading" });
       try {
-        const result = await dataApi.queryTable(connectionId, schema, relation, {
-          limit: pageSizeRef.current,
-          offset,
-          order_by: orderByRef.current,
-          filters: filtersRef.current,
-        });
+        const result = await dataApi.queryTable(
+          connectionId,
+          schema,
+          relation,
+          {
+            limit: pageSizeRef.current,
+            offset,
+            order_by: orderByRef.current,
+            filters: filtersRef.current,
+          },
+          "user",
+        );
         if (stateRef.current.generation !== generation) return;
         dispatch({ type: "next-loaded", result, pageSize: pageSizeRef.current });
       } catch (e) {

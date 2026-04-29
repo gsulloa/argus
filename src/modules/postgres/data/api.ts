@@ -7,6 +7,8 @@ import type {
   QueryTableResult,
 } from "./types";
 
+export type Origin = "auto" | "user";
+
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const started = performance.now();
   console.debug("[argus.data] invoke →", cmd, args);
@@ -28,12 +30,14 @@ export const dataApi = {
     schema: string,
     relation: string,
     options: QueryTableOptions,
+    origin: Origin = "auto",
   ): Promise<QueryTableResult> {
     return call<QueryTableResult>("postgres_query_table", {
       id,
       schema,
       relation,
       options,
+      origin,
     });
   },
   countTable(
@@ -41,12 +45,14 @@ export const dataApi = {
     schema: string,
     relation: string,
     filters?: Filter[],
+    origin: Origin = "auto",
   ): Promise<CountTableResult> {
     return call<CountTableResult>("postgres_count_table", {
       id,
       schema,
       relation,
       filters: filters ?? null,
+      origin,
     });
   },
 };

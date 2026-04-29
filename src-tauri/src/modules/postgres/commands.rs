@@ -9,6 +9,9 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::modules::activity_log::{
+    emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
+};
 use crate::modules::postgres::params::PostgresParams;
 use crate::modules::postgres::pool::{
     build_pg_config, ActivePoolSummary, ConnectResult, PgPoolRegistry,
@@ -32,28 +35,67 @@ pub struct ParseUrlResult {
 /// so the form can render them inline).
 #[tauri::command]
 pub async fn postgres_test_connection(
+    app: AppHandle,
     params: PostgresParams,
     secret: Option<String>,
 ) -> AppResult<serde_json::Value> {
     if let Err(e) = params.validate() {
+        emit_activity(
+            &app,
+            ActivityLogEntryBuilder::new(ActivityKind::TestConnection, Origin::User, 0).err(&e),
+        );
         return Ok(json!({ "ok": false, "error": e }));
     }
 
     let started = Instant::now();
     let outcome = timeout(POSTGRES_TIMEOUT, run_test(&params, secret.as_deref())).await;
+    let duration_ms = started.elapsed().as_millis() as u64;
 
     let value = match outcome {
-        Ok(Ok(server_version)) => json!({
-            "ok": true,
-            "latencyMs": started.elapsed().as_millis() as u64,
-            "serverVersion": server_version,
-        }),
-        Ok(Err(e)) => json!({ "ok": false, "error": e }),
+        Ok(Ok(server_version)) => {
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(
+                    ActivityKind::TestConnection,
+                    Origin::User,
+                    duration_ms,
+                )
+                .ok(Some(Metric::ServerVersion {
+                    value: server_version.clone(),
+                })),
+            );
+            json!({
+                "ok": true,
+                "latencyMs": duration_ms,
+                "serverVersion": server_version,
+            })
+        }
+        Ok(Err(e)) => {
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(
+                    ActivityKind::TestConnection,
+                    Origin::User,
+                    duration_ms,
+                )
+                .err(&e),
+            );
+            json!({ "ok": false, "error": e })
+        }
         Err(_) => {
             let err = AppError::postgres(format!(
                 "test timed out after {}s",
                 POSTGRES_TIMEOUT.as_secs()
             ));
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(
+                    ActivityKind::TestConnection,
+                    Origin::User,
+                    duration_ms,
+                )
+                .err(&err),
+            );
             json!({ "ok": false, "error": err })
         }
     };
@@ -96,22 +138,61 @@ pub async fn postgres_connect(
     pools: State<'_, PgPoolRegistry>,
     id: String,
 ) -> AppResult<ConnectResult> {
-    let id =
-        Uuid::parse_str(&id).map_err(|e| AppError::Validation(format!("bad uuid: {e}")))?;
+    let started = Instant::now();
+    let parsed = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(e) => {
+            let err = AppError::Validation(format!("bad uuid: {e}"));
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(
+                    ActivityKind::Connect,
+                    Origin::User,
+                    started.elapsed().as_millis() as u64,
+                )
+                .err(&err),
+            );
+            return Err(err);
+        }
+    };
 
-    let (params, secret) = crate::modules::postgres::pool::load_connection_input(&db.0, id)?;
+    let outcome: AppResult<ConnectResult> = async {
+        let (params, secret) =
+            crate::modules::postgres::pool::load_connection_input(&db.0, parsed)?;
+        timeout(POSTGRES_TIMEOUT, pools.connect(params, secret, parsed))
+            .await
+            .map_err(|_| {
+                AppError::postgres(format!(
+                    "connect timed out after {}s",
+                    POSTGRES_TIMEOUT.as_secs()
+                ))
+            })?
+    }
+    .await;
 
-    let result = timeout(POSTGRES_TIMEOUT, pools.connect(params, secret, id))
-        .await
-        .map_err(|_| {
-            AppError::postgres(format!(
-                "connect timed out after {}s",
-                POSTGRES_TIMEOUT.as_secs()
-            ))
-        })??;
-
-    let _ = app.emit("postgres:active-changed", ());
-    Ok(result)
+    let duration_ms = started.elapsed().as_millis() as u64;
+    match &outcome {
+        Ok(result) => {
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::Connect, Origin::User, duration_ms)
+                    .connection(parsed)
+                    .ok(Some(Metric::ServerVersion {
+                        value: result.server_version.clone(),
+                    })),
+            );
+            let _ = app.emit("postgres:active-changed", ());
+        }
+        Err(e) => {
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::Connect, Origin::User, duration_ms)
+                    .connection(parsed)
+                    .err(e),
+            );
+        }
+    }
+    outcome
 }
 
 #[tauri::command]
@@ -120,12 +201,37 @@ pub async fn postgres_disconnect(
     pools: State<'_, PgPoolRegistry>,
     id: String,
 ) -> AppResult<()> {
-    let id =
-        Uuid::parse_str(&id).map_err(|e| AppError::Validation(format!("bad uuid: {e}")))?;
-    let removed = pools.disconnect(&id).await;
+    let started = Instant::now();
+    let parsed = match Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(e) => {
+            let err = AppError::Validation(format!("bad uuid: {e}"));
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(
+                    ActivityKind::Disconnect,
+                    Origin::User,
+                    started.elapsed().as_millis() as u64,
+                )
+                .err(&err),
+            );
+            return Err(err);
+        }
+    };
+    let removed = pools.disconnect(&parsed).await;
     if removed {
         let _ = app.emit("postgres:active-changed", ());
     }
+    emit_activity(
+        &app,
+        ActivityLogEntryBuilder::new(
+            ActivityKind::Disconnect,
+            Origin::User,
+            started.elapsed().as_millis() as u64,
+        )
+        .connection(parsed)
+        .ok(None),
+    );
     Ok(())
 }
 

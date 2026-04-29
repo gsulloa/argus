@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use deadpool_postgres::Object as PgObject;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use tauri::State;
+use tauri::{AppHandle, State};
 use tokio::time::timeout;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::NoTls;
@@ -11,6 +11,9 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::modules::activity_log::{
+    emit_activity, format_params, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
+};
 use crate::modules::postgres::params::SslMode;
 use crate::modules::postgres::pool::PgPoolRegistry;
 use crate::modules::postgres::tls::client_config_for;
@@ -429,13 +432,16 @@ async fn fire_cancel(cancel_token: tokio_postgres::CancelToken, sslmode: SslMode
 
 #[tauri::command]
 pub async fn postgres_query_table(
+    app: AppHandle,
     pools: State<'_, PgPoolRegistry>,
     id: String,
     schema: String,
     relation: String,
     options: serde_json::Value,
+    origin: Option<Origin>,
 ) -> AppResult<QueryTableResult> {
     let started = Instant::now();
+    let activity_origin = origin.unwrap_or_default();
     let parsed = parse_id(&id)?;
     let opts: QueryTableOptions = serde_json::from_value(options)
         .map_err(|e| AppError::Validation(format!("invalid query options: {e}")))?;
@@ -458,97 +464,128 @@ pub async fn postgres_query_table(
         opts.filters.len()
     );
 
-    let sslmode = pools.sslmode_for(&parsed).await?;
-    let client = pools.acquire(&parsed).await?;
-    let cancel_token = client.cancel_token();
+    let mut emitted_sql: Option<String> = None;
+    let mut emitted_params: Option<Vec<String>> = None;
+    let inner: AppResult<QueryTableResult> = async {
+        let sslmode = pools.sslmode_for(&parsed).await?;
+        let client = pools.acquire(&parsed).await?;
+        let cancel_token = client.cancel_token();
 
-    // Resolve column metadata first — also serves as the "relation exists" check.
-    let columns = match timeout(QUERY_TIMEOUT, list_columns(&client, &schema, &relation)).await {
-        Ok(r) => r?,
-        Err(_) => {
-            fire_cancel(cancel_token, sslmode).await;
-            drop(client);
-            return Err(AppError::postgres_with_code(
-                "57014",
-                format!(
-                    "table query timed out resolving columns ({}s)",
-                    QUERY_TIMEOUT.as_secs()
-                ),
-            ));
+        let columns =
+            match timeout(QUERY_TIMEOUT, list_columns(&client, &schema, &relation)).await {
+                Ok(r) => r?,
+                Err(_) => {
+                    fire_cancel(cancel_token, sslmode).await;
+                    drop(client);
+                    return Err(AppError::postgres_with_code(
+                        "57014",
+                        format!(
+                            "table query timed out resolving columns ({}s)",
+                            QUERY_TIMEOUT.as_secs()
+                        ),
+                    ));
+                }
+            };
+
+        let (sql, params) = build_select_sql(
+            &schema,
+            &relation,
+            &opts.order_by,
+            &opts.filters,
+            opts.limit,
+            opts.offset,
+        )?;
+        tracing::debug!("postgres_query_table sql: {sql}");
+        emitted_sql = Some(sql.clone());
+        emitted_params = Some(format_params(&params));
+
+        let param_refs: Vec<&(dyn ToSql + Sync)> = params
+            .iter()
+            .map(|b| b.as_ref() as &(dyn ToSql + Sync))
+            .collect();
+
+        let cancel_token_for_query = client.cancel_token();
+        let query_started = Instant::now();
+        let rows = match timeout(QUERY_TIMEOUT, client.query(&sql, &param_refs)).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return Err(AppError::from(e)),
+            Err(_) => {
+                fire_cancel(cancel_token_for_query, sslmode).await;
+                drop(client);
+                return Err(AppError::postgres_with_code(
+                    "57014",
+                    format!("table query timed out ({}s)", QUERY_TIMEOUT.as_secs()),
+                ));
+            }
+        };
+        let query_ms = query_started.elapsed().as_millis() as u64;
+
+        let mut truncated_columns: Vec<String> = Vec::new();
+        let mut out_rows: Vec<Vec<JsonValue>> = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let json_text: String = row.get(0);
+            out_rows.push(process_row(&json_text, &columns, &mut truncated_columns)?);
         }
-    };
 
-    let (sql, params) = build_select_sql(
-        &schema,
-        &relation,
-        &opts.order_by,
-        &opts.filters,
-        opts.limit,
-        opts.offset,
-    )?;
-    tracing::debug!("postgres_query_table sql: {sql}");
+        let applied = AppliedQuery {
+            limit: opts.limit,
+            offset: opts.offset,
+            order_by: opts.order_by.clone(),
+            filters: opts.filters.clone(),
+        };
 
-    let param_refs: Vec<&(dyn ToSql + Sync)> = params
-        .iter()
-        .map(|b| b.as_ref() as &(dyn ToSql + Sync))
-        .collect();
+        tracing::info!(
+            "postgres_query_table ok: id={parsed} schema={schema} relation={relation} \
+             rows={} query_ms={} total_ms={}",
+            out_rows.len(),
+            query_ms,
+            started.elapsed().as_millis()
+        );
 
-    let cancel_token_for_query = client.cancel_token();
-    let query_started = Instant::now();
-    let rows = match timeout(QUERY_TIMEOUT, client.query(&sql, &param_refs)).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(AppError::from(e)),
-        Err(_) => {
-            fire_cancel(cancel_token_for_query, sslmode).await;
-            drop(client);
-            return Err(AppError::postgres_with_code(
-                "57014",
-                format!("table query timed out ({}s)", QUERY_TIMEOUT.as_secs()),
-            ));
-        }
-    };
-    let query_ms = query_started.elapsed().as_millis() as u64;
-
-    let mut truncated_columns: Vec<String> = Vec::new();
-    let mut out_rows: Vec<Vec<JsonValue>> = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let json_text: String = row.get(0);
-        out_rows.push(process_row(&json_text, &columns, &mut truncated_columns)?);
+        Ok(QueryTableResult {
+            columns,
+            rows: out_rows,
+            applied,
+            query_ms,
+            truncated_columns,
+        })
     }
+    .await;
 
-    let applied = AppliedQuery {
-        limit: opts.limit,
-        offset: opts.offset,
-        order_by: opts.order_by.clone(),
-        filters: opts.filters.clone(),
-    };
-
-    tracing::info!(
-        "postgres_query_table ok: id={parsed} schema={schema} relation={relation} \
-         rows={} query_ms={} total_ms={}",
-        out_rows.len(),
-        query_ms,
-        started.elapsed().as_millis()
-    );
-
-    Ok(QueryTableResult {
-        columns,
-        rows: out_rows,
-        applied,
-        query_ms,
-        truncated_columns,
-    })
+    let total_ms = started.elapsed().as_millis() as u64;
+    let mut builder =
+        ActivityLogEntryBuilder::new(ActivityKind::QueryTable, activity_origin, total_ms)
+            .connection(parsed);
+    if let Some(sql) = emitted_sql {
+        builder = builder.sql(sql);
+    }
+    if let Some(params) = emitted_params {
+        builder = builder.params(params);
+    }
+    match &inner {
+        Ok(r) => emit_activity(
+            &app,
+            builder.ok(Some(Metric::Rows {
+                value: r.rows.len() as u64,
+            })),
+        ),
+        Err(e) => emit_activity(&app, builder.err(e)),
+    }
+    inner
 }
 
 #[tauri::command]
 pub async fn postgres_count_table(
+    app: AppHandle,
     pools: State<'_, PgPoolRegistry>,
     id: String,
     schema: String,
     relation: String,
     filters: Option<serde_json::Value>,
+    origin: Option<Origin>,
 ) -> AppResult<CountTableResult> {
     let started = Instant::now();
+    let activity_origin = origin.unwrap_or_default();
     let parsed = parse_id(&id)?;
     let filters_vec: Vec<Filter> = match filters {
         Some(v) => serde_json::from_value(v)
@@ -561,41 +598,67 @@ pub async fn postgres_count_table(
         filters_vec.len()
     );
 
-    let sslmode = pools.sslmode_for(&parsed).await?;
-    let client = pools.acquire(&parsed).await?;
-    let cancel_token = client.cancel_token();
+    let mut emitted_sql: Option<String> = None;
+    let mut emitted_params: Option<Vec<String>> = None;
+    let inner: AppResult<CountTableResult> = async {
+        let sslmode = pools.sslmode_for(&parsed).await?;
+        let client = pools.acquire(&parsed).await?;
+        let cancel_token = client.cancel_token();
 
-    let (sql, params) = build_count_sql(&schema, &relation, &filters_vec)?;
-    tracing::debug!("postgres_count_table sql: {sql}");
+        let (sql, params) = build_count_sql(&schema, &relation, &filters_vec)?;
+        tracing::debug!("postgres_count_table sql: {sql}");
+        emitted_sql = Some(sql.clone());
+        emitted_params = Some(format_params(&params));
 
-    let param_refs: Vec<&(dyn ToSql + Sync)> = params
-        .iter()
-        .map(|b| b.as_ref() as &(dyn ToSql + Sync))
-        .collect();
+        let param_refs: Vec<&(dyn ToSql + Sync)> = params
+            .iter()
+            .map(|b| b.as_ref() as &(dyn ToSql + Sync))
+            .collect();
 
-    let query_started = Instant::now();
-    let row = match timeout(QUERY_TIMEOUT, client.query_one(&sql, &param_refs)).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(AppError::from(e)),
-        Err(_) => {
-            fire_cancel(cancel_token, sslmode).await;
-            drop(client);
-            return Err(AppError::postgres_with_code(
-                "57014",
-                format!("count timed out ({}s)", QUERY_TIMEOUT.as_secs()),
-            ));
-        }
-    };
-    let count: i64 = row.get(0);
-    let query_ms = query_started.elapsed().as_millis() as u64;
+        let query_started = Instant::now();
+        let row = match timeout(QUERY_TIMEOUT, client.query_one(&sql, &param_refs)).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return Err(AppError::from(e)),
+            Err(_) => {
+                fire_cancel(cancel_token, sslmode).await;
+                drop(client);
+                return Err(AppError::postgres_with_code(
+                    "57014",
+                    format!("count timed out ({}s)", QUERY_TIMEOUT.as_secs()),
+                ));
+            }
+        };
+        let count: i64 = row.get(0);
+        let query_ms = query_started.elapsed().as_millis() as u64;
 
-    tracing::info!(
-        "postgres_count_table ok: id={parsed} schema={schema} relation={relation} \
-         count={count} query_ms={query_ms} total_ms={}",
-        started.elapsed().as_millis()
-    );
+        tracing::info!(
+            "postgres_count_table ok: id={parsed} schema={schema} relation={relation} \
+             count={count} query_ms={query_ms} total_ms={}",
+            started.elapsed().as_millis()
+        );
 
-    Ok(CountTableResult { count, query_ms })
+        Ok(CountTableResult { count, query_ms })
+    }
+    .await;
+
+    let total_ms = started.elapsed().as_millis() as u64;
+    let mut builder =
+        ActivityLogEntryBuilder::new(ActivityKind::CountTable, activity_origin, total_ms)
+            .connection(parsed);
+    if let Some(sql) = emitted_sql {
+        builder = builder.sql(sql);
+    }
+    if let Some(params) = emitted_params {
+        builder = builder.params(params);
+    }
+    match &inner {
+        Ok(r) => emit_activity(
+            &app,
+            builder.ok(Some(Metric::Count { value: r.count })),
+        ),
+        Err(e) => emit_activity(&app, builder.err(e)),
+    }
+    inner
 }
 
 #[cfg(test)]

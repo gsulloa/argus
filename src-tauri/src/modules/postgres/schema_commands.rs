@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use deadpool_postgres::Object as PgObject;
-use tauri::State;
+use tauri::{AppHandle, State};
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 use tokio_postgres::NoTls;
@@ -9,6 +9,9 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::modules::activity_log::{
+    emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
+};
 use crate::modules::postgres::params::SslMode;
 use crate::modules::postgres::pool::PgPoolRegistry;
 use crate::modules::postgres::schema;
@@ -129,6 +132,7 @@ fn all_failed_57014(kinds: &[&str]) -> Vec<KindFailure> {
 
 #[tauri::command]
 pub async fn postgres_list_schemas(
+    app: AppHandle,
     pools: State<'_, PgPoolRegistry>,
     id: String,
 ) -> AppResult<Vec<SchemaSummary>> {
@@ -140,15 +144,25 @@ pub async fn postgres_list_schemas(
     })
     .await;
     let ms = started.elapsed().as_millis();
+    let duration_ms = ms as u64;
+    let builder = ActivityLogEntryBuilder::new(ActivityKind::ListSchemas, Origin::Auto, duration_ms)
+        .connection(parsed);
     match &result {
         Ok(rows) => {
             tracing::info!(
                 "postgres_list_schemas ok: id={parsed} schemas={} elapsed={ms}ms",
                 rows.len()
             );
+            emit_activity(
+                &app,
+                builder.ok(Some(Metric::Items {
+                    value: rows.len() as u32,
+                })),
+            );
         }
         Err(e) => {
             tracing::error!("postgres_list_schemas err: id={parsed} elapsed={ms}ms err={e:?}");
+            emit_activity(&app, builder.err(e));
         }
     }
     result
@@ -156,6 +170,7 @@ pub async fn postgres_list_schemas(
 
 #[tauri::command]
 pub async fn postgres_list_relations(
+    app: AppHandle,
     pools: State<'_, PgPoolRegistry>,
     id: String,
     schema_name: String,
@@ -164,38 +179,47 @@ pub async fn postgres_list_relations(
     let parsed = parse_id(&id)?;
     tracing::info!("postgres_list_relations: id={parsed} schema={schema_name}");
 
-    let sslmode = pools.sslmode_for(&parsed).await?;
-    let client = pools.acquire(&parsed).await?;
-    let cancel_token = client.cancel_token();
+    let result: AppResult<RelationsResult> = async {
+        let sslmode = pools.sslmode_for(&parsed).await?;
+        let client = pools.acquire(&parsed).await?;
+        let cancel_token = client.cancel_token();
 
-    let outcome = timeout(
-        RELATIONS_TIMEOUT,
-        schema::list_relations(&client, &schema_name),
-    )
+        match timeout(
+            RELATIONS_TIMEOUT,
+            schema::list_relations(&client, &schema_name),
+        )
+        .await
+        {
+            Ok(Ok((tables, views, materialized_views))) => Ok(RelationsResult {
+                schema: schema_name.clone(),
+                tables,
+                views,
+                materialized_views,
+            }),
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                fire_cancel(cancel_token, sslmode).await;
+                drop(client);
+                Err(AppError::postgres_with_code(
+                    "57014",
+                    format!(
+                        "schema relations load timed out ({}s)",
+                        RELATIONS_TIMEOUT.as_secs()
+                    ),
+                ))
+            }
+        }
+    }
     .await;
 
-    let result: AppResult<RelationsResult> = match outcome {
-        Ok(Ok((tables, views, materialized_views))) => Ok(RelationsResult {
-            schema: schema_name.clone(),
-            tables,
-            views,
-            materialized_views,
-        }),
-        Ok(Err(e)) => Err(e),
-        Err(_) => {
-            fire_cancel(cancel_token, sslmode).await;
-            drop(client);
-            Err(AppError::postgres_with_code(
-                "57014",
-                format!(
-                    "schema relations load timed out ({}s)",
-                    RELATIONS_TIMEOUT.as_secs()
-                ),
-            ))
-        }
-    };
-
     let ms = started.elapsed().as_millis();
+    let duration_ms = ms as u64;
+    let builder = ActivityLogEntryBuilder::new(
+        ActivityKind::ListRelations,
+        Origin::Auto,
+        duration_ms,
+    )
+    .connection(parsed);
     match &result {
         Ok(r) => {
             tracing::info!(
@@ -206,11 +230,19 @@ pub async fn postgres_list_relations(
                 r.views.len(),
                 r.materialized_views.len(),
             );
+            let total = r.tables.len() + r.views.len() + r.materialized_views.len();
+            emit_activity(
+                &app,
+                builder.ok(Some(Metric::Items {
+                    value: total as u32,
+                })),
+            );
         }
         Err(e) => {
             tracing::error!(
                 "postgres_list_relations err: id={parsed} schema={schema_name} elapsed={ms}ms err={e:?}"
             );
+            emit_activity(&app, builder.err(e));
         }
     }
     result
@@ -240,6 +272,7 @@ async fn list_structure_inner<'a>(
 
 #[tauri::command]
 pub async fn postgres_list_structure(
+    app: AppHandle,
     pools: State<'_, PgPoolRegistry>,
     id: String,
     schema_name: String,
@@ -248,72 +281,92 @@ pub async fn postgres_list_structure(
     let parsed = parse_id(&id)?;
     tracing::info!("postgres_list_structure: id={parsed} schema={schema_name}");
 
-    let sslmode = pools.sslmode_for(&parsed).await?;
-    let client = pools.acquire(&parsed).await?;
-    let cancel_token = client.cancel_token();
+    let inner_result: AppResult<StructureResult> = async {
+        let sslmode = pools.sslmode_for(&parsed).await?;
+        let client = pools.acquire(&parsed).await?;
+        let cancel_token = client.cancel_token();
 
-    // Wrap the inner join in the outer total timeout. In practice the inner
-    // per-query timeouts (8s) resolve everything before the outer (10s) ever
-    // fires; the outer is a defensive net for cases where cancellation doesn't
-    // propagate through the pipeline.
-    let outcome = timeout(TOTAL_TIMEOUT, list_structure_inner(&client, &schema_name)).await;
+        // Wrap the inner join in the outer total timeout. In practice the inner
+        // per-query timeouts (8s) resolve everything before the outer (10s)
+        // ever fires; the outer is a defensive net.
+        let outcome = timeout(TOTAL_TIMEOUT, list_structure_inner(&client, &schema_name)).await;
 
-    let (functions, types, extensions, failures) = match outcome {
-        Ok((fr, tr, er)) => {
-            let mut failures = Vec::new();
-            let functions = aggregate_one(fr, "functions", &mut failures);
-            let types = aggregate_one(tr, "types", &mut failures);
-            let extensions = aggregate_one(er, "extensions", &mut failures);
-            (functions, types, extensions, failures)
+        let (functions, types, extensions, failures) = match outcome {
+            Ok((fr, tr, er)) => {
+                let mut failures = Vec::new();
+                let functions = aggregate_one(fr, "functions", &mut failures);
+                let types = aggregate_one(tr, "types", &mut failures);
+                let extensions = aggregate_one(er, "extensions", &mut failures);
+                (functions, types, extensions, failures)
+            }
+            Err(_) => {
+                fire_cancel(cancel_token, sslmode).await;
+                (
+                    None,
+                    None,
+                    None,
+                    all_failed_57014(&["functions", "types", "extensions"]),
+                )
+            }
+        };
+
+        drop(client);
+
+        for f in &failures {
+            tracing::warn!(
+                "postgres_list_structure failure: schema={schema_name} kind={} code={:?} message={}",
+                f.kind,
+                f.code,
+                f.message
+            );
         }
-        Err(_) => {
-            fire_cancel(cancel_token, sslmode).await;
-            (
-                None,
-                None,
-                None,
-                all_failed_57014(&["functions", "types", "extensions"]),
-            )
-        }
-    };
 
-    drop(client);
-
-    for f in &failures {
-        tracing::warn!(
-            "postgres_list_structure failure: schema={schema_name} kind={} code={:?} message={}",
-            f.kind,
-            f.code,
-            f.message
-        );
+        Ok(StructureResult {
+            schema: schema_name.clone(),
+            functions,
+            types,
+            extensions,
+            failures,
+        })
     }
-
-    let result = StructureResult {
-        schema: schema_name.clone(),
-        functions,
-        types,
-        extensions,
-        failures,
-    };
+    .await;
 
     let ms = started.elapsed().as_millis();
-    tracing::info!(
-        "postgres_list_structure ok: id={parsed} schema={schema_name} \
-         functions={} types={} extensions={} failures={} elapsed={ms}ms",
-        result
-            .functions
-            .as_ref()
-            .map(|v| v.len() as i64)
-            .unwrap_or(-1),
-        result.types.as_ref().map(|v| v.len() as i64).unwrap_or(-1),
-        result
-            .extensions
-            .as_ref()
-            .map(|v| v.len() as i64)
-            .unwrap_or(-1),
-        result.failures.len(),
-    );
-    Ok(result)
+    let duration_ms = ms as u64;
+    let builder =
+        ActivityLogEntryBuilder::new(ActivityKind::ListStructure, Origin::Auto, duration_ms)
+            .connection(parsed);
+    match &inner_result {
+        Ok(result) => {
+            tracing::info!(
+                "postgres_list_structure ok: id={parsed} schema={schema_name} \
+                 functions={} types={} extensions={} failures={} elapsed={ms}ms",
+                result
+                    .functions
+                    .as_ref()
+                    .map(|v| v.len() as i64)
+                    .unwrap_or(-1),
+                result.types.as_ref().map(|v| v.len() as i64).unwrap_or(-1),
+                result
+                    .extensions
+                    .as_ref()
+                    .map(|v| v.len() as i64)
+                    .unwrap_or(-1),
+                result.failures.len(),
+            );
+            let total: u32 = result.functions.as_ref().map(|v| v.len() as u32).unwrap_or(0)
+                + result.types.as_ref().map(|v| v.len() as u32).unwrap_or(0)
+                + result.extensions.as_ref().map(|v| v.len() as u32).unwrap_or(0);
+            emit_activity(&app, builder.ok(Some(Metric::Items { value: total })));
+        }
+        Err(e) => {
+            tracing::error!(
+                "postgres_list_structure err: id={parsed} schema={schema_name} elapsed={ms}ms err={e:?}"
+            );
+            emit_activity(&app, builder.err(e));
+        }
+    }
+    inner_result
 }
 
 async fn list_table_extras_inner<'a>(
@@ -336,6 +389,7 @@ async fn list_table_extras_inner<'a>(
 
 #[tauri::command]
 pub async fn postgres_list_table_extras(
+    app: AppHandle,
     pools: State<'_, PgPoolRegistry>,
     id: String,
     schema_name: String,
@@ -347,58 +401,78 @@ pub async fn postgres_list_table_extras(
         "postgres_list_table_extras: id={parsed} schema={schema_name} relation={relation}"
     );
 
-    let sslmode = pools.sslmode_for(&parsed).await?;
-    let client = pools.acquire(&parsed).await?;
-    let cancel_token = client.cancel_token();
+    let inner_result: AppResult<TableExtrasResult> = async {
+        let sslmode = pools.sslmode_for(&parsed).await?;
+        let client = pools.acquire(&parsed).await?;
+        let cancel_token = client.cancel_token();
 
-    let outcome = timeout(
-        TOTAL_TIMEOUT,
-        list_table_extras_inner(&client, &schema_name, &relation),
-    )
+        let outcome = timeout(
+            TOTAL_TIMEOUT,
+            list_table_extras_inner(&client, &schema_name, &relation),
+        )
+        .await;
+
+        let (indexes, triggers, failures) = match outcome {
+            Ok((ir, tr)) => {
+                let mut failures = Vec::new();
+                let indexes = aggregate_one(ir, "indexes", &mut failures);
+                let triggers = aggregate_one(tr, "triggers", &mut failures);
+                (indexes, triggers, failures)
+            }
+            Err(_) => {
+                fire_cancel(cancel_token, sslmode).await;
+                (None, None, all_failed_57014(&["indexes", "triggers"]))
+            }
+        };
+
+        drop(client);
+
+        for f in &failures {
+            tracing::warn!(
+                "postgres_list_table_extras failure: schema={schema_name} relation={relation} \
+                 kind={} code={:?} message={}",
+                f.kind,
+                f.code,
+                f.message
+            );
+        }
+
+        Ok(TableExtrasResult {
+            schema: schema_name.clone(),
+            relation: relation.clone(),
+            indexes,
+            triggers,
+            failures,
+        })
+    }
     .await;
 
-    let (indexes, triggers, failures) = match outcome {
-        Ok((ir, tr)) => {
-            let mut failures = Vec::new();
-            let indexes = aggregate_one(ir, "indexes", &mut failures);
-            let triggers = aggregate_one(tr, "triggers", &mut failures);
-            (indexes, triggers, failures)
-        }
-        Err(_) => {
-            fire_cancel(cancel_token, sslmode).await;
-            (None, None, all_failed_57014(&["indexes", "triggers"]))
-        }
-    };
-
-    drop(client);
-
-    for f in &failures {
-        tracing::warn!(
-            "postgres_list_table_extras failure: schema={schema_name} relation={relation} \
-             kind={} code={:?} message={}",
-            f.kind,
-            f.code,
-            f.message
-        );
-    }
-
-    let result = TableExtrasResult {
-        schema: schema_name.clone(),
-        relation: relation.clone(),
-        indexes,
-        triggers,
-        failures,
-    };
-
     let ms = started.elapsed().as_millis();
-    tracing::info!(
-        "postgres_list_table_extras ok: id={parsed} schema={schema_name} relation={relation} \
-         indexes={} triggers={} failures={} elapsed={ms}ms",
-        result.indexes.as_ref().map(|v| v.len() as i64).unwrap_or(-1),
-        result.triggers.as_ref().map(|v| v.len() as i64).unwrap_or(-1),
-        result.failures.len(),
-    );
-    Ok(result)
+    let duration_ms = ms as u64;
+    let builder =
+        ActivityLogEntryBuilder::new(ActivityKind::ListTableExtras, Origin::Auto, duration_ms)
+            .connection(parsed);
+    match &inner_result {
+        Ok(result) => {
+            tracing::info!(
+                "postgres_list_table_extras ok: id={parsed} schema={schema_name} relation={relation} \
+                 indexes={} triggers={} failures={} elapsed={ms}ms",
+                result.indexes.as_ref().map(|v| v.len() as i64).unwrap_or(-1),
+                result.triggers.as_ref().map(|v| v.len() as i64).unwrap_or(-1),
+                result.failures.len(),
+            );
+            let total: u32 = result.indexes.as_ref().map(|v| v.len() as u32).unwrap_or(0)
+                + result.triggers.as_ref().map(|v| v.len() as u32).unwrap_or(0);
+            emit_activity(&app, builder.ok(Some(Metric::Items { value: total })));
+        }
+        Err(e) => {
+            tracing::error!(
+                "postgres_list_table_extras err: id={parsed} schema={schema_name} relation={relation} elapsed={ms}ms err={e:?}"
+            );
+            emit_activity(&app, builder.err(e));
+        }
+    }
+    inner_result
 }
 
 #[tauri::command]
