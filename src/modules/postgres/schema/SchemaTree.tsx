@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactN
 import { Loader2, RotateCw, Terminal } from "lucide-react";
 import { useTabs } from "@/platform/shell/tabs";
 import { SidebarTree, type TreeNode } from "@/platform/shell/SidebarTree";
+import { useSidebarScrollRef } from "@/platform/shell/sidebarScroll";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { openQueryTab } from "../sql";
 import { GroupIcon, LeafIcon, type GroupKind, type LeafKind } from "./objectIcons";
@@ -640,6 +641,7 @@ export function SchemaTree({ connectionId }: Props) {
   const { items: connections } = useConnections();
   const connectionName =
     connections.find((c) => c.id === connectionId)?.name ?? connectionId;
+  const sidebarScrollRef = useSidebarScrollRef();
 
   // Eager `relations` fetch for visible schemas. The hook de-dupes loading
   // state — this is idempotent and only the cheap query fires.
@@ -872,6 +874,7 @@ export function SchemaTree({ connectionId }: Props) {
             forceExpanded={filtered.forceExpanded}
             ariaLabel={`Schemas for ${connectionName}`}
             empty={showEmpty ? emptyMessage : undefined}
+            scrollElementRef={sidebarScrollRef ?? undefined}
           />
         </div>
       )}
