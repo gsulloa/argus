@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { ChevronRight } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -73,6 +74,13 @@ export interface SidebarTreeProps {
    * tree's internal state has been updated; receives the new state.
    */
   onToggle?: (node: TreeNode, expanded: boolean) => void;
+  /**
+   * Optional ref to an external scroll element. When provided, the virtualizer
+   * measures rows against it instead of the tree's own internal scroller —
+   * letting the tree contribute to a larger shared scroll context (e.g. the
+   * sidebar). When omitted, the tree falls back to its internal scroller.
+   */
+  scrollElementRef?: RefObject<HTMLElement | null>;
 }
 
 interface FlatNode {
@@ -113,6 +121,7 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
     rowHeight = DEFAULT_ROW_HEIGHT,
     isActivatable,
     onToggle,
+    scrollElementRef,
   },
   ref,
 ) {
@@ -381,7 +390,7 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
 
   const virtualizer = useVirtualizer({
     count: shouldVirtualize ? flat.length : 0,
-    getScrollElement: () => scrollerRef.current,
+    getScrollElement: () => scrollElementRef?.current ?? scrollerRef.current,
     estimateSize: () => rowHeight,
     overscan: 12,
   });

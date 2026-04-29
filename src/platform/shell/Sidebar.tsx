@@ -1,7 +1,7 @@
 import { Plus } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import type { Connection } from "@/platform/connection-registry/types";
 import {
@@ -19,16 +19,22 @@ import { useTabs } from "@/platform/shell/tabs";
 import logoUrl from "@/assets/logo.svg";
 import styles from "./Sidebar.module.css";
 import dialogStyles from "./Dialog.module.css";
+import { SidebarScrollContext } from "./sidebarScroll";
 
 export function Sidebar() {
+  const scrollRef = useRef<HTMLDivElement>(null);
   return (
-    <div className={styles.root}>
-      <header className={styles.brand}>
-        <img src={logoUrl} alt="" className={styles.brandMark} />
-        <span className={styles.brandName}>Argus</span>
-      </header>
-      <ConnectionsSection />
-    </div>
+    <SidebarScrollContext.Provider value={scrollRef}>
+      <div className={styles.root}>
+        <header className={styles.brand}>
+          <img src={logoUrl} alt="" className={styles.brandMark} />
+          <span className={styles.brandName}>Argus</span>
+        </header>
+        <div ref={scrollRef} className={styles.scroll}>
+          <ConnectionsSection />
+        </div>
+      </div>
+    </SidebarScrollContext.Provider>
   );
 }
 

@@ -5,6 +5,13 @@
   height: 100%;
 }
 
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 .brand {
   display: flex;
   align-items: center;
