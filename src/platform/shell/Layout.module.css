@@ -1,7 +1,7 @@
 .root {
   display: grid;
   grid-template-columns: var(--sidebar-width, 240px) 4px 1fr 4px var(--inspector-width, 0px);
-  grid-template-rows: 1fr 28px;
+  grid-template-rows: 1fr var(--logs-handle, 0px) var(--logs-height, 0px) 28px;
   height: 100vh;
   width: 100vw;
   background: var(--bg);
@@ -12,6 +12,11 @@
 .root[data-inspector="closed"] {
   --inspector-width: 0px;
   grid-template-columns: var(--sidebar-width, 240px) 4px 1fr 0 0;
+}
+
+.root[data-logs="closed"] {
+  --logs-handle: 0px;
+  --logs-height: 0px;
 }
 
 .sidebar {
@@ -80,9 +85,41 @@
   display: none;
 }
 
-.statusbar {
+.logsHandle {
   grid-column: 1 / -1;
   grid-row: 2;
+  cursor: row-resize;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  user-select: none;
+}
+.root[data-logs="closed"] .logsHandle {
+  display: none;
+}
+.logsHandle:hover,
+.logsHandle:active {
+  background: var(--accent);
+  opacity: 0.4;
+}
+
+.logsPanel {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  background: var(--surface, var(--bg-elevated));
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.root[data-logs="closed"] .logsPanel {
+  display: none;
+}
+
+.statusbar {
+  grid-column: 1 / -1;
+  grid-row: 4;
   background: var(--bg-statusbar);
   border-top: 1px solid var(--border);
   display: flex;

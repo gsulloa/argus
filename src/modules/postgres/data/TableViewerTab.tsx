@@ -96,7 +96,7 @@ function TableViewer({ connectionId, schema, relation }: TableViewerProps) {
     setCountLoading(true);
     setCountError(null);
     dataApi
-      .countTable(connectionId, schema, relation, filters.length ? filters : undefined)
+      .countTable(connectionId, schema, relation, filters.length ? filters : undefined, "user")
       .then((res) => {
         setTotalRows(res.count);
       })
