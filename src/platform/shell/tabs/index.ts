@@ -2,6 +2,7 @@
 import "./welcome";
 import "./settings-placeholder";
 import "./postgres-object-placeholder";
+import "@/modules/postgres/data/TableViewerTab";
 
 export { TabRegistry } from "./TabRegistry";
 export { TabsProvider, useTabs } from "./TabsContext";

@@ -8,19 +8,6 @@ pub struct SchemaSummary {
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SchemaObjects {
-    pub schema: String,
-    pub tables: Vec<TableInfo>,
-    pub views: Vec<ViewInfo>,
-    pub materialized_views: Vec<ViewInfo>,
-    pub functions: Vec<FunctionInfo>,
-    pub types: Vec<TypeInfo>,
-    pub extensions: Vec<ExtensionInfo>,
-    pub indexes: Vec<IndexInfo>,
-    pub triggers: Vec<TriggerInfo>,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TableKind {
@@ -48,8 +35,7 @@ pub struct ViewInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionInfo {
     pub name: String,
-    pub args_signature: String,
-    pub return_type: Option<String>,
+    pub oid: i64,
     pub language: String,
     pub comment: Option<String>,
 }
@@ -111,4 +97,58 @@ pub struct TriggerInfo {
     pub timing: TriggerTiming,
     pub events: Vec<TriggerEvent>,
     pub function: String,
+}
+
+/// Per-kind failure entry inside a partial-degradation envelope. `code` is the
+/// SQLSTATE when the underlying error was Postgres-typed (e.g. `"57014"` for
+/// query_canceled / timeout). `kind` is the logical group name (`"functions"`,
+/// `"types"`, `"extensions"`, `"indexes"`, `"triggers"`).
+#[derive(Debug, Clone, Serialize)]
+pub struct KindFailure {
+    pub kind: String,
+    pub code: Option<String>,
+    pub message: String,
+}
+
+/// Result of `postgres_list_relations`. Always-success or hard error — no
+/// partial-result envelope is needed because there is exactly one underlying
+/// query.
+#[derive(Debug, Clone, Serialize)]
+pub struct RelationsResult {
+    pub schema: String,
+    pub tables: Vec<TableInfo>,
+    pub views: Vec<ViewInfo>,
+    pub materialized_views: Vec<ViewInfo>,
+}
+
+/// Result of `postgres_list_structure`. Each kind field is `None` when its
+/// sub-query failed (a `KindFailure` is appended to `failures` in that case).
+/// Permission-denied (SQLSTATE 42501) collapses to `Some(Vec::new())` silently
+/// — it never enters `failures`.
+#[derive(Debug, Clone, Serialize)]
+pub struct StructureResult {
+    pub schema: String,
+    pub functions: Option<Vec<FunctionInfo>>,
+    pub types: Option<Vec<TypeInfo>>,
+    pub extensions: Option<Vec<ExtensionInfo>>,
+    pub failures: Vec<KindFailure>,
+}
+
+/// Result of `postgres_list_table_extras`. Same partial-degradation semantics
+/// as `StructureResult`, scoped to one relation.
+#[derive(Debug, Clone, Serialize)]
+pub struct TableExtrasResult {
+    pub schema: String,
+    pub relation: String,
+    pub indexes: Option<Vec<IndexInfo>>,
+    pub triggers: Option<Vec<TriggerInfo>>,
+    pub failures: Vec<KindFailure>,
+}
+
+/// Result of `postgres_get_function_signature`. Both fields come straight from
+/// `pg_get_function_arguments` / `pg_get_function_result` for the OID.
+#[derive(Debug, Clone, Serialize)]
+pub struct FunctionSignature {
+    pub args_signature: String,
+    pub return_type: Option<String>,
 }

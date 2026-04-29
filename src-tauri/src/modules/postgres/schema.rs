@@ -4,8 +4,8 @@ use tokio_postgres::error::SqlState;
 use crate::error::{AppError, AppResult};
 use crate::modules::postgres::pool::PgPoolRegistry;
 use crate::modules::postgres::schema_types::{
-    ExtensionInfo, FunctionInfo, IndexInfo, SchemaObjects, SchemaSummary, TableInfo, TableKind,
-    TriggerEvent, TriggerInfo, TriggerTiming, TypeInfo, TypeKind, ViewInfo,
+    ExtensionInfo, FunctionInfo, FunctionSignature, IndexInfo, SchemaSummary, TableInfo,
+    TableKind, TriggerEvent, TriggerInfo, TriggerTiming, TypeInfo, TypeKind, ViewInfo,
 };
 
 const SQL_LIST_SCHEMAS: &str = "\
@@ -20,8 +20,8 @@ ORDER BY 3, 1";
 
 /// Single UNION-ALL-style query covering all five "data" relkinds:
 /// regular table (r), partitioned table (p), foreign table (f),
-/// view (v), materialized view (m). Replaces the three separate queries
-/// that the first cut of the schema browser used.
+/// view (v), materialized view (m). Used by `postgres_list_relations` —
+/// the cheap query that loads eagerly when a schema becomes visible.
 const SQL_LIST_DATA: &str = "\
 SELECT c.relkind::text,
        c.relname,
@@ -36,10 +36,13 @@ WHERE n.nspname = $1
   AND c.relkind IN ('r','p','f','v','m')
 ORDER BY c.relname";
 
+/// List functions in a schema **without** their argument signatures. The
+/// signature (and return type) is resolved on demand by
+/// `postgres_get_function_signature` because `pg_get_function_arguments` is
+/// expensive when called per-row over hundreds of overloaded functions.
 const SQL_LIST_FUNCTIONS: &str = "\
 SELECT p.proname,
-       pg_catalog.pg_get_function_arguments(p.oid),
-       pg_catalog.pg_get_function_result(p.oid),
+       p.oid::int8,
        l.lanname,
        d.description
 FROM pg_catalog.pg_proc p
@@ -49,7 +52,7 @@ LEFT JOIN pg_catalog.pg_description d
        ON d.objoid = p.oid AND d.objsubid = 0 AND d.classoid = 'pg_proc'::regclass
 WHERE n.nspname = $1
   AND p.prokind = 'f'
-ORDER BY p.proname, 2";
+ORDER BY p.proname, p.oid";
 
 const SQL_LIST_TYPES: &str = "\
 SELECT t.typname,
@@ -81,7 +84,11 @@ LEFT JOIN pg_catalog.pg_description d
 WHERE n.nspname = $1
 ORDER BY e.extname";
 
-const SQL_LIST_INDEXES: &str = "\
+/// List indexes for a single relation. The `WHERE` clause filters by
+/// `n.nspname = $1` and `t.relname = $2` so each call hits only the relevant
+/// rows in `pg_index` — orders of magnitude faster than the per-schema
+/// variant on schemas with many partitioned tables.
+const SQL_LIST_TABLE_INDEXES: &str = "\
 SELECT i.relname,
        t.relname,
        ix.indisunique,
@@ -93,9 +100,12 @@ JOIN pg_catalog.pg_class t ON t.oid = ix.indrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = i.relnamespace
 JOIN pg_catalog.pg_am am ON am.oid = i.relam
 WHERE n.nspname = $1
-ORDER BY t.relname, i.relname";
+  AND t.relname = $2
+ORDER BY i.relname";
 
-const SQL_LIST_TRIGGERS: &str = "\
+/// List triggers for a single relation. Same per-table scoping as
+/// `SQL_LIST_TABLE_INDEXES`.
+const SQL_LIST_TABLE_TRIGGERS: &str = "\
 SELECT t.tgname,
        c.relname,
        t.tgtype,
@@ -105,8 +115,21 @@ JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
 WHERE n.nspname = $1
+  AND c.relname = $2
   AND NOT t.tgisinternal
-ORDER BY c.relname, t.tgname";
+ORDER BY t.tgname";
+
+/// Resolve a single function's signature by OID. Defense in depth: the WHERE
+/// clause also filters by `proname` and `nspname` so a stale OID from the UI
+/// can't accidentally surface a different function's signature.
+const SQL_GET_FUNCTION_SIGNATURE: &str = "\
+SELECT pg_catalog.pg_get_function_arguments(p.oid),
+       pg_catalog.pg_get_function_result(p.oid)
+FROM pg_catalog.pg_proc p
+JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+WHERE p.oid = $1::oid
+  AND p.proname = $2
+  AND n.nspname = $3";
 
 // Trigger type bitmask (from PG sources, src/include/catalog/pg_trigger.h):
 const TRIGGER_TYPE_BEFORE: i32 = 1 << 1;
@@ -162,7 +185,7 @@ fn map_type_kind(tt: &str) -> Option<TypeKind> {
 }
 
 /// Returns true if the error is a "permission denied" Postgres error (SQLSTATE 42501).
-fn is_permission_denied(err: &AppError) -> bool {
+pub(crate) fn is_permission_denied(err: &AppError) -> bool {
     if let AppError::Postgres(body) = err {
         if let Some(code) = &body.code {
             return code == SqlState::INSUFFICIENT_PRIVILEGE.code();
@@ -172,7 +195,10 @@ fn is_permission_denied(err: &AppError) -> bool {
 }
 
 /// Wrap a kind-specific query: on permission-denied, return an empty Vec and warn.
-async fn try_kind<T, F, Fut>(kind: &'static str, schema: &str, f: F) -> AppResult<Vec<T>>
+/// Surfaced from `schema_commands.rs` via the partial-degradation aggregator —
+/// the empty Vec is treated as success (`Some(vec![])`), it never enters the
+/// `failures` envelope.
+pub(crate) async fn try_kind<T, F, Fut>(kind: &'static str, schema: &str, f: F) -> AppResult<Vec<T>>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = AppResult<Vec<T>>>,
@@ -202,16 +228,17 @@ pub async fn list_schemas(client: &PgObject) -> AppResult<Vec<SchemaSummary>> {
         .collect())
 }
 
-/// Run the unified data query and split the rows into the typed buckets on
-/// `SchemaObjects` based on the relkind text column. Permission-denied at this
-/// layer surfaces as an error: a user that cannot see `pg_class` cannot
-/// browse the schema at all.
-async fn fetch_data(
+/// Run the unified data query and split rows into (tables, views, materialized_views).
+/// Permission-denied at this layer surfaces as an error: a user that cannot see
+/// `pg_class` cannot browse the schema at all.
+pub async fn list_relations(
     client: &PgObject,
     schema: &str,
-    out: &mut SchemaObjects,
-) -> AppResult<()> {
+) -> AppResult<(Vec<TableInfo>, Vec<ViewInfo>, Vec<ViewInfo>)> {
     let rows = client.query(SQL_LIST_DATA, &[&schema]).await?;
+    let mut tables = Vec::new();
+    let mut views = Vec::new();
+    let mut materialized_views = Vec::new();
     for r in rows {
         let relkind: String = r.get(0);
         let name: String = r.get(1);
@@ -220,7 +247,7 @@ async fn fetch_data(
         let comment: Option<String> = r.get(4);
         match relkind.as_str() {
             "r" | "p" | "f" => {
-                out.tables.push(TableInfo {
+                tables.push(TableInfo {
                     name,
                     owner,
                     estimated_rows,
@@ -229,14 +256,14 @@ async fn fetch_data(
                 });
             }
             "v" => {
-                out.views.push(ViewInfo {
+                views.push(ViewInfo {
                     name,
                     owner,
                     comment,
                 });
             }
             "m" => {
-                out.materialized_views.push(ViewInfo {
+                materialized_views.push(ViewInfo {
                     name,
                     owner,
                     comment,
@@ -249,24 +276,23 @@ async fn fetch_data(
             }
         }
     }
-    Ok(())
+    Ok((tables, views, materialized_views))
 }
 
-async fn list_functions(client: &PgObject, schema: &str) -> AppResult<Vec<FunctionInfo>> {
+pub async fn list_functions(client: &PgObject, schema: &str) -> AppResult<Vec<FunctionInfo>> {
     let rows = client.query(SQL_LIST_FUNCTIONS, &[&schema]).await?;
     Ok(rows
         .into_iter()
         .map(|r| FunctionInfo {
             name: r.get::<_, String>(0),
-            args_signature: r.get::<_, String>(1),
-            return_type: r.get::<_, Option<String>>(2),
-            language: r.get::<_, String>(3),
-            comment: r.get::<_, Option<String>>(4),
+            oid: r.get::<_, i64>(1),
+            language: r.get::<_, String>(2),
+            comment: r.get::<_, Option<String>>(3),
         })
         .collect())
 }
 
-async fn list_types(client: &PgObject, schema: &str) -> AppResult<Vec<TypeInfo>> {
+pub async fn list_types(client: &PgObject, schema: &str) -> AppResult<Vec<TypeInfo>> {
     let rows = client.query(SQL_LIST_TYPES, &[&schema]).await?;
     Ok(rows
         .into_iter()
@@ -282,7 +308,7 @@ async fn list_types(client: &PgObject, schema: &str) -> AppResult<Vec<TypeInfo>>
         .collect())
 }
 
-async fn list_extensions(client: &PgObject, schema: &str) -> AppResult<Vec<ExtensionInfo>> {
+pub async fn list_extensions(client: &PgObject, schema: &str) -> AppResult<Vec<ExtensionInfo>> {
     let rows = client.query(SQL_LIST_EXTENSIONS, &[&schema]).await?;
     Ok(rows
         .into_iter()
@@ -294,8 +320,14 @@ async fn list_extensions(client: &PgObject, schema: &str) -> AppResult<Vec<Exten
         .collect())
 }
 
-async fn list_indexes(client: &PgObject, schema: &str) -> AppResult<Vec<IndexInfo>> {
-    let rows = client.query(SQL_LIST_INDEXES, &[&schema]).await?;
+pub async fn list_table_indexes(
+    client: &PgObject,
+    schema: &str,
+    relation: &str,
+) -> AppResult<Vec<IndexInfo>> {
+    let rows = client
+        .query(SQL_LIST_TABLE_INDEXES, &[&schema, &relation])
+        .await?;
     Ok(rows
         .into_iter()
         .map(|r| IndexInfo {
@@ -308,8 +340,14 @@ async fn list_indexes(client: &PgObject, schema: &str) -> AppResult<Vec<IndexInf
         .collect())
 }
 
-async fn list_triggers(client: &PgObject, schema: &str) -> AppResult<Vec<TriggerInfo>> {
-    let rows = client.query(SQL_LIST_TRIGGERS, &[&schema]).await?;
+pub async fn list_table_triggers(
+    client: &PgObject,
+    schema: &str,
+    relation: &str,
+) -> AppResult<Vec<TriggerInfo>> {
+    let rows = client
+        .query(SQL_LIST_TABLE_TRIGGERS, &[&schema, &relation])
+        .await?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -325,59 +363,26 @@ async fn list_triggers(client: &PgObject, schema: &str) -> AppResult<Vec<Trigger
         .collect())
 }
 
-pub async fn list_objects(client: &PgObject, schema: &str) -> AppResult<SchemaObjects> {
-    tracing::debug!("schema::list_objects start: schema={schema}");
-
-    let mut out = SchemaObjects {
-        schema: schema.to_string(),
-        tables: Vec::new(),
-        views: Vec::new(),
-        materialized_views: Vec::new(),
-        functions: Vec::new(),
-        types: Vec::new(),
-        extensions: Vec::new(),
-        indexes: Vec::new(),
-        triggers: Vec::new(),
-    };
-
-    // Six concurrent queries on the same borrowed client. tokio_postgres
-    // pipelines them over the single TCP connection, so the round-trip cost
-    // is paid once (max(query) instead of sum(query)). Permission-denied for
-    // any *structure* kind degrades to an empty Vec via try_kind so a user
-    // missing privilege on, say, pg_extension still sees the rest.
-    //
-    // The data query is NOT wrapped in try_kind: missing privilege there
-    // means the user can't see pg_class, which makes browsing the schema
-    // meaningless — surface the error.
-    let ((), functions, types, extensions, indexes, triggers) = tokio::try_join!(
-        fetch_data(client, schema, &mut out),
-        try_kind("functions", schema, || list_functions(client, schema)),
-        try_kind("types", schema, || list_types(client, schema)),
-        try_kind("extensions", schema, || list_extensions(client, schema)),
-        try_kind("indexes", schema, || list_indexes(client, schema)),
-        try_kind("triggers", schema, || list_triggers(client, schema)),
-    )?;
-
-    out.functions = functions;
-    out.types = types;
-    out.extensions = extensions;
-    out.indexes = indexes;
-    out.triggers = triggers;
-
-    tracing::debug!(
-        "schema::list_objects done: schema={schema} tables={} views={} matviews={} \
-         functions={} types={} extensions={} indexes={} triggers={}",
-        out.tables.len(),
-        out.views.len(),
-        out.materialized_views.len(),
-        out.functions.len(),
-        out.types.len(),
-        out.extensions.len(),
-        out.indexes.len(),
-        out.triggers.len(),
-    );
-
-    Ok(out)
+/// Resolve a single function's signature by OID. Returns `AppError::NotFound`
+/// when the OID does not match the schema/name pair (UI staleness guard).
+pub async fn get_function_signature(
+    client: &PgObject,
+    schema: &str,
+    name: &str,
+    oid: i64,
+) -> AppResult<FunctionSignature> {
+    let rows = client
+        .query(SQL_GET_FUNCTION_SIGNATURE, &[&oid, &name, &schema])
+        .await?;
+    let row = rows.first().ok_or_else(|| {
+        AppError::NotFound(format!(
+            "function oid={oid} schema={schema} name={name} not found"
+        ))
+    })?;
+    Ok(FunctionSignature {
+        args_signature: row.get::<_, String>(0),
+        return_type: row.get::<_, Option<String>>(1),
+    })
 }
 
 /// Borrow a client from the registry's pool for the given connection id and

@@ -13,8 +13,8 @@ Plan de alto nivel de los `change` de OpenSpec que conforman la versión 1 (Post
 2. add-postgres-connection      ✅ archivado
 3. browse-postgres-schema       ✅ archivado
 3.5. refine-schema-browser-ux   ✅ archivado (UX iteration sobre #3)
-4. view-table-data              ← siguiente
-5. edit-table-data
+4. view-table-data              ✅ archivado
+5. edit-table-data              ← siguiente
 6. run-sql
 7. query-history
 8. table-structure-tab

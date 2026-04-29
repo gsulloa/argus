@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod data;
 pub mod params;
 pub mod pool;
 pub mod schema;
@@ -11,5 +12,9 @@ pub use commands::{
     postgres_connect, postgres_disconnect, postgres_list_active, postgres_parse_url,
     postgres_test_connection,
 };
+pub use data::{postgres_count_table, postgres_query_table};
 pub use pool::PgPoolRegistry;
-pub use schema_commands::{postgres_list_objects, postgres_list_schemas};
+pub use schema_commands::{
+    postgres_get_function_signature, postgres_list_relations, postgres_list_schemas,
+    postgres_list_structure, postgres_list_table_extras,
+};

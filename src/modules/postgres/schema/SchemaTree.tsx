@@ -1,21 +1,26 @@
-import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { Loader2, RotateCw } from "lucide-react";
 import { useTabs } from "@/platform/shell/tabs";
 import { SidebarTree, type TreeNode } from "@/platform/shell/SidebarTree";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { GroupIcon, LeafIcon, type GroupKind, type LeafKind } from "./objectIcons";
 import { SchemaSearch } from "./SchemaSearch";
-import { useSchemaTree } from "./useSchemaTree";
+import { useSchemaTree, type PublicGroupState } from "./useSchemaTree";
 import { useVisibleSchemas } from "./useVisibleSchemas";
 import { VisibleSchemasPicker } from "./VisibleSchemasPicker";
 import { openObjectTab } from "./openObjectTab";
 import { subscribeSchemaEvent } from "./events";
 import type {
+  ExtensionInfo,
+  FunctionInfo,
   IndexInfo,
   ObjectKind,
-  SchemaObjects,
+  RelationsResult,
+  StructureResult,
+  TableExtrasResult,
   TableInfo,
   TriggerInfo,
+  TypeInfo,
 } from "./types";
 import styles from "./SchemaTree.module.css";
 
@@ -23,27 +28,42 @@ interface Props {
   connectionId: string;
 }
 
-type SchemaState = "idle" | "loading" | "retrying" | "loaded" | "error";
-
 interface LeafData {
   kind: "leaf";
   objectKind: ObjectKind;
   schema: string;
   name: string;
-  signature?: string;
+  /** Function OID (only for `objectKind === "function"`). Used to disambiguate overloads. */
+  oid?: number;
   /** Set when the table's relkind is `foreign` — drives the FDW badge. */
   fdw?: boolean;
   /** Set when the table's relkind is `partitioned` — drives the partitioned badge. */
   partitioned?: boolean;
+  /** Display index for an overloaded function (`#1`, `#2`, …). Omitted when there's only one. */
+  overloadIndex?: number;
 }
+
+type RetryScope =
+  | { kind: "relations"; schema: string }
+  | { kind: "structure"; schema: string }
+  | { kind: "table-extras"; schema: string; relation: string };
+
+type LazyTrigger =
+  | { kind: "structure"; schema: string }
+  | { kind: "table-extras"; schema: string; relation: string };
+
 interface GroupData {
   kind: "group";
-  /** Schema-level state, only set on the schema's own group node. */
-  schemaState?: SchemaState;
-  /** Schema name when this group represents a schema (state-bearing) node. */
-  schemaName?: string;
-  /** Error message when the schema's state is `error`. */
-  errorMessage?: string;
+  /** Italic placeholder copy ("Loading…", "(expand to load)", "Failed", "(empty)"). */
+  placeholder?: string;
+  /** Inline retry button context. When set, a retry icon is rendered as the row's badge. */
+  retry?: RetryScope;
+  /** Render an inline spinner as the row's badge. */
+  spinner?: boolean;
+  /** When this group is first expanded, fire the lazy load. */
+  lazyTrigger?: LazyTrigger;
+  /** Counts shown on group-summary nodes. */
+  countBadge?: number;
 }
 type NodeData = LeafData | GroupData;
 
@@ -69,18 +89,107 @@ function caseInsensitiveCompare(a: string, b: string): number {
   return a.localeCompare(b, undefined, { sensitivity: "base" });
 }
 
+function placeholderNode(parentId: string, key: string, label: string): TreeNode {
+  return {
+    id: `${parentId}/__${key}`,
+    label,
+    level: -1, // overridden by caller
+    hasChildren: false,
+    data: { kind: "group", placeholder: label } satisfies GroupData,
+  };
+}
+
+function relativizeLevel(node: TreeNode, level: number): TreeNode {
+  return { ...node, level };
+}
+
+/**
+ * Build the children of a table node based on its `tableExtras` cache slot.
+ * Always returns at least one placeholder so the table node remains expandable
+ * during the lazy fetch.
+ */
+function buildTableChildren(
+  schema: string,
+  relation: string,
+  tableNodeId: string,
+  state: PublicGroupState,
+  extras: TableExtrasResult | null,
+  errorMessage: string | undefined,
+): TreeNode[] {
+  if (state === "idle" || state === "loading") {
+    return [
+      relativizeLevel(
+        placeholderNode(tableNodeId, "loading", state === "loading" ? "Loading…" : "(loading…)"),
+        3,
+      ),
+    ];
+  }
+  if (state === "error") {
+    return [
+      {
+        ...placeholderNode(tableNodeId, "error", errorMessage ?? "Failed to load."),
+        level: 3,
+        data: {
+          kind: "group",
+          placeholder: errorMessage ?? "Failed to load.",
+          retry: { kind: "table-extras", schema, relation },
+        } satisfies GroupData,
+      },
+    ];
+  }
+  // loaded — render Indexes/Triggers sub-groups
+  if (!extras) return [];
+  const out: TreeNode[] = [];
+  const indexesNode = buildIndexesNode(schema, extras.indexes, tableNodeId, extras, relation);
+  if (indexesNode) out.push(indexesNode);
+  const triggersNode = buildTriggersNode(schema, extras.triggers, tableNodeId, extras, relation);
+  if (triggersNode) out.push(triggersNode);
+  if (out.length === 0) {
+    out.push(
+      relativizeLevel(placeholderNode(tableNodeId, "empty", "(no indexes or triggers)"), 3),
+    );
+  }
+  return out;
+}
+
 function buildIndexesNode(
   schema: string,
-  indexes: IndexInfo[],
+  indexes: IndexInfo[] | null,
   tableNodeId: string,
+  extras: TableExtrasResult,
+  relation: string,
 ): TreeNode | null {
+  if (indexes === null) {
+    // Sub-query failed inside the partial-degradation envelope.
+    const failure = extras.failures.find((f) => f.kind === "indexes");
+    return {
+      id: `${tableNodeId}/indexes`,
+      label: GROUP_LABEL.indexes,
+      level: 3,
+      hasChildren: true,
+      data: { kind: "group" } satisfies GroupData,
+      children: [
+        {
+          id: `${tableNodeId}/indexes/__failed`,
+          label: failure?.message ?? "Failed to load.",
+          level: 4,
+          hasChildren: false,
+          data: {
+            kind: "group",
+            placeholder: failure?.message ?? "Failed to load.",
+            retry: { kind: "table-extras", schema, relation },
+          } satisfies GroupData,
+        },
+      ],
+    };
+  }
   if (indexes.length === 0) return null;
   return {
     id: `${tableNodeId}/indexes`,
     label: GROUP_LABEL.indexes,
     level: 3,
     hasChildren: true,
-    data: { kind: "group" } satisfies GroupData,
+    data: { kind: "group", countBadge: indexes.length } satisfies GroupData,
     children: indexes.map<TreeNode>((ix) => ({
       id: `${tableNodeId}/indexes/${ix.name}`,
       label: ix.name,
@@ -98,16 +207,41 @@ function buildIndexesNode(
 
 function buildTriggersNode(
   schema: string,
-  triggers: TriggerInfo[],
+  triggers: TriggerInfo[] | null,
   tableNodeId: string,
+  extras: TableExtrasResult,
+  relation: string,
 ): TreeNode | null {
+  if (triggers === null) {
+    const failure = extras.failures.find((f) => f.kind === "triggers");
+    return {
+      id: `${tableNodeId}/triggers`,
+      label: GROUP_LABEL.triggers,
+      level: 3,
+      hasChildren: true,
+      data: { kind: "group" } satisfies GroupData,
+      children: [
+        {
+          id: `${tableNodeId}/triggers/__failed`,
+          label: failure?.message ?? "Failed to load.",
+          level: 4,
+          hasChildren: false,
+          data: {
+            kind: "group",
+            placeholder: failure?.message ?? "Failed to load.",
+            retry: { kind: "table-extras", schema, relation },
+          } satisfies GroupData,
+        },
+      ],
+    };
+  }
   if (triggers.length === 0) return null;
   return {
     id: `${tableNodeId}/triggers`,
     label: GROUP_LABEL.triggers,
     level: 3,
     hasChildren: true,
-    data: { kind: "group" } satisfies GroupData,
+    data: { kind: "group", countBadge: triggers.length } satisfies GroupData,
     children: triggers.map<TreeNode>((tg) => ({
       id: `${tableNodeId}/triggers/${tg.name}`,
       label: tg.name,
@@ -123,21 +257,19 @@ function buildTriggersNode(
   };
 }
 
-function buildTableNode(schema: string, t: TableInfo, payload: SchemaObjects): TreeNode {
+function buildTableNode(
+  schema: string,
+  t: TableInfo,
+  extrasState: PublicGroupState,
+  extras: TableExtrasResult | null,
+  extrasErrorMessage: string | undefined,
+): TreeNode {
   const id = `schema:${schema}/data/${t.name}`;
-  const indexes = payload.indexes.filter((ix) => ix.table === t.name);
-  const triggers = payload.triggers.filter((tg) => tg.table === t.name);
-  const indexesNode = buildIndexesNode(schema, indexes, id);
-  const triggersNode = buildTriggersNode(schema, triggers, id);
-  const children: TreeNode[] = [];
-  if (indexesNode) children.push(indexesNode);
-  if (triggersNode) children.push(triggersNode);
-  const hasChildren = children.length > 0;
   return {
     id,
     label: t.name,
     level: 2,
-    hasChildren,
+    hasChildren: true,
     data: {
       kind: "leaf",
       objectKind: "table",
@@ -146,12 +278,85 @@ function buildTableNode(schema: string, t: TableInfo, payload: SchemaObjects): T
       fdw: t.kind === "foreign",
       partitioned: t.kind === "partitioned",
     } satisfies LeafData,
-    children: hasChildren ? children : undefined,
+    children: buildTableChildren(schema, t.name, id, extrasState, extras, extrasErrorMessage),
   };
 }
 
-function buildDataGroup(schema: string, payload: SchemaObjects): TreeNode | null {
-  const tableNodes = payload.tables.map((t) => buildTableNode(schema, t, payload));
+function buildDataGroup(
+  schema: string,
+  state: PublicGroupState,
+  payload: RelationsResult | null,
+  errorMessage: string | undefined,
+  getTableExtras: (relation: string) => TableExtrasResult | null,
+  getTableExtrasState: (relation: string) => PublicGroupState,
+  getTableExtrasError: (relation: string) => string | undefined,
+): TreeNode | null {
+  const groupId = `schema:${schema}/data`;
+  const baseGroupData: GroupData = { kind: "group" };
+
+  if (state === "idle" || state === "loading") {
+    return {
+      id: groupId,
+      label: GROUP_LABEL.data,
+      level: 1,
+      hasChildren: true,
+      data: { ...baseGroupData, spinner: state === "loading" },
+      children: [
+        relativizeLevel(
+          placeholderNode(groupId, "loading", state === "loading" ? "Loading…" : "(loading…)"),
+          2,
+        ),
+      ],
+    };
+  }
+  if (state === "retrying") {
+    // Retrying — show a retrying indicator but keep stale payload children if any.
+    const stale = payload;
+    if (!stale) {
+      return {
+        id: groupId,
+        label: GROUP_LABEL.data,
+        level: 1,
+        hasChildren: true,
+        data: { ...baseGroupData, spinner: true },
+        children: [
+          relativizeLevel(placeholderNode(groupId, "retrying", "Slow — retrying…"), 2),
+        ],
+      };
+    }
+  }
+  if (state === "error") {
+    return {
+      id: groupId,
+      label: GROUP_LABEL.data,
+      level: 1,
+      hasChildren: true,
+      data: { ...baseGroupData, retry: { kind: "relations", schema } },
+      children: [
+        {
+          id: `${groupId}/__error`,
+          label: errorMessage ?? "Failed to load.",
+          level: 2,
+          hasChildren: false,
+          data: {
+            kind: "group",
+            placeholder: errorMessage ?? "Failed to load.",
+          } satisfies GroupData,
+        },
+      ],
+    };
+  }
+  // loaded (or retrying-with-stale)
+  if (!payload) return null;
+  const tableNodes = payload.tables.map((t) =>
+    buildTableNode(
+      schema,
+      t,
+      getTableExtrasState(t.name),
+      getTableExtras(t.name),
+      getTableExtrasError(t.name),
+    ),
+  );
   const viewNodes = payload.views.map<TreeNode>((v) => ({
     id: `schema:${schema}/data/${v.name}`,
     label: v.name,
@@ -177,118 +382,175 @@ function buildDataGroup(schema: string, payload: SchemaObjects): TreeNode | null
     } satisfies LeafData,
   }));
   const all = [...tableNodes, ...viewNodes, ...matViewNodes];
-  if (all.length === 0) return null;
+  if (all.length === 0) {
+    return {
+      id: groupId,
+      label: GROUP_LABEL.data,
+      level: 1,
+      hasChildren: true,
+      data: baseGroupData,
+      children: [relativizeLevel(placeholderNode(groupId, "empty", "(empty)"), 2)],
+    };
+  }
   all.sort((a, b) => caseInsensitiveCompare(a.label, b.label));
   return {
-    id: `schema:${schema}/data`,
+    id: groupId,
     label: GROUP_LABEL.data,
     level: 1,
     hasChildren: true,
-    data: { kind: "group" } satisfies GroupData,
+    data: { ...baseGroupData, countBadge: all.length },
     children: all,
   };
 }
 
-function buildStructureGroup(schema: string, payload: SchemaObjects): TreeNode | null {
-  const functionNodes = payload.functions.map<TreeNode>((f, i) => ({
-    // Include `i` to keep ids unique when overload signatures aren't enough.
-    id: `schema:${schema}/structure/${f.name}#${i}`,
-    label: `${f.name}(${f.args_signature})`,
-    level: 2,
-    hasChildren: false,
-    data: {
-      kind: "leaf",
-      objectKind: "function",
-      schema,
-      name: f.name,
-      signature: f.args_signature,
-    } satisfies LeafData,
-  }));
-  const typeNodes = payload.types.map<TreeNode>((t) => ({
-    id: `schema:${schema}/structure/${t.name}`,
-    label: t.name,
-    level: 2,
-    hasChildren: false,
-    data: { kind: "leaf", objectKind: "type", schema, name: t.name } satisfies LeafData,
-  }));
-  const extensionNodes = payload.extensions.map<TreeNode>((e) => ({
-    id: `schema:${schema}/structure/${e.name}`,
-    label: `${e.name} ${e.version}`,
-    level: 2,
-    hasChildren: false,
-    data: {
-      kind: "leaf",
-      objectKind: "extension",
-      schema,
-      name: e.name,
-    } satisfies LeafData,
-  }));
-  const all = [...functionNodes, ...typeNodes, ...extensionNodes];
-  if (all.length === 0) return null;
-  all.sort((a, b) => caseInsensitiveCompare(a.label, b.label));
-  return {
-    id: `schema:${schema}/structure`,
-    label: GROUP_LABEL.structure,
-    level: 1,
-    hasChildren: true,
-    data: { kind: "group" } satisfies GroupData,
-    children: all,
-  };
+function buildFunctionNodes(schema: string, functions: FunctionInfo[]): TreeNode[] {
+  // Pre-compute overload counts so we know whether to render an index badge.
+  const counts = new Map<string, number>();
+  for (const f of functions) counts.set(f.name, (counts.get(f.name) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  return functions.map<TreeNode>((f) => {
+    const i = (seen.get(f.name) ?? 0) + 1;
+    seen.set(f.name, i);
+    const total = counts.get(f.name) ?? 1;
+    const overloadIndex = total > 1 ? i : undefined;
+    return {
+      id: `schema:${schema}/structure/function/${f.oid}`,
+      label: f.name,
+      level: 2,
+      hasChildren: false,
+      data: {
+        kind: "leaf",
+        objectKind: "function",
+        schema,
+        name: f.name,
+        oid: f.oid,
+        overloadIndex,
+      } satisfies LeafData,
+    };
+  });
 }
 
-function buildSchemaNode(
+function buildStructureGroup(
   schema: string,
-  payload: SchemaObjects | null,
-  state: SchemaState,
+  state: PublicGroupState,
+  payload: StructureResult | null,
   errorMessage: string | undefined,
 ): TreeNode {
-  const id = `schema:${schema}`;
-  const dataState: GroupData = {
-    kind: "group",
-    schemaState: state,
-    schemaName: schema,
-    errorMessage,
-  };
+  const groupId = `schema:${schema}/structure`;
+  const lazyTrigger: LazyTrigger = { kind: "structure", schema };
 
-  if (!payload) {
-    // No payload yet — show a single placeholder child with the right copy.
-    let placeholderLabel: string;
-    if (state === "error") placeholderLabel = errorMessage ?? "Failed to load.";
-    else if (state === "loading") placeholderLabel = "Loading…";
-    else if (state === "retrying") placeholderLabel = "Slow — retrying…";
-    else placeholderLabel = "(expand to load)";
+  if (state === "idle") {
     return {
-      id,
-      label: schema,
-      level: 0,
+      id: groupId,
+      label: GROUP_LABEL.structure,
+      level: 1,
       hasChildren: true,
-      data: dataState,
+      data: { kind: "group", lazyTrigger },
+      children: [
+        relativizeLevel(placeholderNode(groupId, "idle", "(expand to load)"), 2),
+      ],
+    };
+  }
+  if (state === "loading") {
+    return {
+      id: groupId,
+      label: GROUP_LABEL.structure,
+      level: 1,
+      hasChildren: true,
+      data: { kind: "group", spinner: true },
+      children: [relativizeLevel(placeholderNode(groupId, "loading", "Loading…"), 2)],
+    };
+  }
+  if (state === "error") {
+    return {
+      id: groupId,
+      label: GROUP_LABEL.structure,
+      level: 1,
+      hasChildren: true,
+      data: { kind: "group", retry: { kind: "structure", schema } },
       children: [
         {
-          id: `${id}/__placeholder`,
-          label: placeholderLabel,
-          level: 1,
+          id: `${groupId}/__error`,
+          label: errorMessage ?? "Failed to load.",
+          level: 2,
           hasChildren: false,
-          data: { kind: "group" } satisfies GroupData,
+          data: {
+            kind: "group",
+            placeholder: errorMessage ?? "Failed to load.",
+          } satisfies GroupData,
         },
       ],
     };
   }
+  // loaded — possibly with partial failures
+  if (!payload) return { id: groupId, label: GROUP_LABEL.structure, level: 1, hasChildren: false, data: { kind: "group" } };
 
-  const groups: TreeNode[] = [];
-  const dataGroup = buildDataGroup(schema, payload);
-  if (dataGroup) groups.push(dataGroup);
-  const structureGroup = buildStructureGroup(schema, payload);
-  if (structureGroup) groups.push(structureGroup);
+  const allItems: TreeNode[] = [];
+  if (payload.functions !== null) {
+    allItems.push(...buildFunctionNodes(schema, payload.functions));
+  }
+  if (payload.types !== null) {
+    allItems.push(
+      ...payload.types.map<TreeNode>((t: TypeInfo) => ({
+        id: `schema:${schema}/structure/type/${t.name}`,
+        label: t.name,
+        level: 2,
+        hasChildren: false,
+        data: { kind: "leaf", objectKind: "type", schema, name: t.name } satisfies LeafData,
+      })),
+    );
+  }
+  if (payload.extensions !== null) {
+    allItems.push(
+      ...payload.extensions.map<TreeNode>((e: ExtensionInfo) => ({
+        id: `schema:${schema}/structure/extension/${e.name}`,
+        label: e.name,
+        level: 2,
+        hasChildren: false,
+        data: { kind: "leaf", objectKind: "extension", schema, name: e.name } satisfies LeafData,
+      })),
+    );
+  }
+  allItems.sort((a, b) => caseInsensitiveCompare(a.label, b.label));
 
+  // Append per-kind failure placeholders so the user can retry just the failed
+  // sub-query (the retry re-runs the whole `listStructure` — that's fine, it's
+  // the smallest unit available).
+  const failureNodes: TreeNode[] = payload.failures.map((f) => ({
+    id: `${groupId}/__failed_${f.kind}`,
+    label: `${capitalize(f.kind)} failed: ${f.message}`,
+    level: 2,
+    hasChildren: false,
+    data: {
+      kind: "group",
+      placeholder: `${capitalize(f.kind)} failed: ${f.message}`,
+      retry: { kind: "structure", schema },
+    } satisfies GroupData,
+  }));
+
+  const children = [...allItems, ...failureNodes];
+  if (children.length === 0) {
+    return {
+      id: groupId,
+      label: GROUP_LABEL.structure,
+      level: 1,
+      hasChildren: true,
+      data: { kind: "group" },
+      children: [relativizeLevel(placeholderNode(groupId, "empty", "(empty)"), 2)],
+    };
+  }
   return {
-    id,
-    label: schema,
-    level: 0,
-    hasChildren: groups.length > 0,
-    data: dataState,
-    children: groups.length > 0 ? groups : undefined,
+    id: groupId,
+    label: GROUP_LABEL.structure,
+    level: 1,
+    hasChildren: true,
+    data: { kind: "group", countBadge: allItems.length },
+    children,
   };
+}
+
+function capitalize(s: string): string {
+  return s.length > 0 ? s[0]!.toUpperCase() + s.slice(1) : s;
 }
 
 interface FilterOutcome {
@@ -337,7 +599,11 @@ function filterTree(nodes: TreeNode[], q: string): FilterOutcome {
       forceExpanded.add(node.id);
       return { ...node, children: filteredChildren };
     }
-    if (node.label.toLowerCase().includes(needle)) {
+    // Only count real leaves toward matches — placeholder rows (group nodes with
+    // no children, identifiable by their `data.kind === "group"`) shouldn't
+    // count even if their text happens to contain the needle.
+    const data = node.data as NodeData | undefined;
+    if (data?.kind === "leaf" && node.label.toLowerCase().includes(needle)) {
       matches += 1;
       return node;
     }
@@ -374,12 +640,12 @@ export function SchemaTree({ connectionId }: Props) {
   const connectionName =
     connections.find((c) => c.id === connectionId)?.name ?? connectionId;
 
-  // Eagerly load objects for visible schemas the first time we see them. The
-  // hook de-dupes loading state — this is idempotent.
+  // Eager `relations` fetch for visible schemas. The hook de-dupes loading
+  // state — this is idempotent and only the cheap query fires.
   useEffect(() => {
     if (!connectionId) return;
     for (const name of visibility.visible) {
-      tree.getObjects(name);
+      tree.getRelations(name);
     }
   }, [connectionId, visibility.visible, tree]);
 
@@ -390,10 +656,44 @@ export function SchemaTree({ connectionId }: Props) {
 
   const builtNodes: TreeNode[] = useMemo(() => {
     return visibleSchemaList.map((s) => {
-      const payload = tree.getObjects(s.name);
-      const state = tree.getObjectsState(s.name) as SchemaState;
-      const err = tree.getObjectsError(s.name);
-      return buildSchemaNode(s.name, payload, state, err?.message);
+      const relationsState = tree.getRelationsState(s.name);
+      const relations = tree.getRelations(s.name);
+      const relationsErr = tree.getRelationsError(s.name);
+      const structureState = tree.getStructureState(s.name);
+      const structure = tree.getStructure(s.name);
+      const structureErr = tree.getStructureError(s.name);
+
+      const dataGroup = buildDataGroup(
+        s.name,
+        relationsState,
+        relations,
+        relationsErr?.message,
+        (rel) => tree.getTableExtras(s.name, rel),
+        (rel) => tree.getTableExtrasState(s.name, rel),
+        (rel) => tree.getTableExtrasError(s.name, rel)?.message,
+      );
+      const structureGroup = buildStructureGroup(
+        s.name,
+        structureState,
+        structure,
+        structureErr?.message,
+      );
+
+      const groups: TreeNode[] = [];
+      if (dataGroup) groups.push(dataGroup);
+      groups.push(structureGroup);
+
+      return {
+        id: `schema:${s.name}`,
+        label: s.name,
+        level: 0,
+        hasChildren: groups.length > 0,
+        data: {
+          kind: "group",
+          spinner: relationsState === "loading" || relationsState === "retrying",
+        } satisfies GroupData,
+        children: groups,
+      };
     });
   }, [visibleSchemaList, tree]);
 
@@ -402,7 +702,15 @@ export function SchemaTree({ connectionId }: Props) {
   const unloadedSchemaCount = useMemo(() => {
     let n = 0;
     for (const s of visibleSchemaList) {
-      if (tree.getObjectsState(s.name) !== "loaded") n += 1;
+      if (tree.getRelationsState(s.name) !== "loaded") n += 1;
+    }
+    return n;
+  }, [visibleSchemaList, tree]);
+
+  const unloadedStructureCount = useMemo(() => {
+    let n = 0;
+    for (const s of visibleSchemaList) {
+      if (tree.getStructureState(s.name) === "idle") n += 1;
     }
     return n;
   }, [visibleSchemaList, tree]);
@@ -416,16 +724,43 @@ export function SchemaTree({ connectionId }: Props) {
       schema: data.schema,
       kind: data.objectKind,
       name: data.name,
-      signature: data.signature,
+      // For function leaves, persist the OID so the placeholder tab can
+      // resolve the signature on demand. The legacy `signature` field is
+      // unused now (firma is fetched lazy).
+      ...(data.objectKind === "function" && data.oid !== undefined
+        ? { oid: data.oid }
+        : {}),
     });
   }
+
+  const onToggle = useCallback(
+    (node: TreeNode, expanded: boolean) => {
+      if (!expanded) return;
+      const data = node.data as NodeData | undefined;
+      if (!data) return;
+      // Group nodes with a `lazyTrigger` field auto-fire their fetch on
+      // first expand. The hook itself de-dupes (loading/loaded slot is a
+      // no-op).
+      if (data.kind === "group" && data.lazyTrigger) {
+        const t = data.lazyTrigger;
+        if (t.kind === "structure") tree.loadStructure(t.schema);
+        return;
+      }
+      // Tables (leaf with hasChildren) trigger their per-table extras fetch.
+      if (data.kind === "leaf" && data.objectKind === "table") {
+        tree.loadTableExtras(data.schema, data.name);
+      }
+    },
+    [tree],
+  );
 
   const renderIcon = (n: TreeNode): ReactNode => {
     const data = n.data as NodeData | undefined;
     if (!data) return null;
     if (data.kind === "group") {
-      // Schema-level node has level 0; group nodes have level 1 or 3.
+      // Schema-level node has level 0; placeholder rows have level >= 1.
       if (n.level === 0) return <LeafIcon kind="schema" />;
+      // Group nodes carry an icon based on the last id segment.
       const segs = n.id.split("/");
       const last = segs[segs.length - 1] as GroupKind | undefined;
       if (last && last in GROUP_LABEL) return <GroupIcon kind={last as GroupKind} />;
@@ -441,51 +776,52 @@ export function SchemaTree({ connectionId }: Props) {
       // Tables share the same icon across regular/partitioned/foreign — disambiguate via badge.
       if (data.fdw) return <span className={styles.tableBadge}>FDW</span>;
       if (data.partitioned) return <span className={styles.tableBadge}>partitioned</span>;
+      if (data.objectKind === "function" && data.overloadIndex !== undefined) {
+        return <span className={styles.overloadBadge}>#{data.overloadIndex}</span>;
+      }
       return null;
     }
-    // Group node.
-    // Schema-level row carries state-driven indicators.
-    if (n.level === 0 && data.schemaState) {
-      if (data.schemaState === "loading") {
-        return (
-          <span className={styles.spinner} aria-label="Loading">
-            <Loader2 size={12} />
-          </span>
-        );
-      }
-      if (data.schemaState === "retrying") {
-        return (
-          <span className={styles.retryingPill} aria-label="Retrying">
-            <Loader2 size={12} className={styles.spinnerInline} />
-            retrying
-          </span>
-        );
-      }
-      if (data.schemaState === "error" && data.schemaName) {
-        const name = data.schemaName;
-        const onClick = (e: MouseEvent<HTMLButtonElement>) => {
-          e.stopPropagation();
-          tree.retrySchema(name);
-        };
-        return (
-          <button
-            type="button"
-            className={styles.retryButton}
-            aria-label="Retry"
-            title={data.errorMessage ?? "Retry"}
-            onClick={onClick}
-          >
-            <RotateCw size={12} />
-          </button>
-        );
-      }
+    // Group node — spinner / retry / count, in priority order.
+    if (data.spinner) {
+      return (
+        <span className={styles.spinner} aria-label="Loading">
+          <Loader2 size={12} />
+        </span>
+      );
     }
-    // Counts on inner group nodes.
-    if (n.children) return n.children.length;
+    if (data.retry) {
+      const retry = data.retry;
+      const onClick = (e: MouseEvent<HTMLButtonElement>) => {
+        e.stopPropagation();
+        if (retry.kind === "relations") tree.retryRelations(retry.schema);
+        else if (retry.kind === "structure") tree.loadStructure(retry.schema);
+        else if (retry.kind === "table-extras")
+          tree.loadTableExtras(retry.schema, retry.relation);
+      };
+      return (
+        <button
+          type="button"
+          className={styles.retryButton}
+          aria-label="Retry"
+          title="Retry"
+          onClick={onClick}
+        >
+          <RotateCw size={12} />
+        </button>
+      );
+    }
+    if (data.countBadge !== undefined) {
+      return <span className={styles.itemCount}>{data.countBadge}</span>;
+    }
+    if (n.children) return null;
     return null;
   };
 
   const renderLabel = (n: TreeNode): ReactNode => {
+    const data = n.data as NodeData | undefined;
+    if (data?.kind === "group" && data.placeholder) {
+      return <span className={styles.placeholderText}>{data.placeholder}</span>;
+    }
     return highlightLabel(n.label, query);
   };
 
@@ -493,11 +829,14 @@ export function SchemaTree({ connectionId }: Props) {
     !tree.schemasLoading && !tree.schemasError && filtered.nodes.length === 0;
 
   let emptyMessage: ReactNode = "No matches.";
-  if (query.length > 0 && unloadedSchemaCount > 0) {
+  if (query.length > 0 && (unloadedSchemaCount > 0 || unloadedStructureCount > 0)) {
+    const parts: string[] = [];
+    if (unloadedSchemaCount > 0) parts.push(`${unloadedSchemaCount} schemas not yet loaded`);
+    if (unloadedStructureCount > 0)
+      parts.push(`${unloadedStructureCount} Structure groups not yet expanded`);
     emptyMessage = (
       <>
-        No matches in loaded schemas. {unloadedSchemaCount} schemas not yet loaded —
-        expand a schema to include it in search.
+        No matches in loaded results. {parts.join("; ")} — expand to include in search.
       </>
     );
   } else if (query.length === 0 && tree.schemas.length === 0) {
@@ -524,6 +863,8 @@ export function SchemaTree({ connectionId }: Props) {
           <SidebarTree
             nodes={filtered.nodes}
             onActivate={onActivate}
+            onToggle={onToggle}
+            isActivatable={(n) => (n.data as NodeData | undefined)?.kind === "leaf"}
             renderIcon={renderIcon}
             renderBadge={renderBadge}
             renderLabel={renderLabel}

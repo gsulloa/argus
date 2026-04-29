@@ -21,10 +21,13 @@ export interface ViewInfo {
   comment: string | null;
 }
 
+/**
+ * Lightweight function entry returned by `listStructure`. The expensive
+ * `pg_get_function_arguments` lookup is deferred to `getFunctionSignature`.
+ */
 export interface FunctionInfo {
   name: string;
-  args_signature: string;
-  return_type: string | null;
+  oid: number;
   language: string;
   comment: string | null;
 }
@@ -62,16 +65,55 @@ export interface TriggerInfo {
   function: string;
 }
 
-export interface SchemaObjects {
+/**
+ * Per-kind failure entry inside a partial-degradation envelope. Permission-
+ * denied is collapsed to an empty kind upstream and never surfaces as a
+ * failure — only timeouts and other errors reach this shape.
+ */
+export interface KindFailure {
+  kind: string;
+  code: string | null;
+  message: string;
+}
+
+/**
+ * Eager schema fetch — single underlying query. No partial-result envelope.
+ */
+export interface RelationsResult {
   schema: string;
   tables: TableInfo[];
   views: ViewInfo[];
   materialized_views: ViewInfo[];
-  functions: FunctionInfo[];
-  types: TypeInfo[];
-  extensions: ExtensionInfo[];
-  indexes: IndexInfo[];
-  triggers: TriggerInfo[];
+}
+
+/**
+ * Lazy structure fetch. Each of `functions`, `types`, `extensions` is `null`
+ * when the corresponding sub-query failed (a `KindFailure` entry is in
+ * `failures`). Permission-denied collapses to `[]` (not `null`).
+ */
+export interface StructureResult {
+  schema: string;
+  functions: FunctionInfo[] | null;
+  types: TypeInfo[] | null;
+  extensions: ExtensionInfo[] | null;
+  failures: KindFailure[];
+}
+
+/**
+ * Lazy per-table fetch. Same partial-degradation semantics as
+ * `StructureResult`, scoped to a single relation.
+ */
+export interface TableExtrasResult {
+  schema: string;
+  relation: string;
+  indexes: IndexInfo[] | null;
+  triggers: TriggerInfo[] | null;
+  failures: KindFailure[];
+}
+
+export interface FunctionSignature {
+  args_signature: string;
+  return_type: string | null;
 }
 
 /** Discriminator for tab payloads and search labels. */

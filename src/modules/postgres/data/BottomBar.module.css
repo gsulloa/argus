@@ -1,0 +1,91 @@
+.root {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 28px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 11px;
+  background: var(--bg-statusbar);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-subtle);
+}
+
+.select {
+  font-size: 11px;
+  padding: 1px 4px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  font-family: inherit;
+}
+
+.btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.btn:hover {
+  background: var(--bg-hover);
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.timing {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft, var(--bg-active));
+  color: var(--accent);
+}
+
+.chipBtn {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0;
+  margin-left: 2px;
+}
+.chipBtn:hover {
+  color: var(--accent-hover);
+}
+
+.spinner {
+  display: inline-flex;
+  animation: bb-spin 1s linear infinite;
+}
+
+@keyframes bb-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
