@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { toAppError } from "@/platform/errors/AppError";
 import type {
+  ApplyEditsOutcome,
   CountTableResult,
+  EditOp,
   Filter,
   QueryTableOptions,
   QueryTableResult,
+  TableEditMetadata,
 } from "./types";
 
 export type Origin = "auto" | "user";
@@ -52,6 +55,34 @@ export const dataApi = {
       schema,
       relation,
       filters: filters ?? null,
+      origin,
+    });
+  },
+  tablePrimaryKey(
+    id: string,
+    schema: string,
+    relation: string,
+    origin: Origin = "auto",
+  ): Promise<TableEditMetadata> {
+    return call<TableEditMetadata>("postgres_table_primary_key", {
+      id,
+      schema,
+      relation,
+      origin,
+    });
+  },
+  applyTableEdits(
+    id: string,
+    schema: string,
+    relation: string,
+    edits: EditOp[],
+    origin: Origin = "user",
+  ): Promise<ApplyEditsOutcome> {
+    return call<ApplyEditsOutcome>("postgres_apply_table_edits", {
+      id,
+      schema,
+      relation,
+      edits,
       origin,
     });
   },

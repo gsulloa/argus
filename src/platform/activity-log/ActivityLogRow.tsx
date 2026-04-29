@@ -12,6 +12,7 @@ const KIND_LABEL: Record<ActivityKind, string> = {
   list_table_extras: "table extras",
   query_table: "query",
   count_table: "count",
+  apply_edits: "apply",
 };
 
 const SUMMARY_TRUNCATE = 120;

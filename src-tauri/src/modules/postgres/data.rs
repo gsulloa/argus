@@ -288,7 +288,7 @@ WHERE n.nspname = $1
   AND NOT a.attisdropped
 ORDER BY a.attnum";
 
-async fn list_columns(
+pub(super) async fn list_columns(
     client: &PgObject,
     schema: &str,
     relation: &str,
@@ -378,7 +378,7 @@ fn transform_cell(
     raw
 }
 
-fn process_row(
+pub(super) fn process_row(
     json_text: &str,
     columns: &[DataColumn],
     truncated_columns: &mut Vec<String>,
@@ -413,7 +413,7 @@ fn parse_id(id: &str) -> AppResult<Uuid> {
 /// Best-effort cancellation matching the schema browser's pattern. Returns
 /// regardless of whether the cancel itself succeeds — the timeout error is
 /// already on its way to the UI.
-async fn fire_cancel(cancel_token: tokio_postgres::CancelToken, sslmode: SslMode) {
+pub(super) async fn fire_cancel(cancel_token: tokio_postgres::CancelToken, sslmode: SslMode) {
     let outcome = match client_config_for(sslmode) {
         Ok(Some(cfg)) => {
             let connector = MakeRustlsConnect::new((*cfg).clone());

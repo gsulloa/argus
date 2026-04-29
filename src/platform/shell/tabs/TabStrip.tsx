@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useState } from "react";
 import { useTabs } from "./TabsContext";
+import { shouldCloseTab } from "./useCloseConfirm";
 import styles from "./TabStrip.module.css";
 
 export function TabStrip() {
@@ -67,7 +68,12 @@ export function TabStrip() {
                 aria-label={`Close ${tab.title}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  close(tab.id);
+                  // Consult any registered close-handler (e.g. dirty buffer in
+                  // the table viewer). When it resolves to false the tab stays
+                  // open; the handler is responsible for surfacing UI.
+                  void shouldCloseTab(tab.id).then((ok) => {
+                    if (ok) close(tab.id);
+                  });
                 }}
               >
                 <X size={11} strokeWidth={2.5} />
