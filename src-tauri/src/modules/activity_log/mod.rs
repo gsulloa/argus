@@ -22,9 +22,11 @@ pub enum ActivityKind {
     ListRelations,
     ListStructure,
     ListTableExtras,
+    ListColumnsBulk,
     QueryTable,
     CountTable,
     ApplyEdits,
+    RunSql,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -47,6 +49,7 @@ pub enum Status {
 pub enum Metric {
     Rows { value: u64 },
     Count { value: i64 },
+    Affected { value: i64 },
     ServerVersion { value: String },
     Items { value: u32 },
 }
@@ -279,13 +282,23 @@ mod tests {
             (ActivityKind::ListRelations, "list_relations"),
             (ActivityKind::ListStructure, "list_structure"),
             (ActivityKind::ListTableExtras, "list_table_extras"),
+            (ActivityKind::ListColumnsBulk, "list_columns_bulk"),
             (ActivityKind::QueryTable, "query_table"),
             (ActivityKind::CountTable, "count_table"),
             (ActivityKind::ApplyEdits, "apply_edits"),
+            (ActivityKind::RunSql, "run_sql"),
         ];
         for (kind, expected) in cases {
             let json = serde_json::to_value(&kind).unwrap();
             assert_eq!(json, expected);
         }
+    }
+
+    #[test]
+    fn affected_metric_serializes_with_kind_and_value() {
+        let m = Metric::Affected { value: 42 };
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json.get("kind").unwrap(), "affected");
+        assert_eq!(json.get("value").unwrap(), 42);
     }
 }

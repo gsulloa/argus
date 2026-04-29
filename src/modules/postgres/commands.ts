@@ -2,11 +2,13 @@ import { useEffect } from "react";
 import { CommandRegistry } from "@/platform/command-palette";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import type { Connection } from "@/platform/connection-registry/types";
+import { useTabs } from "@/platform/shell/tabs";
 import { POSTGRES_KIND } from "./types";
 import { postgresApi } from "./api";
 import { usePostgresForm } from "./FormController";
 import { useActiveConnections } from "./useActiveConnections";
 import { emitSchemaEvent } from "./schema/events";
+import { openQueryTab } from "./sql";
 
 interface SelectionApi {
   selectedConnectionId: string | null;
@@ -21,6 +23,7 @@ export function usePostgresCommands(selection: SelectionApi = NOOP_SELECTION) {
   const form = usePostgresForm();
   const { items } = useConnections();
   const { isActive } = useActiveConnections();
+  const tabs = useTabs();
 
   useEffect(() => {
     const postgresConnections = items.filter((c) => c.kind === POSTGRES_KIND);
@@ -145,6 +148,23 @@ export function usePostgresCommands(selection: SelectionApi = NOOP_SELECTION) {
       }),
     );
 
+    unregisters.push(
+      CommandRegistry.register({
+        id: "argus.sql.newQuery",
+        label: "SQL: New Query",
+        group: "SQL",
+        keywords: ["query", "sql", "editor", "run"],
+        run: () => {
+          const c = pickActiveConnection();
+          if (!c) {
+            console.warn("[argus] new query: no active connection");
+            return;
+          }
+          openQueryTab(tabs, { connectionId: c.id, connectionName: c.name });
+        },
+      }),
+    );
+
     return () => unregisters.forEach((u) => u());
-  }, [form, items, selection.selectedConnectionId, isActive]);
+  }, [form, items, selection.selectedConnectionId, isActive, tabs]);
 }

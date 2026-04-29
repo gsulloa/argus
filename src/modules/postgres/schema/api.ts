@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { toAppError } from "@/platform/errors/AppError";
+import type { BulkColumnInfo } from "./globalSchemaCache";
 import type {
   FunctionSignature,
   RelationsResult,
@@ -7,6 +8,11 @@ import type {
   StructureResult,
   TableExtrasResult,
 } from "./types";
+
+export interface ColumnsBulkResult {
+  schema: string;
+  columns_by_relation: Record<string, BulkColumnInfo[]>;
+}
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const started = performance.now();
@@ -42,4 +48,6 @@ export const schemaApi = {
       name,
       oid,
     }),
+  listColumnsBulk: (id: string, schema: string, origin: "auto" | "user" = "auto") =>
+    call<ColumnsBulkResult>("postgres_list_columns_bulk", { id, schema, origin }),
 };

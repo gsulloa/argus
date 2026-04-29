@@ -9,6 +9,8 @@ export type AppErrorKind =
 export interface PostgresErrorBody {
   code: string | null;
   message: string;
+  /** 1-based character offset where Postgres reported the error, when known. */
+  position?: number | null;
 }
 
 export class AppError extends Error {
@@ -38,7 +40,10 @@ function isPostgresBody(v: unknown): v is PostgresErrorBody {
   const o = v as Record<string, unknown>;
   return (
     (o.code === null || typeof o.code === "string") &&
-    typeof o.message === "string"
+    typeof o.message === "string" &&
+    (o.position === undefined ||
+      o.position === null ||
+      typeof o.position === "number")
   );
 }
 
