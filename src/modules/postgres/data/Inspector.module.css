@@ -98,3 +98,32 @@
   max-height: 120px;
   overflow: auto;
 }
+
+.dirtyDot {
+  color: var(--warning);
+  margin-left: 4px;
+  font-size: 9px;
+}
+
+.editor {
+  width: 100%;
+  font-family: inherit;
+  font-size: 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+.editor:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+.editorMono {
+  font-family: var(--font-mono);
+}
+textarea.editor {
+  resize: vertical;
+  min-height: 60px;
+}

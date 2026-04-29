@@ -89,3 +89,23 @@
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+
+.btnPrimary {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+.btnPrimary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.banner {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+}

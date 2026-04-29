@@ -1,18 +1,12 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppError } from "@/platform/errors/AppError";
 import { ColumnFilter } from "./ColumnFilter";
+import { EditableCell, looksLikeBytea } from "./EditableCell";
 import { cycleSort, sortIndexFor } from "./sortHelpers";
-import { categorize, isMonoCategory } from "./typeHelpers";
-import type {
-  CellEnvelope,
-  CellValue,
-  DataColumn,
-  Filter,
-  OrderBy,
-} from "./types";
-import { isCellEnvelope } from "./types";
+import { isCellEnvelope, type CellValue, type DataColumn, type EditValue, type Filter, type OrderBy } from "./types";
+import type { UseEditBufferResult } from "./useEditBuffer";
 import styles from "./DataGrid.module.css";
 
 const ROW_HEIGHT = 26;
@@ -21,9 +15,15 @@ const STATUS_ROW_HEIGHT = 28;
 const COLUMN_WIDTH = 180;
 const SCROLL_LOOKAHEAD_ROWS = (pageSize: number) => pageSize * 2;
 
+export interface UnifiedRow {
+  rowKey: string;
+  cells: CellValue[];
+  source: "insert" | "server";
+}
+
 export interface DataGridProps {
   columns: DataColumn[];
-  rows: CellValue[][];
+  rows: UnifiedRow[];
   pageSize: number;
   orderBy: OrderBy[];
   filters: Filter[];
@@ -31,66 +31,15 @@ export interface DataGridProps {
   nextError: AppError | null;
   reachedEnd: boolean;
   selectedRowIndex: number | null;
+  isReadOnly: boolean;
+  pkColumns: string[] | null;
+  enumValuesByColumn: Record<string, string[]>;
+  buffer: UseEditBufferResult;
   onSelectRow(index: number | null): void;
   onSortChange(next: OrderBy[]): void;
   onFiltersChange(next: Filter[]): void;
   onLoadNextPage(): void;
   onRetryNextPage(): void;
-}
-
-function formatEnvelope(env: CellEnvelope): string {
-  const bytes = env.byte_length;
-  const human =
-    bytes < 1024
-      ? `${bytes} B`
-      : bytes < 1024 * 1024
-        ? `${(bytes / 1024).toFixed(1)} KB`
-        : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return env.kind === "binary" ? `binary ~${human}` : `truncated ~${human}`;
-}
-
-function CellContent({
-  value,
-  column,
-}: {
-  value: CellValue;
-  column: DataColumn;
-}) {
-  if (value === null || value === undefined) {
-    return <span className={styles.cellNull}>NULL</span>;
-  }
-  if (isCellEnvelope(value)) {
-    return <span className={styles.envelopeChip}>{formatEnvelope(value)}</span>;
-  }
-  if (typeof value === "boolean") {
-    return <span className={styles.cellMono}>{value ? "true" : "false"}</span>;
-  }
-  if (typeof value === "number") {
-    return <span className={styles.cellMono}>{String(value)}</span>;
-  }
-  if (typeof value === "string") {
-    const cat = categorize(column.data_type);
-    return (
-      <span
-        className={isMonoCategory(cat) ? styles.cellMono : undefined}
-        title={value.length > 80 ? value : undefined}
-      >
-        {value}
-      </span>
-    );
-  }
-  // Object/array (e.g. jsonb that's small enough to come back inline).
-  let text: string;
-  try {
-    text = JSON.stringify(value);
-  } catch {
-    text = String(value);
-  }
-  return (
-    <span className={styles.cellMono} title={text.length > 80 ? text : undefined}>
-      {text}
-    </span>
-  );
 }
 
 export function DataGrid(props: DataGridProps) {
@@ -104,6 +53,10 @@ export function DataGrid(props: DataGridProps) {
     nextError,
     reachedEnd,
     selectedRowIndex,
+    isReadOnly,
+    pkColumns,
+    enumValuesByColumn,
+    buffer,
     onSelectRow,
     onSortChange,
     onFiltersChange,
@@ -144,10 +97,40 @@ export function DataGrid(props: DataGridProps) {
     onFiltersChange(next === null ? without : [...without, next]);
   }
 
+  // Track the active editor: at most one cell at a time.
+  const [editing, setEditing] = useState<{ rowIndex: number; col: string } | null>(null);
+
+  // Keyboard handler at the grid level: Backspace toggles delete, Escape clears selection.
+  function onGridKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (editing) return; // editor handles its own keys
+    if ((e.key === "Backspace" || e.key === "Delete") && selectedRowIndex !== null) {
+      const r = rows[selectedRowIndex];
+      if (!r) return;
+      if (isReadOnly) return;
+      if (r.source === "insert") {
+        e.preventDefault();
+        buffer.removeInsertRow(r.rowKey);
+        return;
+      }
+      if (!pkColumns) return; // no-PK relation: can't delete existing rows
+      e.preventDefault();
+      if (buffer.isRowDeleted(r.rowKey)) {
+        buffer.markRowUndelete(r.rowKey);
+      } else {
+        const pk: Record<string, EditValue> = {};
+        for (const col of pkColumns) {
+          const idx = columns.findIndex((c) => c.name === col);
+          if (idx >= 0) pk[col] = (r.cells[idx] ?? null) as EditValue;
+        }
+        buffer.markRowDelete(r.rowKey, pk);
+      }
+    }
+  }
+
   const totalWidth = Math.max(columns.length * COLUMN_WIDTH, 1);
 
   return (
-    <div className={styles.root}>
+    <div className={styles.root} tabIndex={0} onKeyDown={onGridKeyDown}>
       <div className={styles.viewport} ref={viewportRef}>
         <div className={styles.thead} style={{ width: totalWidth }}>
           <div className={styles.headerRow} style={{ height: HEADER_HEIGHT }}>
@@ -197,11 +180,24 @@ export function DataGrid(props: DataGridProps) {
           {items.map((vi) => {
             const row = rows[vi.index];
             if (!row) return null;
+            // Bind the row narrowly for the inner closure that follows so
+            // TypeScript doesn't widen `row` back to `T | undefined` after
+            // the `if (!row) return null` guard.
+            const r = row;
             const selected = selectedRowIndex === vi.index;
+            const isInsert = r.source === "insert";
+            const isDeleted = r.rowKey ? buffer.isRowDeleted(r.rowKey) : false;
+            const rowClasses = [
+              styles.row,
+              isInsert ? styles.rowInsert : "",
+              isDeleted ? styles.rowDeleted : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
             return (
               <div
                 key={vi.key}
-                className={styles.row}
+                className={rowClasses}
                 data-selected={selected ? "true" : "false"}
                 style={{
                   position: "absolute",
@@ -213,17 +209,85 @@ export function DataGrid(props: DataGridProps) {
                 }}
                 onClick={() => onSelectRow(selected ? null : vi.index)}
               >
-                {columns.map((col, ci) => (
-                  <div
-                    key={col.name}
-                    className={styles.cell}
-                    style={{ width: COLUMN_WIDTH }}
-                  >
-                    <span className={styles.cellValue}>
-                      <CellContent value={row[ci] ?? null} column={col} />
-                    </span>
-                  </div>
-                ))}
+                {columns.map((col) => {
+                  const colIdx = columns.findIndex((c) => c.name === col.name);
+                  const serverValue = r.cells[colIdx] ?? null;
+                  const dirty = r.rowKey
+                    ? buffer.isCellDirty(r.rowKey, col.name)
+                    : false;
+                  const editsEntry = r.rowKey ? buffer.getRowEdits(r.rowKey) : undefined;
+                  const displayValue =
+                    editsEntry && col.name in editsEntry.changes
+                      ? (editsEntry.changes[col.name] as EditValue)
+                      : serverValue;
+                  const isPkOfExisting =
+                    !isInsert && pkColumns?.includes(col.name);
+                  const cellReadOnly =
+                    isReadOnly ||
+                    isDeleted ||
+                    (isPkOfExisting ?? false) ||
+                    looksLikeBytea(col.data_type) ||
+                    isCellEnvelope(serverValue) ||
+                    (!isInsert && pkColumns === null) ||
+                    !r.rowKey;
+                  const cellEditing =
+                    !!editing &&
+                    editing.rowIndex === vi.index &&
+                    editing.col === col.name;
+
+                  function onStartEdit() {
+                    setEditing({ rowIndex: vi.index, col: col.name });
+                  }
+                  function onCancelEdit() {
+                    setEditing(null);
+                  }
+                  function onCommitEdit(value: EditValue) {
+                    setEditing(null);
+                    if (!r.rowKey) return;
+                    const pk: Record<string, EditValue> = {};
+                    if (pkColumns) {
+                      for (const c of pkColumns) {
+                        const i = columns.findIndex((cc) => cc.name === c);
+                        if (i >= 0) pk[c] = (r.cells[i] ?? null) as EditValue;
+                      }
+                    }
+                    if (isInsert) {
+                      buffer.setCellEdit({
+                        rowKey: r.rowKey,
+                        column: col.name,
+                        value,
+                        pk: {},
+                        originalRow: null,
+                        originalColumns: null,
+                      });
+                    } else {
+                      buffer.setCellEdit({
+                        rowKey: r.rowKey,
+                        column: col.name,
+                        value,
+                        pk,
+                        originalRow: r.cells,
+                        originalColumns: columns.map((c) => c.name),
+                      });
+                    }
+                  }
+
+                  return (
+                    <EditableCell
+                      key={col.name}
+                      column={col}
+                      displayValue={displayValue}
+                      dirty={dirty}
+                      readOnly={cellReadOnly}
+                      enumValues={enumValuesByColumn[col.name]}
+                      editing={cellEditing}
+                      onStartEdit={onStartEdit}
+                      onCommitEdit={onCommitEdit}
+                      onCancelEdit={onCancelEdit}
+                      style={{ width: COLUMN_WIDTH }}
+                    />
+                  );
+                })}
               </div>
             );
           })}

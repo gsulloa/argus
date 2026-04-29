@@ -11,12 +11,12 @@ The system SHALL define a typed payload `ActivityLogEntry` emitted from the Rust
 - `id: string` — UUID identifying this entry.
 - `timestamp_unix_ms: number` — wall-clock time at emission.
 - `connection_id: string | null` — UUID of the Postgres connection the operation targeted, or `null` when the operation has no bound connection (e.g. `postgres_test_connection` for unsaved params).
-- `kind: string` — one of `"test_connection"`, `"connect"`, `"disconnect"`, `"list_schemas"`, `"list_relations"`, `"list_structure"`, `"list_table_extras"`, `"query_table"`, `"count_table"`.
+- `kind: string` — one of `"test_connection"`, `"connect"`, `"disconnect"`, `"list_schemas"`, `"list_relations"`, `"list_structure"`, `"list_table_extras"`, `"query_table"`, `"count_table"`, `"apply_edits"`.
 - `origin: "auto" | "user"` — whether Argus initiated the call internally (`auto`) or the user did (`user`).
 - `duration_ms: number` — elapsed wall time in Rust from command entry to emission.
 - `status: "ok" | "err"` — whether the command returned a successful result or an error.
-- `sql: string | null` — full SQL text when the command issued one (`query_table`, `count_table`); `null` for catalog-only or lifecycle commands.
-- `params: string[] | null` — bind parameters as `Debug`-formatted strings, each truncated to 200 characters with a trailing `…` marker on truncation. `null` when no parameters were bound.
+- `sql: string | null` — full SQL text when the command issued one (`query_table`, `count_table`); for `apply_edits`, the concatenation of every per-op SQL statement separated by `"; "`, truncated to 4000 characters with a trailing `…` when needed; `null` for catalog-only or lifecycle commands.
+- `params: string[] | null` — bind parameters as `Debug`-formatted strings, each truncated to 200 characters with a trailing `…` marker on truncation. `null` when no parameters were bound; `null` for `apply_edits` (per-op params would balloon and the SQL field carries enough signal).
 - `metric: { kind: "rows", value: number } | { kind: "count", value: number } | { kind: "server_version", value: string } | { kind: "items", value: number } | null` — per-op secondary metric (see "Per-kind metric mapping").
 - `error: { message: string, code: string | null } | null` — populated when `status === "err"`. `code` carries the SQLSTATE when present (forwarded from `AppError::Postgres`).
 
@@ -34,6 +34,11 @@ The system SHALL define a typed payload `ActivityLogEntry` emitted from the Rust
 
 - **WHEN** `postgres_connect` returns successfully
 - **THEN** the emitted entry has `sql: null`, `params: null`, and `metric: { kind: "server_version", value: "PostgreSQL 16.x ..." }`
+
+#### Scenario: Apply edits concatenates SQL and nulls params
+
+- **WHEN** `postgres_apply_table_edits` succeeds with 3 ops affecting 3 rows
+- **THEN** an entry is emitted with `kind: "apply_edits"`, `status: "ok"`, `sql` containing all three statements separated by `"; "`, `params: null`, `metric: { kind: "rows", value: 3 }`
 
 ### Requirement: Tauri event channel
 
@@ -68,6 +73,7 @@ Each command kind SHALL populate `metric` on success according to a fixed mappin
 | `list_relations` | `{ kind: "items", value: <tables + views + materialized_views> }` |
 | `list_structure` | `{ kind: "items", value: <functions + types + extensions counts, treating None as 0> }` |
 | `list_table_extras` | `{ kind: "items", value: <indexes + triggers, None → 0> }` |
+| `apply_edits` | `{ kind: "rows", value: <total rows affected across all ops> }` |
 | `disconnect` | `null` |
 
 On failure (`status: "err"`), `metric` MUST be `null` regardless of kind.
@@ -82,6 +88,11 @@ On failure (`status: "err"`), `metric` MUST be `null` regardless of kind.
 - **WHEN** `postgres_list_structure` returns `{ functions: None, types: Some(7), extensions: Some(3), failures: [{ kind: "functions", … }] }`
 - **THEN** the emitted entry has `status: "ok"` and `metric: { kind: "items", value: 10 }` (None counted as 0)
 - **AND** `error` remains `null` because the command itself returned `Ok`
+
+#### Scenario: Apply edits reports total rows affected
+
+- **WHEN** `postgres_apply_table_edits` succeeds with 2 updates (1 row each) and 1 delete (1 row), 3 rows total
+- **THEN** the emitted entry has `metric: { kind: "rows", value: 3 }`
 
 ### Requirement: Frontend listener and ring buffer
 

@@ -24,6 +24,7 @@ pub enum ActivityKind {
     ListTableExtras,
     QueryTable,
     CountTable,
+    ApplyEdits,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -280,6 +281,7 @@ mod tests {
             (ActivityKind::ListTableExtras, "list_table_extras"),
             (ActivityKind::QueryTable, "query_table"),
             (ActivityKind::CountTable, "count_table"),
+            (ActivityKind::ApplyEdits, "apply_edits"),
         ];
         for (kind, expected) in cases {
             let json = serde_json::to_value(&kind).unwrap();

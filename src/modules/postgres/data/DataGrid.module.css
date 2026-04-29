@@ -208,3 +208,52 @@
   font-size: 12px;
   color: var(--text-subtle);
 }
+
+/* Editable mode: dirty cells, deleted rows, inserted rows. */
+.cellDirty {
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  box-shadow: inset 0 0 0 1px var(--warning);
+}
+.row[data-selected="true"] .cellDirty {
+  /* Keep dirty hue visible on the active row's accent stripe. */
+  background: color-mix(in srgb, var(--warning) 30%, transparent);
+}
+
+.rowDeleted .cell {
+  text-decoration: line-through;
+  color: var(--text-subtle);
+}
+.rowDeleted {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.rowInsert {
+  /* Subtle band on insert rows so they're identifiable in a long buffer. */
+  border-left: 2px solid var(--success);
+}
+
+/* Inline cell editor sizing matches the cell so the layout doesn't jump. */
+.cellEditing {
+  padding: 0;
+  background: var(--surface);
+}
+.cellEditor {
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 4px 11px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.cellEditorMono {
+  font-family: var(--font-mono);
+}
+textarea.cellEditor {
+  resize: none;
+  height: auto;
+  min-height: 26px;
+}

@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { Loader2, Plus } from "lucide-react";
 import styles from "./BottomBar.module.css";
 
 interface Props {
@@ -12,9 +12,21 @@ interface Props {
   queryMs: number | null;
   filterCount: number;
   reachedEnd: boolean;
+  /** When `true` (writable connection on a table), the Save control is rendered. */
+  editable: boolean;
+  /** When `true`, the "Add row" button is rendered. */
+  canInsert: boolean;
+  /** When `true`, the read-only banner replaces the edit controls. */
+  readOnlyBanner: boolean;
+  /** When `true`, the no-PK banner is shown alongside the Add-row button. */
+  noPkBanner: boolean;
+  /** Sum of dirty entries (updates + inserts + deletes) — drives the Save badge. */
+  dirtyCount: number;
   onPageSizeChange(next: number): void;
   onCountRows(): void;
   onClearFilters(): void;
+  onAddRow(): void;
+  onSave(): void;
 }
 
 function formatNumber(n: number): string {
@@ -33,9 +45,16 @@ export function BottomBar(props: Props) {
     queryMs,
     filterCount,
     reachedEnd,
+    editable,
+    canInsert,
+    readOnlyBanner,
+    noPkBanner,
+    dirtyCount,
     onPageSizeChange,
     onCountRows,
     onClearFilters,
+    onAddRow,
+    onSave,
   } = props;
 
   const showing =
@@ -64,6 +83,38 @@ export function BottomBar(props: Props) {
             ×
           </button>
         </span>
+      )}
+      {readOnlyBanner ? (
+        <span className={styles.banner} title="The connection is in read-only mode">
+          Read-only connection — edits disabled
+        </span>
+      ) : noPkBanner ? (
+        <span className={styles.banner} title="Existing rows cannot be edited or deleted; INSERT is allowed">
+          No primary key — existing rows are not editable
+        </span>
+      ) : null}
+      {canInsert && (
+        <button
+          type="button"
+          className={styles.btn}
+          onClick={onAddRow}
+          title="Add a new row to the buffer (Cmd-S to commit)"
+          aria-label="Add row"
+        >
+          <Plus size={11} />
+          Add row
+        </button>
+      )}
+      {editable && (
+        <button
+          type="button"
+          className={`${styles.btn} ${dirtyCount > 0 ? styles.btnPrimary : ""}`}
+          onClick={onSave}
+          disabled={dirtyCount === 0}
+          title="Open the diff preview (Cmd-S)"
+        >
+          {dirtyCount > 0 ? `Save (${dirtyCount})` : "Save"}
+        </button>
       )}
       {queryMs !== null && (
         <span className={styles.timing}>{queryMs} ms</span>
