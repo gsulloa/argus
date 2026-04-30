@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use deadpool_postgres::Object as PgObject;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tokio::time::timeout;
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime, PrimitiveDateTime, Time};
@@ -27,6 +27,8 @@ use crate::modules::activity_log::{
 };
 use crate::modules::postgres::data::{fire_cancel, DataColumn};
 use crate::modules::postgres::pool::PgPoolRegistry;
+use crate::modules::query_history::{self, HistoryOrigin, HistoryStatus, NewEntry};
+use crate::platform::DbState;
 
 /// Hard cap on a single `postgres_run_sql` statement. Generous (60s) because
 /// the user is intentionally running arbitrary SQL — but bounded so a runaway
@@ -458,6 +460,146 @@ fn metric_for_result(result: &RunSqlResult) -> Metric {
 }
 
 // --------------------------------------------------------------------------
+// Query history persistence
+// --------------------------------------------------------------------------
+
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn origin_to_history(o: Origin) -> HistoryOrigin {
+    match o {
+        Origin::User => HistoryOrigin::User,
+        Origin::Auto => HistoryOrigin::Auto,
+    }
+}
+
+/// Resolve the latest registered name for a connection. Falls back to the
+/// stringified UUID if the connection has been removed (the run still
+/// succeeded against an active pool, so this is a defensive fallback only).
+fn fetch_connection_name(app: &AppHandle, id: Uuid) -> String {
+    let db = app.state::<DbState>();
+    let conn = db.0.lock().expect("db poisoned");
+    conn.query_row(
+        "SELECT name FROM connections WHERE id = ?1",
+        rusqlite::params![id.as_bytes().to_vec()],
+        |r| r.get::<_, String>(0),
+    )
+    .unwrap_or_else(|_| id.to_string())
+}
+
+fn build_history_entry_ok(
+    connection_id: Uuid,
+    connection_name: &str,
+    sql: &str,
+    origin: Origin,
+    started_at_ms: i64,
+    duration_ms: u64,
+    result: &RunSqlResult,
+) -> NewEntry {
+    let (row_count, command_tag) = match result {
+        RunSqlResult::Rows { rows, .. } => (Some(rows.len() as i64), None),
+        RunSqlResult::Affected {
+            affected_rows,
+            command_tag,
+            ..
+        } => (Some(*affected_rows as i64), Some(command_tag.clone())),
+    };
+    NewEntry {
+        connection_id,
+        connection_name: connection_name.to_string(),
+        sql: sql.to_string(),
+        origin: origin_to_history(origin),
+        status: HistoryStatus::Ok,
+        started_at: started_at_ms,
+        duration_ms: duration_ms as i64,
+        row_count,
+        command_tag,
+        error_code: None,
+        error_message: None,
+    }
+}
+
+fn build_history_entry_err(
+    connection_id: Uuid,
+    connection_name: &str,
+    sql: &str,
+    origin: Origin,
+    started_at_ms: i64,
+    duration_ms: u64,
+    err: &AppError,
+) -> NewEntry {
+    let (code, message) = match err {
+        AppError::Postgres(b) => (b.code.clone(), b.message.clone()),
+        other => (None, other.to_string()),
+    };
+    NewEntry {
+        connection_id,
+        connection_name: connection_name.to_string(),
+        sql: sql.to_string(),
+        origin: origin_to_history(origin),
+        status: HistoryStatus::Err,
+        started_at: started_at_ms,
+        duration_ms: duration_ms as i64,
+        row_count: None,
+        command_tag: None,
+        error_code: code,
+        error_message: Some(message),
+    }
+}
+
+fn record_history_ok(
+    app: &AppHandle,
+    connection_id: Uuid,
+    connection_name: &str,
+    sql: &str,
+    origin: Origin,
+    started_at_ms: i64,
+    duration_ms: u64,
+    result: &RunSqlResult,
+) {
+    let entry = build_history_entry_ok(
+        connection_id,
+        connection_name,
+        sql,
+        origin,
+        started_at_ms,
+        duration_ms,
+        result,
+    );
+    let db = app.state::<DbState>();
+    let conn = db.0.lock().expect("db poisoned");
+    query_history::insert_entry(&conn, entry);
+}
+
+fn record_history_err(
+    app: &AppHandle,
+    connection_id: Uuid,
+    connection_name: &str,
+    sql: &str,
+    origin: Origin,
+    started_at_ms: i64,
+    duration_ms: u64,
+    err: &AppError,
+) {
+    let entry = build_history_entry_err(
+        connection_id,
+        connection_name,
+        sql,
+        origin,
+        started_at_ms,
+        duration_ms,
+        err,
+    );
+    let db = app.state::<DbState>();
+    let conn = db.0.lock().expect("db poisoned");
+    query_history::insert_entry(&conn, entry);
+}
+
+// --------------------------------------------------------------------------
 // Tauri commands
 // --------------------------------------------------------------------------
 
@@ -469,6 +611,7 @@ pub async fn postgres_run_sql(
     sql: String,
     origin: Option<Origin>,
 ) -> AppResult<RunSqlResult> {
+    let started_wall_ms = now_unix_ms();
     let started = Instant::now();
     let activity_origin = origin.unwrap_or(Origin::User);
     let parsed = parse_id(&id)?;
@@ -476,6 +619,8 @@ pub async fn postgres_run_sql(
     if sql.trim().is_empty() {
         return Err(AppError::Validation("empty SQL".into()));
     }
+
+    let connection_name = fetch_connection_name(&app, parsed);
 
     let inner: AppResult<RunSqlResult> = async {
         let summaries = pools.list_active().await;
@@ -506,8 +651,32 @@ pub async fn postgres_run_sql(
         .connection(parsed)
         .sql(sql.clone());
     match &inner {
-        Ok(r) => emit_activity(&app, builder.ok(Some(metric_for_result(r)))),
-        Err(e) => emit_activity(&app, builder.err(e)),
+        Ok(r) => {
+            emit_activity(&app, builder.ok(Some(metric_for_result(r))));
+            record_history_ok(
+                &app,
+                parsed,
+                &connection_name,
+                &sql,
+                activity_origin,
+                started_wall_ms,
+                total_ms,
+                r,
+            );
+        }
+        Err(e) => {
+            emit_activity(&app, builder.err(e));
+            record_history_err(
+                &app,
+                parsed,
+                &connection_name,
+                &sql,
+                activity_origin,
+                started_wall_ms,
+                total_ms,
+                e,
+            );
+        }
     }
     inner
 }
@@ -538,6 +707,7 @@ pub async fn postgres_run_sql_many(
     // (SET search_path, BEGIN/COMMIT) take effect for later statements.
     let client = pools.acquire(&parsed).await?;
     let cancel_token = client.cancel_token();
+    let connection_name = fetch_connection_name(&app, parsed);
 
     let mut outcomes: Vec<RunManyOutcome> = Vec::with_capacity(statements.len());
     let mut halted = false;
@@ -556,6 +726,7 @@ pub async fn postgres_run_sql_many(
             });
             continue;
         }
+        let started_wall_ms = now_unix_ms();
         let started = Instant::now();
         let result = timeout(RUN_SQL_TIMEOUT, run_one(&client, sql, is_read_only)).await;
         let total_ms = started.elapsed().as_millis() as u64;
@@ -567,6 +738,16 @@ pub async fn postgres_run_sql_many(
         match result {
             Ok(Ok(r)) => {
                 emit_activity(&app, builder.ok(Some(metric_for_result(&r))));
+                record_history_ok(
+                    &app,
+                    parsed,
+                    &connection_name,
+                    sql,
+                    activity_origin,
+                    started_wall_ms,
+                    total_ms,
+                    &r,
+                );
                 outcomes.push(RunManyOutcome::Ok {
                     statement_index: idx,
                     result: r,
@@ -574,6 +755,16 @@ pub async fn postgres_run_sql_many(
             }
             Ok(Err(e)) => {
                 emit_activity(&app, builder.err(&e));
+                record_history_err(
+                    &app,
+                    parsed,
+                    &connection_name,
+                    sql,
+                    activity_origin,
+                    started_wall_ms,
+                    total_ms,
+                    &e,
+                );
                 let env = match &e {
                     AppError::Postgres(b) => RunSqlErrorEnvelope {
                         message: b.message.clone(),
@@ -599,6 +790,16 @@ pub async fn postgres_run_sql_many(
                 );
                 fire_cancel(cancel_token.clone(), sslmode).await;
                 emit_activity(&app, builder.err(&timeout_err));
+                record_history_err(
+                    &app,
+                    parsed,
+                    &connection_name,
+                    sql,
+                    activity_origin,
+                    started_wall_ms,
+                    total_ms,
+                    &timeout_err,
+                );
                 outcomes.push(RunManyOutcome::Err {
                     statement_index: idx,
                     error: RunSqlErrorEnvelope {
@@ -706,6 +907,89 @@ mod tests {
         assert_eq!(v.get("kind").unwrap(), "affected");
         assert_eq!(v.get("affected_rows").unwrap(), 3);
         assert_eq!(v.get("command_tag").unwrap(), "INSERT 0 3");
+    }
+
+    #[test]
+    fn many_ok_err_skipped_persists_two_history_rows() {
+        // Mirrors the behavior of `postgres_run_sql_many` when invoked with
+        // [ok, err, skipped]: two history rows are written, in started_at
+        // order, with the right field shapes.
+        use crate::modules::query_history::{self, HistoryStatus, ListRequest};
+        use crate::platform::storage::open_in_memory;
+
+        let db = open_in_memory().unwrap();
+        let cid = Uuid::new_v4();
+
+        // Statement 1: ok, returns 5 rows.
+        let r_rows = RunSqlResult::Rows {
+            columns: vec![],
+            rows: vec![vec![]; 5],
+            truncated_columns: vec![],
+            truncated: false,
+            query_ms: 5,
+        };
+        let entry1 = build_history_entry_ok(
+            cid,
+            "local-pg",
+            "SELECT 1",
+            Origin::User,
+            100,
+            5,
+            &r_rows,
+        );
+        query_history::insert_entry(&db, entry1);
+
+        // Statement 2: err with SQLSTATE.
+        let err = AppError::postgres_with_code("42601", "syntax error at or near \"SELEC\"");
+        let entry2 = build_history_entry_err(
+            cid,
+            "local-pg",
+            "SELEC 2",
+            Origin::User,
+            200,
+            3,
+            &err,
+        );
+        query_history::insert_entry(&db, entry2);
+
+        // Statement 3: skipped — postgres_run_sql_many calls neither helper.
+        // Verify by NOT calling them.
+
+        let resp = query_history::list_entries(&db, ListRequest::default()).unwrap();
+        assert_eq!(resp.total, 2, "skipped statement must not produce a row");
+        assert_eq!(resp.entries.len(), 2);
+        // Most recent first by started_at DESC.
+        assert_eq!(resp.entries[0].sql, "SELEC 2");
+        assert_eq!(resp.entries[0].status, HistoryStatus::Err);
+        assert_eq!(resp.entries[0].error_code.as_deref(), Some("42601"));
+        assert!(resp.entries[0].error_message.is_some());
+        assert_eq!(resp.entries[0].row_count, None);
+
+        assert_eq!(resp.entries[1].sql, "SELECT 1");
+        assert_eq!(resp.entries[1].status, HistoryStatus::Ok);
+        assert_eq!(resp.entries[1].row_count, Some(5));
+        assert_eq!(resp.entries[1].error_code, None);
+    }
+
+    #[test]
+    fn affected_result_history_entry_has_command_tag() {
+        let cid = Uuid::new_v4();
+        let r = RunSqlResult::Affected {
+            command_tag: "INSERT 0 3".into(),
+            affected_rows: 3,
+            query_ms: 12,
+        };
+        let entry = build_history_entry_ok(
+            cid,
+            "local-pg",
+            "INSERT INTO t VALUES (1), (2), (3)",
+            Origin::User,
+            500,
+            12,
+            &r,
+        );
+        assert_eq!(entry.command_tag.as_deref(), Some("INSERT 0 3"));
+        assert_eq!(entry.row_count, Some(3));
     }
 
     #[test]

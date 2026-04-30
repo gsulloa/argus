@@ -6,10 +6,16 @@ use tracing::info;
 
 use crate::error::{AppError, AppResult};
 
-const MIGRATIONS: &[(&str, &str)] = &[(
-    "0001_init.sql",
-    include_str!("../../migrations/0001_init.sql"),
-)];
+const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0001_init.sql",
+        include_str!("../../migrations/0001_init.sql"),
+    ),
+    (
+        "0002_query_history.sql",
+        include_str!("../../migrations/0002_query_history.sql"),
+    ),
+];
 
 pub fn open_db(app: &AppHandle) -> AppResult<Connection> {
     let dir = app
