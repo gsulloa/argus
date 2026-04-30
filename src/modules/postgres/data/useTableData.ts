@@ -3,12 +3,13 @@ import { AppError } from "@/platform/errors/AppError";
 import { isPostgresTimeout } from "../errors";
 import { globalSchemaCache } from "../schema/globalSchemaCache";
 import { dataApi } from "./api";
-import type {
-  CellValue,
-  DataColumn,
-  Filter,
-  OrderBy,
-  QueryTableResult,
+import {
+  modelToPayload,
+  type CellValue,
+  type DataColumn,
+  type FilterModel,
+  type OrderBy,
+  type QueryTableResult,
 } from "./types";
 
 function isTauriRuntime(): boolean {
@@ -148,7 +149,19 @@ export interface UseTableDataParams {
   relation: string;
   pageSize: number;
   orderBy: OrderBy[];
-  filters: Filter[];
+  /**
+   * Applied (committed) filter model. Edits to the bar's draft do not flow
+   * through here — only the explicit Apply commits.
+   */
+  applied: FilterModel;
+  /**
+   * When `false`, defer the first-page fetch (the buffer stays in
+   * `loading-first`). Used by callers that need to wait for persisted state
+   * to load before issuing the first query — otherwise we'd burn a fetch
+   * with `applied = empty` that the persisted value would immediately
+   * supersede. Defaults to `true`.
+   */
+  enabled?: boolean;
 }
 
 export interface UseTableDataResult {
@@ -172,7 +185,15 @@ export interface UseTableDataResult {
  * whenever `pageSize`, `orderBy`, or `filters` change.
  */
 export function useTableData(params: UseTableDataParams): UseTableDataResult {
-  const { connectionId, schema, relation, pageSize, orderBy, filters } = params;
+  const {
+    connectionId,
+    schema,
+    relation,
+    pageSize,
+    orderBy,
+    applied,
+    enabled = true,
+  } = params;
 
   const [state, dispatch] = useReducer(reducer, undefined, initialState);
 
@@ -181,14 +202,14 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
   stateRef.current = state;
   const orderByRef = useRef(orderBy);
   orderByRef.current = orderBy;
-  const filtersRef = useRef(filters);
-  filtersRef.current = filters;
+  const appliedRef = useRef(applied);
+  appliedRef.current = applied;
   const pageSizeRef = useRef(pageSize);
   pageSizeRef.current = pageSize;
 
   // Stable JSON keys so effects don't churn on identity-equal-but-deep-equal arrays.
   const orderKey = useMemo(() => JSON.stringify(orderBy), [orderBy]);
-  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
+  const filtersKey = useMemo(() => JSON.stringify(applied), [applied]);
 
   // Reset buffer when paging inputs actually change. The fingerprint ref makes
   // this effect idempotent under React 18 StrictMode (which runs effects
@@ -217,7 +238,7 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
             limit: pageSizeRef.current,
             offset: 0,
             order_by: orderByRef.current,
-            filters: filtersRef.current,
+            ...modelToPayload(appliedRef.current),
           },
           "user",
         );
@@ -239,7 +260,7 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
                 limit: pageSizeRef.current,
                 offset: 0,
                 order_by: orderByRef.current,
-                filters: filtersRef.current,
+                ...modelToPayload(appliedRef.current),
               },
               "user",
             );
@@ -270,10 +291,13 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
   );
 
   // Trigger the first-page fetch when we transition to idle after a reset.
+  // Gated by `enabled` so callers can defer the first fetch (e.g. until
+  // persisted filter/orderBy have loaded from disk).
   useEffect(() => {
+    if (!enabled) return;
     if (state.status.state !== "idle") return;
     void fetchFirstPage(state.generation);
-  }, [state.status.state, state.generation, fetchFirstPage]);
+  }, [enabled, state.status.state, state.generation, fetchFirstPage]);
 
   const fetchNextPage = useCallback(
     async (generation: number) => {
@@ -291,7 +315,7 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
             limit: pageSizeRef.current,
             offset,
             order_by: orderByRef.current,
-            filters: filtersRef.current,
+            ...modelToPayload(appliedRef.current),
           },
           "user",
         );

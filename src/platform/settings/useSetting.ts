@@ -12,19 +12,54 @@ function isTauriRuntime(): boolean {
   );
 }
 
-export function useSetting<T>(key: string, defaultValue: T): [T, (next: Updater<T>) => void] {
+export function useSetting<T>(
+  key: string,
+  defaultValue: T,
+): [T, (next: Updater<T>) => void, boolean] {
   const [value, setValue] = useState<T>(() => {
     const cached = memoryCache.get(key);
     return cached === undefined ? defaultValue : (cached as T);
   });
+  // Outside Tauri (jsdom tests, plain web) there is no async disk read, so
+  // first paint is already authoritative. Inside Tauri we flip on the read
+  // settling. Cached values in `memoryCache` from a prior mount also count
+  // as "loaded" — re-reading the disk would only confirm them.
+  const [loaded, setLoaded] = useState<boolean>(
+    () => memoryCache.has(key) || !isTauriRuntime(),
+  );
   const initialized = useRef(false);
   const writeTimer = useRef<number | null>(null);
+
+  // When the same hook instance is re-rendered with a different `key` (e.g.
+  // TabContent reuses one TableViewerTab across two tabs of different
+  // relations), `useState` initializers don't re-run — `value` would stay
+  // pinned to the previous key's data. Detect the change synchronously and
+  // re-derive both pieces of state from memory cache. We track `prevKey`
+  // with `useState` (not `useRef`) so the React docs' pattern survives a
+  // discarded render in StrictMode dev double-invocation: a ref mutation
+  // would stick across the discard, but a queued setState gets discarded
+  // alongside `setValue`/`setLoaded`, so the next render fires the branch
+  // again and self-corrects.
+  // https://react.dev/reference/react/useState#storing-information-from-previous-renders
+  const [prevKey, setPrevKey] = useState(key);
+  if (prevKey !== key) {
+    setPrevKey(key);
+    const cached = memoryCache.get(key);
+    setValue(cached === undefined ? defaultValue : (cached as T));
+    setLoaded(memoryCache.has(key) || !isTauriRuntime());
+  }
 
   // Load on mount.
   useEffect(() => {
     let cancelled = false;
     if (!isTauriRuntime()) {
       initialized.current = true;
+      setLoaded(true);
+      return;
+    }
+    if (memoryCache.has(key)) {
+      initialized.current = true;
+      setLoaded(true);
       return;
     }
     getSetting(key)
@@ -40,9 +75,11 @@ export function useSetting<T>(key: string, defaultValue: T): [T, (next: Updater<
           }
         }
         initialized.current = true;
+        setLoaded(true);
       })
       .catch(() => {
         initialized.current = true;
+        setLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -70,5 +107,5 @@ export function useSetting<T>(key: string, defaultValue: T): [T, (next: Updater<
     [key],
   );
 
-  return [value, update];
+  return [value, update, loaded];
 }

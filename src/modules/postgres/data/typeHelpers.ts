@@ -1,4 +1,4 @@
-import type { Filter } from "./types";
+import type { Operator } from "./types";
 
 /**
  * Loose Postgres type categorization. `data_type` comes from
@@ -60,9 +60,14 @@ export function categorize(dataType: string): ColumnCategory {
   return "other";
 }
 
-/** Operators offered by the column header filter, scoped to the column type. */
-export function operatorsFor(category: ColumnCategory, isNullable: boolean): Filter["op"][] {
-  const base: Filter["op"][] = ["=", "!="];
+/**
+ * Legacy column-scoped operator suggester. Retained only as a fallback for
+ * non-bar contexts — the primary surface is now `operatorsForColumn` in
+ * `filter-bar/operatorRules.ts`, which handles the full operator set
+ * including the Any-column case.
+ */
+export function operatorsFor(category: ColumnCategory, isNullable: boolean): Operator[] {
+  const base: Operator[] = ["=", "!="];
   switch (category) {
     case "numeric":
     case "date":
@@ -76,7 +81,6 @@ export function operatorsFor(category: ColumnCategory, isNullable: boolean): Fil
       base.push("LIKE", "NOT LIKE");
       break;
     case "boolean":
-      // = / != is enough; the value is one of true/false.
       break;
   }
   if (isNullable) {
