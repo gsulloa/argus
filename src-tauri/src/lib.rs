@@ -16,14 +16,47 @@ use crate::modules::postgres::{
     postgres_list_table_extras, postgres_parse_url, postgres_query_table, postgres_run_sql,
     postgres_run_sql_many, postgres_table_primary_key, postgres_test_connection, PgPoolRegistry,
 };
+use crate::modules::query_history::{
+    self,
+    commands::{
+        query_history_clear, query_history_delete, query_history_distinct_connections,
+        query_history_list,
+    },
+};
 use crate::platform::{
     connections::{
         connections_create, connections_delete, connections_get_secret, connections_list,
         connections_update,
     },
-    settings::{settings_get, settings_set},
+    settings::{self, settings_get, settings_set},
     storage, DbState,
 };
+
+const QUERY_HISTORY_RETENTION_DAYS_KEY: &str = "queryHistory.retentionDays";
+const QUERY_HISTORY_RETENTION_MAX_ROWS_KEY: &str = "queryHistory.retentionMaxRows";
+const QUERY_HISTORY_DEFAULT_RETENTION_DAYS: u32 = 30;
+const QUERY_HISTORY_DEFAULT_MAX_ROWS: u32 = 10_000;
+
+fn read_history_retention(conn: &rusqlite::Connection) -> (u32, u32) {
+    let days = settings::get(conn, QUERY_HISTORY_RETENTION_DAYS_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(QUERY_HISTORY_DEFAULT_RETENTION_DAYS);
+    let max_rows = settings::get(conn, QUERY_HISTORY_RETENTION_MAX_ROWS_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(QUERY_HISTORY_DEFAULT_MAX_ROWS);
+    (days, max_rows)
+}
+
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 fn init_tracing(app: &AppHandle) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -66,7 +99,13 @@ pub fn run() {
             init_tracing(&handle);
 
             match storage::open_db(&handle) {
-                Ok(conn) => {
+                Ok(mut conn) => {
+                    let (days, max_rows) = read_history_retention(&conn);
+                    if let Err(e) =
+                        query_history::prune_for_retention(&mut conn, days, max_rows, now_unix_ms())
+                    {
+                        tracing::warn!("query_history retention sweep failed: {e}");
+                    }
                     app.manage(DbState(Mutex::new(conn)));
                 }
                 Err(e) => {
@@ -103,6 +142,10 @@ pub fn run() {
             postgres_run_sql,
             postgres_run_sql_many,
             postgres_list_columns_bulk,
+            query_history_list,
+            query_history_delete,
+            query_history_clear,
+            query_history_distinct_connections,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

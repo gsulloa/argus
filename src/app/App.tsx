@@ -28,6 +28,7 @@ import { ConnectionsProvider } from "@/platform/connection-registry/useConnectio
 import { ActivityLogProvider } from "@/platform/activity-log/store";
 import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
 import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
+import { useQueryHistoryCommands } from "@/modules/query-history";
 
 export function App() {
   return (
@@ -66,6 +67,7 @@ function ShellMain() {
       <ShortcutBindings />
       <DevCommands />
       <PostgresCommands />
+      <QueryHistoryCommands />
       <BootstrapTabs />
       <TabStrip />
       <TabContent />
@@ -77,6 +79,11 @@ function ShellMain() {
 
 function PostgresCommands() {
   usePostgresCommands();
+  return null;
+}
+
+function QueryHistoryCommands() {
+  useQueryHistoryCommands();
   return null;
 }
 

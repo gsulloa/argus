@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Clock, Plus } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useRef, useState } from "react";
@@ -15,6 +15,7 @@ import {
   useActiveConnections,
   usePostgresForm,
 } from "@/modules/postgres";
+import { openHistoryTab } from "@/modules/query-history";
 import { useTabs } from "@/platform/shell/tabs";
 import logoUrl from "@/assets/logo.svg";
 import styles from "./Sidebar.module.css";
@@ -32,6 +33,7 @@ export function Sidebar() {
         </header>
         <div ref={scrollRef} className={styles.scroll}>
           <ConnectionsSection />
+          <PlatformSection />
         </div>
       </div>
     </SidebarScrollContext.Provider>
@@ -73,6 +75,34 @@ function ConnectionsSection() {
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+function PlatformSection() {
+  const tabs = useTabs();
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHeader}>
+        <span>Plataforma</span>
+      </header>
+      <ul className={styles.list}>
+        <li>
+          <div className={styles.row}>
+            <button
+              type="button"
+              className={styles.item}
+              onClick={() => openHistoryTab(tabs)}
+              title="Open query history"
+            >
+              <span className={styles.icon}>
+                <Clock size={14} />
+              </span>
+              <span className={styles.itemName}>History</span>
+            </button>
+          </div>
+        </li>
+      </ul>
     </section>
   );
 }
