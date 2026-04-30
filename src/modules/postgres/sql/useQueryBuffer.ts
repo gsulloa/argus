@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSetting, setSetting } from "@/platform/settings/api";
+import {
+  registerCloseHandler,
+  unregisterCloseHandler,
+} from "@/platform/shell/tabs/useCloseConfirm";
 
 function settingsKey(tabId: string): string {
   return `pgQueryBuffer:${tabId}`;
@@ -74,15 +78,28 @@ export function useQueryBuffer(
     [tabId],
   );
 
-  // Cleanup: drop the key on unmount.
+  // Flush any pending debounced write on unmount so it doesn't fire after the
+  // component is gone. We do NOT wipe the buffer here — that's tied to the
+  // actual tab close (see the close-handler effect below), so a StrictMode
+  // dev double-mount can't clobber a buffer that was just seeded by
+  // payload.sql.
   useEffect(() => {
     return () => {
       if (writeTimer.current !== null) window.clearTimeout(writeTimer.current);
-      if (!isTauriRuntime()) return;
-      // Flush the latest value before deleting? On close we drop. The spec
-      // says: closing a tab discards the buffer.
-      setSetting(settingsKey(tabId), JSON.stringify("")).catch(() => {});
     };
+  }, []);
+
+  // Drop the persisted buffer when the tab actually closes (the registry is
+  // consulted by TabStrip's close button). Returning true allows the close;
+  // Query tabs don't need a confirm dialog (per spec).
+  useEffect(() => {
+    registerCloseHandler(tabId, () => {
+      if (isTauriRuntime()) {
+        setSetting(settingsKey(tabId), "").catch(() => {});
+      }
+      return true;
+    });
+    return () => unregisterCloseHandler(tabId);
   }, [tabId]);
 
   return { loaded, initialSql, update };

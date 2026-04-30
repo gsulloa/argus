@@ -14,34 +14,105 @@ export interface OrderBy {
   direction: SortDirection;
 }
 
-/**
- * Filter predicate accepted by `postgres_query_table` and `postgres_count_table`.
- * Mirrors the closed Rust enum 1:1.
- */
-export type Filter =
-  | { op: "="; column: string; value: FilterValue }
-  | { op: "!="; column: string; value: FilterValue }
-  | { op: "<"; column: string; value: FilterValue }
-  | { op: "<="; column: string; value: FilterValue }
-  | { op: ">"; column: string; value: FilterValue }
-  | { op: ">="; column: string; value: FilterValue }
-  | { op: "LIKE"; column: string; value: FilterValue }
-  | { op: "NOT LIKE"; column: string; value: FilterValue }
-  | { op: "IS NULL"; column: string }
-  | { op: "IS NOT NULL"; column: string }
-  | { op: "BETWEEN"; column: string; min: FilterValue; max: FilterValue };
+// --------------------------------------------------------------------------
+// Structured filter model (postgres-data-grid capability)
+// --------------------------------------------------------------------------
 
 /**
- * Values that can be bound as a filter parameter. The backend rejects null —
- * IS NULL / IS NOT NULL are dedicated ops.
+ * Operator surface — mirrors the closed Rust `Operator` enum on the wire.
+ * SQL keywords stay uppercase; sugar operators are PascalCase.
  */
-export type FilterValue = string | number | boolean;
+export type Operator =
+  | "="
+  | "!="
+  | "<"
+  | "<="
+  | ">"
+  | ">="
+  | "LIKE"
+  | "NOT LIKE"
+  | "ILIKE"
+  | "NOT ILIKE"
+  | "Contains"
+  | "StartsWith"
+  | "EndsWith"
+  | "In"
+  | "NotIn"
+  | "BETWEEN"
+  | "IS NULL"
+  | "IS NOT NULL";
+
+/** Either a named column or the special "Any column" pseudo-column. */
+export type ColumnRef =
+  | { kind: "named"; name: string }
+  | { kind: "any_column" };
+
+/** Scalar value bindable to a filter parameter. The backend rejects null. */
+export type FilterScalar = string | number | boolean;
+
+/**
+ * Operator-shaped value. Most ops want a scalar; In/NotIn want an array;
+ * BETWEEN wants `{min, max}`; null variants want absent.
+ */
+export type FilterValue =
+  | FilterScalar
+  | FilterScalar[]
+  | { min: FilterScalar; max: FilterScalar };
+
+export interface Condition {
+  column: ColumnRef;
+  op: Operator;
+  value?: FilterValue;
+}
+
+/**
+ * One node of the filter tree. Internally tagged with `kind`. The wire
+ * shape mirrors the Rust `FilterNode` enum — `or_group` carries
+ * `FilterNode[]` so the JSON shape is uniform; the backend rejects nested
+ * `or_group` at validation time and the UI doesn't allow it.
+ */
+export type FilterNode =
+  | ({ kind: "condition" } & Condition)
+  | { kind: "or_group"; children: FilterNode[] };
+
+export interface FilterTree {
+  children: FilterNode[];
+}
+
+export type FilterMode = "structured" | "raw";
+
+/**
+ * UI-level filter state. Carries both modes simultaneously so the user can
+ * toggle between Structured and Raw without losing draft state. When
+ * dispatching to the backend, exactly one of `filter_tree` / `raw_where`
+ * is emitted based on `mode` (and `raw` is sent only if non-empty after
+ * trimming a leading `WHERE`).
+ */
+export interface FilterModel {
+  mode: FilterMode;
+  tree: FilterTree;
+  raw: string;
+}
+
+export const EMPTY_FILTER_TREE: FilterTree = { children: [] };
+
+export const EMPTY_FILTER_MODEL: FilterModel = {
+  mode: "structured",
+  tree: EMPTY_FILTER_TREE,
+  raw: "",
+};
 
 export interface QueryTableOptions {
   limit: number;
   offset: number;
   order_by?: OrderBy[];
-  filters?: Filter[];
+  filter_tree?: FilterTree;
+  raw_where?: string;
+}
+
+export interface CountTableOptions {
+  filter_tree?: FilterTree;
+  raw_where?: string;
 }
 
 /**
@@ -74,7 +145,8 @@ export interface QueryTableResult {
     limit: number;
     offset: number;
     order_by: OrderBy[];
-    filters: Filter[];
+    filter_tree: FilterTree | null;
+    raw_where: string | null;
   };
   query_ms: number;
   truncated_columns: string[];
@@ -141,3 +213,96 @@ export type ApplyEditsOutcome =
       message: string;
       failed_op_index: number;
     };
+
+// --------------------------------------------------------------------------
+// FilterModel helpers
+// --------------------------------------------------------------------------
+
+/**
+ * Project a UI-level `FilterModel` to the wire payload accepted by
+ * `postgres_query_table` / `postgres_count_table`. Exactly one of
+ * `filter_tree` / `raw_where` is emitted (both undefined means "no WHERE").
+ */
+export function modelToPayload(model: FilterModel): {
+  filter_tree?: FilterTree;
+  raw_where?: string;
+} {
+  if (model.mode === "raw") {
+    const trimmed = trimLeadingWhere(model.raw);
+    if (trimmed.length === 0) return {};
+    return { raw_where: trimmed };
+  }
+  if (model.tree.children.length === 0) return {};
+  return { filter_tree: model.tree };
+}
+
+/**
+ * Strip a single leading `WHERE ` (case-insensitive) from a raw body, plus
+ * surrounding whitespace. Mirrors the backend's tolerant trimming so the
+ * user can keep or drop the keyword without surprises.
+ */
+export function trimLeadingWhere(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return "";
+  const m = trimmed.match(/^where\s+/i);
+  if (m) return trimmed.slice(m[0].length).trim();
+  return trimmed;
+}
+
+/** Structural equality for FilterModel — used by the dirty indicator. */
+export function filterModelEquals(a: FilterModel, b: FilterModel): boolean {
+  if (a.mode !== b.mode) return false;
+  if (a.raw !== b.raw) return false;
+  return filterTreeEquals(a.tree, b.tree);
+}
+
+export function filterTreeEquals(a: FilterTree, b: FilterTree): boolean {
+  if (a.children.length !== b.children.length) return false;
+  for (let i = 0; i < a.children.length; i++) {
+    if (!filterNodeEquals(a.children[i]!, b.children[i]!)) return false;
+  }
+  return true;
+}
+
+function filterNodeEquals(a: FilterNode, b: FilterNode): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "condition" && b.kind === "condition") {
+    return conditionEquals(a, b);
+  }
+  if (a.kind === "or_group" && b.kind === "or_group") {
+    if (a.children.length !== b.children.length) return false;
+    for (let i = 0; i < a.children.length; i++) {
+      if (!filterNodeEquals(a.children[i]!, b.children[i]!)) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function conditionEquals(a: Condition, b: Condition): boolean {
+  if (a.op !== b.op) return false;
+  if (!columnRefEquals(a.column, b.column)) return false;
+  return filterValueEquals(a.value, b.value);
+}
+
+function columnRefEquals(a: ColumnRef, b: ColumnRef): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "named" && b.kind === "named") return a.name === b.name;
+  return true;
+}
+
+function filterValueEquals(a: FilterValue | undefined, b: FilterValue | undefined): boolean {
+  if (a === undefined && b === undefined) return true;
+  if (a === undefined || b === undefined) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
+  }
+  if (typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {
+    return a.min === b.min && a.max === b.max;
+  }
+  return a === b;
+}

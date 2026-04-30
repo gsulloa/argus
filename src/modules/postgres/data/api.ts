@@ -2,9 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { toAppError } from "@/platform/errors/AppError";
 import type {
   ApplyEditsOutcome,
+  CountTableOptions,
   CountTableResult,
   EditOp,
-  Filter,
   QueryTableOptions,
   QueryTableResult,
   TableEditMetadata,
@@ -47,14 +47,14 @@ export const dataApi = {
     id: string,
     schema: string,
     relation: string,
-    filters?: Filter[],
+    options: CountTableOptions,
     origin: Origin = "auto",
   ): Promise<CountTableResult> {
     return call<CountTableResult>("postgres_count_table", {
       id,
       schema,
       relation,
-      filters: filters ?? null,
+      options,
       origin,
     });
   },

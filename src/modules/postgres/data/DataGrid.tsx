@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppError } from "@/platform/errors/AppError";
-import { ColumnFilter } from "./ColumnFilter";
 import { EditableCell, looksLikeBytea } from "./EditableCell";
 import { cycleSort, sortIndexFor } from "./sortHelpers";
-import { isCellEnvelope, type CellValue, type DataColumn, type EditValue, type Filter, type OrderBy } from "./types";
+import { isCellEnvelope, type CellValue, type DataColumn, type EditValue, type OrderBy } from "./types";
 import type { UseEditBufferResult } from "./useEditBuffer";
 import styles from "./DataGrid.module.css";
 
@@ -26,7 +25,6 @@ export interface DataGridProps {
   rows: UnifiedRow[];
   pageSize: number;
   orderBy: OrderBy[];
-  filters: Filter[];
   status: string;
   nextError: AppError | null;
   reachedEnd: boolean;
@@ -37,7 +35,6 @@ export interface DataGridProps {
   buffer: UseEditBufferResult;
   onSelectRow(index: number | null): void;
   onSortChange(next: OrderBy[]): void;
-  onFiltersChange(next: Filter[]): void;
   onLoadNextPage(): void;
   onRetryNextPage(): void;
 }
@@ -48,7 +45,6 @@ export function DataGrid(props: DataGridProps) {
     rows,
     pageSize,
     orderBy,
-    filters,
     status,
     nextError,
     reachedEnd,
@@ -59,7 +55,6 @@ export function DataGrid(props: DataGridProps) {
     buffer,
     onSelectRow,
     onSortChange,
-    onFiltersChange,
     onLoadNextPage,
     onRetryNextPage,
   } = props;
@@ -85,17 +80,6 @@ export function DataGrid(props: DataGridProps) {
       onLoadNextPage();
     }
   }, [lastVirtual, status, reachedEnd, pageSize, rows.length, onLoadNextPage]);
-
-  const filterByColumn = useMemo(() => {
-    const map = new Map<string, Filter>();
-    for (const f of filters) map.set(f.column, f);
-    return map;
-  }, [filters]);
-
-  function setFilterFor(column: string, next: Filter | null) {
-    const without = filters.filter((f) => f.column !== column);
-    onFiltersChange(next === null ? without : [...without, next]);
-  }
 
   // Track the active editor: at most one cell at a time.
   const [editing, setEditing] = useState<{ rowIndex: number; col: string } | null>(null);
@@ -159,11 +143,6 @@ export function DataGrid(props: DataGridProps) {
                     </span>
                   )}
                   <span className={styles.colType}>{col.data_type}</span>
-                  <ColumnFilter
-                    column={col}
-                    current={filterByColumn.get(col.name) ?? null}
-                    onChange={(next) => setFilterFor(col.name, next)}
-                  />
                 </div>
               );
             })}
