@@ -1,4 +1,20 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
+
+type ActivePalette = "command" | "table" | null;
+
+interface CoordinatorState {
+  active: ActivePalette;
+  setActive: Dispatch<SetStateAction<ActivePalette>>;
+}
 
 interface PaletteCtx {
   open: boolean;
@@ -7,24 +23,52 @@ interface PaletteCtx {
   toggle: () => void;
 }
 
-const Ctx = createContext<PaletteCtx | null>(null);
+const Coordinator = createContext<CoordinatorState | null>(null);
 
 export function PaletteProvider({ children }: { children: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const show = useCallback(() => setOpen(true), []);
-  const hide = useCallback(() => setOpen(false), []);
-  const toggle = useCallback(() => setOpen((v) => !v), []);
-
-  const value = useMemo<PaletteCtx>(
-    () => ({ open, show, hide, toggle }),
-    [open, show, hide, toggle],
-  );
-
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  const [active, setActive] = useState<ActivePalette>(null);
+  const value = useMemo<CoordinatorState>(() => ({ active, setActive }), [active]);
+  return <Coordinator.Provider value={value}>{children}</Coordinator.Provider>;
 }
 
-export function usePalette() {
-  const v = useContext(Ctx);
-  if (!v) throw new Error("usePalette must be used inside PaletteProvider");
+function useCoordinator(hookName: string): CoordinatorState {
+  const v = useContext(Coordinator);
+  if (!v) throw new Error(`${hookName} must be used inside PaletteProvider`);
   return v;
+}
+
+export function usePalette(): PaletteCtx {
+  const { active, setActive } = useCoordinator("usePalette");
+  // Mutual exclusion is implicit: show() overwrites the shared `active`,
+  // so opening the command palette closes the table switcher and vice versa.
+  const show = useCallback(() => setActive("command"), [setActive]);
+  const hide = useCallback(
+    () => setActive((a) => (a === "command" ? null : a)),
+    [setActive],
+  );
+  const toggle = useCallback(
+    () => setActive((a) => (a === "command" ? null : "command")),
+    [setActive],
+  );
+  return useMemo(
+    () => ({ open: active === "command", show, hide, toggle }),
+    [active, show, hide, toggle],
+  );
+}
+
+export function useTablePalette(): PaletteCtx {
+  const { active, setActive } = useCoordinator("useTablePalette");
+  const show = useCallback(() => setActive("table"), [setActive]);
+  const hide = useCallback(
+    () => setActive((a) => (a === "table" ? null : a)),
+    [setActive],
+  );
+  const toggle = useCallback(
+    () => setActive((a) => (a === "table" ? null : "table")),
+    [setActive],
+  );
+  return useMemo(
+    () => ({ open: active === "table", show, hide, toggle }),
+    [active, show, hide, toggle],
+  );
 }

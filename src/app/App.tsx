@@ -19,8 +19,10 @@ import {
   CommandRegistry,
   Palette,
   PaletteProvider,
+  TablePalette,
   useCommandHotkeys,
   usePalette,
+  useTablePalette,
 } from "@/platform/command-palette";
 import { ConnectionsProvider } from "@/platform/connection-registry/useConnections";
 import { ActivityLogProvider } from "@/platform/activity-log/store";
@@ -68,6 +70,7 @@ function ShellMain() {
       <TabStrip />
       <TabContent />
       <Palette />
+      <TablePalette />
     </>
   );
 }
@@ -79,6 +82,7 @@ function PostgresCommands() {
 
 function ShortcutBindings() {
   const palette = usePalette();
+  const tablePalette = useTablePalette();
   const { close, activeTabId, cycle, open } = useTabs();
   const { toggleInspector } = useLayout();
 
@@ -87,6 +91,7 @@ function ShortcutBindings() {
   useShortcuts([
     { key: "k", handler: () => palette.show() },
     { key: "p", shift: true, handler: () => palette.show() },
+    { key: "p", handler: () => tablePalette.show() },
     {
       key: "w",
       handler: () => {

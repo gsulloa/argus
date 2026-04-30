@@ -1,7 +1,7 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import { Command as Cmdk } from "cmdk";
 import { useEffect, useMemo, useState } from "react";
 import { CommandRegistry, type Command } from "./CommandRegistry";
+import { PaletteShell } from "./PaletteShell";
 import { usePalette } from "./PaletteContext";
 import styles from "./Palette.module.css";
 
@@ -49,55 +49,47 @@ export function Palette() {
   const isEmpty = commands.length === 0;
 
   return (
-    <Dialog.Root open={open} onOpenChange={(v) => !v && hide()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={styles.overlay} />
-        <Dialog.Content className={styles.content} onOpenAutoFocus={(e) => e.preventDefault()}>
-          <Dialog.Title className={styles.title}>Command palette</Dialog.Title>
-          <Cmdk label="Command palette" shouldFilter={!isEmpty} value={undefined}>
-            <Cmdk.Input
-              autoFocus
-              className={styles.input}
-              placeholder={isEmpty ? "No commands available yet" : "Type a command…"}
-              value={search}
-              onValueChange={setSearch}
-            />
-            <Cmdk.List className={styles.list}>
-              {isEmpty ? (
-                <div className={styles.empty}>
-                  No commands available yet. Modules will register commands here.
-                </div>
-              ) : (
-                <>
-                  <Cmdk.Empty>
-                    <div className={styles.empty}>No matching commands</div>
-                  </Cmdk.Empty>
-                  {grouped.map(([group, items]) => (
-                    <Cmdk.Group key={group} heading={group} className={styles.group}>
-                      {items.map((cmd) => (
-                        <Cmdk.Item
-                          key={cmd.id}
-                          value={`${cmd.label} ${cmd.keywords?.join(" ") ?? ""}`}
-                          className={styles.item}
-                          onSelect={async () => {
-                            if (!cmd.keepOpen) hide();
-                            await cmd.run();
-                          }}
-                        >
-                          <span className={styles.label}>{cmd.label}</span>
-                          {cmd.hotkey && (
-                            <span className={styles.hotkey}>{formatHotkey(cmd.hotkey)}</span>
-                          )}
-                        </Cmdk.Item>
-                      ))}
-                    </Cmdk.Group>
-                  ))}
-                </>
-              )}
-            </Cmdk.List>
-          </Cmdk>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <PaletteShell
+      open={open}
+      onOpenChange={(v) => !v && hide()}
+      title="Command palette"
+      ariaLabel="Command palette"
+      placeholder={isEmpty ? "No commands available yet" : "Type a command…"}
+      search={search}
+      onSearchChange={setSearch}
+      shouldFilter={!isEmpty}
+    >
+      {isEmpty ? (
+        <div className={styles.empty}>
+          No commands available yet. Modules will register commands here.
+        </div>
+      ) : (
+        <>
+          <Cmdk.Empty>
+            <div className={styles.empty}>No matching commands</div>
+          </Cmdk.Empty>
+          {grouped.map(([group, items]) => (
+            <Cmdk.Group key={group} heading={group} className={styles.group}>
+              {items.map((cmd) => (
+                <Cmdk.Item
+                  key={cmd.id}
+                  value={`${cmd.label} ${cmd.keywords?.join(" ") ?? ""}`}
+                  className={styles.item}
+                  onSelect={async () => {
+                    if (!cmd.keepOpen) hide();
+                    await cmd.run();
+                  }}
+                >
+                  <span className={styles.label}>{cmd.label}</span>
+                  {cmd.hotkey && (
+                    <span className={styles.hotkey}>{formatHotkey(cmd.hotkey)}</span>
+                  )}
+                </Cmdk.Item>
+              ))}
+            </Cmdk.Group>
+          ))}
+        </>
+      )}
+    </PaletteShell>
   );
 }
