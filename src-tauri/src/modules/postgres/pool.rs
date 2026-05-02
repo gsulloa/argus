@@ -137,6 +137,16 @@ impl PgPoolRegistry {
         self.pools.write().await.remove(id).is_some()
     }
 
+    /// Drain every registered pool in a single locked snapshot. Returns the
+    /// number of pools that were dropped. Idle connections close on drop;
+    /// in-flight ones complete.
+    pub async fn disconnect_all(&self) -> usize {
+        let mut guard = self.pools.write().await;
+        let count = guard.len();
+        guard.clear();
+        count
+    }
+
     /// Borrow a client from the registered pool. `pub(crate)` so only modules
     /// inside `modules::postgres` can use it (the schema browser shares one
     /// client across multiple introspection queries). External callers must go
@@ -341,6 +351,13 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disconnect_all_on_empty_registry_returns_zero() {
+        let reg = PgPoolRegistry::new();
+        assert_eq!(reg.disconnect_all().await, 0);
+        assert!(reg.list_active().await.is_empty());
+    }
+
+    #[tokio::test]
     async fn execute_mutation_on_unknown_id_returns_not_found() {
         let reg = PgPoolRegistry::new();
         let err = reg
@@ -372,6 +389,21 @@ mod tests {
             assert!(res.server_version.starts_with("PostgreSQL"));
             let rows = reg.execute_query(&id, "SELECT 1::int", &[]).await.unwrap();
             assert_eq!(rows[0].get::<_, i32>(0), 1);
+        }
+
+        #[tokio::test]
+        async fn live_disconnect_all_drops_every_pool() {
+            let reg = PgPoolRegistry::new();
+            let (params, pw) = live_params();
+            let id1 = Uuid::new_v4();
+            let id2 = Uuid::new_v4();
+            reg.connect(params.clone(), pw.clone(), id1).await.unwrap();
+            reg.connect(params, pw, id2).await.unwrap();
+            assert_eq!(reg.list_active().await.len(), 2);
+
+            let dropped = reg.disconnect_all().await;
+            assert_eq!(dropped, 2);
+            assert!(reg.list_active().await.is_empty());
         }
 
         #[tokio::test]

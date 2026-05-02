@@ -3,6 +3,7 @@ import { Loader2, X } from "lucide-react";
 import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
 import { useTabs } from "@/platform/shell/tabs/TabsContext";
 import { useCloseConfirm } from "@/platform/shell/tabs/useCloseConfirm";
+import { useDirtySummary } from "@/platform/shell/tabs/useDirtySummary";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { AppError } from "@/platform/errors/AppError";
 import { useActiveConnections } from "../useActiveConnections";
@@ -300,6 +301,15 @@ export function TableViewer({
       })
       .finally(() => setSaving(false));
   }, [buffer, connectionId, schema, relation, data, saving]);
+
+  // Publish a dirty-summary entry while the buffer holds uncommitted edits, so
+  // the disconnect-confirmation dialog can name what would be lost.
+  useDirtySummary(
+    tabId,
+    buffer.hasDirty
+      ? { connectionId, label: `${schema}.${relation}` }
+      : null,
+  );
 
   // Discard close: confirm when buffer has dirty entries.
   useCloseConfirm(
