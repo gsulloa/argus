@@ -167,7 +167,7 @@ Estos no están en la ruta crítica. Se proponen cuando el dolor sea real:
 - `multi-window` — abrir varias ventanas con conjuntos distintos de pestañas.
 - `keyboard-shortcuts-editor` — UI para reasignar atajos.
 - `schema-search` — buscar columnas/tablas por nombre cross-schema.
-- `auto-update` — `tauri-plugin-updater` para release continua.
+- ~~`auto-update` — `tauri-plugin-updater` para release continua.~~ ✅ resuelto en `ship-beta-auto-update` (pipeline completo de beta + auto-updater silencioso vía R2).
 
 ---
 

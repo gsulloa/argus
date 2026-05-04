@@ -27,23 +27,26 @@ import {
 import { ConnectionsProvider } from "@/platform/connection-registry/useConnections";
 import { ActivityLogProvider } from "@/platform/activity-log/store";
 import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
+import { UpdaterProvider } from "@/platform/updater";
 import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
 import { useQueryHistoryCommands } from "@/modules/query-history";
 
 export function App() {
   return (
     <ThemeProvider>
-      <PaletteProvider>
-        <TabsProvider>
-          <ConnectionsProvider>
-            <ActivityLogProvider>
-              <PostgresFormProvider>
-                <Shell />
-              </PostgresFormProvider>
-            </ActivityLogProvider>
-          </ConnectionsProvider>
-        </TabsProvider>
-      </PaletteProvider>
+      <UpdaterProvider>
+        <PaletteProvider>
+          <TabsProvider>
+            <ConnectionsProvider>
+              <ActivityLogProvider>
+                <PostgresFormProvider>
+                  <Shell />
+                </PostgresFormProvider>
+              </ActivityLogProvider>
+            </ConnectionsProvider>
+          </TabsProvider>
+        </PaletteProvider>
+      </UpdaterProvider>
     </ThemeProvider>
   );
 }
