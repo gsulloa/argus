@@ -27,7 +27,7 @@ use crate::modules::query_history::{
 use crate::platform::{
     connections::{
         connections_create, connections_delete, connections_get_secret, connections_list,
-        connections_update,
+        connections_refresh_secret, connections_update,
     },
     settings::{self, settings_get, settings_set},
     storage, DbState,
@@ -124,6 +124,7 @@ pub fn run() {
             connections_update,
             connections_delete,
             connections_get_secret,
+            connections_refresh_secret,
             settings_get,
             settings_set,
             postgres_test_connection,

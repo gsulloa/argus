@@ -137,6 +137,8 @@ export function ConnectionForm({
   const [urlError, setUrlError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   // Reset state when the dialog (re)opens.
   useEffect(() => {
@@ -146,6 +148,8 @@ export function ConnectionForm({
       setUrlError(null);
       setTest({ kind: "idle" });
       setSave({ kind: "idle" });
+      setRefreshing(false);
+      setRefreshError(null);
       setView("form");
     }
   }, [open, initial, mode]);
@@ -210,6 +214,21 @@ export function ConnectionForm({
       return s ?? undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  async function handleRefreshSecret() {
+    if (!initial?.id || refreshing) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      const value = await connectionsApi.refreshSecret(initial.id);
+      setForm((f) => ({ ...f, password: value ?? "" }));
+      setTest({ kind: "idle" });
+    } catch (e) {
+      setRefreshError(toAppError(e).message ?? "Could not refresh from Keychain");
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -380,17 +399,32 @@ export function ConnectionForm({
 
               <div className={styles.field}>
                 <label className={styles.label}>Password</label>
-                <input
-                  className={styles.input}
-                  type="password"
-                  value={form.password}
-                  onChange={(e) => setField("password", e.target.value)}
-                  placeholder={
-                    mode === "edit"
-                      ? "leave blank to keep existing"
-                      : ""
-                  }
-                />
+                <div className={styles.passwordRow}>
+                  <input
+                    className={`${styles.input} ${styles.passwordInput}`}
+                    type="password"
+                    value={form.password}
+                    onChange={(e) => setField("password", e.target.value)}
+                    placeholder={
+                      mode === "edit"
+                        ? "leave blank to keep existing"
+                        : ""
+                    }
+                  />
+                  {mode === "edit" && initial?.id && (
+                    <button
+                      type="button"
+                      className={styles.iconButton}
+                      onClick={handleRefreshSecret}
+                      disabled={refreshing}
+                      title="Re-read from Keychain"
+                      aria-label="Re-read from Keychain"
+                    >
+                      <RefreshIcon spinning={refreshing} />
+                    </button>
+                  )}
+                </div>
+                {refreshError && <div className={styles.error}>{refreshError}</div>}
               </div>
 
               <div className={styles.field}>
@@ -490,5 +524,26 @@ export function ConnectionForm({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+function RefreshIcon({ spinning }: { spinning: boolean }) {
+  return (
+    <svg
+      role="img"
+      aria-hidden="true"
+      width={14}
+      height={14}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={spinning ? styles.spinning : undefined}
+    >
+      <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+      <path d="M21 3v5h-5" />
+    </svg>
   );
 }

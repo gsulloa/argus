@@ -17,4 +17,5 @@ export const connectionsApi = {
     call<Connection>("connections_update", { id, update }),
   delete: (id: string) => call<void>("connections_delete", { id }),
   getSecret: (id: string) => call<string | null>("connections_get_secret", { id }),
+  refreshSecret: (id: string) => call<string | null>("connections_refresh_secret", { id }),
 };
