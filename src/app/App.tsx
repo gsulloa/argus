@@ -25,6 +25,7 @@ import {
   useTablePalette,
 } from "@/platform/command-palette";
 import { ConnectionsProvider } from "@/platform/connection-registry/useConnections";
+import { ConnectionGroupsProvider } from "@/platform/connection-registry/useConnectionGroups";
 import { ActivityLogProvider } from "@/platform/activity-log/store";
 import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
 import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
@@ -35,13 +36,15 @@ export function App() {
     <ThemeProvider>
       <PaletteProvider>
         <TabsProvider>
-          <ConnectionsProvider>
-            <ActivityLogProvider>
-              <PostgresFormProvider>
-                <Shell />
-              </PostgresFormProvider>
-            </ActivityLogProvider>
-          </ConnectionsProvider>
+          <ConnectionGroupsProvider>
+            <ConnectionsProvider>
+              <ActivityLogProvider>
+                <PostgresFormProvider>
+                  <Shell />
+                </PostgresFormProvider>
+              </ActivityLogProvider>
+            </ConnectionsProvider>
+          </ConnectionGroupsProvider>
         </TabsProvider>
       </PaletteProvider>
     </ThemeProvider>
