@@ -1,7 +1,7 @@
-import { GripVertical } from "lucide-react";
+import { GripVertical, Loader2, Power } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useConnections } from "@/platform/connection-registry/useConnections";
@@ -20,6 +20,9 @@ import {
   usePostgresForm,
 } from "@/modules/postgres";
 import { useTabs } from "@/platform/shell/tabs";
+import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
+import { listDirtySummaries } from "@/platform/shell/tabs/useDirtySummary";
+import { DisconnectConfirmDialog } from "./DisconnectConfirmDialog";
 import styles from "./Sidebar.module.css";
 import dialogStyles from "./Dialog.module.css";
 
@@ -36,6 +39,8 @@ export function ConnectionRow({
   const form = usePostgresForm();
   const tabs = useTabs();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
   const isPostgres = connection.kind === POSTGRES_KIND;
   const active = isActive(connection.id);
   const readOnly = Boolean(
@@ -51,16 +56,34 @@ export function ConnectionRow({
       }
     : undefined;
 
-  async function toggleConnect() {
+  const tabCount = useMemo(
+    () => (active ? listConnectionTabs(tabs.tabs, connection.id).length : 0),
+    [active, tabs.tabs, connection.id],
+  );
+
+  const dirtyLabels = useMemo(
+    () => (confirmDisconnect ? listDirtySummaries(connection.id).map((s) => s.label) : []),
+    [confirmDisconnect, connection.id],
+  );
+
+  async function handleRowClick() {
     if (!isPostgres) return;
+    if (active || isConnecting) return;
+    setIsConnecting(true);
     try {
-      if (active) {
-        await postgresApi.disconnect(connection.id);
-      } else {
-        await postgresApi.connect(connection.id);
-      }
+      await postgresApi.connect(connection.id);
     } catch (e) {
-      console.error("[argus] toggle connect:", e);
+      console.error("[argus] connect:", e);
+    } finally {
+      setIsConnecting(false);
+    }
+  }
+
+  async function handleDisconnect() {
+    try {
+      await postgresApi.disconnect(connection.id);
+    } catch (e) {
+      console.error("[argus] disconnect:", e);
     }
   }
 
@@ -90,6 +113,18 @@ export function ConnectionRow({
     }
   }
 
+  const dotState: "active" | "inactive" | "connecting" = isConnecting
+    ? "connecting"
+    : active
+      ? "active"
+      : "inactive";
+
+  const rowTitle = active
+    ? connection.name
+    : isConnecting
+      ? "Connecting…"
+      : "Connect";
+
   return (
     <>
       <ContextMenu.Root>
@@ -113,8 +148,9 @@ export function ConnectionRow({
             <button
               type="button"
               className={styles.item}
-              onClick={toggleConnect}
-              title={active ? "Disconnect" : "Connect"}
+              onClick={handleRowClick}
+              title={rowTitle}
+              aria-busy={isConnecting || undefined}
             >
               <span className={styles.icon}>
                 {isPostgres ? (
@@ -125,17 +161,38 @@ export function ConnectionRow({
               </span>
               <span className={styles.itemName}>{connection.name}</span>
               {readOnly && <span className={styles.roBadge}>RO</span>}
-              <span
-                className={styles.activeDot}
-                data-active={active}
-                aria-label={active ? "active" : "inactive"}
-              />
+              {dotState === "connecting" ? (
+                <span
+                  className={`${styles.activeDot} ${styles.activeDotSpinner}`}
+                  aria-label="connecting"
+                >
+                  <Loader2 size={10} strokeWidth={2.5} />
+                </span>
+              ) : (
+                <span
+                  className={styles.activeDot}
+                  data-active={dotState === "active"}
+                  aria-label={dotState === "active" ? "active" : "inactive"}
+                />
+              )}
             </button>
             {isPostgres && active && (
               <>
                 <span className={styles.rowPrimary}>
                   <SchemaPrimaryActions connectionId={connection.id} />
                 </span>
+                <button
+                  type="button"
+                  className={styles.disconnectBtn}
+                  aria-label="Disconnect"
+                  title="Disconnect"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDisconnect(true);
+                  }}
+                >
+                  <Power size={12} strokeWidth={2.5} />
+                </button>
                 <span className={styles.rowToolbar}>
                   <SchemaToolbar connectionId={connection.id} />
                 </span>
@@ -157,6 +214,12 @@ export function ConnectionRow({
                   }
                 >
                   New SQL Query
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => setConfirmDisconnect(true)}
+                >
+                  Disconnect
                 </ContextMenu.Item>
                 <ContextMenu.Separator className={styles.contextSeparator} />
               </>
@@ -217,6 +280,15 @@ export function ConnectionRow({
           <SchemaTree connectionId={connection.id} />
         </div>
       )}
+
+      <DisconnectConfirmDialog
+        open={confirmDisconnect}
+        onOpenChange={setConfirmDisconnect}
+        subject={connection.name}
+        tabCount={tabCount}
+        dirtyLabels={dirtyLabels}
+        onConfirm={handleDisconnect}
+      />
 
       <Dialog.Root open={confirmDelete} onOpenChange={setConfirmDelete}>
         <Dialog.Portal>

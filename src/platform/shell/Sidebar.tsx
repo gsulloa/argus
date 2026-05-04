@@ -1,4 +1,4 @@
-import { Clock, Plus } from "lucide-react";
+import { Clock, Plus, PowerOff } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -7,9 +7,11 @@ import { useConnectionGroups } from "@/platform/connection-registry/useConnectio
 import { useExpandedGroups } from "@/platform/connection-registry/useExpandedGroups";
 import { computeMidpointSortOrder } from "@/platform/connection-registry/sortOrder";
 import type { Connection, ConnectionGroup } from "@/platform/connection-registry/types";
-import { usePostgresForm } from "@/modules/postgres";
+import { postgresApi, useActiveConnections, usePostgresForm } from "@/modules/postgres";
 import { openHistoryTab } from "@/modules/query-history";
 import { useTabs } from "@/platform/shell/tabs";
+import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
+import { listAllDirtySummaries } from "@/platform/shell/tabs/useDirtySummary";
 import logoUrl from "@/assets/logo.svg";
 import {
   DndContext,
@@ -35,6 +37,7 @@ import {
   UNGROUPED_DROPPABLE_ID,
   resolveConnectionDropTarget,
 } from "./dropResolution";
+import { DisconnectConfirmDialog } from "./DisconnectConfirmDialog";
 
 export { UNGROUPED_DROPPABLE_ID };
 
@@ -221,6 +224,36 @@ function ConnectionsSection() {
     }
   }
 
+  const { items: activeItems } = useActiveConnections();
+  const tabs = useTabs();
+  const [confirmAll, setConfirmAll] = useState(false);
+
+  const anyActive = activeItems.length > 0;
+
+  const allTabCount = useMemo(() => {
+    let count = 0;
+    for (const a of activeItems) {
+      count += listConnectionTabs(tabs.tabs, a.id).length;
+    }
+    return count;
+  }, [activeItems, tabs.tabs]);
+
+  const allDirtyLabels = useMemo(() => {
+    if (!confirmAll) return [];
+    const byId = new Map(connections.items.map((c) => [c.id, c.name] as const));
+    return listAllDirtySummaries()
+      .filter((s) => activeItems.some((a) => a.id === s.connectionId))
+      .map((s) => `${byId.get(s.connectionId) ?? s.connectionId} – ${s.label}`);
+  }, [confirmAll, connections.items, activeItems]);
+
+  async function handleDisconnectAll() {
+    try {
+      await postgresApi.disconnectAll();
+    } catch (e) {
+      console.error("[argus] disconnect all:", e);
+    }
+  }
+
   const loading = connections.loading || groups.loading;
   const error = connections.error ?? groups.error;
   const isEmpty = !loading && !error && connections.items.length === 0 && groups.items.length === 0;
@@ -229,29 +262,40 @@ function ConnectionsSection() {
     <section className={styles.section}>
       <header className={styles.sectionHeader}>
         <span>Connections</span>
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild>
-            <button aria-label="Add" title="New connection or group">
-              <Plus size={14} strokeWidth={2.5} />
+        <span className={styles.sectionActions}>
+          {anyActive && (
+            <button
+              aria-label="Disconnect all"
+              title="Disconnect all"
+              onClick={() => setConfirmAll(true)}
+            >
+              <PowerOff size={13} strokeWidth={2.5} />
             </button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content className={styles.contextMenu} align="end">
-              <DropdownMenu.Item
-                className={styles.contextItem}
-                onSelect={() => form.openCreate()}
-              >
-                New connection
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                className={styles.contextItem}
-                onSelect={() => setCreatingGroupName("")}
-              >
-                New group
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+          )}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button aria-label="Add" title="New connection or group">
+                <Plus size={14} strokeWidth={2.5} />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content className={styles.contextMenu} align="end">
+                <DropdownMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => form.openCreate()}
+                >
+                  New connection
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => setCreatingGroupName("")}
+                >
+                  New group
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </span>
       </header>
 
       {loading && <div className={styles.empty}>Loading…</div>}
@@ -376,6 +420,15 @@ function ConnectionsSection() {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      <DisconnectConfirmDialog
+        open={confirmAll}
+        onOpenChange={setConfirmAll}
+        subject={`all ${activeItems.length} connection${activeItems.length === 1 ? "" : "s"}`}
+        tabCount={allTabCount}
+        dirtyLabels={allDirtyLabels}
+        onConfirm={handleDisconnectAll}
+      />
 
       <div className={styles.srOnly} role="status" aria-live="polite">
         {announcement}

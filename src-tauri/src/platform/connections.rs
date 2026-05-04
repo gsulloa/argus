@@ -297,6 +297,20 @@ pub fn get_secret(conn: &rusqlite::Connection, id: Uuid) -> AppResult<Option<Str
     secrets::get(&id)
 }
 
+pub fn refresh_secret(conn: &rusqlite::Connection, id: Uuid) -> AppResult<Option<String>> {
+    let exists: Option<i32> = conn
+        .query_row(
+            "SELECT 1 FROM connections WHERE id = ?1",
+            params![id.as_bytes().to_vec()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if exists.is_none() {
+        return Err(AppError::NotFound(format!("connection {id} not found")));
+    }
+    secrets::refresh(&id)
+}
+
 // ---------------- Tauri commands ----------------
 
 #[tauri::command]
@@ -350,6 +364,16 @@ pub fn connections_get_secret(state: State<'_, DbState>, id: String) -> AppResul
     get_secret(&conn, id)
 }
 
+#[tauri::command]
+pub fn connections_refresh_secret(
+    state: State<'_, DbState>,
+    id: String,
+) -> AppResult<Option<String>> {
+    let id = Uuid::parse_str(&id).map_err(|e| AppError::Validation(format!("bad uuid: {e}")))?;
+    let conn = state.0.lock().expect("db poisoned");
+    refresh_secret(&conn, id)
+}
+
 // ---------------- tests ----------------
 
 #[cfg(test)]
@@ -359,7 +383,10 @@ mod tests {
     use crate::platform::storage::open_in_memory;
 
     fn fresh() -> rusqlite::Connection {
-        secrets::_clear_for_tests();
+        // Each test uses a freshly generated `Uuid`, so the global secrets
+        // store does not need to be wiped between tests. Wiping it here would
+        // race with concurrent cache tests in `secrets::cache_tests` and erase
+        // their state mid-execution.
         open_in_memory().expect("open in-memory db")
     }
 
@@ -731,6 +758,34 @@ mod tests {
     fn get_secret_unknown_is_not_found() {
         let c = fresh();
         let err = get_secret(&c, Uuid::new_v4()).unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[test]
+    fn refresh_secret_picks_up_external_keychain_edit() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "ext".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: Some("old".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(get_secret(&c, made.id).unwrap().as_deref(), Some("old"));
+        secrets::_backend_set_for_tests(&made.id, "new").unwrap();
+        let v = refresh_secret(&c, made.id).unwrap();
+        assert_eq!(v.as_deref(), Some("new"));
+        assert_eq!(get_secret(&c, made.id).unwrap().as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn refresh_secret_unknown_is_not_found() {
+        let c = fresh();
+        let err = refresh_secret(&c, Uuid::new_v4()).unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
     }
 }

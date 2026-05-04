@@ -58,6 +58,11 @@
   border-radius: 3px;
   color: var(--text-muted);
 }
+.sectionActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
 
 .empty {
   padding: 8px 12px 16px;
@@ -287,6 +292,37 @@
   background: var(--success);
   border-color: var(--success);
   box-shadow: 0 0 4px rgba(22, 163, 74, 0.5);
+}
+.activeDotSpinner {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  animation: argus-spin 0.9s linear infinite;
+}
+@keyframes argus-spin {
+  to { transform: rotate(360deg); }
+}
+.disconnectBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.disconnectBtn:hover {
+  background: var(--bg-hover);
+  color: var(--danger);
 }
 .roBadge {
   font-size: 9.5px;
