@@ -193,3 +193,47 @@
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+
+.passwordRow {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.passwordInput {
+  flex: 1;
+  min-width: 0;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.iconButton:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-3, var(--surface));
+}
+
+.iconButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spinning {
+  animation: argusSpin 0.7s linear infinite;
+}
+
+@keyframes argusSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
