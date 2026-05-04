@@ -152,3 +152,96 @@ pub struct FunctionSignature {
     pub args_signature: String,
     pub return_type: Option<String>,
 }
+
+/// Relation kind exposed in the `postgres_table_structure` response. The data
+/// viewer already commits to "table | view | materialized-view" as the only
+/// kinds it supports; we follow the same shape here.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Relkind {
+    Table,
+    View,
+    MaterializedView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ColumnDetail {
+    pub name: String,
+    pub data_type: String,
+    pub is_nullable: bool,
+    pub default: Option<String>,
+    pub ordinal_position: i32,
+    pub comment: Option<String>,
+    pub is_identity: bool,
+    pub is_generated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PrimaryKeyInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FkAction {
+    NoAction,
+    Restrict,
+    Cascade,
+    SetNull,
+    SetDefault,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ForeignKeyRef {
+    pub schema: String,
+    pub relation: String,
+    pub columns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ForeignKeyInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub references: ForeignKeyRef,
+    pub on_update: FkAction,
+    pub on_delete: FkAction,
+    pub deferrable: bool,
+    pub initially_deferred: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UniqueConstraintInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckConstraintInfo {
+    pub name: String,
+    pub expression: String,
+}
+
+/// Result of `postgres_table_structure`. Same partial-degradation semantics as
+/// `TableExtrasResult`. `columns` is *required* — if the columns sub-query
+/// fails the whole command returns `AppError::Postgres` rather than a partial
+/// payload (the Structure subtab cannot render anything useful without them).
+/// `is_best_effort` is `true` for relkinds whose DDL reconstruction we know is
+/// approximate (partitioned tables, foreign tables); the frontend uses it to
+/// surface the "Best effort" badge in the Raw subtab.
+#[derive(Debug, Clone, Serialize)]
+pub struct TableStructureResult {
+    pub schema: String,
+    pub relation: String,
+    pub relkind: Relkind,
+    pub is_best_effort: bool,
+    pub columns: Vec<ColumnDetail>,
+    pub primary_key: Option<PrimaryKeyInfo>,
+    pub foreign_keys: Option<Vec<ForeignKeyInfo>>,
+    pub unique_constraints: Option<Vec<UniqueConstraintInfo>>,
+    pub check_constraints: Option<Vec<CheckConstraintInfo>>,
+    pub indexes: Option<Vec<IndexInfo>>,
+    pub triggers: Option<Vec<TriggerInfo>>,
+    pub ddl: String,
+    pub failures: Vec<KindFailure>,
+}

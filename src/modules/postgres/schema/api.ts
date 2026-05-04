@@ -7,6 +7,7 @@ import type {
   SchemaSummary,
   StructureResult,
   TableExtrasResult,
+  TableStructureResult,
 } from "./types";
 
 export interface ColumnsBulkResult {
@@ -50,4 +51,16 @@ export const schemaApi = {
     }),
   listColumnsBulk: (id: string, schema: string, origin: "auto" | "user" = "auto") =>
     call<ColumnsBulkResult>("postgres_list_columns_bulk", { id, schema, origin }),
+  tableStructure: (
+    id: string,
+    schema: string,
+    relation: string,
+    origin: "auto" | "user" = "auto",
+  ) =>
+    call<TableStructureResult>("postgres_table_structure", {
+      id,
+      schemaName: schema,
+      relation,
+      origin,
+    }),
 };
