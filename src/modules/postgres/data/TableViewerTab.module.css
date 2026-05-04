@@ -7,6 +7,21 @@
   background: var(--bg);
 }
 
+/* Subtab wrapper: takes the remaining vertical space below the sub-tab
+   header. When inactive, hide entirely (display: none) so its DOM is still
+   mounted (preserving scroll/buffer/grid state) but absent from layout. */
+.dataSubtab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.dataSubtab[data-active="false"] {
+  display: none;
+}
+
 .body {
   display: flex;
   flex: 1;

@@ -27,6 +27,7 @@ pub enum ActivityKind {
     CountTable,
     ApplyEdits,
     RunSql,
+    TableStructure,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +288,7 @@ mod tests {
             (ActivityKind::CountTable, "count_table"),
             (ActivityKind::ApplyEdits, "apply_edits"),
             (ActivityKind::RunSql, "run_sql"),
+            (ActivityKind::TableStructure, "table_structure"),
         ];
         for (kind, expected) in cases {
             let json = serde_json::to_value(&kind).unwrap();

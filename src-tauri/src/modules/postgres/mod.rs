@@ -1,6 +1,7 @@
 pub mod columns;
 pub mod commands;
 pub mod data;
+pub mod ddl;
 pub mod edit;
 pub mod params;
 pub mod pool;
@@ -21,6 +22,6 @@ pub use edit::{postgres_apply_table_edits, postgres_table_primary_key};
 pub use pool::PgPoolRegistry;
 pub use schema_commands::{
     postgres_get_function_signature, postgres_list_relations, postgres_list_schemas,
-    postgres_list_structure, postgres_list_table_extras,
+    postgres_list_structure, postgres_list_table_extras, postgres_table_structure,
 };
 pub use sql::{postgres_run_sql, postgres_run_sql_many};

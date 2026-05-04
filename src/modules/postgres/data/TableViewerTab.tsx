@@ -21,6 +21,13 @@ import { useTableData } from "./useTableData";
 import { useTableFilter } from "./useTableFilter";
 import { useTableOrderBy } from "./useTableOrderBy";
 import { useTablePrimaryKey } from "./useTablePrimaryKey";
+import { RawSubtab } from "../structure/RawSubtab";
+import { StructureSubtab } from "../structure/StructureSubtab";
+import {
+  SubtabHeader,
+  type Subtab,
+} from "../structure/SubtabHeader";
+import { useTableStructureCache } from "../structure/useTableStructureCache";
 import {
   modelToPayload,
   type CellValue,
@@ -103,6 +110,8 @@ export function TableViewer({
   } = useTableOrderBy(connectionId, schema, relation);
   const [rawError, setRawError] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  const [activeSubtab, setActiveSubtab] = useState<Subtab>("data");
+  const structureCache = useTableStructureCache(connectionId, schema, relation);
 
   const { pageSize, setPageSize, options: pageSizeOptions } = usePageSize(
     connectionId,
@@ -333,6 +342,28 @@ export function TableViewer({
         e.preventDefault();
         onSave();
       }
+      // ⌘1 / ⌘2 / ⌘3 → sub-tab switching. Skip when focus is in an editable
+      // surface (input/textarea/CodeMirror) so the user's typing isn't stolen.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        (e.key === "1" || e.key === "2" || e.key === "3")
+      ) {
+        const active = document.activeElement as HTMLElement | null;
+        const tag = active?.tagName ?? "";
+        const isEditable =
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          (active?.closest(".cm-editor") ?? null) !== null;
+        if (!isEditable) {
+          e.preventDefault();
+          const next: Subtab =
+            e.key === "1" ? "data" : e.key === "2" ? "structure" : "raw";
+          setActiveSubtab(next);
+        }
+      }
       // ⌘Z → undo (only when buffer has entries; don't swallow text-edit undo
       // when the active element is an input/textarea/select).
       if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
@@ -402,120 +433,149 @@ export function TableViewer({
 
   return (
     <div className={styles.root} ref={rootRef} tabIndex={-1}>
-      {showFirstError && (
-        <div className={styles.errorBanner}>
-          <span>{data.error?.message ?? "Failed to load table."}</span>
+      <SubtabHeader active={activeSubtab} onChange={setActiveSubtab} />
+      {/* Data subtab: kept mounted so scroll/buffer/grid state survive subtab
+          switches; visually hidden when inactive. Structure / Raw mount on
+          first activation and unmount when switched away from (their state
+          lives in the shared cache hook above). */}
+      <div
+        className={styles.dataSubtab}
+        data-active={activeSubtab === "data"}
+        aria-hidden={activeSubtab !== "data"}
+      >
+        {showFirstError && (
+          <div className={styles.errorBanner}>
+            <span>{data.error?.message ?? "Failed to load table."}</span>
+            <button
+              type="button"
+              className={styles.retryBtn}
+              onClick={data.retryFirstPage}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {saveError && (
+          <div className={styles.errorBanner} role="alert">
+            <span>{saveError.message}</span>
+            <button
+              type="button"
+              className={styles.retryBtn}
+              aria-label="Dismiss save error"
+              onClick={() => setSaveError(null)}
+            >
+              <X size={11} strokeWidth={2.5} />
+            </button>
+          </div>
+        )}
+        <FilterBar
+          draft={draft}
+          applied={applied}
+          columns={data.columns}
+          rawError={rawError}
+          onDraftChange={setDraft}
+          onApply={onApplyFilters}
+          onReset={onResetFilters}
+          onOpenInSqlEditor={onOpenInSqlEditor}
+        />
+        <div className={styles.body}>
+          <div className={styles.gridArea}>
+            {isFirstLoad ? (
+              <div className={styles.firstLoad}>
+                <span className={styles.spinner}>
+                  <Loader2 size={14} />
+                </span>
+                {data.status === "loading-first-retrying"
+                  ? "Slow — retrying…"
+                  : "Loading table…"}
+              </div>
+            ) : (
+              <DataGrid
+                columns={data.columns}
+                rows={unifiedRows}
+                pageSize={pageSize}
+                orderBy={orderBy}
+                status={data.status}
+                nextError={data.error}
+                reachedEnd={data.reachedEnd}
+                selectedRowIndex={selectedRow}
+                isReadOnly={isReadOnly}
+                pkColumns={pkColumns}
+                enumValuesByColumn={enumValuesByColumn}
+                buffer={buffer}
+                onSelectRow={setSelectedRow}
+                onSortChange={setOrderBy}
+                onLoadNextPage={data.loadNextPage}
+                onRetryNextPage={data.retryNextPage}
+              />
+            )}
+          </div>
           <button
             type="button"
-            className={styles.retryBtn}
-            onClick={data.retryFirstPage}
+            className={styles.handle}
+            aria-label="Resize inspector"
+            onMouseDown={onHandleMouseDown}
+          />
+          <div
+            className={styles.inspector}
+            style={{ width: inspectorWidth, flex: `0 0 ${inspectorWidth}px` }}
           >
-            Retry
-          </button>
-        </div>
-      )}
-      {saveError && (
-        <div className={styles.errorBanner} role="alert">
-          <span>{saveError.message}</span>
-          <button
-            type="button"
-            className={styles.retryBtn}
-            aria-label="Dismiss save error"
-            onClick={() => setSaveError(null)}
-          >
-            <X size={11} strokeWidth={2.5} />
-          </button>
-        </div>
-      )}
-      <FilterBar
-        draft={draft}
-        applied={applied}
-        columns={data.columns}
-        rawError={rawError}
-        onDraftChange={setDraft}
-        onApply={onApplyFilters}
-        onReset={onResetFilters}
-        onOpenInSqlEditor={onOpenInSqlEditor}
-      />
-      <div className={styles.body}>
-        <div className={styles.gridArea}>
-          {isFirstLoad ? (
-            <div className={styles.firstLoad}>
-              <span className={styles.spinner}>
-                <Loader2 size={14} />
-              </span>
-              {data.status === "loading-first-retrying"
-                ? "Slow — retrying…"
-                : "Loading table…"}
-            </div>
-          ) : (
-            <DataGrid
+            <Inspector
               columns={data.columns}
-              rows={unifiedRows}
-              pageSize={pageSize}
-              orderBy={orderBy}
-              status={data.status}
-              nextError={data.error}
-              reachedEnd={data.reachedEnd}
-              selectedRowIndex={selectedRow}
+              row={selectedRowData}
+              rowKey={selectedRowKey}
               isReadOnly={isReadOnly}
               pkColumns={pkColumns}
               enumValuesByColumn={enumValuesByColumn}
               buffer={buffer}
-              onSelectRow={setSelectedRow}
-              onSortChange={setOrderBy}
-              onLoadNextPage={data.loadNextPage}
-              onRetryNextPage={data.retryNextPage}
             />
-          )}
+          </div>
         </div>
-        <button
-          type="button"
-          className={styles.handle}
-          aria-label="Resize inspector"
-          onMouseDown={onHandleMouseDown}
+        <BottomBar
+          rowsLoaded={data.rows.length}
+          highestLoadedPage={data.highestLoadedPage}
+          pageSize={pageSize}
+          pageSizeOptions={pageSizeOptions}
+          totalRows={totalRows}
+          countLoading={countLoading}
+          countError={countError}
+          queryMs={data.queryMs}
+          filterCount={filterCount}
+          reachedEnd={data.reachedEnd}
+          editable={!isReadOnly && relationKind === "table"}
+          canInsert={!isReadOnly && relationKind === "table"}
+          readOnlyBanner={isReadOnly}
+          noPkBanner={!isReadOnly && relationKind === "table" && pkColumns === null}
+          dirtyCount={
+            buffer.dirtyCounts.updates +
+            buffer.dirtyCounts.inserts +
+            buffer.dirtyCounts.deletes
+          }
+          onPageSizeChange={setPageSize}
+          onCountRows={onCountRows}
+          onClearFilters={onClearFiltersFromBottomBar}
+          onAddRow={onAddRow}
+          onSave={onSave}
         />
-        <div
-          className={styles.inspector}
-          style={{ width: inspectorWidth, flex: `0 0 ${inspectorWidth}px` }}
-        >
-          <Inspector
-            columns={data.columns}
-            row={selectedRowData}
-            rowKey={selectedRowKey}
-            isReadOnly={isReadOnly}
-            pkColumns={pkColumns}
-            enumValuesByColumn={enumValuesByColumn}
-            buffer={buffer}
-          />
-        </div>
       </div>
-      <BottomBar
-        rowsLoaded={data.rows.length}
-        highestLoadedPage={data.highestLoadedPage}
-        pageSize={pageSize}
-        pageSizeOptions={pageSizeOptions}
-        totalRows={totalRows}
-        countLoading={countLoading}
-        countError={countError}
-        queryMs={data.queryMs}
-        filterCount={filterCount}
-        reachedEnd={data.reachedEnd}
-        editable={!isReadOnly && relationKind === "table"}
-        canInsert={!isReadOnly && relationKind === "table"}
-        readOnlyBanner={isReadOnly}
-        noPkBanner={!isReadOnly && relationKind === "table" && pkColumns === null}
-        dirtyCount={
-          buffer.dirtyCounts.updates +
-          buffer.dirtyCounts.inserts +
-          buffer.dirtyCounts.deletes
-        }
-        onPageSizeChange={setPageSize}
-        onCountRows={onCountRows}
-        onClearFilters={onClearFiltersFromBottomBar}
-        onAddRow={onAddRow}
-        onSave={onSave}
-      />
+      {activeSubtab === "structure" && (
+        <StructureSubtab
+          tabs={tabs}
+          connectionId={connectionId}
+          connectionName={connectionName}
+          schema={schema}
+          relation={relation}
+          relkind={relationKind}
+          cache={structureCache}
+        />
+      )}
+      {activeSubtab === "raw" && (
+        <RawSubtab
+          schema={schema}
+          relation={relation}
+          cache={structureCache}
+        />
+      )}
       {showDiscardConfirm && (
         <DiscardChangesDialog
           count={

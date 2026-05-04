@@ -116,6 +116,80 @@ export interface FunctionSignature {
   return_type: string | null;
 }
 
+export type Relkind = "table" | "view" | "materialized-view";
+
+export type FkAction =
+  | "no_action"
+  | "restrict"
+  | "cascade"
+  | "set_null"
+  | "set_default";
+
+export interface ColumnDetail {
+  name: string;
+  data_type: string;
+  is_nullable: boolean;
+  default: string | null;
+  ordinal_position: number;
+  comment: string | null;
+  is_identity: boolean;
+  is_generated: boolean;
+}
+
+export interface PrimaryKeyInfo {
+  name: string;
+  columns: string[];
+}
+
+export interface ForeignKeyRef {
+  schema: string;
+  relation: string;
+  columns: string[];
+}
+
+export interface ForeignKeyInfo {
+  name: string;
+  columns: string[];
+  references: ForeignKeyRef;
+  on_update: FkAction;
+  on_delete: FkAction;
+  deferrable: boolean;
+  initially_deferred: boolean;
+}
+
+export interface UniqueConstraintInfo {
+  name: string;
+  columns: string[];
+}
+
+export interface CheckConstraintInfo {
+  name: string;
+  expression: string;
+}
+
+/**
+ * Single round-trip for the Structure / Raw subtab. `columns` is always
+ * populated (a failure on the columns sub-query becomes a hard error rather
+ * than a partial response); every other section follows the same partial-
+ * degradation envelope as `TableExtrasResult` (`null` + a `failures` entry on
+ * non-permission failures, `[]` / `null` PK on permission-denied).
+ */
+export interface TableStructureResult {
+  schema: string;
+  relation: string;
+  relkind: Relkind;
+  is_best_effort: boolean;
+  columns: ColumnDetail[];
+  primary_key: PrimaryKeyInfo | null;
+  foreign_keys: ForeignKeyInfo[] | null;
+  unique_constraints: UniqueConstraintInfo[] | null;
+  check_constraints: CheckConstraintInfo[] | null;
+  indexes: IndexInfo[] | null;
+  triggers: TriggerInfo[] | null;
+  ddl: string;
+  failures: KindFailure[];
+}
+
 /** Discriminator for tab payloads and search labels. */
 export type ObjectKind =
   | "table"
