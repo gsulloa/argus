@@ -7,12 +7,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { connectionsApi } from "./api";
+import { connectionGroupsApi } from "./api";
 import type {
-  Connection,
-  ConnectionInput,
-  ConnectionMove,
-  ConnectionUpdate,
+  ConnectionGroup,
+  ConnectionGroupInput,
+  ConnectionGroupUpdate,
 } from "./types";
 
 function isTauriRuntime() {
@@ -22,21 +21,20 @@ function isTauriRuntime() {
   );
 }
 
-interface ConnectionsContextValue {
-  items: Connection[];
+interface ConnectionGroupsContextValue {
+  items: ConnectionGroup[];
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
-  create: (input: ConnectionInput) => Promise<Connection>;
-  update: (id: string, patch: ConnectionUpdate) => Promise<Connection>;
-  move: (id: string, move: ConnectionMove) => Promise<Connection>;
+  create: (input: ConnectionGroupInput) => Promise<ConnectionGroup>;
+  update: (id: string, patch: ConnectionGroupUpdate) => Promise<ConnectionGroup>;
   remove: (id: string) => Promise<void>;
 }
 
-const Ctx = createContext<ConnectionsContextValue | null>(null);
+const Ctx = createContext<ConnectionGroupsContextValue | null>(null);
 
-export function ConnectionsProvider({ children }: { children: ReactNode }) {
-  const [items, setItems] = useState<Connection[]>([]);
+export function ConnectionGroupsProvider({ children }: { children: ReactNode }) {
+  const [items, setItems] = useState<ConnectionGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,7 +46,7 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     }
     setLoading(true);
     try {
-      const list = await connectionsApi.list();
+      const list = await connectionGroupsApi.list();
       setItems(list);
       setError(null);
     } catch (e) {
@@ -63,8 +61,8 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const create = useCallback(
-    async (input: ConnectionInput) => {
-      const created = await connectionsApi.create(input);
+    async (input: ConnectionGroupInput) => {
+      const created = await connectionGroupsApi.create(input);
       await refresh();
       return created;
     },
@@ -72,43 +70,34 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
   );
 
   const update = useCallback(
-    async (id: string, patch: ConnectionUpdate) => {
-      const updated = await connectionsApi.update(id, patch);
+    async (id: string, patch: ConnectionGroupUpdate) => {
+      const updated = await connectionGroupsApi.update(id, patch);
       await refresh();
       return updated;
     },
     [refresh],
   );
 
-  const move = useCallback(
-    async (id: string, m: ConnectionMove) => {
-      const moved = await connectionsApi.move(id, m);
-      await refresh();
-      return moved;
-    },
-    [refresh],
-  );
-
   const remove = useCallback(
     async (id: string) => {
-      await connectionsApi.delete(id);
+      await connectionGroupsApi.delete(id);
       await refresh();
     },
     [refresh],
   );
 
   const value = useMemo(
-    () => ({ items, loading, error, refresh, create, update, move, remove }),
-    [items, loading, error, refresh, create, update, move, remove],
+    () => ({ items, loading, error, refresh, create, update, remove }),
+    [items, loading, error, refresh, create, update, remove],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
-export function useConnections(): ConnectionsContextValue {
+export function useConnectionGroups(): ConnectionGroupsContextValue {
   const v = useContext(Ctx);
   if (!v) {
-    throw new Error("useConnections must be used within ConnectionsProvider");
+    throw new Error("useConnectionGroups must be used within ConnectionGroupsProvider");
   }
   return v;
 }

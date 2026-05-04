@@ -1,26 +1,4 @@
-# connection-registry Specification
-
-## Purpose
-TBD - created by archiving change bootstrap-tauri-shell. Update Purpose after archive.
-## Requirements
-### Requirement: Local storage initialization
-
-On application startup the platform SHALL ensure a SQLite database exists at `<app_data_dir>/argus.db` and that all pending schema migrations have been applied. If the directory does not exist it MUST be created. If migrations fail the application MUST NOT proceed to render the main window and MUST surface a clear error.
-
-#### Scenario: First launch creates the database
-
-- **WHEN** the user launches Argus for the first time and no database file exists
-- **THEN** the platform creates `<app_data_dir>/argus.db` with the initial schema (tables `_migrations`, `connections`, `settings`) and a recorded migration version
-
-#### Scenario: Subsequent launches reuse the database
-
-- **WHEN** the user launches Argus with an existing `argus.db` already at the latest migration version
-- **THEN** the platform opens the existing database without modification and proceeds to render the window
-
-#### Scenario: Migration failure blocks startup
-
-- **WHEN** a pending migration fails during startup (for example, the disk is full or the file is corrupt)
-- **THEN** the application surfaces an error to the user (dialog or fallback window) and does not render the main shell
+## MODIFIED Requirements
 
 ### Requirement: Connection envelope
 
@@ -135,38 +113,3 @@ The platform SHALL expose a Tauri command `connections.update` that accepts `{ i
 
 - **WHEN** the user invokes `connections.update` for an id that does not exist
 - **THEN** the command returns `AppError::NotFound`
-
-### Requirement: Delete connection
-
-The platform SHALL expose a Tauri command `connections.delete` that removes the SQLite row for the given id and deletes the corresponding keychain entry if one exists. Deleting an id that does not exist MUST return `AppError::NotFound`.
-
-#### Scenario: Deleting an existing connection
-
-- **WHEN** a connection with secret exists and the user invokes `connections.delete` with its id
-- **THEN** both the SQLite row and the keychain entry under `connection:<id>` are removed
-
-#### Scenario: Deleting an unknown id
-
-- **WHEN** the user invokes `connections.delete` for an id that does not exist
-- **THEN** the command returns `AppError::NotFound`
-
-### Requirement: Get secret
-
-The platform SHALL expose a Tauri command `connections.getSecret` that returns the secret string for a given connection id from the OS keychain, or `null` if no secret is stored. This command is the only path through which secrets cross the IPC boundary, and it MUST be invoked only by data-source modules at the moment they need to open a network connection.
-
-#### Scenario: Retrieving an existing secret
-
-- **WHEN** a connection has a stored secret and a module invokes `connections.getSecret` with its id
-- **THEN** the command returns the secret string
-
-#### Scenario: No secret stored
-
-- **WHEN** a connection exists but has no secret stored
-- **AND** a module invokes `connections.getSecret` with its id
-- **THEN** the command returns `null`
-
-#### Scenario: Unknown id
-
-- **WHEN** a module invokes `connections.getSecret` for an id that does not exist in the connections table
-- **THEN** the command returns `AppError::NotFound`
-

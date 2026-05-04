@@ -101,6 +101,145 @@
   margin: 4px 0;
 }
 
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-subtle);
+  font-weight: 600;
+  border-radius: 4px;
+  user-select: none;
+}
+.groupHeader:hover .dragHandle,
+.groupHeader:hover .groupMenuButton {
+  opacity: 1;
+}
+.groupHeader:hover {
+  background: var(--bg-hover);
+}
+.groupChevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  border-radius: 2px;
+}
+.groupName {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.groupCount {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-subtle);
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 999px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.groupMenuButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 3px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  opacity: 0;
+  transition: opacity 100ms;
+  cursor: pointer;
+}
+.groupMenuButton:hover,
+.groupMenuButton[data-state="open"] {
+  background: var(--surface-2);
+  opacity: 1;
+}
+
+.dragHandle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--text-subtle);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 100ms;
+  flex-shrink: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.dragHandle:active {
+  cursor: grabbing;
+}
+.row:hover .dragHandle {
+  opacity: 1;
+}
+
+.dragOverlay {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 4px 8px;
+  box-shadow: var(--shadow-md);
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.groupBody {
+  display: flex;
+  flex-direction: column;
+}
+
+.dropTarget {
+  border-radius: 4px;
+}
+.dropTarget[data-over="true"] {
+  background: var(--accent-soft, rgba(168, 85, 247, 0.12));
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.menuButton {
+  position: relative;
+}
+
 .subtree {
   padding-left: 12px;
   padding-right: 4px;
