@@ -11,10 +11,10 @@ use tracing_subscriber::EnvFilter;
 
 use crate::modules::postgres::{
     postgres_apply_table_edits, postgres_connect, postgres_count_table, postgres_disconnect,
-    postgres_get_function_signature, postgres_list_active, postgres_list_columns_bulk,
-    postgres_list_relations, postgres_list_schemas, postgres_list_structure,
-    postgres_list_table_extras, postgres_parse_url, postgres_query_table, postgres_run_sql,
-    postgres_run_sql_many, postgres_table_primary_key, postgres_table_structure,
+    postgres_disconnect_all, postgres_get_function_signature, postgres_list_active,
+    postgres_list_columns_bulk, postgres_list_relations, postgres_list_schemas,
+    postgres_list_structure, postgres_list_table_extras, postgres_parse_url, postgres_query_table,
+    postgres_run_sql, postgres_run_sql_many, postgres_table_primary_key, postgres_table_structure,
     postgres_test_connection, PgPoolRegistry,
 };
 use crate::modules::query_history::{
@@ -25,9 +25,13 @@ use crate::modules::query_history::{
     },
 };
 use crate::platform::{
+    connection_groups::{
+        connection_groups_create, connection_groups_delete, connection_groups_list,
+        connection_groups_update,
+    },
     connections::{
         connections_create, connections_delete, connections_get_secret, connections_list,
-        connections_update,
+        connections_move, connections_refresh_secret, connections_update,
     },
     settings::{self, settings_get, settings_set},
     storage, DbState,
@@ -123,12 +127,19 @@ pub fn run() {
             connections_create,
             connections_update,
             connections_delete,
+            connections_move,
             connections_get_secret,
+            connections_refresh_secret,
+            connection_groups_list,
+            connection_groups_create,
+            connection_groups_update,
+            connection_groups_delete,
             settings_get,
             settings_set,
             postgres_test_connection,
             postgres_connect,
             postgres_disconnect,
+            postgres_disconnect_all,
             postgres_list_active,
             postgres_parse_url,
             postgres_list_schemas,
