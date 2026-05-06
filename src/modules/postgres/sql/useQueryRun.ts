@@ -32,6 +32,8 @@ export interface UseQueryRunResult {
   state: RunState;
   /** Last-completed run summary text (e.g. `5 rows · 12 ms`), or null. */
   summary: string | null;
+  /** `Date.now()` at which the latest run transitioned to `running`, or null otherwise. */
+  runStartedAt: number | null;
   /** Run whatever applies based on the editor state. */
   run(args: {
     fullSql: string;
@@ -44,6 +46,7 @@ export interface UseQueryRunResult {
 
 export function useQueryRun(connectionId: string): UseQueryRunResult {
   const [state, setState] = useState<RunState>({ status: "idle" });
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
 
   const run = useCallback(
     async (args: {
@@ -109,6 +112,7 @@ export function useQueryRun(connectionId: string): UseQueryRunResult {
         plan.mode === "multi" ? plan.statements : [];
 
       setState({ status: "running" });
+      setRunStartedAt(Date.now());
 
       if (mode === "single") {
         try {
@@ -136,6 +140,7 @@ export function useQueryRun(connectionId: string): UseQueryRunResult {
             },
           });
         }
+        setRunStartedAt(null);
         return;
       }
 
@@ -175,13 +180,14 @@ export function useQueryRun(connectionId: string): UseQueryRunResult {
           outcomes: synthetic,
         });
       }
+      setRunStartedAt(null);
     },
     [connectionId],
   );
 
   const summary = summarize(state);
 
-  return { state, summary, run };
+  return { state, summary, runStartedAt, run };
 }
 
 function summarize(state: RunState): string | null {

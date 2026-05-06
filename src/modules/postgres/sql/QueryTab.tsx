@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Lock } from "lucide-react";
+import { Lock, Wand2 } from "lucide-react";
 import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { getSetting, setSetting } from "@/platform/settings/api";
+import { useToast } from "@/platform/toast";
 import { useActiveConnections } from "../useActiveConnections";
 import { globalSchemaCache } from "../schema/globalSchemaCache";
 import { QueryEditor, type QueryEditorHandle } from "./QueryEditor";
 import { ResultPanel } from "./ResultPanel";
+import { ExportMenu } from "./export/ExportMenu";
+import { RunSummary } from "./RunSummary";
 import { useQueryBuffer } from "./useQueryBuffer";
 import { useQueryRun } from "./useQueryRun";
 import styles from "./QueryTab.module.css";
+
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+const FORMAT_HINT = isMac ? "⌘⇧F" : "Ctrl+Shift+F";
 
 /** Debounce window for autocomplete reconfigures triggered by cache updates. */
 const RECONFIGURE_DEBOUNCE_MS = 100;
@@ -49,6 +55,7 @@ interface InnerProps {
 function QueryTab({ tabId, payload }: InnerProps) {
   const { getActive } = useActiveConnections();
   const isReadOnly = getActive(payload.connectionId)?.read_only ?? false;
+  const toast = useToast();
 
   const buffer = useQueryBuffer(tabId, payload.sql);
   const editorRef = useRef<QueryEditorHandle | null>(null);
@@ -105,6 +112,17 @@ function QueryTab({ tabId, payload }: InnerProps) {
   const onShowInEditor = useCallback((offset: number) => {
     editorRef.current?.setCursor(offset);
   }, []);
+
+  const onFormat = useCallback(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    try {
+      ed.formatBuffer();
+    } catch (e) {
+      console.error("[argus.sql.format]", e);
+      toast.show("Could not format SQL", "error");
+    }
+  }, [toast]);
 
   // Resizable result panel.
   const [resultHeight, setResultHeight] = useState(280);
@@ -164,6 +182,18 @@ function QueryTab({ tabId, payload }: InnerProps) {
         </div>
       ) : null}
       <div className={styles.editorArea}>
+        <div className={styles.editorToolbar}>
+          <button
+            type="button"
+            className={styles.toolbarButton}
+            onClick={onFormat}
+            title={`Format SQL (${FORMAT_HINT})`}
+          >
+            <Wand2 size={12} />
+            <span>Format</span>
+            <span className={styles.kbd}>{FORMAT_HINT}</span>
+          </button>
+        </div>
         {buffer.loaded ? (
           <QueryEditor
             ref={editorRef}
@@ -172,6 +202,7 @@ function QueryTab({ tabId, payload }: InnerProps) {
             onChange={buffer.update}
             onRun={onRun}
             onRunAll={onRunAll}
+            onFormat={onFormat}
           />
         ) : (
           <div className={styles.editorPlaceholder}>Loading editor…</div>
@@ -189,8 +220,23 @@ function QueryTab({ tabId, payload }: InnerProps) {
       >
         <div className={styles.resultHeader}>
           <span className={styles.connectionLabel}>{payload.connectionName}</span>
-          {runner.summary ? (
-            <span className={styles.runSummary}>{runner.summary}</span>
+          <span className={styles.runSummary}>
+            <RunSummary
+              staticSummary={runner.summary}
+              runStartedAt={runner.runStartedAt}
+              isRunning={runner.state.status === "running"}
+            />
+          </span>
+          {runner.state.status === "done" &&
+          runner.state.mode === "single" &&
+          runner.state.result?.kind === "rows" &&
+          runner.state.result.rows.length > 0 ? (
+            <ExportMenu
+              connectionName={payload.connectionName}
+              columns={runner.state.result.columns}
+              rows={runner.state.result.rows}
+              truncated={runner.state.result.truncated}
+            />
           ) : null}
         </div>
         <div className={styles.resultBody}>

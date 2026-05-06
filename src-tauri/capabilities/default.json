@@ -15,6 +15,24 @@
     "core:tray:default",
     "core:path:default",
     "dialog:default",
-    "updater:default"
+    "updater:default",
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [
+        { "path": "$DOWNLOAD/*" },
+        { "path": "$DOCUMENT/*" },
+        { "path": "$DESKTOP/*" },
+        { "path": "$HOME/*" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        { "path": "$DOWNLOAD/*" },
+        { "path": "$DOCUMENT/*" },
+        { "path": "$DESKTOP/*" },
+        { "path": "$HOME/*" }
+      ]
+    }
   ]
 }

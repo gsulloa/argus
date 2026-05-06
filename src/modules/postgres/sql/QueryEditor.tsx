@@ -26,6 +26,7 @@ import {
 import { searchKeymap } from "@codemirror/search";
 import { sql, PostgreSQL } from "@codemirror/lang-sql";
 import { composeSources } from "./completionSources";
+import { formatSql } from "./format";
 import styles from "./QueryEditor.module.css";
 
 export interface QueryEditorHandle {
@@ -42,6 +43,8 @@ export interface QueryEditorHandle {
   /** Re-bind the autocomplete sources to the current schema cache state.
    * Call this when `globalSchemaCache` notifies a relevant change. */
   reconfigureAutocomplete(): void;
+  /** Format the entire buffer. Returns true on success, false on no-op or error. */
+  formatBuffer(): boolean;
 }
 
 export interface QueryEditorProps {
@@ -54,6 +57,8 @@ export interface QueryEditorProps {
   onRun(): void;
   /** Called when the user presses Mod-Shift-Enter (run all). */
   onRunAll(): void;
+  /** Called when the user presses Mod-Shift-F (format the buffer). */
+  onFormat(): void;
 }
 
 /**
@@ -80,6 +85,8 @@ export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
     onRunRef.current = props.onRun;
     const onRunAllRef = useRef(props.onRunAll);
     onRunAllRef.current = props.onRunAll;
+    const onFormatRef = useRef(props.onFormat);
+    onFormatRef.current = props.onFormat;
     const connectionIdRef = useRef(props.connectionId);
     connectionIdRef.current = props.connectionId;
 
@@ -132,6 +139,14 @@ export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
             preventDefault: true,
             run: () => {
               onRunAllRef.current();
+              return true;
+            },
+          },
+          {
+            key: "Mod-Shift-f",
+            preventDefault: true,
+            run: () => {
+              onFormatRef.current();
               return true;
             },
           },
@@ -323,6 +338,20 @@ export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
         view.dispatch({
           effects: autocompleteCompartment.current.reconfigure(next),
         });
+      },
+      formatBuffer() {
+        const view = viewRef.current;
+        if (!view) return false;
+        const current = view.state.doc.toString();
+        if (current.trim().length === 0) return false;
+        const formatted = formatSql(current);
+        if (formatted === current) return true;
+        view.dispatch({
+          changes: { from: 0, to: current.length, insert: formatted },
+          selection: { anchor: 0, head: 0 },
+          scrollIntoView: true,
+        });
+        return true;
       },
     }));
 

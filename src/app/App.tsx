@@ -29,27 +29,30 @@ import { ConnectionGroupsProvider } from "@/platform/connection-registry/useConn
 import { ActivityLogProvider } from "@/platform/activity-log/store";
 import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
 import { UpdaterProvider } from "@/platform/updater";
+import { ToastProvider } from "@/platform/toast";
 import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
 import { useQueryHistoryCommands } from "@/modules/query-history";
 
 export function App() {
   return (
     <ThemeProvider>
-      <UpdaterProvider>
-        <PaletteProvider>
-          <TabsProvider>
-            <ConnectionGroupsProvider>
-              <ConnectionsProvider>
-                <ActivityLogProvider>
-                  <PostgresFormProvider>
-                    <Shell />
-                  </PostgresFormProvider>
-                </ActivityLogProvider>
-              </ConnectionsProvider>
-            </ConnectionGroupsProvider>
-          </TabsProvider>
-        </PaletteProvider>
-      </UpdaterProvider>
+      <ToastProvider>
+        <UpdaterProvider>
+          <PaletteProvider>
+            <TabsProvider>
+              <ConnectionGroupsProvider>
+                <ConnectionsProvider>
+                  <ActivityLogProvider>
+                    <PostgresFormProvider>
+                      <Shell />
+                    </PostgresFormProvider>
+                  </ActivityLogProvider>
+                </ConnectionsProvider>
+              </ConnectionGroupsProvider>
+            </TabsProvider>
+          </PaletteProvider>
+        </UpdaterProvider>
+      </ToastProvider>
     </ThemeProvider>
   );
 }
@@ -102,18 +105,20 @@ function ShortcutBindings() {
   useCommandHotkeys();
 
   useShortcuts([
-    { key: "k", handler: () => palette.show() },
-    { key: "p", shift: true, handler: () => palette.show() },
-    { key: "p", handler: () => tablePalette.show() },
+    { key: "k", whenInInput: true, handler: () => palette.show() },
+    { key: "p", shift: true, whenInInput: true, handler: () => palette.show() },
+    { key: "p", whenInInput: true, handler: () => tablePalette.show() },
     {
       key: "w",
+      whenInInput: true,
       handler: () => {
         if (activeTabId) close(activeTabId);
       },
     },
-    { key: "\\", handler: toggleInspector },
+    { key: "\\", whenInInput: true, handler: toggleInspector },
     {
       key: ",",
+      whenInInput: true,
       handler: () =>
         open({
           id: SETTINGS_PLACEHOLDER_TAB_ID,

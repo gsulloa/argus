@@ -35,12 +35,15 @@
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-dialog": "^2.2.0",
+    "@tauri-apps/plugin-fs": "^2.2.0",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "exceljs": "^4.4.0",
     "lucide-react": "^0.475.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "sql-formatter": "^15.4.11"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
