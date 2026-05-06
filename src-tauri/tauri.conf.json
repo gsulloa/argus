@@ -39,5 +39,11 @@
     "category": "DeveloperTool",
     "shortDescription": "Inspect and edit data across multiple sources",
     "longDescription": "Argus is a desktop tool for inspecting and editing data across Postgres, DynamoDB, and CloudWatch."
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [],
+      "pubkey": ""
+    }
   }
 }
