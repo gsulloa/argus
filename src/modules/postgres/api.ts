@@ -38,6 +38,7 @@ export const postgresApi = {
 
   connect: (id: string) => call<ConnectResult>("postgres_connect", { id }),
   disconnect: (id: string) => call<void>("postgres_disconnect", { id }),
+  disconnectAll: () => call<number>("postgres_disconnect_all"),
   listActive: () => call<ActiveConnection[]>("postgres_list_active"),
   parseUrl: (input: string) => call<ParseUrlResult>("postgres_parse_url", { input }),
 };

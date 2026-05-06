@@ -8,7 +8,8 @@ export type ActivityKind =
   | "list_table_extras"
   | "query_table"
   | "count_table"
-  | "apply_edits";
+  | "apply_edits"
+  | "table_structure";
 
 export type Origin = "auto" | "user";
 export type Status = "ok" | "err";

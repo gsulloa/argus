@@ -1,0 +1,32 @@
+.warning {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--bg-active);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.warningHeader {
+  font-weight: 500;
+  color: var(--danger);
+}
+
+.warningList {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  list-style: disc;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.destructive {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--accent-text);
+}
+.destructive:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  filter: brightness(1.05);
+}

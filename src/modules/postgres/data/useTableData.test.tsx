@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { AppError } from "@/platform/errors/AppError";
 import { useTableData } from "./useTableData";
-import type { QueryTableResult } from "./types";
+import { EMPTY_FILTER_MODEL, type QueryTableResult } from "./types";
 
 vi.mock("./api", () => ({
   dataApi: {
@@ -34,7 +34,7 @@ const baseParams = {
   relation: "users",
   pageSize: 200,
   orderBy: [],
-  filters: [],
+  applied: EMPTY_FILTER_MODEL,
 };
 
 function makeResult(rowCount: number): QueryTableResult {
@@ -43,7 +43,7 @@ function makeResult(rowCount: number): QueryTableResult {
       { name: "id", data_type: "int4", ordinal_position: 1, is_nullable: false },
     ],
     rows: Array.from({ length: rowCount }, (_, i) => [i + 1]),
-    applied: { limit: 200, offset: 0, order_by: [], filters: [] },
+    applied: { limit: 200, offset: 0, order_by: [], filter_tree: null, raw_where: null },
     query_ms: 7,
     truncated_columns: [],
   };

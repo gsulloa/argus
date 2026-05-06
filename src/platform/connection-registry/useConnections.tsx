@@ -8,7 +8,12 @@ import {
   type ReactNode,
 } from "react";
 import { connectionsApi } from "./api";
-import type { Connection, ConnectionInput, ConnectionUpdate } from "./types";
+import type {
+  Connection,
+  ConnectionInput,
+  ConnectionMove,
+  ConnectionUpdate,
+} from "./types";
 
 function isTauriRuntime() {
   return (
@@ -24,6 +29,7 @@ interface ConnectionsContextValue {
   refresh: () => Promise<void>;
   create: (input: ConnectionInput) => Promise<Connection>;
   update: (id: string, patch: ConnectionUpdate) => Promise<Connection>;
+  move: (id: string, move: ConnectionMove) => Promise<Connection>;
   remove: (id: string) => Promise<void>;
 }
 
@@ -74,6 +80,15 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
     [refresh],
   );
 
+  const move = useCallback(
+    async (id: string, m: ConnectionMove) => {
+      const moved = await connectionsApi.move(id, m);
+      await refresh();
+      return moved;
+    },
+    [refresh],
+  );
+
   const remove = useCallback(
     async (id: string) => {
       await connectionsApi.delete(id);
@@ -83,8 +98,8 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ items, loading, error, refresh, create, update, remove }),
-    [items, loading, error, refresh, create, update, remove],
+    () => ({ items, loading, error, refresh, create, update, move, remove }),
+    [items, loading, error, refresh, create, update, move, remove],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

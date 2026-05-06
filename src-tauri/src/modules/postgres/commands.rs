@@ -236,6 +236,29 @@ pub async fn postgres_disconnect(
 }
 
 #[tauri::command]
+pub async fn postgres_disconnect_all(
+    app: AppHandle,
+    pools: State<'_, PgPoolRegistry>,
+) -> AppResult<u32> {
+    let started = Instant::now();
+    let dropped = pools.disconnect_all().await;
+    let dropped_u32 = u32::try_from(dropped).unwrap_or(u32::MAX);
+    if dropped > 0 {
+        let _ = app.emit("postgres:active-changed", ());
+        emit_activity(
+            &app,
+            ActivityLogEntryBuilder::new(
+                ActivityKind::Disconnect,
+                Origin::User,
+                started.elapsed().as_millis() as u64,
+            )
+            .ok(Some(Metric::Items { value: dropped_u32 })),
+        );
+    }
+    Ok(dropped_u32)
+}
+
+#[tauri::command]
 pub async fn postgres_list_active(
     pools: State<'_, PgPoolRegistry>,
 ) -> AppResult<Vec<ActivePoolSummary>> {

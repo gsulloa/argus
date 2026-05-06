@@ -15,9 +15,12 @@ use crate::modules::activity_log::{
 use crate::modules::postgres::params::SslMode;
 use crate::modules::postgres::pool::PgPoolRegistry;
 use crate::modules::postgres::schema;
+use crate::modules::postgres::ddl;
 use crate::modules::postgres::schema_types::{
-    ExtensionInfo, FunctionInfo, FunctionSignature, IndexInfo, KindFailure, RelationsResult,
-    SchemaSummary, StructureResult, TableExtrasResult, TriggerInfo, TypeInfo,
+    CheckConstraintInfo, ColumnDetail, ExtensionInfo, ForeignKeyInfo, FunctionInfo,
+    FunctionSignature, IndexInfo, KindFailure, PrimaryKeyInfo, RelationsResult, Relkind,
+    SchemaSummary, StructureResult, TableExtrasResult, TableStructureResult, TriggerInfo, TypeInfo,
+    UniqueConstraintInfo,
 };
 use crate::modules::postgres::tls::client_config_for;
 
@@ -468,6 +471,305 @@ pub async fn postgres_list_table_extras(
         Err(e) => {
             tracing::error!(
                 "postgres_list_table_extras err: id={parsed} schema={schema_name} relation={relation} elapsed={ms}ms err={e:?}"
+            );
+            emit_activity(&app, builder.err(e));
+        }
+    }
+    inner_result
+}
+
+/// Inner aggregator for `postgres_table_structure`. Runs every per-kind
+/// sub-query under `PER_QUERY_TIMEOUT` in parallel, plus the relkind +
+/// view-definition lookups required for DDL reconstruction.
+#[allow(clippy::type_complexity)]
+async fn list_table_structure_inner<'a>(
+    client: &'a PgObject,
+    schema_name: &'a str,
+    relation: &'a str,
+) -> (
+    Result<AppResult<Vec<ColumnDetail>>, Elapsed>,
+    Result<AppResult<Vec<PrimaryKeyInfo>>, Elapsed>,
+    Result<AppResult<Vec<ForeignKeyInfo>>, Elapsed>,
+    Result<AppResult<Vec<UniqueConstraintInfo>>, Elapsed>,
+    Result<AppResult<Vec<CheckConstraintInfo>>, Elapsed>,
+    Result<AppResult<Vec<(IndexInfo, String)>>, Elapsed>,
+    Result<AppResult<Vec<TriggerInfo>>, Elapsed>,
+    Result<AppResult<(Relkind, bool, bool)>, Elapsed>,
+) {
+    tokio::join!(
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("columns", schema_name, || {
+                schema::list_table_columns_detailed(client, schema_name, relation)
+            }),
+        ),
+        // PK is wrapped in a `Vec` (0 or 1 entries) so it shares the same
+        // aggregator path as every other kind. We collapse back to Option
+        // before composing the response.
+        timeout(PER_QUERY_TIMEOUT, async {
+            schema::try_kind("primary_key", schema_name, || async {
+                let pk = schema::get_primary_key(client, schema_name, relation).await?;
+                Ok(pk.into_iter().collect::<Vec<_>>())
+            })
+            .await
+        }),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("foreign_keys", schema_name, || {
+                schema::list_foreign_keys(client, schema_name, relation)
+            }),
+        ),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("unique_constraints", schema_name, || {
+                schema::list_unique_constraints(client, schema_name, relation)
+            }),
+        ),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("check_constraints", schema_name, || {
+                schema::list_check_constraints(client, schema_name, relation)
+            }),
+        ),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("indexes", schema_name, || {
+                schema::list_table_indexes_with_def(client, schema_name, relation)
+            }),
+        ),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("triggers", schema_name, || {
+                schema::list_table_triggers(client, schema_name, relation)
+            }),
+        ),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::get_relkind(client, schema_name, relation),
+        ),
+    )
+}
+
+#[tauri::command]
+pub async fn postgres_table_structure(
+    app: AppHandle,
+    pools: State<'_, PgPoolRegistry>,
+    id: String,
+    schema_name: String,
+    relation: String,
+    origin: Option<Origin>,
+) -> AppResult<TableStructureResult> {
+    let started = Instant::now();
+    let parsed = parse_id(&id)?;
+    let activity_origin = origin.unwrap_or_default();
+    tracing::info!(
+        "postgres_table_structure: id={parsed} schema={schema_name} relation={relation} origin={activity_origin:?}"
+    );
+
+    let inner_result: AppResult<TableStructureResult> = async {
+        let sslmode = pools.sslmode_for(&parsed).await?;
+        let client = pools.acquire(&parsed).await?;
+        let cancel_token = client.cancel_token();
+
+        let outcome = timeout(
+            TOTAL_TIMEOUT,
+            list_table_structure_inner(&client, &schema_name, &relation),
+        )
+        .await;
+
+        let (
+            columns_r,
+            pk_r,
+            fk_r,
+            unique_r,
+            check_r,
+            indexes_r,
+            triggers_r,
+            relkind_r,
+        ) = match outcome {
+            Ok(tuple) => tuple,
+            Err(_) => {
+                fire_cancel(cancel_token, sslmode).await;
+                drop(client);
+                return Err(AppError::postgres_with_code(
+                    "57014",
+                    format!(
+                        "table structure load timed out ({}s)",
+                        TOTAL_TIMEOUT.as_secs()
+                    ),
+                ));
+            }
+        };
+
+        let mut failures: Vec<KindFailure> = Vec::new();
+
+        // Columns: required. Failure here returns a hard error rather than a
+        // partial response — the Structure subtab cannot render anything
+        // without the column list.
+        let columns = match columns_r {
+            Ok(Ok(cols)) => cols,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Err(AppError::postgres_with_code(
+                    "57014",
+                    format!(
+                        "columns query timed out ({}s)",
+                        PER_QUERY_TIMEOUT.as_secs()
+                    ),
+                ))
+            }
+        };
+
+        let pk_vec = aggregate_one(pk_r, "primary_key", &mut failures);
+        let foreign_keys = aggregate_one(fk_r, "foreign_keys", &mut failures);
+        let unique_constraints = aggregate_one(unique_r, "unique_constraints", &mut failures);
+        let check_constraints = aggregate_one(check_r, "check_constraints", &mut failures);
+        let indexes_with_def = aggregate_one(indexes_r, "indexes", &mut failures);
+        let triggers = aggregate_one(triggers_r, "triggers", &mut failures);
+
+        // Relkind: required. Failure → hard error (we can't pick a DDL path).
+        let (relkind, is_populated, is_best_effort) = match relkind_r {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Err(AppError::postgres_with_code(
+                    "57014",
+                    format!(
+                        "relkind lookup timed out ({}s)",
+                        PER_QUERY_TIMEOUT.as_secs()
+                    ),
+                ))
+            }
+        };
+
+        let primary_key = pk_vec.and_then(|mut v| v.pop());
+
+        // Split indexes into the response payload (IndexInfo only) and the
+        // DDL strings used to reconstruct CREATE INDEX lines (skipping the
+        // PK index, which is implicit in the PK clause).
+        let (indexes, index_defs) = match &indexes_with_def {
+            Some(rows) => {
+                let pk_name = primary_key.as_ref().map(|p| p.name.as_str());
+                let mut info = Vec::with_capacity(rows.len());
+                let mut defs = Vec::with_capacity(rows.len());
+                for (ix, def) in rows {
+                    if Some(ix.name.as_str()) == pk_name {
+                        info.push(ix.clone());
+                        continue;
+                    }
+                    info.push(ix.clone());
+                    defs.push(def.clone());
+                }
+                (Some(info), defs)
+            }
+            None => (None, Vec::new()),
+        };
+
+        let ddl = match relkind {
+            Relkind::Table => ddl::reconstruct_table(
+                &schema_name,
+                &relation,
+                &columns,
+                primary_key.as_ref(),
+                foreign_keys.as_deref().unwrap_or(&[]),
+                unique_constraints.as_deref().unwrap_or(&[]),
+                check_constraints.as_deref().unwrap_or(&[]),
+                &index_defs,
+            ),
+            Relkind::View => {
+                let body = schema::get_view_definition(&client, &schema_name, &relation).await?;
+                ddl::reconstruct_view(&schema_name, &relation, &body)
+            }
+            Relkind::MaterializedView => {
+                let body = schema::get_view_definition(&client, &schema_name, &relation).await?;
+                ddl::reconstruct_matview(&schema_name, &relation, &body, is_populated)
+            }
+        };
+
+        drop(client);
+
+        for f in &failures {
+            tracing::warn!(
+                "postgres_table_structure failure: schema={schema_name} relation={relation} \
+                 kind={} code={:?} message={}",
+                f.kind,
+                f.code,
+                f.message
+            );
+        }
+
+        Ok(TableStructureResult {
+            schema: schema_name.clone(),
+            relation: relation.clone(),
+            relkind,
+            is_best_effort,
+            columns,
+            primary_key,
+            foreign_keys,
+            unique_constraints,
+            check_constraints,
+            indexes,
+            triggers,
+            ddl,
+            failures,
+        })
+    }
+    .await;
+
+    let ms = started.elapsed().as_millis();
+    let duration_ms = ms as u64;
+    let builder =
+        ActivityLogEntryBuilder::new(ActivityKind::TableStructure, activity_origin, duration_ms)
+            .connection(parsed);
+    match &inner_result {
+        Ok(result) => {
+            let total: u32 = result.columns.len() as u32
+                + result
+                    .indexes
+                    .as_ref()
+                    .map(|v| v.len() as u32)
+                    .unwrap_or(0)
+                + result
+                    .triggers
+                    .as_ref()
+                    .map(|v| v.len() as u32)
+                    .unwrap_or(0)
+                + result
+                    .foreign_keys
+                    .as_ref()
+                    .map(|v| v.len() as u32)
+                    .unwrap_or(0)
+                + result
+                    .unique_constraints
+                    .as_ref()
+                    .map(|v| v.len() as u32)
+                    .unwrap_or(0)
+                + result
+                    .check_constraints
+                    .as_ref()
+                    .map(|v| v.len() as u32)
+                    .unwrap_or(0)
+                + if result.primary_key.is_some() { 1 } else { 0 };
+            tracing::info!(
+                "postgres_table_structure ok: id={parsed} schema={schema_name} relation={relation} \
+                 columns={} pk={} fks={:?} uniques={:?} checks={:?} indexes={:?} triggers={:?} \
+                 best_effort={} failures={} elapsed={ms}ms",
+                result.columns.len(),
+                result.primary_key.is_some(),
+                result.foreign_keys.as_ref().map(|v| v.len()),
+                result.unique_constraints.as_ref().map(|v| v.len()),
+                result.check_constraints.as_ref().map(|v| v.len()),
+                result.indexes.as_ref().map(|v| v.len()),
+                result.triggers.as_ref().map(|v| v.len()),
+                result.is_best_effort,
+                result.failures.len(),
+            );
+            emit_activity(&app, builder.ok(Some(Metric::Items { value: total })));
+        }
+        Err(e) => {
+            tracing::error!(
+                "postgres_table_structure err: id={parsed} schema={schema_name} \
+                 relation={relation} elapsed={ms}ms err={e:?}"
             );
             emit_activity(&app, builder.err(e));
         }

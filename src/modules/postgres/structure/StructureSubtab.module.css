@@ -1,0 +1,222 @@
+.root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  background: var(--canvas);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex: 0 0 auto;
+}
+
+.title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.relname {
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: var(--text-md, 13px);
+  color: var(--text);
+}
+
+.relkind {
+  font-size: var(--text-xs, 11px);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+}
+
+.refreshBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: var(--text-xs, 11px);
+  padding: 4px 10px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.refreshBtn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.refreshBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 16px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--text-xs, 11px);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+  font-weight: 500;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sectionBody {
+  display: flex;
+  flex-direction: column;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm, 12px);
+}
+
+.table thead th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-xs, 11px);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.table tbody td {
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--hairline);
+  vertical-align: top;
+}
+
+.table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.mono {
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.numeric {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text-muted);
+}
+
+.colNum {
+  width: 32px;
+  text-align: right;
+}
+
+.colFlag {
+  width: 64px;
+  text-align: center;
+}
+
+.muted {
+  color: var(--text-subtle);
+}
+
+.fkChip {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--accent-hover);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: var(--text-xs, 11px);
+  cursor: pointer;
+}
+
+.fkChip:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  font-size: var(--text-sm, 12px);
+  color: var(--text-subtle);
+}
+
+.spinner {
+  animation: structure-spin 1s linear infinite;
+}
+
+@keyframes structure-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.errorBanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg-elevated, var(--surface));
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm, 12px);
+  color: var(--danger);
+}
+
+.failureChip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-radius: 3px;
+  font-size: var(--text-sm, 12px);
+  color: var(--warning);
+}
+
+.retryBtn {
+  font-family: inherit;
+  font-size: var(--text-xs, 11px);
+  padding: 2px 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.retryBtn:hover {
+  background: var(--surface-2);
+}
+
+.emptyState {
+  padding: 8px 0;
+  font-size: var(--text-sm, 12px);
+  color: var(--text-subtle);
+  font-style: italic;
+}

@@ -50,38 +50,87 @@ pub struct OrderBy {
     pub direction: SortDirection,
 }
 
-/// Filter predicate accepted by the data-grid commands. The `op` field
-/// discriminates the variant and matches the operator surface promised by the
-/// `postgres-data-grid` spec. Any unknown op is rejected at deserialization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "op")]
-pub enum Filter {
+/// Operator surface accepted by Structured filters. The wire form mirrors the
+/// `postgres-data-grid` spec: SQL keywords stay uppercase (`=`, `LIKE`,
+/// `IS NULL`, …); sugar operators are PascalCase (`Contains`, `In`, …).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Operator {
     #[serde(rename = "=")]
-    Eq { column: String, value: JsonValue },
+    Eq,
     #[serde(rename = "!=")]
-    Ne { column: String, value: JsonValue },
+    Ne,
     #[serde(rename = "<")]
-    Lt { column: String, value: JsonValue },
+    Lt,
     #[serde(rename = "<=")]
-    Le { column: String, value: JsonValue },
+    Le,
     #[serde(rename = ">")]
-    Gt { column: String, value: JsonValue },
+    Gt,
     #[serde(rename = ">=")]
-    Ge { column: String, value: JsonValue },
+    Ge,
     #[serde(rename = "LIKE")]
-    Like { column: String, value: JsonValue },
+    Like,
     #[serde(rename = "NOT LIKE")]
-    NotLike { column: String, value: JsonValue },
-    #[serde(rename = "IS NULL")]
-    IsNull { column: String },
-    #[serde(rename = "IS NOT NULL")]
-    IsNotNull { column: String },
+    NotLike,
+    #[serde(rename = "ILIKE")]
+    Ilike,
+    #[serde(rename = "NOT ILIKE")]
+    NotIlike,
+    Contains,
+    StartsWith,
+    EndsWith,
+    In,
+    NotIn,
     #[serde(rename = "BETWEEN")]
-    Between {
-        column: String,
-        min: JsonValue,
-        max: JsonValue,
-    },
+    Between,
+    #[serde(rename = "IS NULL")]
+    IsNull,
+    #[serde(rename = "IS NOT NULL")]
+    IsNotNull,
+}
+
+/// Either a named column or the special "Any column" pseudo-column. The wire
+/// form is internally tagged: `{ kind: "named", name: "..." }` or
+/// `{ kind: "any_column" }`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ColumnRef {
+    Named { name: String },
+    AnyColumn,
+}
+
+/// A single condition leaf — a column / operator / optional value triple. The
+/// `value` shape varies by operator (scalar / array / `{min, max}` / absent),
+/// so it lands here as `serde_json::Value` and is validated when the predicate
+/// is compiled.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Condition {
+    pub column: ColumnRef,
+    pub op: Operator,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<JsonValue>,
+}
+
+/// One node of the filter tree — either a condition leaf or an OR group. The
+/// wire form is internally tagged:
+/// - `{ kind: "condition", column, op, value? }`
+/// - `{ kind: "or_group", children: [...] }`
+///
+/// The `or_group` arm carries `Vec<FilterNode>` so the wire shape is uniform;
+/// nested `or_group` inside another `or_group` is rejected at validation time
+/// (see `validate_filter_tree`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FilterNode {
+    Condition(Condition),
+    OrGroup { children: Vec<FilterNode> },
+}
+
+/// Recursive filter payload: an implicit AND root joining condition leaves
+/// and OR groups.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FilterTree {
+    #[serde(default)]
+    pub children: Vec<FilterNode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,7 +140,17 @@ pub struct QueryTableOptions {
     #[serde(default)]
     pub order_by: Vec<OrderBy>,
     #[serde(default)]
-    pub filters: Vec<Filter>,
+    pub filter_tree: Option<FilterTree>,
+    #[serde(default)]
+    pub raw_where: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct CountTableOptions {
+    #[serde(default)]
+    pub filter_tree: Option<FilterTree>,
+    #[serde(default)]
+    pub raw_where: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,7 +158,8 @@ pub struct AppliedQuery {
     pub limit: i64,
     pub offset: i64,
     pub order_by: Vec<OrderBy>,
-    pub filters: Vec<Filter>,
+    pub filter_tree: Option<FilterTree>,
+    pub raw_where: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -129,8 +189,8 @@ pub(crate) fn quote_ident(s: &str) -> String {
 /// the JSON value's natural Rust type (bool/i64/f64/String) and let Postgres
 /// implicit-cast where possible. Types that need explicit casting (uuid,
 /// dates, …) will surface a Postgres error to the user, who can fall back
-/// to the SQL editor (#6) for those columns. `null` is rejected — the
-/// caller MUST use `IS NULL` / `IS NOT NULL` instead.
+/// to the SQL editor for those columns. `null` is rejected — the caller
+/// MUST use `IS NULL` / `IS NOT NULL` instead.
 fn json_to_param(v: &JsonValue) -> AppResult<Box<dyn ToSql + Sync + Send>> {
     match v {
         JsonValue::Null => Err(AppError::Validation(
@@ -159,66 +219,355 @@ fn placeholder_for(idx: usize) -> String {
     format!("${idx}")
 }
 
-fn binary_predicate(
-    col: &str,
-    op_sql: &str,
-    val: &JsonValue,
-    params: &mut Vec<Box<dyn ToSql + Sync + Send>>,
-) -> AppResult<String> {
-    let p = json_to_param(val)?;
-    params.push(p);
-    Ok(format!(
-        "{} {} {}",
-        quote_ident(col),
-        op_sql,
-        placeholder_for(params.len())
-    ))
+/// SQL fragment for a single-bound binary operator. Caller has already
+/// pushed the parameter and computed the placeholder index.
+fn binary_op_sql(col_with_cast: &str, op: Operator, placeholder: &str) -> String {
+    match op {
+        Operator::Eq => format!("{col_with_cast} = {placeholder}"),
+        Operator::Ne => format!("{col_with_cast} <> {placeholder}"),
+        Operator::Lt => format!("{col_with_cast} < {placeholder}"),
+        Operator::Le => format!("{col_with_cast} <= {placeholder}"),
+        Operator::Gt => format!("{col_with_cast} > {placeholder}"),
+        Operator::Ge => format!("{col_with_cast} >= {placeholder}"),
+        Operator::Like => format!("{col_with_cast} LIKE {placeholder}"),
+        Operator::NotLike => format!("{col_with_cast} NOT LIKE {placeholder}"),
+        Operator::Ilike => format!("{col_with_cast} ILIKE {placeholder}"),
+        Operator::NotIlike => format!("{col_with_cast} NOT ILIKE {placeholder}"),
+        Operator::Contains => {
+            format!("{col_with_cast} ILIKE '%' || {placeholder} || '%'")
+        }
+        Operator::StartsWith => format!("{col_with_cast} ILIKE {placeholder} || '%'"),
+        Operator::EndsWith => format!("{col_with_cast} ILIKE '%' || {placeholder}"),
+        // Multi-bound / value-less operators are not handled here — callers
+        // must dispatch on operator before calling this.
+        Operator::In
+        | Operator::NotIn
+        | Operator::Between
+        | Operator::IsNull
+        | Operator::IsNotNull => {
+            unreachable!("binary_op_sql called with multi-bound or value-less operator");
+        }
+    }
 }
 
+/// Compile one column / operator / value triple to a parametrized SQL
+/// fragment. `cast_suffix` is `""` for normal references and `"::text"` for
+/// Any-column branches.
 fn predicate_for(
-    f: &Filter,
+    column_name: &str,
+    op: Operator,
+    value: Option<&JsonValue>,
+    cast_suffix: &str,
     params: &mut Vec<Box<dyn ToSql + Sync + Send>>,
 ) -> AppResult<String> {
-    match f {
-        Filter::Eq { column, value } => binary_predicate(column, "=", value, params),
-        Filter::Ne { column, value } => binary_predicate(column, "<>", value, params),
-        Filter::Lt { column, value } => binary_predicate(column, "<", value, params),
-        Filter::Le { column, value } => binary_predicate(column, "<=", value, params),
-        Filter::Gt { column, value } => binary_predicate(column, ">", value, params),
-        Filter::Ge { column, value } => binary_predicate(column, ">=", value, params),
-        Filter::Like { column, value } => binary_predicate(column, "LIKE", value, params),
-        Filter::NotLike { column, value } => binary_predicate(column, "NOT LIKE", value, params),
-        Filter::IsNull { column } => Ok(format!("{} IS NULL", quote_ident(column))),
-        Filter::IsNotNull { column } => Ok(format!("{} IS NOT NULL", quote_ident(column))),
-        Filter::Between { column, min, max } => {
+    let col_with_cast = format!("{}{}", quote_ident(column_name), cast_suffix);
+    match op {
+        Operator::IsNull => {
+            if value.is_some_and(|v| !matches!(v, JsonValue::Null)) {
+                return Err(AppError::Validation(
+                    "IS NULL must not carry a value".into(),
+                ));
+            }
+            Ok(format!("{col_with_cast} IS NULL"))
+        }
+        Operator::IsNotNull => {
+            if value.is_some_and(|v| !matches!(v, JsonValue::Null)) {
+                return Err(AppError::Validation(
+                    "IS NOT NULL must not carry a value".into(),
+                ));
+            }
+            Ok(format!("{col_with_cast} IS NOT NULL"))
+        }
+        Operator::Between => {
+            let v = value
+                .ok_or_else(|| AppError::Validation("BETWEEN requires { min, max }".into()))?;
+            let obj = v.as_object().ok_or_else(|| {
+                AppError::Validation("BETWEEN requires { min, max } object".into())
+            })?;
+            let min = obj
+                .get("min")
+                .ok_or_else(|| AppError::Validation("BETWEEN missing `min`".into()))?;
+            let max = obj
+                .get("max")
+                .ok_or_else(|| AppError::Validation("BETWEEN missing `max`".into()))?;
             let pmin = json_to_param(min)?;
             params.push(pmin);
             let ph_min = placeholder_for(params.len());
             let pmax = json_to_param(max)?;
             params.push(pmax);
             let ph_max = placeholder_for(params.len());
+            Ok(format!("{col_with_cast} BETWEEN {ph_min} AND {ph_max}"))
+        }
+        Operator::In | Operator::NotIn => {
+            let v = value
+                .ok_or_else(|| AppError::Validation("In/NotIn require an array value".into()))?;
+            let arr = v
+                .as_array()
+                .ok_or_else(|| AppError::Validation("In/NotIn require an array value".into()))?;
+            if arr.is_empty() {
+                return Err(AppError::Validation(
+                    "In/NotIn require a non-empty array".into(),
+                ));
+            }
+            let mut placeholders = Vec::with_capacity(arr.len());
+            for item in arr {
+                let p = json_to_param(item)?;
+                params.push(p);
+                placeholders.push(placeholder_for(params.len()));
+            }
+            let kw = if matches!(op, Operator::In) {
+                "IN"
+            } else {
+                "NOT IN"
+            };
             Ok(format!(
-                "{} BETWEEN {} AND {}",
-                quote_ident(column),
-                ph_min,
-                ph_max
+                "{col_with_cast} {kw} ({})",
+                placeholders.join(", ")
             ))
+        }
+        // Single-bound binary ops.
+        _ => {
+            let v = value
+                .ok_or_else(|| AppError::Validation("operator requires a value".into()))?;
+            let p = json_to_param(v)?;
+            params.push(p);
+            let placeholder = placeholder_for(params.len());
+            Ok(binary_op_sql(&col_with_cast, op, &placeholder))
         }
     }
 }
 
-fn build_where_clause(
-    filters: &[Filter],
+/// True for Postgres types that survive a `::text` cast in a way the user
+/// expects when searching across "any column". Bytea is excluded (cast yields
+/// the hex-escaped form, never what a user typed); composite/row types are
+/// excluded because their text rep is implementation-defined and noisy.
+///
+/// `data_type` here comes from `pg_catalog.format_type` — the same source
+/// `list_columns` uses — so builtin types arrive as canonical lowercase
+/// tokens (e.g. `text`, `timestamp without time zone`, `numeric(10,2)`).
+fn text_castable(data_type: &str) -> bool {
+    let t = data_type.trim().to_ascii_lowercase();
+    let head = t.split('(').next().unwrap_or(&t).trim();
+
+    if head == "bytea" {
+        return false;
+    }
+    // Composite / row types come back as either `record` or as a qualified
+    // user type. Heuristic: builtin types are a flat set of lowercase tokens;
+    // anything containing a `.` (qualified user type) is opaque to us.
+    if head.contains('.') || head.contains('"') {
+        return false;
+    }
+    // Builtin allow-list. Arrays (suffix `[]`) of these are also castable.
+    let mut base = head;
+    if let Some(stripped) = base.strip_suffix("[]") {
+        base = stripped.trim();
+    }
+    matches!(
+        base,
+        "text"
+            | "character varying"
+            | "varchar"
+            | "character"
+            | "char"
+            | "bpchar"
+            | "name"
+            | "citext"
+            | "uuid"
+            | "json"
+            | "jsonb"
+            | "boolean"
+            | "bool"
+            | "smallint"
+            | "int2"
+            | "integer"
+            | "int4"
+            | "bigint"
+            | "int8"
+            | "real"
+            | "float4"
+            | "double precision"
+            | "float8"
+            | "numeric"
+            | "decimal"
+            | "money"
+            | "date"
+            | "time"
+            | "time without time zone"
+            | "time with time zone"
+            | "timetz"
+            | "timestamp"
+            | "timestamp without time zone"
+            | "timestamp with time zone"
+            | "timestamptz"
+            | "interval"
+            | "smallserial"
+            | "serial"
+            | "bigserial"
+            | "inet"
+            | "cidr"
+            | "macaddr"
+            | "macaddr8"
+            | "xml"
+    )
+}
+
+/// Validate that an operator is allowed on the Any-column pseudo-column.
+/// Per spec, comparators / `BETWEEN` / `In` / null variants are rejected
+/// (the SQL would be nonsensical or the result misleading).
+fn validate_any_column_operator(op: Operator) -> AppResult<()> {
+    match op {
+        Operator::Eq
+        | Operator::Ne
+        | Operator::Like
+        | Operator::NotLike
+        | Operator::Ilike
+        | Operator::NotIlike
+        | Operator::Contains
+        | Operator::StartsWith
+        | Operator::EndsWith => Ok(()),
+        _ => Err(AppError::Validation(format!(
+            "operator {op:?} is not allowed on Any column"
+        ))),
+    }
+}
+
+/// Expand an Any-column condition into a parenthesized OR-of-per-column
+/// predicates. The same parameter slot (`$n`) is shared across every branch.
+fn expand_any_column(
+    op: Operator,
+    value: Option<&JsonValue>,
+    columns: &[DataColumn],
     params: &mut Vec<Box<dyn ToSql + Sync + Send>>,
 ) -> AppResult<String> {
-    if filters.is_empty() {
+    validate_any_column_operator(op)?;
+    let castable: Vec<&DataColumn> = columns
+        .iter()
+        .filter(|c| text_castable(&c.data_type))
+        .collect();
+    if castable.is_empty() {
+        return Ok("(FALSE)".to_string());
+    }
+    // All allowed Any-column ops are single-bound binary ops, so we push
+    // the value once and reuse the placeholder across every branch.
+    let v = value
+        .ok_or_else(|| AppError::Validation("Any column operator requires a value".into()))?;
+    let p = json_to_param(v)?;
+    params.push(p);
+    let ph = placeholder_for(params.len());
+    let parts: Vec<String> = castable
+        .iter()
+        .map(|c| {
+            let col_cast = format!("{}::text", quote_ident(&c.name));
+            binary_op_sql(&col_cast, op, &ph)
+        })
+        .collect();
+    Ok(format!("({})", parts.join(" OR ")))
+}
+
+fn compile_condition(
+    cond: &Condition,
+    columns: &[DataColumn],
+    params: &mut Vec<Box<dyn ToSql + Sync + Send>>,
+) -> AppResult<String> {
+    match &cond.column {
+        ColumnRef::Named { name } => {
+            predicate_for(name, cond.op, cond.value.as_ref(), "", params)
+        }
+        ColumnRef::AnyColumn => {
+            expand_any_column(cond.op, cond.value.as_ref(), columns, params)
+        }
+    }
+}
+
+/// Reject trees that violate the one-level-of-nesting rule. Conditions are
+/// always fine; or_group children must all be conditions.
+fn validate_filter_tree(tree: &FilterTree) -> AppResult<()> {
+    for node in &tree.children {
+        if let FilterNode::OrGroup { children } = node {
+            for c in children {
+                if let FilterNode::OrGroup { .. } = c {
+                    return Err(AppError::Validation(
+                        "or_group inside or_group is not allowed".into(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Walk the tree and emit the AND-joined root with parenthesized OR groups.
+/// Returns an empty string when the tree has no children (caller decides
+/// whether to emit a `WHERE` keyword).
+pub(crate) fn compile_filter_tree(
+    tree: &FilterTree,
+    columns: &[DataColumn],
+    params: &mut Vec<Box<dyn ToSql + Sync + Send>>,
+) -> AppResult<String> {
+    validate_filter_tree(tree)?;
+    if tree.children.is_empty() {
         return Ok(String::new());
     }
-    let mut parts = Vec::with_capacity(filters.len());
-    for f in filters {
-        parts.push(predicate_for(f, params)?);
+    let mut parts = Vec::with_capacity(tree.children.len());
+    for node in &tree.children {
+        match node {
+            FilterNode::Condition(c) => {
+                parts.push(compile_condition(c, columns, params)?);
+            }
+            FilterNode::OrGroup { children } => {
+                let mut inner = Vec::with_capacity(children.len());
+                for c in children {
+                    match c {
+                        FilterNode::Condition(cond) => {
+                            inner.push(compile_condition(cond, columns, params)?);
+                        }
+                        FilterNode::OrGroup { .. } => {
+                            // Rejected by validate_filter_tree, but be explicit.
+                            return Err(AppError::Validation(
+                                "or_group inside or_group is not allowed".into(),
+                            ));
+                        }
+                    }
+                }
+                if inner.is_empty() {
+                    // Empty OR group is a no-op; skip it (UI auto-collapses).
+                    continue;
+                }
+                parts.push(format!("({})", inner.join(" OR ")));
+            }
+        }
     }
-    Ok(format!(" WHERE {}", parts.join(" AND ")))
+    if parts.is_empty() {
+        return Ok(String::new());
+    }
+    Ok(parts.join(" AND "))
+}
+
+/// Build the WHERE body for either filter_tree (parametrized) or raw_where
+/// (verbatim). Mutually exclusive: both set is a validation error.
+fn build_where_body(
+    filter_tree: Option<&FilterTree>,
+    raw_where: Option<&str>,
+    columns: &[DataColumn],
+    params: &mut Vec<Box<dyn ToSql + Sync + Send>>,
+) -> AppResult<String> {
+    if filter_tree.is_some() && raw_where.is_some() {
+        return Err(AppError::Validation(
+            "filter_tree and raw_where are mutually exclusive".into(),
+        ));
+    }
+    if let Some(raw) = raw_where {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(String::new());
+        }
+        return Ok(trimmed.to_string());
+    }
+    if let Some(tree) = filter_tree {
+        return compile_filter_tree(tree, columns, params);
+    }
+    Ok(String::new())
 }
 
 fn build_order_clause(order: &[OrderBy]) -> String {
@@ -247,12 +596,19 @@ pub(crate) fn build_select_sql(
     schema: &str,
     relation: &str,
     order: &[OrderBy],
-    filters: &[Filter],
+    filter_tree: Option<&FilterTree>,
+    raw_where: Option<&str>,
+    columns: &[DataColumn],
     limit: i64,
     offset: i64,
 ) -> AppResult<(String, Vec<Box<dyn ToSql + Sync + Send>>)> {
     let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
-    let where_sql = build_where_clause(filters, &mut params)?;
+    let where_body = build_where_body(filter_tree, raw_where, columns, &mut params)?;
+    let where_sql = if where_body.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {where_body}")
+    };
     let order_sql = build_order_clause(order);
     let from = format!("{}.{}", quote_ident(schema), quote_ident(relation));
     let sql = format!(
@@ -265,10 +621,17 @@ pub(crate) fn build_select_sql(
 pub(crate) fn build_count_sql(
     schema: &str,
     relation: &str,
-    filters: &[Filter],
+    filter_tree: Option<&FilterTree>,
+    raw_where: Option<&str>,
+    columns: &[DataColumn],
 ) -> AppResult<(String, Vec<Box<dyn ToSql + Sync + Send>>)> {
     let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
-    let where_sql = build_where_clause(filters, &mut params)?;
+    let where_body = build_where_body(filter_tree, raw_where, columns, &mut params)?;
+    let where_sql = if where_body.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {where_body}")
+    };
     let from = format!("{}.{}", quote_ident(schema), quote_ident(relation));
     let sql = format!("SELECT COUNT(*)::bigint FROM {from}{where_sql}");
     Ok((sql, params))
@@ -454,14 +817,23 @@ pub async fn postgres_query_table(
     if opts.offset < 0 {
         return Err(AppError::Validation("offset must be >= 0".into()));
     }
+    if opts.filter_tree.is_some() && opts.raw_where.is_some() {
+        return Err(AppError::Validation(
+            "filter_tree and raw_where are mutually exclusive".into(),
+        ));
+    }
 
     tracing::info!(
         "postgres_query_table: id={parsed} schema={schema} relation={relation} \
-         limit={} offset={} order={} filters={}",
+         limit={} offset={} order={} structured={} raw={}",
         opts.limit,
         opts.offset,
         opts.order_by.len(),
-        opts.filters.len()
+        opts.filter_tree
+            .as_ref()
+            .map(|t| t.children.len())
+            .unwrap_or(0),
+        opts.raw_where.as_deref().map(|s| s.len()).unwrap_or(0)
     );
 
     let mut emitted_sql: Option<String> = None;
@@ -491,7 +863,9 @@ pub async fn postgres_query_table(
             &schema,
             &relation,
             &opts.order_by,
-            &opts.filters,
+            opts.filter_tree.as_ref(),
+            opts.raw_where.as_deref(),
+            &columns,
             opts.limit,
             opts.offset,
         )?;
@@ -531,7 +905,8 @@ pub async fn postgres_query_table(
             limit: opts.limit,
             offset: opts.offset,
             order_by: opts.order_by.clone(),
-            filters: opts.filters.clone(),
+            filter_tree: opts.filter_tree.clone(),
+            raw_where: opts.raw_where.clone(),
         };
 
         tracing::info!(
@@ -581,21 +956,32 @@ pub async fn postgres_count_table(
     id: String,
     schema: String,
     relation: String,
-    filters: Option<serde_json::Value>,
+    options: Option<serde_json::Value>,
     origin: Option<Origin>,
 ) -> AppResult<CountTableResult> {
     let started = Instant::now();
     let activity_origin = origin.unwrap_or_default();
     let parsed = parse_id(&id)?;
-    let filters_vec: Vec<Filter> = match filters {
+    let opts: CountTableOptions = match options {
         Some(v) => serde_json::from_value(v)
-            .map_err(|e| AppError::Validation(format!("invalid filters: {e}")))?,
-        None => Vec::new(),
+            .map_err(|e| AppError::Validation(format!("invalid count options: {e}")))?,
+        None => CountTableOptions::default(),
     };
 
+    if opts.filter_tree.is_some() && opts.raw_where.is_some() {
+        return Err(AppError::Validation(
+            "filter_tree and raw_where are mutually exclusive".into(),
+        ));
+    }
+
     tracing::info!(
-        "postgres_count_table: id={parsed} schema={schema} relation={relation} filters={}",
-        filters_vec.len()
+        "postgres_count_table: id={parsed} schema={schema} relation={relation} \
+         structured={} raw={}",
+        opts.filter_tree
+            .as_ref()
+            .map(|t| t.children.len())
+            .unwrap_or(0),
+        opts.raw_where.as_deref().map(|s| s.len()).unwrap_or(0)
     );
 
     let mut emitted_sql: Option<String> = None;
@@ -605,7 +991,31 @@ pub async fn postgres_count_table(
         let client = pools.acquire(&parsed).await?;
         let cancel_token = client.cancel_token();
 
-        let (sql, params) = build_count_sql(&schema, &relation, &filters_vec)?;
+        // The Any-column expansion needs the column list. List_columns is
+        // cheap and gives us the canonical type strings.
+        let columns =
+            match timeout(QUERY_TIMEOUT, list_columns(&client, &schema, &relation)).await {
+                Ok(r) => r?,
+                Err(_) => {
+                    fire_cancel(cancel_token, sslmode).await;
+                    drop(client);
+                    return Err(AppError::postgres_with_code(
+                        "57014",
+                        format!(
+                            "count timed out resolving columns ({}s)",
+                            QUERY_TIMEOUT.as_secs()
+                        ),
+                    ));
+                }
+            };
+
+        let (sql, params) = build_count_sql(
+            &schema,
+            &relation,
+            opts.filter_tree.as_ref(),
+            opts.raw_where.as_deref(),
+            &columns,
+        )?;
         tracing::debug!("postgres_count_table sql: {sql}");
         emitted_sql = Some(sql.clone());
         emitted_params = Some(format_params(&params));
@@ -615,12 +1025,13 @@ pub async fn postgres_count_table(
             .map(|b| b.as_ref() as &(dyn ToSql + Sync))
             .collect();
 
+        let cancel_token_for_query = client.cancel_token();
         let query_started = Instant::now();
         let row = match timeout(QUERY_TIMEOUT, client.query_one(&sql, &param_refs)).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => return Err(AppError::from(e)),
             Err(_) => {
-                fire_cancel(cancel_token, sslmode).await;
+                fire_cancel(cancel_token_for_query, sslmode).await;
                 drop(client);
                 return Err(AppError::postgres_with_code(
                     "57014",
@@ -679,6 +1090,31 @@ mod tests {
         }
     }
 
+    fn col(name: &str, data_type: &str) -> DataColumn {
+        DataColumn {
+            name: name.into(),
+            data_type: data_type.into(),
+            ordinal_position: 1,
+            is_nullable: true,
+        }
+    }
+
+    fn cond(name: &str, op: Operator, value: Option<JsonValue>) -> FilterNode {
+        FilterNode::Condition(Condition {
+            column: ColumnRef::Named { name: name.into() },
+            op,
+            value,
+        })
+    }
+
+    fn any_cond(op: Operator, value: Option<JsonValue>) -> FilterNode {
+        FilterNode::Condition(Condition {
+            column: ColumnRef::AnyColumn,
+            op,
+            value,
+        })
+    }
+
     #[test]
     fn quote_ident_simple() {
         assert_eq!(quote_ident("public"), "\"public\"");
@@ -694,7 +1130,7 @@ mod tests {
     #[test]
     fn build_select_sql_simple() {
         let (sql, params) =
-            build_select_sql("public", "users", &[], &[], 200, 0).unwrap();
+            build_select_sql("public", "users", &[], None, None, &[], 200, 0).unwrap();
         assert!(sql.contains("\"public\".\"users\""));
         assert!(sql.contains("LIMIT 200"));
         assert!(sql.contains("OFFSET 0"));
@@ -707,35 +1143,296 @@ mod tests {
     fn build_select_sql_multi_column_order() {
         let order = vec![order_asc("country"), order_desc("created_at")];
         let (sql, _params) =
-            build_select_sql("public", "users", &order, &[], 200, 0).unwrap();
+            build_select_sql("public", "users", &order, None, None, &[], 200, 0).unwrap();
         assert!(sql.contains("ORDER BY \"country\" ASC, \"created_at\" DESC"));
     }
 
     #[test]
-    fn build_select_sql_eq_filter() {
-        let filters = vec![Filter::Eq {
-            column: "country".into(),
-            value: json!("CL"),
-        }];
-        let (sql, params) =
-            build_select_sql("public", "users", &[], &filters, 100, 0).unwrap();
-        assert!(sql.contains("WHERE \"country\" = $1"));
+    fn compile_filter_tree_empty_emits_no_where() {
+        let tree = FilterTree::default();
+        let mut params = Vec::new();
+        let body = compile_filter_tree(&tree, &[], &mut params).unwrap();
+        assert!(body.is_empty());
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn compile_filter_tree_single_condition() {
+        let tree = FilterTree {
+            children: vec![cond("country", Operator::Eq, Some(json!("CL")))],
+        };
+        let mut params = Vec::new();
+        let body = compile_filter_tree(&tree, &[], &mut params).unwrap();
+        assert_eq!(body, "\"country\" = $1");
         assert_eq!(params.len(), 1);
     }
 
     #[test]
-    fn build_select_sql_combined_filters() {
-        let filters = vec![
-            Filter::Eq {
-                column: "country".into(),
-                value: json!("CL"),
-            },
-            Filter::IsNull {
-                column: "deleted_at".into(),
-            },
+    fn compile_filter_tree_multiple_anded() {
+        let tree = FilterTree {
+            children: vec![
+                cond("country", Operator::Eq, Some(json!("CL"))),
+                cond("deleted_at", Operator::IsNull, None),
+            ],
+        };
+        let mut params = Vec::new();
+        let body = compile_filter_tree(&tree, &[], &mut params).unwrap();
+        assert_eq!(body, "\"country\" = $1 AND \"deleted_at\" IS NULL");
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn compile_filter_tree_or_group_parenthesized() {
+        let tree = FilterTree {
+            children: vec![
+                cond("country", Operator::Eq, Some(json!("CL"))),
+                FilterNode::OrGroup {
+                    children: vec![
+                        cond("status", Operator::Eq, Some(json!("active"))),
+                        cond("status", Operator::Eq, Some(json!("pending"))),
+                    ],
+                },
+            ],
+        };
+        let mut params = Vec::new();
+        let body = compile_filter_tree(&tree, &[], &mut params).unwrap();
+        assert_eq!(
+            body,
+            "\"country\" = $1 AND (\"status\" = $2 OR \"status\" = $3)"
+        );
+        assert_eq!(params.len(), 3);
+    }
+
+    #[test]
+    fn compile_filter_tree_or_group_with_one_child_still_parens() {
+        let tree = FilterTree {
+            children: vec![FilterNode::OrGroup {
+                children: vec![cond("a", Operator::Eq, Some(json!(1)))],
+            }],
+        };
+        let mut params = Vec::new();
+        let body = compile_filter_tree(&tree, &[], &mut params).unwrap();
+        assert_eq!(body, "(\"a\" = $1)");
+    }
+
+    #[test]
+    fn compile_filter_tree_rejects_nested_or_group() {
+        let tree = FilterTree {
+            children: vec![FilterNode::OrGroup {
+                children: vec![FilterNode::OrGroup {
+                    children: vec![cond("a", Operator::Eq, Some(json!(1)))],
+                }],
+            }],
+        };
+        let mut params = Vec::new();
+        let err = compile_filter_tree(&tree, &[], &mut params).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn compile_filter_tree_rejects_empty_in() {
+        let tree = FilterTree {
+            children: vec![cond("status", Operator::In, Some(json!([])))],
+        };
+        let mut params = Vec::new();
+        let err = compile_filter_tree(&tree, &[], &mut params).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn compile_filter_tree_rejects_missing_between_bounds() {
+        let tree = FilterTree {
+            children: vec![cond(
+                "x",
+                Operator::Between,
+                Some(json!({ "min": 1 })),
+            )],
+        };
+        let mut params = Vec::new();
+        let err = compile_filter_tree(&tree, &[], &mut params).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn predicate_for_eq() {
+        let mut params = Vec::new();
+        let sql = predicate_for("a", Operator::Eq, Some(&json!(1)), "", &mut params).unwrap();
+        assert_eq!(sql, "\"a\" = $1");
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn predicate_for_contains_uses_ilike_concat() {
+        let mut params = Vec::new();
+        let sql =
+            predicate_for("name", Operator::Contains, Some(&json!("ana")), "", &mut params)
+                .unwrap();
+        assert_eq!(sql, "\"name\" ILIKE '%' || $1 || '%'");
+    }
+
+    #[test]
+    fn predicate_for_starts_with() {
+        let mut params = Vec::new();
+        let sql =
+            predicate_for("name", Operator::StartsWith, Some(&json!("ana")), "", &mut params)
+                .unwrap();
+        assert_eq!(sql, "\"name\" ILIKE $1 || '%'");
+    }
+
+    #[test]
+    fn predicate_for_ends_with() {
+        let mut params = Vec::new();
+        let sql =
+            predicate_for("name", Operator::EndsWith, Some(&json!("ana")), "", &mut params)
+                .unwrap();
+        assert_eq!(sql, "\"name\" ILIKE '%' || $1");
+    }
+
+    #[test]
+    fn predicate_for_in_binds_each_element() {
+        let mut params = Vec::new();
+        let sql = predicate_for(
+            "status",
+            Operator::In,
+            Some(&json!(["a", "b", "c"])),
+            "",
+            &mut params,
+        )
+        .unwrap();
+        assert_eq!(sql, "\"status\" IN ($1, $2, $3)");
+        assert_eq!(params.len(), 3);
+    }
+
+    #[test]
+    fn predicate_for_not_in() {
+        let mut params = Vec::new();
+        let sql = predicate_for(
+            "status",
+            Operator::NotIn,
+            Some(&json!(["a", "b"])),
+            "",
+            &mut params,
+        )
+        .unwrap();
+        assert_eq!(sql, "\"status\" NOT IN ($1, $2)");
+    }
+
+    #[test]
+    fn predicate_for_between_binds_two() {
+        let mut params = Vec::new();
+        let sql = predicate_for(
+            "created_at",
+            Operator::Between,
+            Some(&json!({ "min": "2026-01-01", "max": "2026-04-30" })),
+            "",
+            &mut params,
+        )
+        .unwrap();
+        assert_eq!(sql, "\"created_at\" BETWEEN $1 AND $2");
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn predicate_for_is_null_uses_no_param() {
+        let mut params = Vec::new();
+        let sql = predicate_for("a", Operator::IsNull, None, "", &mut params).unwrap();
+        assert_eq!(sql, "\"a\" IS NULL");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn predicate_for_is_null_with_value_is_rejected() {
+        let mut params = Vec::new();
+        let err = predicate_for("a", Operator::IsNull, Some(&json!("x")), "", &mut params)
+            .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn predicate_for_applies_cast_suffix() {
+        let mut params = Vec::new();
+        let sql = predicate_for("a", Operator::Eq, Some(&json!("1")), "::text", &mut params)
+            .unwrap();
+        assert_eq!(sql, "\"a\"::text = $1");
+    }
+
+    #[test]
+    fn text_castable_handles_common_types() {
+        assert!(text_castable("text"));
+        assert!(text_castable("integer"));
+        assert!(text_castable("uuid"));
+        assert!(text_castable("jsonb"));
+        assert!(text_castable("timestamp without time zone"));
+        assert!(text_castable("numeric(10,2)"));
+        assert!(text_castable("text[]"));
+        assert!(!text_castable("bytea"));
+        assert!(!text_castable("public.my_composite_type"));
+        assert!(!text_castable("\"public\".\"my_t\""));
+    }
+
+    #[test]
+    fn expand_any_column_mixed_columns_skips_bytea_and_composite() {
+        let cols = vec![
+            col("name", "text"),
+            col("payload", "bytea"),
+            col("data", "public.my_composite_type"),
+            col("notes", "text"),
         ];
-        let (sql, params) =
-            build_select_sql("public", "users", &[], &filters, 100, 0).unwrap();
+        let mut params = Vec::new();
+        let body =
+            expand_any_column(Operator::Contains, Some(&json!("argus")), &cols, &mut params)
+                .unwrap();
+        assert_eq!(
+            body,
+            "(\"name\"::text ILIKE '%' || $1 || '%' OR \"notes\"::text ILIKE '%' || $1 || '%')"
+        );
+        // Only one parameter is bound — shared $1 across branches.
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn expand_any_column_only_bytea_compiles_to_false() {
+        let cols = vec![col("a", "bytea"), col("b", "bytea")];
+        let mut params = Vec::new();
+        let body =
+            expand_any_column(Operator::Eq, Some(&json!("x")), &cols, &mut params).unwrap();
+        assert_eq!(body, "(FALSE)");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn expand_any_column_rejects_disallowed_operator() {
+        let cols = vec![col("a", "text")];
+        let mut params = Vec::new();
+        let err = expand_any_column(
+            Operator::Between,
+            Some(&json!({ "min": 1, "max": 2 })),
+            &cols,
+            &mut params,
+        )
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn build_select_sql_filter_tree_eq_and_is_null() {
+        let tree = FilterTree {
+            children: vec![
+                cond("country", Operator::Eq, Some(json!("CL"))),
+                cond("deleted_at", Operator::IsNull, None),
+            ],
+        };
+        let (sql, params) = build_select_sql(
+            "public",
+            "users",
+            &[],
+            Some(&tree),
+            None,
+            &[],
+            100,
+            0,
+        )
+        .unwrap();
         assert!(
             sql.contains("WHERE \"country\" = $1 AND \"deleted_at\" IS NULL"),
             "sql was: {sql}"
@@ -744,121 +1441,72 @@ mod tests {
     }
 
     #[test]
-    fn build_select_sql_every_binary_operator_uses_correct_sql() {
-        let cases: Vec<(Filter, &str)> = vec![
-            (
-                Filter::Eq {
-                    column: "a".into(),
-                    value: json!(1),
-                },
-                "= $1",
-            ),
-            (
-                Filter::Ne {
-                    column: "a".into(),
-                    value: json!(1),
-                },
-                "<> $1",
-            ),
-            (
-                Filter::Lt {
-                    column: "a".into(),
-                    value: json!(1),
-                },
-                "< $1",
-            ),
-            (
-                Filter::Le {
-                    column: "a".into(),
-                    value: json!(1),
-                },
-                "<= $1",
-            ),
-            (
-                Filter::Gt {
-                    column: "a".into(),
-                    value: json!(1),
-                },
-                "> $1",
-            ),
-            (
-                Filter::Ge {
-                    column: "a".into(),
-                    value: json!(1),
-                },
-                ">= $1",
-            ),
-            (
-                Filter::Like {
-                    column: "a".into(),
-                    value: json!("x%"),
-                },
-                "LIKE $1",
-            ),
-            (
-                Filter::NotLike {
-                    column: "a".into(),
-                    value: json!("x%"),
-                },
-                "NOT LIKE $1",
-            ),
-        ];
-        for (filter, fragment) in cases {
-            let (sql, _params) =
-                build_select_sql("p", "t", &[], &[filter], 10, 0).unwrap();
-            assert!(
-                sql.contains(fragment),
-                "expected sql to contain `{fragment}`, got: {sql}"
-            );
-        }
-    }
-
-    #[test]
-    fn build_select_sql_between_binds_two_params() {
-        let filters = vec![Filter::Between {
-            column: "created_at".into(),
-            min: json!("2026-01-01"),
-            max: json!("2026-04-30"),
-        }];
-        let (sql, params) =
-            build_select_sql("p", "t", &[], &filters, 10, 0).unwrap();
-        assert!(
-            sql.contains("WHERE \"created_at\" BETWEEN $1 AND $2"),
-            "sql was: {sql}"
-        );
-        assert_eq!(params.len(), 2);
-    }
-
-    #[test]
-    fn build_select_sql_is_null_uses_no_param() {
-        let filters = vec![Filter::IsNull {
-            column: "deleted_at".into(),
-        }];
-        let (sql, params) =
-            build_select_sql("p", "t", &[], &filters, 10, 0).unwrap();
-        assert!(sql.contains("\"deleted_at\" IS NULL"));
+    fn build_select_sql_raw_where_emits_verbatim() {
+        let raw = "created_at > now() - interval '7 days' AND payload->>'source' = 'webhook'";
+        let (sql, params) = build_select_sql(
+            "public",
+            "events",
+            &[],
+            None,
+            Some(raw),
+            &[],
+            100,
+            0,
+        )
+        .unwrap();
+        assert!(sql.contains(&format!("WHERE {raw}")), "sql was: {sql}");
         assert!(params.is_empty());
     }
 
     #[test]
-    fn build_select_sql_is_not_null_uses_no_param() {
-        let filters = vec![Filter::IsNotNull {
-            column: "deleted_at".into(),
-        }];
-        let (sql, params) =
-            build_select_sql("p", "t", &[], &filters, 10, 0).unwrap();
-        assert!(sql.contains("\"deleted_at\" IS NOT NULL"));
-        assert!(params.is_empty());
+    fn build_select_sql_raw_where_trims_surrounding_whitespace() {
+        let (sql, _) = build_select_sql(
+            "public",
+            "t",
+            &[],
+            None,
+            Some("  a > 1  "),
+            &[],
+            10,
+            0,
+        )
+        .unwrap();
+        assert!(sql.contains("WHERE a > 1"));
+    }
+
+    #[test]
+    fn build_select_sql_rejects_both_filter_tree_and_raw_where() {
+        let tree = FilterTree::default();
+        let err = build_select_sql(
+            "public",
+            "t",
+            &[],
+            Some(&tree),
+            Some("a > 1"),
+            &[],
+            10,
+            0,
+        )
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 
     #[test]
     fn build_select_sql_quotes_identifiers_with_embedded_quote() {
-        let filters = vec![Filter::Eq {
-            column: "we\"ird".into(),
-            value: json!("v"),
-        }];
-        let (sql, _params) =
-            build_select_sql("we\"ird", "we\"ird_t", &[], &filters, 10, 0).unwrap();
+        let tree = FilterTree {
+            children: vec![cond("we\"ird", Operator::Eq, Some(json!("v")))],
+        };
+        let (sql, _params) = build_select_sql(
+            "we\"ird",
+            "we\"ird_t",
+            &[],
+            Some(&tree),
+            None,
+            &[],
+            10,
+            0,
+        )
+        .unwrap();
         assert!(
             sql.contains("\"we\"\"ird\".\"we\"\"ird_t\""),
             "sql was: {sql}"
@@ -868,7 +1516,7 @@ mod tests {
 
     #[test]
     fn build_count_sql_no_filters() {
-        let (sql, params) = build_count_sql("public", "users", &[]).unwrap();
+        let (sql, params) = build_count_sql("public", "users", None, None, &[]).unwrap();
         assert_eq!(
             sql,
             "SELECT COUNT(*)::bigint FROM \"public\".\"users\""
@@ -877,56 +1525,81 @@ mod tests {
     }
 
     #[test]
-    fn build_count_sql_with_filters_matches_params() {
-        let filters = vec![
-            Filter::Eq {
-                column: "country".into(),
-                value: json!("CL"),
-            },
-            Filter::IsNull {
-                column: "deleted_at".into(),
-            },
-        ];
-        let (sql, params) = build_count_sql("public", "users", &filters).unwrap();
+    fn build_count_sql_filter_tree_matches_params() {
+        let tree = FilterTree {
+            children: vec![
+                cond("country", Operator::Eq, Some(json!("CL"))),
+                cond("deleted_at", Operator::IsNull, None),
+            ],
+        };
+        let (sql, params) =
+            build_count_sql("public", "users", Some(&tree), None, &[]).unwrap();
         assert!(sql.contains("WHERE \"country\" = $1 AND \"deleted_at\" IS NULL"));
         assert_eq!(params.len(), 1);
     }
 
     #[test]
-    fn null_filter_value_rejected() {
-        let f = Filter::Eq {
-            column: "a".into(),
-            value: JsonValue::Null,
-        };
-        let mut params = Vec::new();
-        let err = predicate_for(&f, &mut params).unwrap_err();
-        assert!(matches!(err, AppError::Validation(_)));
+    fn build_count_sql_raw_where_inlines() {
+        let (sql, params) = build_count_sql(
+            "public",
+            "events",
+            None,
+            Some("created_at > now()"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            sql,
+            "SELECT COUNT(*)::bigint FROM \"public\".\"events\" WHERE created_at > now()"
+        );
+        assert!(params.is_empty());
     }
 
     #[test]
-    fn array_filter_value_rejected() {
-        let f = Filter::Eq {
-            column: "a".into(),
-            value: json!([1, 2]),
-        };
+    fn null_filter_value_rejected() {
         let mut params = Vec::new();
-        let err = predicate_for(&f, &mut params).unwrap_err();
+        let err =
+            predicate_for("a", Operator::Eq, Some(&JsonValue::Null), "", &mut params)
+                .unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
 
     #[test]
     fn unknown_op_is_rejected_at_deserialize_time() {
-        // Mirrors how the IPC command surfaces the same error: serde rejects
-        // any op outside the closed set, which we wrap in `AppError::Validation`.
-        let raw = json!({ "op": "DROP", "column": "x" });
-        let r: Result<Filter, _> = serde_json::from_value(raw);
+        // The closed Operator enum rejects anything outside the spec set.
+        let raw = json!("DROP");
+        let r: Result<Operator, _> = serde_json::from_value(raw);
         assert!(r.is_err());
-        let msg = r.unwrap_err().to_string();
-        assert!(
-            msg.contains("DROP")
-                || msg.to_ascii_lowercase().contains("unknown variant"),
-            "expected serde error to mention the offending op or 'unknown variant', got: {msg}"
+    }
+
+    #[test]
+    fn any_column_with_contains_compiles_via_expansion() {
+        let cols = vec![
+            col("name", "text"),
+            col("email", "text"),
+            col("notes", "text"),
+        ];
+        let tree = FilterTree {
+            children: vec![any_cond(Operator::Contains, Some(json!("argus")))],
+        };
+        let mut params = Vec::new();
+        let body = compile_filter_tree(&tree, &cols, &mut params).unwrap();
+        assert_eq!(
+            body,
+            "(\"name\"::text ILIKE '%' || $1 || '%' OR \"email\"::text ILIKE '%' || $1 || '%' OR \"notes\"::text ILIKE '%' || $1 || '%')"
         );
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn any_column_disallowed_operator_rejected_through_compile_path() {
+        let cols = vec![col("a", "text")];
+        let tree = FilterTree {
+            children: vec![any_cond(Operator::Gt, Some(json!(1)))],
+        };
+        let mut params = Vec::new();
+        let err = compile_filter_tree(&tree, &cols, &mut params).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 
     #[test]

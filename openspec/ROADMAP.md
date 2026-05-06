@@ -15,9 +15,9 @@ Plan de alto nivel de los `change` de OpenSpec que conforman la versión 1 (Post
 3.5. refine-schema-browser-ux   ✅ archivado (UX iteration sobre #3)
 4. view-table-data              ✅ archivado
 5. edit-table-data              ✅ archivado
-6. run-sql                      ← siguiente
-7. query-history
-8. table-structure-tab
+6. run-sql                      ✅ archivado
+7. query-history                ✅ archivado
+8. table-structure-tab          ✅ archivado
 ```
 
 Después del #5 ya tienes una herramienta utilizable para reemplazar TablePlus en tu uso diario.
@@ -140,7 +140,7 @@ Después del #5 ya tienes una herramienta utilizable para reemplazar TablePlus e
 
 ---
 
-### 8. `table-structure-tab`
+### 8. `table-structure-tab` ✅ archivado
 
 **Meta**: La pestaña de tabla tiene tres tabs internos como TablePlus: Data / Structure / Raw. Structure muestra columnas, tipos, defaults, PK, FKs, índices, triggers. Raw muestra el `CREATE TABLE` reconstruido.
 **Capacidades nuevas**: `postgres-table-structure`.
@@ -153,6 +153,7 @@ Después del #5 ya tienes una herramienta utilizable para reemplazar TablePlus e
 - Las funciones también obtienen una vista similar (subtabs Definition / Signature / Calls).
   **Out of scope**: editar el schema (alter table, create index) — eso sería `edit-postgres-schema` en V1.5.
   **Depende de**: 3.
+**Estado**: archivado en `openspec/changes/archive/2026-05-04-table-structure-tab`. Bug-fix de seguimiento `fix-table-structure-cache-on-relation-change` (cache de Structure que mostraba la tabla anterior al cambiar de tab) archivado en `openspec/changes/archive/2026-05-04-fix-table-structure-cache-on-relation-change`.
 
 ---
 
