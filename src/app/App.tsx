@@ -28,25 +28,28 @@ import { ConnectionsProvider } from "@/platform/connection-registry/useConnectio
 import { ConnectionGroupsProvider } from "@/platform/connection-registry/useConnectionGroups";
 import { ActivityLogProvider } from "@/platform/activity-log/store";
 import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
+import { ToastProvider } from "@/platform/toast";
 import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
 import { useQueryHistoryCommands } from "@/modules/query-history";
 
 export function App() {
   return (
     <ThemeProvider>
-      <PaletteProvider>
-        <TabsProvider>
-          <ConnectionGroupsProvider>
-            <ConnectionsProvider>
-              <ActivityLogProvider>
-                <PostgresFormProvider>
-                  <Shell />
-                </PostgresFormProvider>
-              </ActivityLogProvider>
-            </ConnectionsProvider>
-          </ConnectionGroupsProvider>
-        </TabsProvider>
-      </PaletteProvider>
+      <ToastProvider>
+        <PaletteProvider>
+          <TabsProvider>
+            <ConnectionGroupsProvider>
+              <ConnectionsProvider>
+                <ActivityLogProvider>
+                  <PostgresFormProvider>
+                    <Shell />
+                  </PostgresFormProvider>
+                </ActivityLogProvider>
+              </ConnectionsProvider>
+            </ConnectionGroupsProvider>
+          </TabsProvider>
+        </PaletteProvider>
+      </ToastProvider>
     </ThemeProvider>
   );
 }
@@ -99,18 +102,20 @@ function ShortcutBindings() {
   useCommandHotkeys();
 
   useShortcuts([
-    { key: "k", handler: () => palette.show() },
-    { key: "p", shift: true, handler: () => palette.show() },
-    { key: "p", handler: () => tablePalette.show() },
+    { key: "k", whenInInput: true, handler: () => palette.show() },
+    { key: "p", shift: true, whenInInput: true, handler: () => palette.show() },
+    { key: "p", whenInInput: true, handler: () => tablePalette.show() },
     {
       key: "w",
+      whenInInput: true,
       handler: () => {
         if (activeTabId) close(activeTabId);
       },
     },
-    { key: "\\", handler: toggleInspector },
+    { key: "\\", whenInInput: true, handler: toggleInspector },
     {
       key: ",",
+      whenInInput: true,
       handler: () =>
         open({
           id: SETTINGS_PLACEHOLDER_TAB_ID,
