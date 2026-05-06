@@ -33,6 +33,49 @@
   flex-direction: column;
 }
 
+.editorToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  height: 28px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex: 0 0 28px;
+}
+
+.toolbarButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background-color 80ms ease, color 80ms ease, border-color 80ms ease;
+}
+
+.toolbarButton:hover {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.toolbarButton:active {
+  background: var(--bg-elevated, var(--surface));
+}
+
+.kbd {
+  color: var(--text-subtle);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  margin-left: 2px;
+}
+
 .editorPlaceholder {
   display: flex;
   align-items: center;
@@ -83,6 +126,8 @@
 
 .runSummary {
   color: var(--text-muted);
+  flex: 1;
+  min-width: 0;
 }
 
 .resultBody {
