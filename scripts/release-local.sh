@@ -238,7 +238,11 @@ for TARGET in "${TARGETS[@]}"; do
   step "Building target: $TARGET ($ARCH)"
 
   # Tauri picks up these env vars to drive codesign + notarytool + updater signing.
-  run "TAURI_SIGNING_PRIVATE_KEY='$TAURI_SIGNING_PRIVATE_KEY' \
+  # We explicitly unset APPLE_CERTIFICATE{,_PASSWORD} so the keychain identity is used
+  # locally — if they leak in from .env.release, tauri-bundler tries to re-import the
+  # p12 and rejects any APPLE_SIGNING_IDENTITY that doesn't match it byte-for-byte.
+  run "env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD \
+       TAURI_SIGNING_PRIVATE_KEY='$TAURI_SIGNING_PRIVATE_KEY' \
        TAURI_SIGNING_PRIVATE_KEY_PASSWORD='$TAURI_SIGNING_PRIVATE_KEY_PASSWORD' \
        APPLE_ID='$APPLE_ID' \
        APPLE_PASSWORD='$APPLE_PASSWORD' \
