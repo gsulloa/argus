@@ -37,6 +37,13 @@ if [ -f "$ROOT/.env.release" ]; then
   set +a
 fi
 
+# Expand leading "~/" in TAURI_SIGNING_PRIVATE_KEY — bash does not expand tildes
+# inside quoted values when sourcing, and tauri-cli treats unexpanded paths as
+# raw base64 content, which fails to decode.
+if [[ "${TAURI_SIGNING_PRIVATE_KEY:-}" == "~/"* ]]; then
+  TAURI_SIGNING_PRIVATE_KEY="${HOME}/${TAURI_SIGNING_PRIVATE_KEY:2}"
+fi
+
 # ---------- defaults + flags --------------------------------------------------
 
 SKIP_BUMP=0
