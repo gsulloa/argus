@@ -138,8 +138,14 @@ if [ "$NO_UPLOAD" = "0" ]; then
 fi
 
 # Verify the Developer ID Application identity is in a keychain.
-if ! security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
+IDENTITY_MATCHES="$(security find-identity -v -p codesigning | grep -c "Developer ID Application" || true)"
+if [ "$IDENTITY_MATCHES" -eq 0 ]; then
   die "No 'Developer ID Application' identity found in keychain. Import the .p12 first."
+fi
+if [ "$IDENTITY_MATCHES" -gt 1 ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  c_red "Multiple 'Developer ID Application' identities found in keychain:"
+  security find-identity -v -p codesigning | grep "Developer ID Application" >&2
+  die "Set APPLE_SIGNING_IDENTITY in .env.release to the desired SHA-1 hash to disambiguate."
 fi
 
 # Verify rustup targets are installed.
@@ -237,7 +243,7 @@ for TARGET in "${TARGETS[@]}"; do
        APPLE_ID='$APPLE_ID' \
        APPLE_PASSWORD='$APPLE_PASSWORD' \
        APPLE_TEAM_ID='$APPLE_TEAM_ID' \
-       APPLE_SIGNING_IDENTITY='Developer ID Application' \
+       APPLE_SIGNING_IDENTITY='${APPLE_SIGNING_IDENTITY:-Developer ID Application}' \
        pnpm tauri build --target '$TARGET'"
 
   BUNDLE_DIR="src-tauri/target/$TARGET/release/bundle"
