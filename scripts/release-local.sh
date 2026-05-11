@@ -37,6 +37,13 @@ if [ -f "$ROOT/.env.release" ]; then
   set +a
 fi
 
+# Expand leading "~/" in TAURI_SIGNING_PRIVATE_KEY — bash does not expand tildes
+# inside quoted values when sourcing, and tauri-cli treats unexpanded paths as
+# raw base64 content, which fails to decode.
+if [[ "${TAURI_SIGNING_PRIVATE_KEY:-}" == "~/"* ]]; then
+  TAURI_SIGNING_PRIVATE_KEY="${HOME}/${TAURI_SIGNING_PRIVATE_KEY:2}"
+fi
+
 # ---------- defaults + flags --------------------------------------------------
 
 SKIP_BUMP=0
@@ -138,8 +145,14 @@ if [ "$NO_UPLOAD" = "0" ]; then
 fi
 
 # Verify the Developer ID Application identity is in a keychain.
-if ! security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
+IDENTITY_MATCHES="$(security find-identity -v -p codesigning | grep -c "Developer ID Application" || true)"
+if [ "$IDENTITY_MATCHES" -eq 0 ]; then
   die "No 'Developer ID Application' identity found in keychain. Import the .p12 first."
+fi
+if [ "$IDENTITY_MATCHES" -gt 1 ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  c_red "Multiple 'Developer ID Application' identities found in keychain:"
+  security find-identity -v -p codesigning | grep "Developer ID Application" >&2
+  die "Set APPLE_SIGNING_IDENTITY in .env.release to the desired SHA-1 hash to disambiguate."
 fi
 
 # Verify rustup targets are installed.
@@ -232,12 +245,16 @@ for TARGET in "${TARGETS[@]}"; do
   step "Building target: $TARGET ($ARCH)"
 
   # Tauri picks up these env vars to drive codesign + notarytool + updater signing.
-  run "TAURI_SIGNING_PRIVATE_KEY='$TAURI_SIGNING_PRIVATE_KEY' \
+  # We explicitly unset APPLE_CERTIFICATE{,_PASSWORD} so the keychain identity is used
+  # locally — if they leak in from .env.release, tauri-bundler tries to re-import the
+  # p12 and rejects any APPLE_SIGNING_IDENTITY that doesn't match it byte-for-byte.
+  run "env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD \
+       TAURI_SIGNING_PRIVATE_KEY='$TAURI_SIGNING_PRIVATE_KEY' \
        TAURI_SIGNING_PRIVATE_KEY_PASSWORD='$TAURI_SIGNING_PRIVATE_KEY_PASSWORD' \
        APPLE_ID='$APPLE_ID' \
        APPLE_PASSWORD='$APPLE_PASSWORD' \
        APPLE_TEAM_ID='$APPLE_TEAM_ID' \
-       APPLE_SIGNING_IDENTITY='Developer ID Application' \
+       APPLE_SIGNING_IDENTITY='${APPLE_SIGNING_IDENTITY:-Developer ID Application}' \
        pnpm tauri build --target '$TARGET'"
 
   BUNDLE_DIR="src-tauri/target/$TARGET/release/bundle"

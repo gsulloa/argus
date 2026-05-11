@@ -1,6 +1,6 @@
 [package]
 name = "argus"
-version = "0.1.0"
+version = "0.1.4"
 description = "Argus desktop"
 authors = ["Argus contributors"]
 edition = "2021"
