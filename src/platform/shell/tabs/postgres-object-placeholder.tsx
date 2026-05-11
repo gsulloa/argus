@@ -98,7 +98,7 @@ function FunctionSignatureLine({
   return null;
 }
 
-function PostgresObjectPlaceholderTab({ tab }: { tab: Tab }) {
+function PostgresObjectPlaceholderTab({ tab }: { tab: Tab; active: boolean }) {
   if (!isPayload(tab.payload)) {
     return <div className={styles.root}>Invalid placeholder payload.</div>;
   }

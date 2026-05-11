@@ -3,7 +3,7 @@ import styles from "./welcome.module.css";
 
 export const WELCOME_KIND = "welcome";
 
-function WelcomeTab() {
+function WelcomeTab(_props: { tab: unknown; active: boolean }) {
   return (
     <div className={styles.root}>
       <h1>Welcome to Argus</h1>
