@@ -78,12 +78,10 @@ pub async fn postgres_list_columns_bulk(
 ) -> AppResult<ColumnsBulkResult> {
     let started = Instant::now();
     let activity_origin = origin.unwrap_or_default();
-    let parsed = Uuid::parse_str(&id)
-        .map_err(|e| AppError::Validation(format!("bad uuid: {e}")))?;
+    let parsed =
+        Uuid::parse_str(&id).map_err(|e| AppError::Validation(format!("bad uuid: {e}")))?;
 
-    tracing::info!(
-        "postgres_list_columns_bulk: id={parsed} schema={schema}"
-    );
+    tracing::info!("postgres_list_columns_bulk: id={parsed} schema={schema}");
 
     let inner: AppResult<ColumnsBulkResult> = async {
         let sslmode = pools.sslmode_for(&parsed).await?;

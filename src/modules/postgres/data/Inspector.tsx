@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { AlertTriangle } from "lucide-react";
 import { isCellEnvelope, type CellEnvelope, type CellValue, type DataColumn, type EditValue } from "./types";
 import { categorize, isMonoCategory } from "./typeHelpers";
 import type { UseEditBufferResult } from "./useEditBuffer";
 import { looksLikeBytea } from "./EditableCell";
+import { validateJsonInput, hasSmartQuotes } from "./jsonEditValidation";
 import styles from "./Inspector.module.css";
 
 interface Props {
@@ -177,6 +179,8 @@ function InspectorEditableField({
   onChange(next: EditValue): void;
 }) {
   const [text, setText] = useState<string>(() => valueToText(value));
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  const [jsonWarning, setJsonWarning] = useState<boolean>(false);
   // Re-sync `text` when `value` changes from an external source (e.g. the
   // user edited the same cell in the grid). The `key` on this field already
   // covers cross-row remounts; this effect handles same-row external updates.
@@ -229,14 +233,58 @@ function InspectorEditableField({
   }
 
   if (isJson || (typeof value === "string" && value.length > 100)) {
+    const textareaClassName = [
+      styles.editor,
+      styles.editorMono,
+      isJson && jsonError ? styles.jsonErrorBorder : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     return (
-      <textarea
-        className={`${styles.editor} ${styles.editorMono}`}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={() => onChange(text)}
-        rows={4}
-      />
+      <div className={styles.jsonEditorWrapper}>
+        <textarea
+          className={textareaClassName}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            setJsonError(null);
+            setJsonWarning(false);
+          }}
+          onBlur={() => {
+            if (!isJson) {
+              onChange(text);
+              return;
+            }
+            const result = validateJsonInput(text);
+            if (!result.ok) {
+              setJsonError(result.error);
+              setJsonWarning(false);
+              return;
+            }
+            setJsonError(null);
+            setJsonWarning(hasSmartQuotes(result.canonical));
+            onChange(result.canonical === "" ? null : result.canonical);
+          }}
+          rows={4}
+          {...(isJson
+            ? {
+                autoCorrect: "off",
+                autoCapitalize: "off",
+                spellCheck: false,
+                autoComplete: "off",
+              }
+            : {})}
+        />
+        {isJson && jsonError && (
+          <div className={styles.jsonError}>{jsonError}</div>
+        )}
+        {isJson && jsonWarning && !jsonError && (
+          <div className={styles.jsonWarning}>
+            <AlertTriangle size={11} />
+            Contains smart quotes
+          </div>
+        )}
+      </div>
     );
   }
 

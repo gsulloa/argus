@@ -16,8 +16,8 @@ pub fn parse_postgres_url(input: &str) -> AppResult<ParsedUrl> {
         return Err(AppError::Validation("URL must not be empty".into()));
     }
 
-    let url = Url::parse(trimmed)
-        .map_err(|e| AppError::Validation(format!("malformed URL: {e}")))?;
+    let url =
+        Url::parse(trimmed).map_err(|e| AppError::Validation(format!("malformed URL: {e}")))?;
 
     match url.scheme() {
         "postgres" | "postgresql" => {}

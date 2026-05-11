@@ -15,9 +15,9 @@ use deadpool_postgres::Object as PgObject;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tauri::{AppHandle, Manager, State};
-use tokio::time::timeout;
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime, PrimitiveDateTime, Time};
+use tokio::time::timeout;
 use tokio_postgres::types::Type as PgType;
 use uuid::Uuid;
 
@@ -284,9 +284,7 @@ fn cell_to_json(
             Ok(Some(v)) => {
                 // RFC 3339 is a strict subset of ISO 8601 and is the canonical
                 // representation Postgres' clients expect for timestamptz.
-                return JsonValue::String(
-                    v.format(&Rfc3339).unwrap_or_else(|_| v.to_string()),
-                );
+                return JsonValue::String(v.format(&Rfc3339).unwrap_or_else(|_| v.to_string()));
             }
             Ok(None) => return JsonValue::Null,
             Err(_) => {}
@@ -393,11 +391,7 @@ fn synthesize_command_tag(sql: &str, affected: u64) -> String {
 /// rows result; everything else as `affected`. The classifier here is only
 /// used to short-circuit read-only enforcement; the actual SELECT-vs-execute
 /// branching uses the existence of result columns.
-async fn run_one(
-    client: &PgObject,
-    sql: &str,
-    is_read_only: bool,
-) -> AppResult<RunSqlResult> {
+async fn run_one(client: &PgObject, sql: &str, is_read_only: bool) -> AppResult<RunSqlResult> {
     if is_read_only && is_mutating_sql(sql) {
         return Err(AppError::Validation("connection is read-only".into()));
     }
@@ -876,12 +870,24 @@ mod tests {
 
     #[test]
     fn synthesize_tag_matches_pg_shapes() {
-        assert_eq!(synthesize_command_tag("INSERT INTO t VALUES (1)", 3), "INSERT 0 3");
+        assert_eq!(
+            synthesize_command_tag("INSERT INTO t VALUES (1)", 3),
+            "INSERT 0 3"
+        );
         assert_eq!(synthesize_command_tag("UPDATE t SET x=1", 5), "UPDATE 5");
         assert_eq!(synthesize_command_tag("DELETE FROM t", 0), "DELETE 0");
-        assert_eq!(synthesize_command_tag("CREATE TABLE t (id int)", 0), "CREATE");
-        assert_eq!(synthesize_command_tag("SET search_path TO public", 0), "SET");
-        assert_eq!(synthesize_command_tag("/* x */ INSERT INTO t VALUES (1)", 1), "INSERT 0 1");
+        assert_eq!(
+            synthesize_command_tag("CREATE TABLE t (id int)", 0),
+            "CREATE"
+        );
+        assert_eq!(
+            synthesize_command_tag("SET search_path TO public", 0),
+            "SET"
+        );
+        assert_eq!(
+            synthesize_command_tag("/* x */ INSERT INTO t VALUES (1)", 1),
+            "INSERT 0 1"
+        );
         assert_eq!(synthesize_command_tag("", 0), "EXECUTED 0");
     }
 
@@ -928,28 +934,14 @@ mod tests {
             truncated: false,
             query_ms: 5,
         };
-        let entry1 = build_history_entry_ok(
-            cid,
-            "local-pg",
-            "SELECT 1",
-            Origin::User,
-            100,
-            5,
-            &r_rows,
-        );
+        let entry1 =
+            build_history_entry_ok(cid, "local-pg", "SELECT 1", Origin::User, 100, 5, &r_rows);
         query_history::insert_entry(&db, entry1);
 
         // Statement 2: err with SQLSTATE.
         let err = AppError::postgres_with_code("42601", "syntax error at or near \"SELEC\"");
-        let entry2 = build_history_entry_err(
-            cid,
-            "local-pg",
-            "SELEC 2",
-            Origin::User,
-            200,
-            3,
-            &err,
-        );
+        let entry2 =
+            build_history_entry_err(cid, "local-pg", "SELEC 2", Origin::User, 200, 3, &err);
         query_history::insert_entry(&db, entry2);
 
         // Statement 3: skipped — postgres_run_sql_many calls neither helper.

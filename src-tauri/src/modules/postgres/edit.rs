@@ -17,6 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::modules::activity_log::{
     emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
 };
+use crate::modules::postgres::binding::{bind_edit_value, ColumnTypeIndex};
 use crate::modules::postgres::data::{
     fire_cancel, list_columns, process_row, quote_ident, DataColumn,
 };
@@ -52,68 +53,23 @@ pub enum EditOp {
     },
 }
 
-
-// --------------------------------------------------------------------------
-// JSON value → ToSql conversion
-// --------------------------------------------------------------------------
-
-/// Convert any JSON value to an `Option<String>` bound parameter. We always
-/// bind as text and rely on the per-placeholder `::<data_type>` cast in the
-/// generated SQL to do the type conversion server-side. This works around
-/// `tokio-postgres`' default bind-type inference, which without optional
-/// features only matches `String`/`&str` to text-family columns and would
-/// reject every non-text column with `error serializing parameter X`.
-fn json_to_param(v: &JsonValue) -> Box<dyn ToSql + Sync + Send> {
-    let opt: Option<String> = match v {
-        JsonValue::Null => None,
-        JsonValue::Bool(b) => Some(b.to_string()),
-        JsonValue::Number(n) => Some(n.to_string()),
-        JsonValue::String(s) => Some(s.clone()),
-        JsonValue::Array(_) | JsonValue::Object(_) => {
-            Some(serde_json::to_string(v).unwrap_or_default())
-        }
-    };
-    Box::new(opt)
-}
-
 // --------------------------------------------------------------------------
 // SQL builder
 // --------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize)]
-pub struct BuiltStatement {
-    pub sql: String,
-    pub params: Vec<JsonValue>,
-}
-
-/// Look up a column's `data_type` (Postgres `format_type` form) by name.
-/// Returns `None` when the column isn't in the relation's metadata — the
-/// caller decides how to react (typically: reject as Validation).
-fn data_type_for<'a>(columns: &'a [DataColumn], name: &str) -> Option<&'a str> {
-    columns
-        .iter()
-        .find(|c| c.name == name)
-        .map(|c| c.data_type.as_str())
-}
 
 /// Build the parameterized SQL for one `EditOp`. UPDATE and INSERT wrap their
 /// `RETURNING *` in `row_to_json(_argus_r)::text` so the apply command can
 /// decode the refreshed row using the existing data-module pipeline.
 ///
-/// Each placeholder is emitted with an explicit `::<data_type>` cast so that
-/// `tokio-postgres` (which by default only binds `String` to text-family
-/// columns) can pass values through unchanged and let Postgres convert them
-/// server-side. All values therefore travel as `Option<String>` — see
-/// `json_to_param`.
+/// Uses type-aware binding: each column's Postgres `data_type` drives whether
+/// the value is bound as a native Rust primitive (plain `$N`) or as a `String`
+/// with a server-side cast (`$N::<type>`). See `binding::bind_edit_value`.
 ///
 /// Validation is performed inline:
 /// - update: non-empty `pk` covering all PK columns, non-empty `changes`
 /// - insert: non-empty `values`
 /// - delete: non-empty `pk` covering all PK columns
 /// - every referenced column MUST exist in `columns` (else `AppError::Validation`)
-///
-/// PK coverage is checked against `pk_columns` when the caller supplies it;
-/// when it is empty (no PK), update/delete are rejected upstream.
 pub fn build_edit_sql(
     schema: &str,
     relation: &str,
@@ -122,45 +78,45 @@ pub fn build_edit_sql(
     pk_columns: &[String],
 ) -> AppResult<(String, Vec<Box<dyn ToSql + Sync + Send>>)> {
     let qualified = format!("{}.{}", quote_ident(schema), quote_ident(relation));
-
-    let placeholder = |idx: usize, dtype: &str| format!("${idx}::{dtype}");
-    let resolve_type = |col: &str| -> AppResult<&str> {
-        data_type_for(columns, col).ok_or_else(|| {
-            AppError::Validation(format!(
-                "unknown column \"{col}\" on {schema}.{relation}"
-            ))
-        })
-    };
+    let type_idx = ColumnTypeIndex::from_iter(
+        columns
+            .iter()
+            .map(|c| (c.name.as_str(), c.data_type.as_str())),
+    );
 
     match op {
         EditOp::Update { pk, changes } => {
             if changes.is_empty() {
-                return Err(AppError::Validation(
-                    "update op has empty `changes`".into(),
-                ));
+                return Err(AppError::Validation("update op has empty `changes`".into()));
             }
             check_pk_coverage("update", pk, pk_columns)?;
             let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
 
             let mut set_parts: Vec<String> = Vec::with_capacity(changes.len());
             for (col, val) in changes.iter() {
-                let dtype = resolve_type(col)?;
-                params.push(json_to_param(val));
+                let kind = type_idx.kind_for(col).ok_or_else(|| {
+                    AppError::Validation(format!("unknown column \"{col}\" on {schema}.{relation}"))
+                })?;
+                let bound = bind_edit_value(val, col, kind)?;
+                params.push(bound.value);
                 set_parts.push(format!(
                     "{} = {}",
                     quote_ident(col),
-                    placeholder(params.len(), dtype),
+                    bound.placeholder.render(params.len()),
                 ));
             }
 
             let mut where_parts: Vec<String> = Vec::with_capacity(pk.len());
             for (col, val) in pk.iter() {
-                let dtype = resolve_type(col)?;
-                params.push(json_to_param(val));
+                let kind = type_idx.kind_for(col).ok_or_else(|| {
+                    AppError::Validation(format!("unknown column \"{col}\" on {schema}.{relation}"))
+                })?;
+                let bound = bind_edit_value(val, col, kind)?;
+                params.push(bound.value);
                 where_parts.push(format!(
                     "{} = {}",
                     quote_ident(col),
-                    placeholder(params.len(), dtype),
+                    bound.placeholder.render(params.len()),
                 ));
             }
 
@@ -177,18 +133,19 @@ pub fn build_edit_sql(
         }
         EditOp::Insert { values } => {
             if values.is_empty() {
-                return Err(AppError::Validation(
-                    "insert op has empty `values`".into(),
-                ));
+                return Err(AppError::Validation("insert op has empty `values`".into()));
             }
             let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
             let mut col_parts: Vec<String> = Vec::with_capacity(values.len());
             let mut val_parts: Vec<String> = Vec::with_capacity(values.len());
             for (col, val) in values.iter() {
-                let dtype = resolve_type(col)?;
-                params.push(json_to_param(val));
+                let kind = type_idx.kind_for(col).ok_or_else(|| {
+                    AppError::Validation(format!("unknown column \"{col}\" on {schema}.{relation}"))
+                })?;
+                let bound = bind_edit_value(val, col, kind)?;
+                params.push(bound.value);
                 col_parts.push(quote_ident(col));
-                val_parts.push(placeholder(params.len(), dtype));
+                val_parts.push(bound.placeholder.render(params.len()));
             }
             let inner = format!(
                 "INSERT INTO {qualified} ({cols}) VALUES ({vals}) RETURNING *",
@@ -206,12 +163,15 @@ pub fn build_edit_sql(
             let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
             let mut where_parts: Vec<String> = Vec::with_capacity(pk.len());
             for (col, val) in pk.iter() {
-                let dtype = resolve_type(col)?;
-                params.push(json_to_param(val));
+                let kind = type_idx.kind_for(col).ok_or_else(|| {
+                    AppError::Validation(format!("unknown column \"{col}\" on {schema}.{relation}"))
+                })?;
+                let bound = bind_edit_value(val, col, kind)?;
+                params.push(bound.value);
                 where_parts.push(format!(
                     "{} = {}",
                     quote_ident(col),
-                    placeholder(params.len(), dtype),
+                    bound.placeholder.render(params.len()),
                 ));
             }
             let sql = format!(
@@ -234,8 +194,7 @@ fn check_pk_coverage(
         )));
     }
     if !pk_columns.is_empty() {
-        let missing: Vec<&String> =
-            pk_columns.iter().filter(|c| !pk.contains_key(*c)).collect();
+        let missing: Vec<&String> = pk_columns.iter().filter(|c| !pk.contains_key(*c)).collect();
         if !missing.is_empty() {
             let joined = missing
                 .iter()
@@ -311,8 +270,8 @@ pub async fn postgres_table_primary_key(
 ) -> AppResult<TableEditMetadata> {
     let started = Instant::now();
     let activity_origin = origin.unwrap_or_default();
-    let parsed = Uuid::parse_str(&id)
-        .map_err(|e| AppError::Validation(format!("bad uuid: {e}")))?;
+    let parsed =
+        Uuid::parse_str(&id).map_err(|e| AppError::Validation(format!("bad uuid: {e}")))?;
 
     let inner: AppResult<TableEditMetadata> = async {
         let sslmode = pools.sslmode_for(&parsed).await?;
@@ -320,7 +279,12 @@ pub async fn postgres_table_primary_key(
         let cancel_token = client.cancel_token();
 
         // PK lookup.
-        let pk_rows = match timeout(QUERY_TIMEOUT, client.query(SQL_PK_LOOKUP, &[&schema, &relation])).await {
+        let pk_rows = match timeout(
+            QUERY_TIMEOUT,
+            client.query(SQL_PK_LOOKUP, &[&schema, &relation]),
+        )
+        .await
+        {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => return Err(AppError::from(e)),
             Err(_) => {
@@ -339,9 +303,7 @@ pub async fn postgres_table_primary_key(
         };
 
         // Enum lookup.
-        let enum_rows = client
-            .query(SQL_ENUM_LOOKUP, &[&schema, &relation])
-            .await?;
+        let enum_rows = client.query(SQL_ENUM_LOOKUP, &[&schema, &relation]).await?;
         let mut enums: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for row in enum_rows {
             let col: String = row.get(0);
@@ -359,8 +321,7 @@ pub async fn postgres_table_primary_key(
             .connection(parsed);
     match &inner {
         Ok(r) => {
-            let count = r.pk_columns.as_ref().map(|v| v.len()).unwrap_or(0)
-                + r.enums.len();
+            let count = r.pk_columns.as_ref().map(|v| v.len()).unwrap_or(0) + r.enums.len();
             emit_activity(
                 &app,
                 builder.ok(Some(Metric::Items {
@@ -414,8 +375,8 @@ pub async fn postgres_apply_table_edits(
 ) -> AppResult<ApplyEditsOutcome> {
     let started = Instant::now();
     let activity_origin = origin.unwrap_or_default();
-    let parsed = Uuid::parse_str(&id)
-        .map_err(|e| AppError::Validation(format!("bad uuid: {e}")))?;
+    let parsed =
+        Uuid::parse_str(&id).map_err(|e| AppError::Validation(format!("bad uuid: {e}")))?;
 
     if edits.is_empty() {
         return Err(AppError::Validation("no edits to apply".into()));
@@ -442,11 +403,8 @@ pub async fn postgres_apply_table_edits(
         let cancel_token = client.cancel_token();
 
         // PK lookup once for validation + refreshed_rows pk extraction.
-        let pk_rows = client
-            .query(SQL_PK_LOOKUP, &[&schema, &relation])
-            .await?;
-        let pk_columns: Vec<String> =
-            pk_rows.iter().map(|r| r.get::<_, String>(0)).collect();
+        let pk_rows = client.query(SQL_PK_LOOKUP, &[&schema, &relation]).await?;
+        let pk_columns: Vec<String> = pk_rows.iter().map(|r| r.get::<_, String>(0)).collect();
 
         // Column metadata once for refreshed_rows decoding AND for the SQL
         // builder's per-placeholder cast types.
@@ -458,7 +416,13 @@ pub async fn postgres_apply_table_edits(
         let mut built: Vec<(String, Vec<Box<dyn ToSql + Sync + Send>>)> =
             Vec::with_capacity(edits.len());
         for op in edits.iter() {
-            built.push(build_edit_sql(&schema, &relation, op, &columns, &pk_columns)?);
+            built.push(build_edit_sql(
+                &schema,
+                &relation,
+                op,
+                &columns,
+                &pk_columns,
+            )?);
         }
 
         // Activity-log SQL: concatenate all op SQLs, separated by "; ", capped.
@@ -480,8 +444,10 @@ pub async fn postgres_apply_table_edits(
             let mut rows_affected: u64 = 0;
 
             for (idx, ((sql, params), op)) in built.iter().zip(edits.iter()).enumerate() {
-                let param_refs: Vec<&(dyn ToSql + Sync)> =
-                    params.iter().map(|b| b.as_ref() as &(dyn ToSql + Sync)).collect();
+                let param_refs: Vec<&(dyn ToSql + Sync)> = params
+                    .iter()
+                    .map(|b| b.as_ref() as &(dyn ToSql + Sync))
+                    .collect();
 
                 match op {
                     EditOp::Update { .. } | EditOp::Insert { .. } => {
@@ -491,16 +457,10 @@ pub async fn postgres_apply_table_edits(
                                 rows_affected += rows.len() as u64;
                                 if let Some(row) = rows.first() {
                                     let json_text: String = row.get(0);
-                                    let processed = process_row(
-                                        &json_text,
-                                        &columns,
-                                        &mut truncated_columns,
-                                    )?;
-                                    let pk_map = extract_pk_from_row(
-                                        &columns,
-                                        &processed,
-                                        &pk_columns,
-                                    );
+                                    let processed =
+                                        process_row(&json_text, &columns, &mut truncated_columns)?;
+                                    let pk_map =
+                                        extract_pk_from_row(&columns, &processed, &pk_columns);
                                     refreshed_rows.push(RefreshedRow {
                                         pk: pk_map,
                                         row: Some(processed),
@@ -592,11 +552,14 @@ pub async fn postgres_apply_table_edits(
         builder = builder.sql(sql);
     }
     let outcome_result: AppResult<ApplyEditsOutcome> = match inner {
-        Ok((ApplyEditsOutcome::Ok {
-            committed,
-            refreshed_rows,
-            query_ms,
-        }, rows_affected)) => {
+        Ok((
+            ApplyEditsOutcome::Ok {
+                committed,
+                refreshed_rows,
+                query_ms,
+            },
+            rows_affected,
+        )) => {
             emit_activity(
                 &app,
                 builder.ok(Some(Metric::Rows {
@@ -688,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn build_update_emits_casts_on_set_and_where() {
+    fn build_update_native_columns_emit_plain_placeholders() {
         let op = EditOp::Update {
             pk: map_of(&[("id", json!(1))]),
             changes: map_of(&[("name", json!("ana"))]),
@@ -697,8 +660,10 @@ mod tests {
         let (sql, params) =
             build_edit_sql("public", "users", &op, &cols, &pk_cols(&["id"])).unwrap();
         assert!(sql.contains("UPDATE \"public\".\"users\""));
-        assert!(sql.contains("SET \"name\" = $1::text"), "sql: {sql}");
-        assert!(sql.contains("WHERE \"id\" = $2::bigint"), "sql: {sql}");
+        assert!(sql.contains("SET \"name\" = $1"), "sql: {sql}");
+        assert!(!sql.contains("$1::"), "no cast expected for text: {sql}");
+        assert!(sql.contains("WHERE \"id\" = $2"), "sql: {sql}");
+        assert!(!sql.contains("$2::"), "no cast expected for bigint: {sql}");
         assert!(sql.contains("RETURNING *"));
         assert!(sql.contains("WITH _argus_r AS"));
         assert_eq!(params.len(), 2);
@@ -728,6 +693,14 @@ mod tests {
         let name_pos = sql.find("\"name\"").unwrap();
         assert!(age_pos < email_pos);
         assert!(email_pos < name_pos);
+        // All columns are native-bind kinds (integer/text) — no parameter casts.
+        assert!(
+            !sql.contains("$1::")
+                && !sql.contains("$2::")
+                && !sql.contains("$3::")
+                && !sql.contains("$4::"),
+            "no param casts expected: {sql}"
+        );
         assert_eq!(params.len(), 4);
     }
 
@@ -738,8 +711,7 @@ mod tests {
             changes: BTreeMap::new(),
         };
         let cols = columns_of(&[("id", "integer")]);
-        let err =
-            build_edit_sql("public", "users", &op, &cols, &pk_cols(&["id"])).unwrap_err();
+        let err = build_edit_sql("public", "users", &op, &cols, &pk_cols(&["id"])).unwrap_err();
         assert!(matches!(err, AppError::Validation(ref m) if m.contains("changes")));
     }
 
@@ -775,8 +747,7 @@ mod tests {
             changes: map_of(&[("ghost", json!("x"))]),
         };
         let cols = columns_of(&[("id", "integer")]);
-        let err =
-            build_edit_sql("public", "t", &op, &cols, &pk_cols(&["id"])).unwrap_err();
+        let err = build_edit_sql("public", "t", &op, &cols, &pk_cols(&["id"])).unwrap_err();
         match err {
             AppError::Validation(m) => assert!(m.contains("ghost"), "msg: {m}"),
             other => panic!("expected validation, got {other:?}"),
@@ -784,14 +755,15 @@ mod tests {
     }
 
     #[test]
-    fn build_insert_uses_only_supplied_columns_with_cast() {
+    fn build_insert_text_column_no_cast() {
         let op = EditOp::Insert {
             values: map_of(&[("name", json!("ana"))]),
         };
         let cols = columns_of(&[("id", "bigint"), ("name", "text")]);
         let (sql, params) = build_edit_sql("public", "users", &op, &cols, &[]).unwrap();
         assert!(sql.contains("INSERT INTO \"public\".\"users\" (\"name\")"));
-        assert!(sql.contains("VALUES ($1::text)"), "sql: {sql}");
+        assert!(sql.contains("VALUES ($1)"), "sql: {sql}");
+        assert!(!sql.contains("$1::"), "no cast for text: {sql}");
         assert!(sql.contains("RETURNING *"));
         assert_eq!(params.len(), 1);
     }
@@ -807,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn build_delete_with_composite_pk_casts_each() {
+    fn build_delete_integer_pk_no_cast() {
         let op = EditOp::Delete {
             pk: map_of(&[("tenant_id", json!(5)), ("user_id", json!(7))]),
         };
@@ -822,9 +794,10 @@ mod tests {
         .unwrap();
         assert!(sql.contains("DELETE FROM \"public\".\"t\""));
         assert!(
-            sql.contains("WHERE \"tenant_id\" = $1::integer AND \"user_id\" = $2::integer"),
+            sql.contains("WHERE \"tenant_id\" = $1 AND \"user_id\" = $2"),
             "sql: {sql}"
         );
+        assert!(!sql.contains("::"), "no casts for integer: {sql}");
         assert!(!sql.contains("RETURNING"));
         assert_eq!(params.len(), 2);
     }
@@ -853,16 +826,112 @@ mod tests {
     }
 
     #[test]
-    fn null_value_against_integer_column_emits_typed_null() {
+    fn null_on_integer_column_binds_typed_none() {
         let op = EditOp::Update {
             pk: map_of(&[("id", json!(1))]),
             changes: map_of(&[("age", JsonValue::Null)]),
         };
         let cols = columns_of(&[("id", "bigint"), ("age", "integer")]);
-        let (sql, params) =
-            build_edit_sql("public", "t", &op, &cols, &pk_cols(&["id"])).unwrap();
-        assert!(sql.contains("\"age\" = $1::integer"), "sql: {sql}");
+        let (sql, params) = build_edit_sql("public", "t", &op, &cols, &pk_cols(&["id"])).unwrap();
+        // Integer columns use a plain placeholder (no cast) — the boxed value
+        // is Option::<i32>::None, which tokio-postgres sends as a NULL of OID int4.
+        // The runtime type is verified by integration tests against real Postgres.
+        assert!(sql.contains("\"age\" = $1"), "sql: {sql}");
+        assert!(!sql.contains("$1::"), "no cast for integer null: {sql}");
         assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn build_update_jsonb_column_binds_native() {
+        let op = EditOp::Update {
+            pk: map_of(&[("id", json!(1))]),
+            changes: map_of(&[("metadata", json!({"a": 1}))]),
+        };
+        let cols = columns_of(&[("id", "integer"), ("metadata", "jsonb")]);
+        let (sql, params) =
+            build_edit_sql("market", "product", &op, &cols, &pk_cols(&["id"])).unwrap();
+        assert!(sql.contains("SET \"metadata\" = $1 "), "sql: {sql}");
+        assert!(sql.contains("WHERE \"id\" = $2 "), "sql: {sql}");
+        assert!(!sql.contains("$1::"), "jsonb binds native, no cast: {sql}");
+        assert!(!sql.contains("$2::"), "no cast for integer: {sql}");
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn build_update_jsonb_null() {
+        let op = EditOp::Update {
+            pk: map_of(&[("id", json!(1))]),
+            changes: map_of(&[("metadata", JsonValue::Null)]),
+        };
+        let cols = columns_of(&[("id", "integer"), ("metadata", "jsonb")]);
+        let (sql, params) =
+            build_edit_sql("market", "product", &op, &cols, &pk_cols(&["id"])).unwrap();
+        assert!(sql.contains("SET \"metadata\" = $1 "), "sql: {sql}");
+        assert!(!sql.contains("$1::"), "jsonb null binds native: {sql}");
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn build_update_uuid_column_double_casts() {
+        let uuid_val = "550e8400-e29b-41d4-a716-446655440000";
+        let op = EditOp::Update {
+            pk: map_of(&[("id", json!(uuid_val))]),
+            changes: map_of(&[("ext_id", json!(uuid_val))]),
+        };
+        let cols = columns_of(&[("id", "uuid"), ("ext_id", "uuid")]);
+        let (sql, params) = build_edit_sql("public", "t", &op, &cols, &pk_cols(&["id"])).unwrap();
+        assert!(
+            sql.contains("SET \"ext_id\" = $1::text::uuid"),
+            "sql: {sql}"
+        );
+        assert!(sql.contains("WHERE \"id\" = $2::text::uuid"), "sql: {sql}");
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn build_update_timestamptz_column_double_casts() {
+        let op = EditOp::Update {
+            pk: map_of(&[("id", json!(1))]),
+            changes: map_of(&[("created_at", json!("2024-01-01T00:00:00Z"))]),
+        };
+        let cols = columns_of(&[
+            ("id", "integer"),
+            ("created_at", "timestamp with time zone"),
+        ]);
+        let (sql, params) = build_edit_sql("public", "t", &op, &cols, &pk_cols(&["id"])).unwrap();
+        assert!(
+            sql.contains("SET \"created_at\" = $1::text::timestamptz"),
+            "sql: {sql}"
+        );
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn build_update_structured_value_on_text_column_rejected() {
+        let op = EditOp::Update {
+            pk: map_of(&[("id", json!(1))]),
+            changes: map_of(&[("name", json!({"x": 1}))]),
+        };
+        let cols = columns_of(&[("id", "integer"), ("name", "text")]);
+        let err = build_edit_sql("public", "t", &op, &cols, &pk_cols(&["id"])).unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("name"), "msg: {msg}");
+                assert!(msg.contains("text"), "msg: {msg}");
+            }
+            other => panic!("expected validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_update_out_of_range_int_rejected() {
+        let op = EditOp::Update {
+            pk: map_of(&[("id", json!(1))]),
+            changes: map_of(&[("count", json!(999_999_999_999_i64))]),
+        };
+        let cols = columns_of(&[("id", "integer"), ("count", "smallint")]);
+        let err = build_edit_sql("public", "t", &op, &cols, &pk_cols(&["id"])).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 
     #[test]
@@ -872,5 +941,62 @@ mod tests {
         let out = truncate_with_marker(&s, cap);
         assert!(out.ends_with('…'));
         assert_eq!(out.chars().count(), cap + 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // JSONB string normalization regression tests (fix-update-jsonb-serialization)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_update_jsonb_string_input_normalized_to_object() {
+        // The frontend sends the edited value as a JSON-encoded string
+        // (e.g. Value::String("{\"a\":1}")). The builder must parse it and bind
+        // the parsed object — not store a jsonb string scalar.
+        let op = EditOp::Update {
+            pk: map_of(&[("id", json!(1))]),
+            changes: map_of(&[("metadata", json!("{\"a\":1}"))]),
+        };
+        let cols = columns_of(&[("id", "integer"), ("metadata", "jsonb")]);
+        let (sql, params) =
+            build_edit_sql("market", "product_source_info", &op, &cols, &pk_cols(&["id"]))
+                .unwrap();
+        // Placeholder must be plain (no cast) — jsonb binds natively.
+        assert!(
+            sql.contains("SET \"metadata\" = $1"),
+            "sql: {sql}"
+        );
+        assert!(
+            sql.contains("WHERE \"id\" = $2"),
+            "sql: {sql}"
+        );
+        assert!(!sql.contains("$1::"), "no cast for jsonb: {sql}");
+        assert_eq!(params.len(), 2);
+        // The bound value was verified at the binding level (bind_scalar tests).
+        // At the builder level we confirm the call succeeds (doesn't return Err)
+        // and the SQL shape is correct — indicating the string was accepted and
+        // parsed rather than rejected or stored as-is.
+    }
+
+    #[test]
+    fn build_update_jsonb_invalid_string_rejected() {
+        // An unparseable string targeting a jsonb column must propagate
+        // AppError::Validation naming the column.
+        let op = EditOp::Update {
+            pk: map_of(&[("id", json!(1))]),
+            changes: map_of(&[("metadata", json!("{bad}"))]),
+        };
+        let cols = columns_of(&[("id", "integer"), ("metadata", "jsonb")]);
+        let err =
+            build_edit_sql("market", "product_source_info", &op, &cols, &pk_cols(&["id"]))
+                .unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(
+                    msg.contains("metadata"),
+                    "error message must name the column: {msg}"
+                );
+            }
+            other => panic!("expected AppError::Validation, got {other:?}"),
+        }
     }
 }

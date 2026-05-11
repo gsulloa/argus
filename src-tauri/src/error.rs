@@ -80,6 +80,35 @@ impl From<std::io::Error> for AppError {
     }
 }
 
+fn build_pg_message_from_parts(
+    message: &str,
+    detail: Option<&str>,
+    hint: Option<&str>,
+    where_: Option<&str>,
+) -> String {
+    let mut s = message.to_string();
+    if let Some(d) = detail {
+        s.push_str("\nDETAIL: ");
+        s.push_str(d);
+    }
+    if let Some(h) = hint {
+        s.push_str("\nHINT: ");
+        s.push_str(h);
+    }
+    if let Some(w) = where_ {
+        s.push_str("\nWHERE: ");
+        s.push_str(w);
+    }
+    s
+}
+
+fn build_pg_message(e: &tokio_postgres::Error) -> String {
+    match e.as_db_error() {
+        Some(db) => build_pg_message_from_parts(db.message(), db.detail(), db.hint(), db.where_()),
+        None => e.to_string(),
+    }
+}
+
 impl From<tokio_postgres::Error> for AppError {
     fn from(e: tokio_postgres::Error) -> Self {
         let code = e
@@ -95,10 +124,42 @@ impl From<tokio_postgres::Error> for AppError {
         });
         AppError::Postgres(PostgresErrorBody {
             code,
-            message: e.to_string(),
+            message: build_pg_message(&e),
             position,
         })
     }
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn db_error_with_detail_and_hint_assembles_multiline_message() {
+        let msg = build_pg_message_from_parts(
+            "invalid input syntax for type json",
+            Some("offending value: not-json"),
+            Some("use a valid JSON literal"),
+            None,
+        );
+        assert_eq!(
+            msg,
+            "invalid input syntax for type json\nDETAIL: offending value: not-json\nHINT: use a valid JSON literal"
+        );
+    }
+
+    #[test]
+    fn db_error_message_only_has_no_extra_lines() {
+        let msg = build_pg_message_from_parts("column \"foo\" does not exist", None, None, None);
+        assert_eq!(msg, "column \"foo\" does not exist");
+    }
+
+    #[test]
+    fn non_db_error_falls_back_to_display() {
+        let e = tokio_postgres::Error::__private_api_timeout();
+        let msg = build_pg_message(&e);
+        assert_eq!(msg, e.to_string());
+    }
+}

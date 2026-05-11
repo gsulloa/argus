@@ -292,7 +292,9 @@ mod tests {
         let mut c = col("email", "text", true, None, 1);
         c.comment = Some("primary contact".into());
         let ddl = reconstruct_table("public", "users", &[c], None, &[], &[], &[], &[]);
-        assert!(ddl.contains("COMMENT ON COLUMN \"public\".\"users\".\"email\" IS 'primary contact';"));
+        assert!(
+            ddl.contains("COMMENT ON COLUMN \"public\".\"users\".\"email\" IS 'primary contact';")
+        );
     }
 
     #[test]
@@ -305,7 +307,11 @@ mod tests {
 
     #[test]
     fn view_ddl_uses_create_or_replace_view() {
-        let ddl = reconstruct_view("public", "active_users", " SELECT id, name FROM users\n  WHERE deleted_at IS NULL;");
+        let ddl = reconstruct_view(
+            "public",
+            "active_users",
+            " SELECT id, name FROM users\n  WHERE deleted_at IS NULL;",
+        );
         assert!(ddl.starts_with("CREATE OR REPLACE VIEW \"public\".\"active_users\" AS\n"));
         assert!(ddl.ends_with(";\n"));
     }
