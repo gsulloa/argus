@@ -21,3 +21,5 @@ latest.json
 *.njsproj
 *.sln
 *.sw?
+
+.envrc

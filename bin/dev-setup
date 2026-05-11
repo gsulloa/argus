@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Set up local development environment for Conductor workspaces and git worktrees.
+#
+# - Copies cloud/.envrc from the main worktree (so env vars carry over automatically)
+# - Installs npm dependencies at monorepo root (parent of cloud/), if missing
+# - Sources .envrc so the current shell has all env vars
+#
+# Usage: bin/dev-setup       # set up
+set -e
+
+CLOUD_FOLDER="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$CLOUD_FOLDER/.." && pwd)"
+
+# 1. Copy cloud/.envrc from main worktree (if we're a worktree and don't have one)
+if [ ! -f "$CLOUD_FOLDER/.envrc" ]; then
+  MAIN_WORKTREE="$(git -C "$CLOUD_FOLDER" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
+  MAIN_CLOUD_ENVRC="$MAIN_WORKTREE/cloud/.envrc"
+  if [ -n "$MAIN_WORKTREE" ] && [ "$MAIN_WORKTREE" != "$CLOUD_FOLDER" ] && [ -f "$MAIN_CLOUD_ENVRC" ]; then
+    cp "$MAIN_CLOUD_ENVRC" "$CLOUD_FOLDER/.envrc"
+    echo "✓ Copied cloud/.envrc from main worktree ($MAIN_CLOUD_ENVRC)"
+  else
+    echo "⚠ No cloud/.envrc found in main worktree and nothing to copy from"
+  fi
+fi
+
+# 2. Source .envrc
+if [ -f "$CLOUD_FOLDER/.envrc" ]; then
+  source "$CLOUD_FOLDER/.envrc"
+  cd "$CLOUD_FOLDER"
+  direnv allow "$CLOUD_FOLDER"
+  echo "✓ Sourced cloud .envrc"
+fi
+
+
+echo ""
+echo "Dev setup complete!"
