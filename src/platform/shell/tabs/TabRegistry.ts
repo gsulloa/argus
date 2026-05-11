@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import type { Tab } from "./types";
 
-export type TabRenderer = ComponentType<{ tab: Tab }>;
+export type TabRenderer = ComponentType<{ tab: Tab; active: boolean }>;
 
 const registry = new Map<string, TabRenderer>();
 const listeners = new Set<() => void>();

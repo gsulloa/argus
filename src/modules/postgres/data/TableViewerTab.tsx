@@ -61,7 +61,7 @@ function isPayload(v: unknown): v is PostgresTableDataPayload {
   );
 }
 
-function TableViewerTab({ tab }: { tab: Tab }) {
+function TableViewerTab({ tab, active }: { tab: Tab; active: boolean }) {
   if (!isPayload(tab.payload)) {
     return <div className={styles.firstLoad}>Invalid table viewer payload.</div>;
   }
@@ -75,6 +75,7 @@ function TableViewerTab({ tab }: { tab: Tab }) {
       schema={schema}
       relation={relation}
       relationKind={relationKind}
+      active={active}
     />
   );
 }
@@ -86,6 +87,7 @@ export interface TableViewerProps {
   schema: string;
   relation: string;
   relationKind: RelationKind;
+  active?: boolean;
 }
 
 export function TableViewer({
@@ -95,6 +97,7 @@ export function TableViewer({
   schema,
   relation,
   relationKind,
+  active = true,
 }: TableViewerProps) {
   const {
     draft,
@@ -338,9 +341,11 @@ export function TableViewer({
     tabs.close(tabId);
   }
 
-  // Keyboard shortcuts at the tab root.
+  // Keyboard shortcuts at the tab root. Only attach when this tab is active
+  // so multiple mounted tabs don't double-fire window-level shortcuts.
   const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
+    if (!active) return;
     function onKey(e: KeyboardEvent) {
       // Only respond when this tab's root has focus or contains the active
       // element. Otherwise typing in an inspector field triggers ⌘S.
@@ -360,13 +365,13 @@ export function TableViewer({
         !e.altKey &&
         (e.key === "1" || e.key === "2" || e.key === "3")
       ) {
-        const active = document.activeElement as HTMLElement | null;
-        const tag = active?.tagName ?? "";
+        const focused = document.activeElement as HTMLElement | null;
+        const tag = focused?.tagName ?? "";
         const isEditable =
           tag === "INPUT" ||
           tag === "TEXTAREA" ||
           tag === "SELECT" ||
-          (active?.closest(".cm-editor") ?? null) !== null;
+          (focused?.closest(".cm-editor") ?? null) !== null;
         if (!isEditable) {
           e.preventDefault();
           const next: Subtab =
@@ -388,7 +393,7 @@ export function TableViewer({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onSave, buffer]);
+  }, [active, onSave, buffer]);
 
   function onAddRow() {
     if (isReadOnly) return;

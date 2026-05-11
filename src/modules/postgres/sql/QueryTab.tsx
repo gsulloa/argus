@@ -38,7 +38,7 @@ function isPayload(v: unknown): v is PostgresQueryPayload {
   );
 }
 
-function QueryTabRoot({ tab }: { tab: Tab }) {
+function QueryTabRoot({ tab }: { tab: Tab; active: boolean }) {
   if (!isPayload(tab.payload)) {
     return <div className={styles.invalid}>Invalid query tab payload.</div>;
   }
