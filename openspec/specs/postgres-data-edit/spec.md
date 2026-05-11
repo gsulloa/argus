@@ -3,7 +3,6 @@
 ## Purpose
 Editable-table support for the Postgres data viewer: PK + enum metadata lookup, edit-SQL builder with per-placeholder type casts, transactional apply command. Owned by the Postgres module; consumed by the data-grid editable mode.
 ## Requirements
-
 ### Requirement: Edit operation payload shape
 
 The Postgres module SHALL define a typed `EditOp` payload accepted by the edit commands. `EditOp` MUST be a discriminated union with three variants:
@@ -62,43 +61,82 @@ The Postgres module SHALL expose a Tauri command `postgres_table_primary_key(con
 
 ### Requirement: Edit-SQL builder
 
-The Postgres module SHALL implement a pure builder `build_edit_sql(schema, relation, op, columns)` that returns `{ sql: string, params: Vec<Param> }`. The builder MUST:
+The Postgres module SHALL implement a pure builder `build_edit_sql(schema, relation, op, columns, pk_columns)` that returns `{ sql: string, params: Vec<BoundParam> }`. The builder MUST:
 
 - Quote `schema` and `relation` via the existing `quote_ident` helper.
 - Quote every column name via `quote_ident`.
 - Bind every value as a parameter (`$1`, `$2`, …) — never interpolate values into SQL.
-- Emit each placeholder with an explicit Postgres cast `::<data_type>` derived from the column's declared `data_type` (as returned by `pg_catalog.format_type`). This works around `tokio-postgres`' default bind-type inference, which only matches `String` to text-family columns; the cast lets Postgres convert the bound text to any cast-from-text type (numeric, uuid, jsonb, timestamp, inet, etc.). All edit values therefore travel as `Option<String>` over the wire.
-- For `update`: emit `UPDATE <qualified> SET "c1" = $1::<type1>, "c2" = $2::<type2>, ... WHERE "pk1" = $N::<pk_type1> AND "pk2" = $N+1::<pk_type2>, ... RETURNING *`. The order of `SET` columns MUST match the iteration order of `changes` and MUST be deterministic (sorted by column name).
-- For `insert`: emit `INSERT INTO <qualified> ("c1", "c2", ...) VALUES ($1::<type1>, $2::<type2>, ...) RETURNING *`. Columns omitted from `values` MUST NOT appear.
-- For `delete`: emit `DELETE FROM <qualified> WHERE "pk1" = $1::<pk_type1> AND "pk2" = $2::<pk_type2> ...`.
+- Use a type-aware binding strategy keyed off each column's declared `data_type` (as returned by `pg_catalog.format_type`). Three binding modes:
+  - **Native-bind primitives** (`smallint`/`int2`, `integer`/`int4`, `bigint`/`int8`, `real`/`float4`, `double precision`/`float8`, `boolean`, `text`/`character varying`/`varchar`/`character`/`char`/`bpchar`/`name`/`citext`): the JSON value is parsed into the matching Rust primitive (`i16`/`i32`/`i64`/`f32`/`f64`/`bool`) or owned `String`, and bound directly. Placeholder is rendered as plain `$N` with no cast.
+  - **Native-bind JSON** (`json`, `jsonb`): the JSON value is bound directly as `serde_json::Value` via tokio-postgres' `with-serde_json-1` feature. Placeholder is rendered as plain `$N` with no cast. Structured (`array`/`object`), scalar (number/string/bool), and `null` shapes are all accepted.
+  - **Cast-from-text types** (`uuid`, `numeric`/`decimal`, `date`, `time`, `time with time zone`/`timetz`, `timestamp`, `timestamp with time zone`/`timestamptz`, `bytea`, plus a fallback for any unrecognized type): the JSON value is coerced to a `String` and bound as text. Placeholder is rendered as `$N::text::<type>`. The inner `::text` cast forces Postgres to infer `$N` as `text` (which is what tokio-postgres binds `String` to); the outer cast does the server-side conversion to the target type. A single-cast `$N::<type>` would make Postgres infer `$N` as the target type directly (since the cast is identity on those types), and tokio-postgres would reject the bind with `error serializing parameter N`.
+  - JSON `null` MUST bind as the typed `Option::<T>::None` for the column's bind kind (e.g. `Option::<i32>::None` for `integer`, `Option::<serde_json::Value>::None` for `jsonb`, `Option::<String>::None` for `uuid`). The placeholder shape MUST match the non-null case for the same kind.
+  - JSON `array` and `object` values MUST be accepted only when the column's bind kind is `json` or `jsonb` (where they bind natively as `serde_json::Value`). For every other kind, structured JSON values MUST be rejected with `AppError::Validation` naming the column and its data type.
+- For `update`: emit `UPDATE <qualified> SET "c1" = <ph1>, "c2" = <ph2>, ... WHERE "pk1" = <ph_n> AND "pk2" = <ph_n+1>, ... RETURNING *`. The order of `SET` columns MUST match the iteration order of `changes` (BTreeMap, so alphabetical) and MUST be deterministic.
+- For `insert`: emit `INSERT INTO <qualified> ("c1", "c2", ...) VALUES (<ph1>, <ph2>, ...) RETURNING *`. Columns omitted from `values` MUST NOT appear.
+- For `delete`: emit `DELETE FROM <qualified> WHERE "pk1" = <ph1> AND "pk2" = <ph2> ...`.
 
-The builder MUST be reused by `postgres_apply_table_edits`.
+UPDATE and INSERT statements MUST wrap their inner statement in `WITH _argus_r AS (<inner>) SELECT row_to_json(_argus_r)::text FROM _argus_r` so the apply command can decode the refreshed row through the existing data-module pipeline.
 
-#### Scenario: Update produces parameterized SQL with type casts
+The builder MUST be reused by `postgres_apply_table_edits`. All bind-validation errors (e.g. value out of range, structured JSON for non-json column, malformed integer string) MUST surface as `AppError::Validation` from the builder, which the apply command propagates as a thrown error before opening any transaction.
+
+#### Scenario: Update on native-bind columns emits plain placeholders
 
 - **WHEN** the builder is called with `update { pk: { id: 1 }, changes: { name: "ana", email: "a@b.com" } }` against `"public"."users"` (id is `bigint`, name is `text`, email is `text`)
-- **THEN** the returned `sql` is `UPDATE "public"."users" SET "email" = $1::text, "name" = $2::text WHERE "id" = $3::bigint RETURNING *` (columns alphabetized) and `params` is `["a@b.com", "ana", "1"]`
+- **THEN** the returned `sql` contains `SET "email" = $1, "name" = $2 WHERE "id" = $3` (no `::<type>` casts because all three columns are native-bind kinds; `email`/`name` come first alphabetically before `id` in the WHERE clause numbering)
+- **AND** `params[0]` is bound as `String("a@b.com")`, `params[1]` is bound as `String("ana")`, `params[2]` is bound as `i64(1)`
 
-#### Scenario: Insert respects supplied columns only and casts each placeholder
+#### Scenario: Update on jsonb column binds serde_json::Value natively
+
+- **WHEN** the builder is called with `update { pk: { id: 1 }, changes: { metadata: {"a": 1} } }` against `"market"."product"` (id is `integer`, metadata is `jsonb`)
+- **THEN** the returned `sql` contains `SET "metadata" = $1 WHERE "id" = $2` (no casts — both columns use native-bind paths)
+- **AND** `params[0]` is bound as `serde_json::Value` `{"a": 1}`, `params[1]` is bound as `i32(1)`
+
+#### Scenario: Insert respects supplied columns only
 
 - **WHEN** the builder is called with `insert { values: { name: "ana" } }` against `"public"."users"` (name is `text`)
-- **THEN** the returned `sql` is `INSERT INTO "public"."users" ("name") VALUES ($1::text) RETURNING *` with `params: ["ana"]`
+- **THEN** the returned `sql` contains `INSERT INTO "public"."users" ("name") VALUES ($1) RETURNING *` (no cast on a text column)
 
-#### Scenario: Delete with composite PK casts each PK placeholder
+#### Scenario: Delete with composite integer PK uses plain placeholders
 
 - **WHEN** the builder is called with `delete { pk: { tenant_id: 5, user_id: 7 } }` (both `integer`)
-- **THEN** the returned `sql` is `DELETE FROM "public"."t" WHERE "tenant_id" = $1::integer AND "user_id" = $2::integer` with `params: ["5", "7"]`
+- **THEN** the returned `sql` is `DELETE FROM "public"."t" WHERE "tenant_id" = $1 AND "user_id" = $2`
+- **AND** `params[0]` is bound as `i32(5)`, `params[1]` is bound as `i32(7)`
 
 #### Scenario: Pathological identifier is escaped
 
 - **WHEN** the builder is called against a relation named `we"ird`
 - **THEN** the returned `sql` quotes it as `"we""ird"` (standard double-quote-doubling)
 
-#### Scenario: NULL value with a non-text column casts correctly
+#### Scenario: NULL value on a native-bind column binds typed None
 
 - **WHEN** the builder is called with `update { pk: { id: 1 }, changes: { age: null } }` (age is `integer`)
-- **THEN** the returned `sql` contains `SET "age" = $1::integer` and the bound parameter is `Option::<String>::None`
-- **AND** the resulting Postgres expression `null::integer` is a properly-typed NULL in the column
+- **THEN** the returned `sql` contains `SET "age" = $1` (plain placeholder)
+- **AND** the bound parameter is `Option::<i32>::None` (NOT `Option::<String>::None`), which `tokio-postgres` accepts and serializes as a NULL of OID `int4`
+
+#### Scenario: NULL value on a jsonb column binds typed None with no cast
+
+- **WHEN** the builder is called with `update { pk: { id: 1 }, changes: { metadata: null } }` (metadata is `jsonb`)
+- **THEN** the returned `sql` contains `SET "metadata" = $1` (no cast — jsonb uses native binding)
+- **AND** the bound parameter is `Option::<serde_json::Value>::None`
+
+#### Scenario: NULL value on a cast-from-text column binds typed None with double cast
+
+- **WHEN** the builder is called with `update { pk: { id: 1 }, changes: { ext_id: null } }` (ext_id is `uuid`)
+- **THEN** the returned `sql` contains `SET "ext_id" = $1::text::uuid`
+- **AND** the bound parameter is `Option::<String>::None`
+
+#### Scenario: Structured JSON value on a non-json column is rejected
+
+- **WHEN** the builder is called with `update { pk: { id: 1 }, changes: { name: {"x": 1} } }` (name is `text`)
+- **THEN** the builder returns `AppError::Validation` whose message names the column `"name"` and the data type `"text"`
+- **AND** no SQL is produced
+
+#### Scenario: Out-of-range integer is rejected at build time
+
+- **WHEN** the builder is called with `update { pk: { id: 1 }, changes: { count: 999999999999 } }` (count is `smallint`)
+- **THEN** the builder returns `AppError::Validation` whose message names the column `"count"` and the type `"smallint"`
+- **AND** no SQL is produced
 
 ### Requirement: Apply command and transactional commit
 
@@ -308,3 +346,96 @@ When the loaded relation's `pk_columns` is `null`, the viewer SHALL keep `INSERT
 - **WHEN** the user opens a table that has columns but no `PRIMARY KEY` constraint, on a writable connection
 - **THEN** the "Add row" button is rendered (insert is allowed)
 - **AND** existing rows are read-only with the "no PK" banner visible
+
+### Requirement: JSON/JSONB cell editor disables native autocorrect
+
+When the inline cell editor (in the data grid OR in the row inspector) is mounted for a column whose `data_type` matches `looksLikeJson(t)` — currently `json`, `jsonb`, anything ending in `[]`, or anything starting with `_` — the underlying `<textarea>` MUST render with the following attributes:
+
+- `autoCorrect="off"`
+- `autoCapitalize="off"`
+- `spellCheck={false}`
+- `autoComplete="off"`
+
+The purpose is to prevent the host OS (notably macOS) from rewriting typed characters (smart quotes, em-dashes, capitalization) before React receives them. These attributes are NOT required for non-JSON column types (text columns may legitimately want autocorrect for prose).
+
+#### Scenario: Typing a straight quote in a jsonb cell produces a straight quote
+
+- **WHEN** the user double-clicks a `jsonb` cell on macOS with the system "Smart Quotes" preference enabled
+- **AND** types the character `"`
+- **THEN** the textarea's value contains the ASCII character `"` (U+0022), NOT a curly quote (`"` U+201C or `"` U+201D)
+
+#### Scenario: Pasting smart-quoted JSON into a jsonb cell is preserved as-typed
+
+- **WHEN** the user pastes the literal string `{"foo":"bar"}` (with U+201C / U+201D as the outer quotes) into a `jsonb` cell editor
+- **THEN** the textarea displays the pasted string with the smart quotes intact (the OS does not auto-rewrite them but it also does not strip them — that's the next requirement's job)
+
+#### Scenario: Text columns are unaffected
+
+- **WHEN** the user opens an inline editor for a `text` or `varchar` column
+- **THEN** the textarea does NOT have `autoCorrect="off"` (autocorrect remains enabled per the OS default)
+
+### Requirement: JSON/JSONB edits validate as strict JSON on commit
+
+When the user commits a json/jsonb cell edit (Tab / Enter / clicking outside the cell / `<textarea>` blur in the row inspector), the frontend MUST validate the textarea contents by:
+
+1. Trimming leading and trailing whitespace.
+2. If the trimmed value is empty (`""`), treat the commit as a NULL write (existing behavior) — no parse is attempted.
+3. Otherwise, attempt `JSON.parse(trimmed)`:
+   - If parsing succeeds, the value sent to the edit buffer (and ultimately to the backend as `EditOp.update.changes[col]`) MUST be `JSON.stringify(parsed)` — the canonical re-serialization. The user-visible cell value MUST be the canonical form (so the displayed cell after commit reflects exactly what was sent).
+   - If parsing fails, the commit MUST be rejected: the textarea MUST remain open in edit mode (no commit, no exit), its border MUST become `var(--danger)`, and an inline error message MUST be rendered immediately below the textarea showing the parser's error message (e.g. `Unexpected token } in JSON at position 47`). The error MUST be in `font-family: var(--font-mono); color: var(--danger); font-size: 11px`. Pressing Escape MUST still cancel the edit normally.
+
+This applies identically in the grid cell editor (`EditableCell.tsx`) and the row inspector (`Inspector.tsx`).
+
+#### Scenario: Valid JSON commits with canonical re-serialization
+
+- **WHEN** the user types `{ "foo": "bar"  }  \n` (with extra whitespace) into a `jsonb` cell and presses Tab
+- **THEN** the edit buffer receives the canonical string `{"foo":"bar"}` for that column
+- **AND** the cell exits edit mode and renders the canonical form
+
+#### Scenario: Invalid JSON keeps the editor open with an inline error
+
+- **WHEN** the user types `{ "foo": "bar"` (missing closing brace) into a `jsonb` cell and presses Tab
+- **THEN** the textarea stays mounted in edit mode
+- **AND** its border is `var(--danger)`
+- **AND** a one-line error message below the textarea shows the `JSON.parse` error text
+- **AND** the edit buffer is NOT mutated for that column
+- **AND** pressing Escape exits edit mode without committing
+
+#### Scenario: Empty input commits as NULL
+
+- **WHEN** the user clears a `jsonb` cell to empty (or whitespace only) and presses Tab
+- **THEN** the edit buffer records a `null` write for that column (existing behavior)
+- **AND** no parse error is shown
+
+#### Scenario: Pasted smart-quote JSON is rejected at commit
+
+- **WHEN** the user pastes `{"foo":"bar"}` (with smart quotes as outer delimiters) into a `jsonb` cell and presses Tab
+- **THEN** `JSON.parse` fails with a syntax error
+- **AND** the textarea stays open with the danger-border + inline error UI
+- **AND** nothing is committed to the buffer or the backend
+
+#### Scenario: Row inspector uses the same validation
+
+- **WHEN** the user types invalid JSON into a `jsonb` field in the row inspector and tabs out
+- **THEN** the same danger-border + inline error UI is rendered around the inspector field
+- **AND** no commit reaches the buffer
+
+### Requirement: Smart-quote warning chip on JSON edits
+
+After a json/jsonb edit successfully passes `JSON.parse` validation, the frontend MUST scan the canonical (re-stringified) value for the presence of any of the following Unicode code points: U+201C (`"`), U+201D (`"`), U+2018 (`'`), U+2019 (`'`). If any are present, the frontend MUST render a small chip `⚠ Contains smart quotes` directly below the textarea while the editor is still mounted. The chip MUST be informational only — it MUST NOT block the commit, the commit MUST proceed normally, and the chip disappears when the editor closes (no persistent indicator on the dirty cell).
+
+The chip MUST use `font-size: 11px`, `color: var(--warning)`, and a leading warning icon (Lucide `AlertTriangle` or equivalent at 11px).
+
+#### Scenario: Smart quotes inside string content trigger a warning but commit succeeds
+
+- **WHEN** the user pastes the string `{"name":"John “Doe” Smith"}` (smart quotes inside the string value, JSON itself is valid) into a `jsonb` cell and presses Tab
+- **THEN** `JSON.parse` succeeds
+- **AND** the canonical value sent to the buffer is `{"name":"John "Doe" Smith"}` (smart quotes preserved as valid string content)
+- **AND** the smart-quote warning chip is shown below the textarea before commit
+- **AND** the commit proceeds normally on Tab (chip is informational)
+
+#### Scenario: Pure ASCII JSON shows no warning
+
+- **WHEN** the user types `{"foo":"bar"}` (all ASCII quotes) into a `jsonb` cell
+- **THEN** no smart-quote warning chip is rendered before or after commit
+

@@ -415,11 +415,7 @@ mod tests {
             params.sslmode = SslMode::Disable;
             reg.connect(params, pw, id).await.unwrap();
             let err = reg
-                .execute_mutation(
-                    &id,
-                    "CREATE TEMP TABLE _argus_ro_test (x int)",
-                    &[],
-                )
+                .execute_mutation(&id, "CREATE TEMP TABLE _argus_ro_test (x int)", &[])
                 .await
                 .unwrap_err();
             match err {

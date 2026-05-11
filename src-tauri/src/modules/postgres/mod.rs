@@ -1,3 +1,4 @@
+pub mod binding;
 pub mod columns;
 pub mod commands;
 pub mod data;

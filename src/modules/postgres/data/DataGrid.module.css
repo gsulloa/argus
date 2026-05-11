@@ -257,3 +257,30 @@ textarea.cellEditor {
   height: auto;
   min-height: 26px;
 }
+
+.jsonEditorWrapper {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.jsonErrorBorder {
+  border-color: var(--danger);
+  outline-color: var(--danger);
+}
+
+.jsonError {
+  font-family: var(--font-mono);
+  color: var(--danger);
+  font-size: 11px;
+  padding-top: 4px;
+}
+
+.jsonWarning {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--warning);
+  padding-top: 4px;
+}

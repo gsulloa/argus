@@ -3,6 +3,7 @@ import { useLayout } from "./Layout";
 import styles from "./StatusBar.module.css";
 import { useFilteredCount } from "@/platform/activity-log/store";
 import { useSetting } from "@/platform/settings/useSetting";
+import { VersionIndicator } from "./VersionIndicator";
 
 export function StatusBar() {
   const { inspectorOpen, toggleInspector, logsOpen, toggleLogs } = useLayout();
@@ -35,6 +36,7 @@ export function StatusBar() {
           <PanelRight size={12} />
           Inspector
         </button>
+        <VersionIndicator />
       </div>
     </div>
   );

@@ -136,7 +136,9 @@ pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<
     validate_name(&input.name)?;
     if let Some(g) = input.group_id.as_ref() {
         if !group_exists(conn, g)? {
-            return Err(AppError::NotFound(format!("connection_group {g} not found")));
+            return Err(AppError::NotFound(format!(
+                "connection_group {g} not found"
+            )));
         }
     }
     let id = Uuid::new_v4();
@@ -200,9 +202,7 @@ pub fn update(
 ) -> AppResult<Connection> {
     let existing: Option<Connection> = conn
         .query_row(
-            &format!(
-                "SELECT {SELECT_CONNECTION_COLS} FROM connections WHERE id = ?1"
-            ),
+            &format!("SELECT {SELECT_CONNECTION_COLS} FROM connections WHERE id = ?1"),
             params![id.as_bytes().to_vec()],
             row_to_connection,
         )
@@ -247,7 +247,9 @@ pub fn update(
 pub fn move_(conn: &rusqlite::Connection, id: Uuid, m: ConnectionMove) -> AppResult<Connection> {
     if let Some(g) = m.group_id.as_ref() {
         if !group_exists(conn, g)? {
-            return Err(AppError::NotFound(format!("connection_group {g} not found")));
+            return Err(AppError::NotFound(format!(
+                "connection_group {g} not found"
+            )));
         }
     }
     let now = now_unix();
@@ -635,16 +637,12 @@ mod tests {
         let c = fresh();
         let g_a = connection_groups::create(
             &c,
-            connection_groups::ConnectionGroupInput {
-                name: "A".into(),
-            },
+            connection_groups::ConnectionGroupInput { name: "A".into() },
         )
         .unwrap();
         let g_b = connection_groups::create(
             &c,
-            connection_groups::ConnectionGroupInput {
-                name: "B".into(),
-            },
+            connection_groups::ConnectionGroupInput { name: "B".into() },
         )
         .unwrap();
         let _ungrouped = create(

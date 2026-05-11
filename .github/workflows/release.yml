@@ -1,0 +1,255 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+# The bump job needs to push commits and tags back to the repo.
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    name: Bump version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      skipped: ${{ steps.guard.outputs.skipped }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if last commit is itself a bump
+        id: guard
+        run: |
+          subject=$(git log -1 --pretty=%s)
+          echo "Last commit: $subject"
+          if echo "$subject" | grep -q "^chore: bump version to v"; then
+            echo "Already a bump commit. Skipping."
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        if: steps.guard.outputs.skipped != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Bump version
+        if: steps.guard.outputs.skipped != 'true'
+        id: bump
+        run: |
+          new=$(node scripts/bump-version.mjs)
+          echo "Bumped to: $new"
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+
+      - name: Commit + tag
+        if: steps.guard.outputs.skipped != 'true'
+        env:
+          NEW: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name "argus-release-bot"
+          git config user.email "argus-release-bot@users.noreply.github.com"
+          git add src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml
+          git commit -m "chore: bump version to v${NEW} [skip ci]"
+          git tag "v${NEW}"
+          git push origin HEAD:master
+          git push origin "v${NEW}"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: bump
+    if: needs.bump.outputs.skipped != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            arch: aarch64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    outputs:
+      arm64-tarball: ${{ steps.collect.outputs.arm64-tarball }}
+      x64-tarball: ${{ steps.collect.outputs.x64-tarball }}
+    steps:
+      - name: Checkout (post-bump)
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.bump.outputs.version }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ matrix.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Install pnpm deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Import Apple cert into keychain
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+          KEYCHAIN_PWD=$(openssl rand -base64 24)
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" \
+            "$KEYCHAIN_PATH"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Build, sign, notarize
+        uses: tauri-apps/tauri-action@v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_UPDATER_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: Developer ID Application
+        with:
+          args: --target ${{ matrix.target }}
+
+      - name: Collect artifact paths
+        id: collect
+        run: |
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          DMG=$(ls "$BUNDLE_DIR/dmg/"*.dmg | head -1)
+          TARBALL=$(ls "$BUNDLE_DIR/macos/"*.app.tar.gz | head -1)
+          SIG="${TARBALL}.sig"
+          test -f "$DMG"
+          test -f "$TARBALL"
+          test -f "$SIG"
+          # Rename to canonical names so the manifest URLs are predictable.
+          VERSION="${{ needs.bump.outputs.version }}"
+          BASE_DMG="Argus_${VERSION}_${{ matrix.arch }}.dmg"
+          BASE_TARBALL="Argus_${VERSION}_${{ matrix.arch }}.app.tar.gz"
+          mkdir -p staging
+          cp "$DMG" "staging/$BASE_DMG"
+          cp "$TARBALL" "staging/$BASE_TARBALL"
+          cp "$SIG" "staging/${BASE_TARBALL}.sig"
+          echo "tarball=$BASE_TARBALL" >> "$GITHUB_OUTPUT"
+          echo "dmg=$BASE_DMG" >> "$GITHUB_OUTPUT"
+          echo "sig=${BASE_TARBALL}.sig" >> "$GITHUB_OUTPUT"
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            echo "arm64-tarball=$BASE_TARBALL" >> "$GITHUB_OUTPUT"
+          else
+            echo "x64-tarball=$BASE_TARBALL" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload artifact for downstream job
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.arch }}
+          path: staging/
+          retention-days: 1
+
+  publish:
+    name: Publish to R2
+    needs: [bump, build]
+    if: needs.bump.outputs.skipped != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.bump.outputs.version }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download arm64 bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-aarch64
+          path: staging/
+
+      - name: Download x64 bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-x64
+          path: staging/
+
+      - name: Build manifest
+        env:
+          VERSION: ${{ needs.bump.outputs.version }}
+          PUB_DATE: ${{ github.event.head_commit.timestamp }}
+          PUBLIC_URL_BASE: ${{ secrets.R2_PUBLIC_URL }}
+          ARM64_TARBALL: Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz
+          ARM64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz.sig
+          X64_TARBALL: Argus_${{ needs.bump.outputs.version }}_x64.app.tar.gz
+          X64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.app.tar.gz.sig
+        run: node scripts/build-manifest.mjs
+
+      - name: Configure R2 credentials
+        run: |
+          mkdir -p ~/.aws
+          cat > ~/.aws/credentials <<EOF
+          [default]
+          aws_access_key_id = ${{ secrets.R2_ACCESS_KEY_ID }}
+          aws_secret_access_key = ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          EOF
+
+      - name: Upload binaries (long cache)
+        env:
+          AWS_DEFAULT_REGION: auto
+          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          for f in staging/*; do
+            key=$(basename "$f")
+            aws s3 cp "$f" "s3://${BUCKET}/${key}" \
+              --endpoint-url "$ENDPOINT" \
+              --cache-control "public, max-age=31536000, immutable"
+          done
+
+      - name: Upload manifest (no cache)
+        env:
+          AWS_DEFAULT_REGION: auto
+          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          aws s3 cp latest.json "s3://${BUCKET}/latest.json" \
+            --endpoint-url "$ENDPOINT" \
+            --cache-control "no-cache, max-age=0" \
+            --content-type "application/json"

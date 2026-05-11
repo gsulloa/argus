@@ -203,15 +203,15 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
 
 /// Build the WHERE clause + values for a filter set. Returned values are
 /// `Box<dyn ToSql>` because the IN-list arity is dynamic.
-fn build_where(
-    filters: &HistoryFilters,
-) -> AppResult<(String, Vec<Box<dyn rusqlite::ToSql>>)> {
+fn build_where(filters: &HistoryFilters) -> AppResult<(String, Vec<Box<dyn rusqlite::ToSql>>)> {
     let mut clauses: Vec<String> = Vec::new();
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
     if let Some(ids) = filters.connection_ids.as_ref() {
         if !ids.is_empty() {
-            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", values.len() + i)).collect();
+            let placeholders: Vec<String> = (1..=ids.len())
+                .map(|i| format!("?{}", values.len() + i))
+                .collect();
             clauses.push(format!("connection_id IN ({})", placeholders.join(", ")));
             for id_str in ids {
                 let parsed = Uuid::parse_str(id_str)
@@ -250,10 +250,7 @@ fn build_where(
     Ok((where_sql, values))
 }
 
-pub fn list_entries(
-    conn: &rusqlite::Connection,
-    request: ListRequest,
-) -> AppResult<ListResponse> {
+pub fn list_entries(conn: &rusqlite::Connection, request: ListRequest) -> AppResult<ListResponse> {
     let limit = request.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = request.offset.unwrap_or(0);
     let (where_sql, values) = build_where(&request.filters)?;
@@ -261,7 +258,9 @@ pub fn list_entries(
     let count_sql = format!("SELECT COUNT(*) FROM query_history{}", where_sql);
     let mut count_stmt = conn.prepare(&count_sql)?;
     let total: i64 = count_stmt
-        .query_row(params_from_iter(values.iter().map(|v| v.as_ref())), |r| r.get(0))?;
+        .query_row(params_from_iter(values.iter().map(|v| v.as_ref())), |r| {
+            r.get(0)
+        })?;
 
     let list_sql = format!(
         "SELECT id, connection_id, connection_name, sql, origin, status,
@@ -277,8 +276,10 @@ pub fn list_entries(
     let mut all_values: Vec<Box<dyn rusqlite::ToSql>> = values;
     all_values.push(Box::new(limit as i64));
     all_values.push(Box::new(offset as i64));
-    let rows = list_stmt
-        .query_map(params_from_iter(all_values.iter().map(|v| v.as_ref())), row_to_entry)?;
+    let rows = list_stmt.query_map(
+        params_from_iter(all_values.iter().map(|v| v.as_ref())),
+        row_to_entry,
+    )?;
     let mut entries: Vec<HistoryEntry> = Vec::new();
     for r in rows {
         entries.push(r?);
@@ -294,10 +295,7 @@ pub fn delete_one(conn: &rusqlite::Connection, id: &str) -> AppResult<()> {
     Ok(())
 }
 
-pub fn clear(
-    conn: &rusqlite::Connection,
-    filters: HistoryFilters,
-) -> AppResult<ClearResponse> {
+pub fn clear(conn: &rusqlite::Connection, filters: HistoryFilters) -> AppResult<ClearResponse> {
     let (where_sql, values) = build_where(&filters)?;
     let sql = format!("DELETE FROM query_history{}", where_sql);
     let affected = conn.execute(&sql, params_from_iter(values.iter().map(|v| v.as_ref())))?;
@@ -336,9 +334,7 @@ pub fn prune_for_retention(
 /// Look up the latest count of distinct connection ids that have at least one
 /// history row. Used by the connections picker to surface deleted connections
 /// alongside live ones.
-pub fn distinct_connections(
-    conn: &rusqlite::Connection,
-) -> AppResult<Vec<(Uuid, String)>> {
+pub fn distinct_connections(conn: &rusqlite::Connection) -> AppResult<Vec<(Uuid, String)>> {
     // Latest snapshotted name wins (most recent run).
     let mut stmt = conn.prepare(
         "SELECT connection_id, connection_name
@@ -447,8 +443,14 @@ mod tests {
     fn filter_by_search_is_case_insensitive() {
         let c = open_in_memory().unwrap();
         let cid = Uuid::new_v4();
-        insert_entry(&c, make_entry(cid, "SELECT * FROM Orders", HistoryStatus::Ok, 100));
-        insert_entry(&c, make_entry(cid, "SELECT id FROM users", HistoryStatus::Ok, 200));
+        insert_entry(
+            &c,
+            make_entry(cid, "SELECT * FROM Orders", HistoryStatus::Ok, 100),
+        );
+        insert_entry(
+            &c,
+            make_entry(cid, "SELECT id FROM users", HistoryStatus::Ok, 200),
+        );
 
         let req = ListRequest {
             filters: HistoryFilters {
@@ -487,7 +489,10 @@ mod tests {
         let c = open_in_memory().unwrap();
         let cid = Uuid::new_v4();
         for i in 0..50_i64 {
-            insert_entry(&c, make_entry(cid, &format!("S{i}"), HistoryStatus::Ok, i * 10));
+            insert_entry(
+                &c,
+                make_entry(cid, &format!("S{i}"), HistoryStatus::Ok, i * 10),
+            );
         }
         let req = ListRequest {
             limit: Some(10),
@@ -558,10 +563,21 @@ mod tests {
         let day = 86_400_000_i64;
         // 10 fresh entries (within 30 days), 5 ancient (older than 30 days).
         for i in 0..10 {
-            insert_entry(&c, make_entry(cid, &format!("fresh-{i}"), HistoryStatus::Ok, now - i * day));
+            insert_entry(
+                &c,
+                make_entry(cid, &format!("fresh-{i}"), HistoryStatus::Ok, now - i * day),
+            );
         }
         for i in 0..5 {
-            insert_entry(&c, make_entry(cid, &format!("old-{i}"), HistoryStatus::Ok, now - 60 * day - i * day));
+            insert_entry(
+                &c,
+                make_entry(
+                    cid,
+                    &format!("old-{i}"),
+                    HistoryStatus::Ok,
+                    now - 60 * day - i * day,
+                ),
+            );
         }
         prune_for_retention(&mut c, 30, 10_000, now).unwrap();
         let resp = list_entries(&c, ListRequest::default()).unwrap();
@@ -581,7 +597,12 @@ mod tests {
         for i in 0..50_i64 {
             insert_entry(
                 &c,
-                make_entry(cid, &format!("S{i}"), HistoryStatus::Ok, now - (50 - i) * 1000),
+                make_entry(
+                    cid,
+                    &format!("S{i}"),
+                    HistoryStatus::Ok,
+                    now - (50 - i) * 1000,
+                ),
             );
         }
         prune_for_retention(&mut c, 30, 10, now).unwrap();

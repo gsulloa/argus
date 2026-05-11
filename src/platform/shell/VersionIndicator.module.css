@@ -1,0 +1,104 @@
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  border-radius: 3px;
+  color: var(--text-subtle);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.trigger:hover {
+  background: var(--bg-hover, var(--surface-2));
+  color: var(--text-muted);
+}
+.trigger[data-pending="true"] {
+  color: var(--text-muted);
+}
+
+.current {
+  color: inherit;
+}
+
+.arrow {
+  color: var(--text-subtle);
+}
+
+.pending {
+  color: var(--accent);
+}
+
+.tooltip {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
+  box-shadow: var(--shadow-md);
+  z-index: 60;
+}
+
+.menu {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px;
+  min-width: 220px;
+  box-shadow: var(--shadow-lg);
+  z-index: 60;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  border-radius: 3px;
+  cursor: pointer;
+  outline: none;
+}
+.item[data-highlighted] {
+  background: var(--surface-2);
+}
+
+.separator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.aboutList {
+  margin: 0 0 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.aboutRow {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 12px;
+  font-size: 12.5px;
+}
+
+.aboutRow dt {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 10px;
+  align-self: center;
+}
+
+.aboutRow dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.mono {
+  font-family: var(--font-mono, ui-monospace, "Geist Mono", monospace);
+  font-feature-settings: "zero" on;
+}

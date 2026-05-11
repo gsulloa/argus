@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use deadpool_postgres::Object as PgObject;
@@ -15,6 +14,9 @@ use crate::error::{AppError, AppResult};
 use crate::modules::activity_log::{
     emit_activity, format_params, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
 };
+use crate::modules::postgres::binding::{bind_filter_value, BindKind, ColumnTypeIndex};
+#[cfg(test)]
+use crate::modules::postgres::binding::{bind_kind_for_type, normalize_pg_type};
 use crate::modules::postgres::params::SslMode;
 use crate::modules::postgres::pool::PgPoolRegistry;
 use crate::modules::postgres::tls::client_config_for;
@@ -186,336 +188,6 @@ pub(crate) fn quote_ident(s: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-/// Placeholder template for a single bound parameter. `Plain` renders to
-/// `$N`; `Cast` renders to `$N::<type>` so Postgres parses the bound text
-/// into the column's expected type.
-#[derive(Debug, Clone)]
-enum PlaceholderTemplate {
-    Plain,
-    Cast(String),
-}
-
-impl PlaceholderTemplate {
-    fn render(&self, idx: usize) -> String {
-        match self {
-            PlaceholderTemplate::Plain => format!("${idx}"),
-            PlaceholderTemplate::Cast(t) => format!("${idx}::{t}"),
-        }
-    }
-}
-
-/// One bound parameter ready to push into the params Vec, paired with the
-/// placeholder template the SQL builder must render at the param's position.
-struct BoundParam {
-    value: Box<dyn ToSql + Sync + Send>,
-    placeholder: PlaceholderTemplate,
-}
-
-/// How a JSON filter value should be coerced for binding against a given
-/// Postgres column type. Drives both the Rust target type and the placeholder
-/// shape (plain `$N` or a `$N::<type>` cast).
-#[derive(Debug, Clone)]
-enum BindKind {
-    Int2,
-    Int4,
-    Int8,
-    Float4,
-    Float8,
-    Numeric,
-    Bool,
-    Text,
-    Uuid,
-    Date,
-    Time,
-    TimeTz,
-    Timestamp,
-    TimestampTz,
-    Bytea,
-    Json,
-    Jsonb,
-    /// Catch-all for column types we don't have a native mapping for.
-    /// We bind a `String` and let Postgres parse it via `$N::<type>`.
-    Fallback(String),
-}
-
-/// Strip parameterized modifiers from a `pg_catalog.format_type` string and
-/// lowercase it. Examples:
-/// - `varchar(255)` → `varchar`
-/// - `numeric(10,2)` → `numeric`
-/// - `timestamp(6) with time zone` → `timestamp with time zone`
-/// - `character varying(50)` → `character varying`
-fn normalize_pg_type(raw: &str) -> String {
-    let lower = raw.trim().to_ascii_lowercase();
-    let mut stripped = String::with_capacity(lower.len());
-    let mut depth: u32 = 0;
-    for ch in lower.chars() {
-        match ch {
-            '(' => depth += 1,
-            ')' => depth = depth.saturating_sub(1),
-            _ if depth == 0 => stripped.push(ch),
-            _ => {}
-        }
-    }
-    // Collapse runs of whitespace introduced by elided modifiers, e.g.
-    // `timestamp  with time zone` → `timestamp with time zone`.
-    let mut collapsed = String::with_capacity(stripped.len());
-    let mut prev_space = false;
-    for ch in stripped.chars() {
-        if ch == ' ' || ch == '\t' {
-            if !prev_space {
-                collapsed.push(' ');
-            }
-            prev_space = true;
-        } else {
-            collapsed.push(ch);
-            prev_space = false;
-        }
-    }
-    collapsed.trim().to_string()
-}
-
-/// Pick the bind kind for a Postgres column type. The input is the raw
-/// `data_type` from `pg_catalog.format_type` (already what `list_columns`
-/// returns).
-fn bind_kind_for_type(data_type: &str) -> BindKind {
-    let normalized = normalize_pg_type(data_type);
-    match normalized.as_str() {
-        "smallint" | "int2" | "smallserial" | "serial2" => BindKind::Int2,
-        "integer" | "int" | "int4" | "serial" | "serial4" => BindKind::Int4,
-        "bigint" | "int8" | "bigserial" | "serial8" => BindKind::Int8,
-        "real" | "float4" => BindKind::Float4,
-        "double precision" | "float8" => BindKind::Float8,
-        "numeric" | "decimal" => BindKind::Numeric,
-        "boolean" | "bool" => BindKind::Bool,
-        "text" | "character varying" | "varchar" | "character" | "char" | "bpchar" | "name"
-        | "citext" => BindKind::Text,
-        "uuid" => BindKind::Uuid,
-        "date" => BindKind::Date,
-        "time" | "time without time zone" => BindKind::Time,
-        "time with time zone" | "timetz" => BindKind::TimeTz,
-        "timestamp" | "timestamp without time zone" => BindKind::Timestamp,
-        "timestamp with time zone" | "timestamptz" => BindKind::TimestampTz,
-        "bytea" => BindKind::Bytea,
-        "json" => BindKind::Json,
-        "jsonb" => BindKind::Jsonb,
-        _ => BindKind::Fallback(normalized),
-    }
-}
-
-/// Per-relation index from column name → bind kind. Built once per filter
-/// compile and consulted per condition.
-struct ColumnTypeIndex {
-    kinds: HashMap<String, BindKind>,
-}
-
-impl ColumnTypeIndex {
-    fn from_columns(columns: &[DataColumn]) -> Self {
-        let mut kinds = HashMap::with_capacity(columns.len());
-        for c in columns {
-            kinds.insert(c.name.clone(), bind_kind_for_type(&c.data_type));
-        }
-        Self { kinds }
-    }
-
-    fn kind_for(&self, name: &str) -> Option<&BindKind> {
-        self.kinds.get(name)
-    }
-}
-
-/// Short rendering of a JSON value for inclusion in validation messages.
-fn repr_for_error(v: &JsonValue) -> String {
-    match v {
-        JsonValue::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-fn parse_int_value(v: &JsonValue, column: &str) -> AppResult<i64> {
-    match v {
-        JsonValue::Number(n) => n.as_i64().ok_or_else(|| {
-            AppError::Validation(format!(
-                "expected integer for column '{column}', got '{}'",
-                repr_for_error(v)
-            ))
-        }),
-        JsonValue::String(s) => s.trim().parse::<i64>().map_err(|_| {
-            AppError::Validation(format!(
-                "expected integer for column '{column}', got '{}'",
-                repr_for_error(v)
-            ))
-        }),
-        _ => Err(AppError::Validation(format!(
-            "expected integer for column '{column}', got '{}'",
-            repr_for_error(v)
-        ))),
-    }
-}
-
-fn parse_float_value(v: &JsonValue, column: &str) -> AppResult<f64> {
-    match v {
-        JsonValue::Number(n) => n.as_f64().ok_or_else(|| {
-            AppError::Validation(format!(
-                "expected number for column '{column}', got '{}'",
-                repr_for_error(v)
-            ))
-        }),
-        JsonValue::String(s) => s.trim().parse::<f64>().map_err(|_| {
-            AppError::Validation(format!(
-                "expected number for column '{column}', got '{}'",
-                repr_for_error(v)
-            ))
-        }),
-        _ => Err(AppError::Validation(format!(
-            "expected number for column '{column}', got '{}'",
-            repr_for_error(v)
-        ))),
-    }
-}
-
-fn coerce_to_string(v: &JsonValue) -> String {
-    match v {
-        JsonValue::String(s) => s.clone(),
-        JsonValue::Number(n) => n.to_string(),
-        JsonValue::Bool(b) => b.to_string(),
-        // bind_value rejects Null/Array/Object before this is reached.
-        other => other.to_string(),
-    }
-}
-
-/// Convert a JSON filter value into an owned `ToSql` parameter typed for the
-/// column's resolved Postgres data type, plus the placeholder template the
-/// SQL builder must render. `null` is rejected — the caller MUST use
-/// `IS NULL` / `IS NOT NULL` instead.
-fn bind_value(v: &JsonValue, column: &str, kind: &BindKind) -> AppResult<BoundParam> {
-    if matches!(v, JsonValue::Null) {
-        return Err(AppError::Validation(
-            "null filter value not allowed; use IS NULL / IS NOT NULL".into(),
-        ));
-    }
-    if matches!(v, JsonValue::Array(_) | JsonValue::Object(_)) {
-        return Err(AppError::Validation(
-            "array/object filter values are not supported".into(),
-        ));
-    }
-    match kind {
-        BindKind::Int2 => {
-            let n = parse_int_value(v, column)?;
-            let n16 = i16::try_from(n).map_err(|_| {
-                AppError::Validation(format!(
-                    "value {n} out of range for column '{column}' (smallint)"
-                ))
-            })?;
-            Ok(BoundParam {
-                value: Box::new(n16),
-                placeholder: PlaceholderTemplate::Plain,
-            })
-        }
-        BindKind::Int4 => {
-            let n = parse_int_value(v, column)?;
-            let n32 = i32::try_from(n).map_err(|_| {
-                AppError::Validation(format!(
-                    "value {n} out of range for column '{column}' (integer)"
-                ))
-            })?;
-            Ok(BoundParam {
-                value: Box::new(n32),
-                placeholder: PlaceholderTemplate::Plain,
-            })
-        }
-        BindKind::Int8 => {
-            let n = parse_int_value(v, column)?;
-            Ok(BoundParam {
-                value: Box::new(n),
-                placeholder: PlaceholderTemplate::Plain,
-            })
-        }
-        BindKind::Float4 => {
-            let n = parse_float_value(v, column)?;
-            Ok(BoundParam {
-                value: Box::new(n as f32),
-                placeholder: PlaceholderTemplate::Plain,
-            })
-        }
-        BindKind::Float8 => {
-            let n = parse_float_value(v, column)?;
-            Ok(BoundParam {
-                value: Box::new(n),
-                placeholder: PlaceholderTemplate::Plain,
-            })
-        }
-        BindKind::Numeric => {
-            let s = match v {
-                JsonValue::Number(n) => n.to_string(),
-                JsonValue::String(s) => s.clone(),
-                _ => {
-                    return Err(AppError::Validation(format!(
-                        "expected numeric for column '{column}', got '{}'",
-                        repr_for_error(v)
-                    )))
-                }
-            };
-            Ok(BoundParam {
-                value: Box::new(s),
-                placeholder: PlaceholderTemplate::Cast("numeric".into()),
-            })
-        }
-        BindKind::Bool => match v {
-            JsonValue::Bool(b) => Ok(BoundParam {
-                value: Box::new(*b),
-                placeholder: PlaceholderTemplate::Plain,
-            }),
-            _ => Err(AppError::Validation(format!(
-                "expected boolean for column '{column}', got '{}'",
-                repr_for_error(v)
-            ))),
-        },
-        BindKind::Text => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Plain,
-        }),
-        BindKind::Uuid => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Cast("uuid".into()),
-        }),
-        BindKind::Date => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Cast("date".into()),
-        }),
-        BindKind::Time => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Cast("time".into()),
-        }),
-        BindKind::TimeTz => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Cast("timetz".into()),
-        }),
-        BindKind::Timestamp => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Cast("timestamp".into()),
-        }),
-        BindKind::TimestampTz => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Cast("timestamptz".into()),
-        }),
-        BindKind::Bytea => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Cast("bytea".into()),
-        }),
-        BindKind::Json => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Cast("json".into()),
-        }),
-        BindKind::Jsonb => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Cast("jsonb".into()),
-        }),
-        BindKind::Fallback(type_name) => Ok(BoundParam {
-            value: Box::new(coerce_to_string(v)),
-            placeholder: PlaceholderTemplate::Cast(type_name.clone()),
-        }),
-    }
-}
-
 /// SQL fragment for a single-bound binary operator. Caller has already
 /// pushed the parameter and computed the placeholder index.
 fn binary_op_sql(col_with_cast: &str, op: Operator, placeholder: &str) -> String {
@@ -610,10 +282,10 @@ fn predicate_for(
             let max = obj
                 .get("max")
                 .ok_or_else(|| AppError::Validation("BETWEEN missing `max`".into()))?;
-            let bmin = bind_value(min, column_name, effective_kind)?;
+            let bmin = bind_filter_value(min, column_name, effective_kind)?;
             params.push(bmin.value);
             let ph_min = bmin.placeholder.render(params.len());
-            let bmax = bind_value(max, column_name, effective_kind)?;
+            let bmax = bind_filter_value(max, column_name, effective_kind)?;
             params.push(bmax.value);
             let ph_max = bmax.placeholder.render(params.len());
             Ok(format!("{col_with_cast} BETWEEN {ph_min} AND {ph_max}"))
@@ -631,7 +303,7 @@ fn predicate_for(
             }
             let mut placeholders = Vec::with_capacity(arr.len());
             for item in arr {
-                let bound = bind_value(item, column_name, effective_kind)?;
+                let bound = bind_filter_value(item, column_name, effective_kind)?;
                 params.push(bound.value);
                 placeholders.push(bound.placeholder.render(params.len()));
             }
@@ -649,7 +321,7 @@ fn predicate_for(
         _ => {
             let v =
                 value.ok_or_else(|| AppError::Validation("operator requires a value".into()))?;
-            let bound = bind_value(v, column_name, effective_kind)?;
+            let bound = bind_filter_value(v, column_name, effective_kind)?;
             params.push(bound.value);
             let placeholder = bound.placeholder.render(params.len());
             Ok(binary_op_sql(&col_with_cast, op, &placeholder))
@@ -773,7 +445,7 @@ fn expand_any_column(
     // column is cast to `::text` on the SQL side, so the bind is text.
     let v =
         value.ok_or_else(|| AppError::Validation("Any column operator requires a value".into()))?;
-    let bound = bind_value(v, "any_column", &BindKind::Text)?;
+    let bound = bind_filter_value(v, "any_column", &BindKind::Text)?;
     params.push(bound.value);
     let ph = bound.placeholder.render(params.len());
     let parts: Vec<String> = castable
@@ -832,7 +504,11 @@ pub(crate) fn compile_filter_tree(
     if tree.children.is_empty() {
         return Ok(String::new());
     }
-    let column_index = ColumnTypeIndex::from_columns(columns);
+    let column_index = ColumnTypeIndex::from_iter(
+        columns
+            .iter()
+            .map(|c| (c.name.as_str(), c.data_type.as_str())),
+    );
     let mut parts = Vec::with_capacity(tree.children.len());
     for node in &tree.children {
         match node {
@@ -1682,7 +1358,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             sql,
-            "\"created_at\" BETWEEN $1::timestamptz AND $2::timestamptz"
+            "\"created_at\" BETWEEN $1::text::timestamptz AND $2::text::timestamptz"
         );
         assert_eq!(params.len(), 2);
     }
@@ -2143,7 +1819,7 @@ mod tests {
             &mut params,
         )
         .unwrap();
-        assert_eq!(sql, "\"price\" < $1::numeric");
+        assert_eq!(sql, "\"price\" < $1::text::numeric");
         let dbg = format!("{:?}", params[0]);
         assert_eq!(dbg, "\"19.99\"");
     }
@@ -2160,7 +1836,7 @@ mod tests {
             &mut params,
         )
         .unwrap();
-        assert_eq!(sql, "\"user_id\" = $1::uuid");
+        assert_eq!(sql, "\"user_id\" = $1::text::uuid");
         let dbg = format!("{:?}", params[0]);
         assert_eq!(dbg, "\"550e8400-e29b-41d4-a716-446655440000\"");
     }
@@ -2196,7 +1872,7 @@ mod tests {
             &mut params,
         )
         .unwrap();
-        assert_eq!(sql, "\"addr\" = $1::inet");
+        assert_eq!(sql, "\"addr\" = $1::text::inet");
         let dbg = format!("{:?}", params[0]);
         assert_eq!(dbg, "\"192.168.1.1\"");
     }
@@ -2246,7 +1922,10 @@ mod tests {
         let cols = vec![col("due_date", "date")];
         let mut params = Vec::new();
         let body = compile_filter_tree(&tree, &cols, &mut params).unwrap();
-        assert_eq!(body, "\"due_date\" BETWEEN $1::date AND $2::date");
+        assert_eq!(
+            body,
+            "\"due_date\" BETWEEN $1::text::date AND $2::text::date"
+        );
         assert_eq!(params.len(), 2);
     }
 

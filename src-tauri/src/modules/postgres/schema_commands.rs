@@ -12,10 +12,10 @@ use crate::error::{AppError, AppResult};
 use crate::modules::activity_log::{
     emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
 };
+use crate::modules::postgres::ddl;
 use crate::modules::postgres::params::SslMode;
 use crate::modules::postgres::pool::PgPoolRegistry;
 use crate::modules::postgres::schema;
-use crate::modules::postgres::ddl;
 use crate::modules::postgres::schema_types::{
     CheckConstraintInfo, ColumnDetail, ExtensionInfo, ForeignKeyInfo, FunctionInfo,
     FunctionSignature, IndexInfo, KindFailure, PrimaryKeyInfo, RelationsResult, Relkind,
@@ -106,10 +106,7 @@ pub(super) fn aggregate_one<T>(
             failures.push(KindFailure {
                 kind: kind.to_string(),
                 code: Some("57014".to_string()),
-                message: format!(
-                    "{kind} query timed out ({}s)",
-                    PER_QUERY_TIMEOUT.as_secs()
-                ),
+                message: format!("{kind} query timed out ({}s)", PER_QUERY_TIMEOUT.as_secs()),
             });
             None
         }
@@ -148,8 +145,9 @@ pub async fn postgres_list_schemas(
     .await;
     let ms = started.elapsed().as_millis();
     let duration_ms = ms as u64;
-    let builder = ActivityLogEntryBuilder::new(ActivityKind::ListSchemas, Origin::Auto, duration_ms)
-        .connection(parsed);
+    let builder =
+        ActivityLogEntryBuilder::new(ActivityKind::ListSchemas, Origin::Auto, duration_ms)
+            .connection(parsed);
     match &result {
         Ok(rows) => {
             tracing::info!(
@@ -217,12 +215,9 @@ pub async fn postgres_list_relations(
 
     let ms = started.elapsed().as_millis();
     let duration_ms = ms as u64;
-    let builder = ActivityLogEntryBuilder::new(
-        ActivityKind::ListRelations,
-        Origin::Auto,
-        duration_ms,
-    )
-    .connection(parsed);
+    let builder =
+        ActivityLogEntryBuilder::new(ActivityKind::ListRelations, Origin::Auto, duration_ms)
+            .connection(parsed);
     match &result {
         Ok(r) => {
             tracing::info!(
@@ -261,15 +256,24 @@ async fn list_structure_inner<'a>(
     Result<AppResult<Vec<ExtensionInfo>>, Elapsed>,
 ) {
     tokio::join!(
-        timeout(PER_QUERY_TIMEOUT, schema::try_kind("functions", schema_name, || {
-            schema::list_functions(client, schema_name)
-        })),
-        timeout(PER_QUERY_TIMEOUT, schema::try_kind("types", schema_name, || {
-            schema::list_types(client, schema_name)
-        })),
-        timeout(PER_QUERY_TIMEOUT, schema::try_kind("extensions", schema_name, || {
-            schema::list_extensions(client, schema_name)
-        })),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("functions", schema_name, || {
+                schema::list_functions(client, schema_name)
+            })
+        ),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("types", schema_name, || {
+                schema::list_types(client, schema_name)
+            })
+        ),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("extensions", schema_name, || {
+                schema::list_extensions(client, schema_name)
+            })
+        ),
     )
 }
 
@@ -357,9 +361,17 @@ pub async fn postgres_list_structure(
                     .unwrap_or(-1),
                 result.failures.len(),
             );
-            let total: u32 = result.functions.as_ref().map(|v| v.len() as u32).unwrap_or(0)
+            let total: u32 = result
+                .functions
+                .as_ref()
+                .map(|v| v.len() as u32)
+                .unwrap_or(0)
                 + result.types.as_ref().map(|v| v.len() as u32).unwrap_or(0)
-                + result.extensions.as_ref().map(|v| v.len() as u32).unwrap_or(0);
+                + result
+                    .extensions
+                    .as_ref()
+                    .map(|v| v.len() as u32)
+                    .unwrap_or(0);
             emit_activity(&app, builder.ok(Some(Metric::Items { value: total })));
         }
         Err(e) => {
@@ -381,12 +393,18 @@ async fn list_table_extras_inner<'a>(
     Result<AppResult<Vec<TriggerInfo>>, Elapsed>,
 ) {
     tokio::join!(
-        timeout(PER_QUERY_TIMEOUT, schema::try_kind("indexes", schema_name, || {
-            schema::list_table_indexes(client, schema_name, relation)
-        })),
-        timeout(PER_QUERY_TIMEOUT, schema::try_kind("triggers", schema_name, || {
-            schema::list_table_triggers(client, schema_name, relation)
-        })),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("indexes", schema_name, || {
+                schema::list_table_indexes(client, schema_name, relation)
+            })
+        ),
+        timeout(
+            PER_QUERY_TIMEOUT,
+            schema::try_kind("triggers", schema_name, || {
+                schema::list_table_triggers(client, schema_name, relation)
+            })
+        ),
     )
 }
 
@@ -465,7 +483,11 @@ pub async fn postgres_list_table_extras(
                 result.failures.len(),
             );
             let total: u32 = result.indexes.as_ref().map(|v| v.len() as u32).unwrap_or(0)
-                + result.triggers.as_ref().map(|v| v.len() as u32).unwrap_or(0);
+                + result
+                    .triggers
+                    .as_ref()
+                    .map(|v| v.len() as u32)
+                    .unwrap_or(0);
             emit_activity(&app, builder.ok(Some(Metric::Items { value: total })));
         }
         Err(e) => {
@@ -577,29 +599,21 @@ pub async fn postgres_table_structure(
         )
         .await;
 
-        let (
-            columns_r,
-            pk_r,
-            fk_r,
-            unique_r,
-            check_r,
-            indexes_r,
-            triggers_r,
-            relkind_r,
-        ) = match outcome {
-            Ok(tuple) => tuple,
-            Err(_) => {
-                fire_cancel(cancel_token, sslmode).await;
-                drop(client);
-                return Err(AppError::postgres_with_code(
-                    "57014",
-                    format!(
-                        "table structure load timed out ({}s)",
-                        TOTAL_TIMEOUT.as_secs()
-                    ),
-                ));
-            }
-        };
+        let (columns_r, pk_r, fk_r, unique_r, check_r, indexes_r, triggers_r, relkind_r) =
+            match outcome {
+                Ok(tuple) => tuple,
+                Err(_) => {
+                    fire_cancel(cancel_token, sslmode).await;
+                    drop(client);
+                    return Err(AppError::postgres_with_code(
+                        "57014",
+                        format!(
+                            "table structure load timed out ({}s)",
+                            TOTAL_TIMEOUT.as_secs()
+                        ),
+                    ));
+                }
+            };
 
         let mut failures: Vec<KindFailure> = Vec::new();
 
@@ -612,10 +626,7 @@ pub async fn postgres_table_structure(
             Err(_) => {
                 return Err(AppError::postgres_with_code(
                     "57014",
-                    format!(
-                        "columns query timed out ({}s)",
-                        PER_QUERY_TIMEOUT.as_secs()
-                    ),
+                    format!("columns query timed out ({}s)", PER_QUERY_TIMEOUT.as_secs()),
                 ))
             }
         };
@@ -724,11 +735,7 @@ pub async fn postgres_table_structure(
     match &inner_result {
         Ok(result) => {
             let total: u32 = result.columns.len() as u32
-                + result
-                    .indexes
-                    .as_ref()
-                    .map(|v| v.len() as u32)
-                    .unwrap_or(0)
+                + result.indexes.as_ref().map(|v| v.len() as u32).unwrap_or(0)
                 + result
                     .triggers
                     .as_ref()

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { AlertTriangle } from "lucide-react";
 import { categorize, isMonoCategory } from "./typeHelpers";
 import { isCellEnvelope, type CellEnvelope, type CellValue, type DataColumn, type EditValue } from "./types";
+import { validateJsonInput, hasSmartQuotes } from "./jsonEditValidation";
 import styles from "./DataGrid.module.css";
 
 export interface EditableCellProps {
@@ -64,6 +66,9 @@ function looksLikeBytea(dataType: string): boolean {
  * Coerce the raw input string into a typed `EditValue` based on the column's
  * data type. We keep this loose: anything ambiguous goes through as a string
  * and Postgres validates on commit.
+ *
+ * JSON/JSONB columns are handled separately in CellEditor (they require
+ * parse validation before commit and may keep the editor open on failure).
  */
 function parseInputValue(raw: string, column: DataColumn, isNull: boolean): EditValue {
   if (isNull) return null;
@@ -77,10 +82,6 @@ function parseInputValue(raw: string, column: DataColumn, isNull: boolean): Edit
     if (raw.trim() === "") return null;
     const n = Number(raw);
     return Number.isFinite(n) ? n : raw;
-  }
-  if (looksLikeJson(t)) {
-    // Bind as the raw text — backend casts to json/jsonb.
-    return raw;
   }
   return raw;
 }
@@ -197,6 +198,8 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
   const isNull = initial === null || initial === undefined;
   const [text, setText] = useState<string>(valueToInputString(initial));
   const [nullToggle, setNullToggle] = useState<boolean>(isNull);
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  const [jsonWarning, setJsonWarning] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null>(null);
 
   useEffect(() => {
@@ -208,6 +211,22 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
   }, []);
 
   function commit() {
+    if (nullToggle) {
+      onCommit(null);
+      return;
+    }
+    if (looksLikeJson(column.data_type)) {
+      const result = validateJsonInput(text);
+      if (!result.ok) {
+        setJsonError(result.error);
+        setJsonWarning(false);
+        return;
+      }
+      setJsonError(null);
+      setJsonWarning(hasSmartQuotes(result.canonical));
+      onCommit(result.canonical === "" ? null : result.canonical);
+      return;
+    }
     onCommit(parseInputValue(text, column, nullToggle));
   }
 
@@ -287,22 +306,52 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
   const useTextarea =
     looksLikeJson(t) || (typeof initial === "string" && initial.length > 100);
 
+  const isJsonColumn = looksLikeJson(column.data_type);
+
   if (useTextarea) {
+    const textareaClassName = [
+      styles.cellEditor,
+      styles.cellEditorMono,
+      isJsonColumn && jsonError ? styles.jsonErrorBorder : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     return (
-      <textarea
-        ref={(el) => {
-          inputRef.current = el;
-        }}
-        className={`${styles.cellEditor} ${styles.cellEditorMono}`}
-        value={text}
-        onChange={(e) => {
-          setNullToggle(false);
-          setText(e.target.value);
-        }}
-        onBlur={commit}
-        onKeyDown={handleKey}
-        rows={3}
-      />
+      <div className={styles.jsonEditorWrapper}>
+        <textarea
+          ref={(el) => {
+            inputRef.current = el;
+          }}
+          className={textareaClassName}
+          value={text}
+          onChange={(e) => {
+            setNullToggle(false);
+            setText(e.target.value);
+            setJsonError(null);
+            setJsonWarning(false);
+          }}
+          onBlur={commit}
+          onKeyDown={handleKey}
+          rows={3}
+          {...(isJsonColumn
+            ? {
+                autoCorrect: "off",
+                autoCapitalize: "off",
+                spellCheck: false,
+                autoComplete: "off",
+              }
+            : {})}
+        />
+        {isJsonColumn && jsonError && (
+          <div className={styles.jsonError}>{jsonError}</div>
+        )}
+        {isJsonColumn && jsonWarning && !jsonError && (
+          <div className={styles.jsonWarning}>
+            <AlertTriangle size={11} />
+            Contains smart quotes
+          </div>
+        )}
+      </div>
     );
   }
 

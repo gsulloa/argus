@@ -28,6 +28,7 @@ import { ConnectionsProvider } from "@/platform/connection-registry/useConnectio
 import { ConnectionGroupsProvider } from "@/platform/connection-registry/useConnectionGroups";
 import { ActivityLogProvider } from "@/platform/activity-log/store";
 import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
+import { UpdaterProvider } from "@/platform/updater";
 import { ToastProvider } from "@/platform/toast";
 import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
 import { useQueryHistoryCommands } from "@/modules/query-history";
@@ -36,19 +37,21 @@ export function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <PaletteProvider>
-          <TabsProvider>
-            <ConnectionGroupsProvider>
-              <ConnectionsProvider>
-                <ActivityLogProvider>
-                  <PostgresFormProvider>
-                    <Shell />
-                  </PostgresFormProvider>
-                </ActivityLogProvider>
-              </ConnectionsProvider>
-            </ConnectionGroupsProvider>
-          </TabsProvider>
-        </PaletteProvider>
+        <UpdaterProvider>
+          <PaletteProvider>
+            <TabsProvider>
+              <ConnectionGroupsProvider>
+                <ConnectionsProvider>
+                  <ActivityLogProvider>
+                    <PostgresFormProvider>
+                      <Shell />
+                    </PostgresFormProvider>
+                  </ActivityLogProvider>
+                </ConnectionsProvider>
+              </ConnectionGroupsProvider>
+            </TabsProvider>
+          </PaletteProvider>
+        </UpdaterProvider>
       </ToastProvider>
     </ThemeProvider>
   );

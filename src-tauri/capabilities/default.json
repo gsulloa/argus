@@ -15,6 +15,7 @@
     "core:tray:default",
     "core:path:default",
     "dialog:default",
+    "updater:default",
     {
       "identifier": "fs:allow-write-text-file",
       "allow": [
