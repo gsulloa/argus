@@ -99,12 +99,7 @@ pub fn create(
     conn.execute(
         "INSERT INTO connection_groups (id, name, sort_order, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?4)",
-        params![
-            id.as_bytes().to_vec(),
-            input.name.trim(),
-            sort_order,
-            now,
-        ],
+        params![id.as_bytes().to_vec(), input.name.trim(), sort_order, now,],
     )?;
 
     Ok(ConnectionGroup {
@@ -152,7 +147,9 @@ pub fn delete(conn: &rusqlite::Connection, id: Uuid) -> AppResult<()> {
         params![id.as_bytes().to_vec()],
     )?;
     if affected == 0 {
-        return Err(AppError::NotFound(format!("connection_group {id} not found")));
+        return Err(AppError::NotFound(format!(
+            "connection_group {id} not found"
+        )));
     }
     Ok(())
 }
@@ -233,13 +230,7 @@ mod tests {
     #[test]
     fn create_validates_name() {
         let c = fresh();
-        let err = create(
-            &c,
-            ConnectionGroupInput {
-                name: "  ".into(),
-            },
-        )
-        .unwrap_err();
+        let err = create(&c, ConnectionGroupInput { name: "  ".into() }).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
         assert!(list(&c).unwrap().is_empty());
     }
@@ -277,13 +268,7 @@ mod tests {
     #[test]
     fn update_renames_and_bumps_updated_at() {
         let c = fresh();
-        let g = create(
-            &c,
-            ConnectionGroupInput {
-                name: "Old".into(),
-            },
-        )
-        .unwrap();
+        let g = create(&c, ConnectionGroupInput { name: "Old".into() }).unwrap();
         std::thread::sleep(std::time::Duration::from_secs(1));
         let updated = update(
             &c,
@@ -329,13 +314,7 @@ mod tests {
     #[test]
     fn delete_empty_group() {
         let c = fresh();
-        let g = create(
-            &c,
-            ConnectionGroupInput {
-                name: "g".into(),
-            },
-        )
-        .unwrap();
+        let g = create(&c, ConnectionGroupInput { name: "g".into() }).unwrap();
         delete(&c, g.id).unwrap();
         assert!(list(&c).unwrap().is_empty());
     }
@@ -350,13 +329,7 @@ mod tests {
     #[test]
     fn delete_non_empty_preserves_connections_via_fk() {
         let c = fresh();
-        let g = create(
-            &c,
-            ConnectionGroupInput {
-                name: "g".into(),
-            },
-        )
-        .unwrap();
+        let g = create(&c, ConnectionGroupInput { name: "g".into() }).unwrap();
         let conn_id = Uuid::new_v4();
         let now: i64 = 1;
         c.execute(

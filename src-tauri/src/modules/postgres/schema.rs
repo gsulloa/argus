@@ -689,14 +689,12 @@ pub async fn get_relkind(
     let is_populated: bool = row.get(1);
     let (kind, best_effort) = match relkind_raw.as_str() {
         "r" => (Relkind::Table, false),
-        "p" => (Relkind::Table, true),  // partitioned: best-effort DDL
-        "f" => (Relkind::Table, true),  // foreign: best-effort DDL
+        "p" => (Relkind::Table, true), // partitioned: best-effort DDL
+        "f" => (Relkind::Table, true), // foreign: best-effort DDL
         "v" => (Relkind::View, false),
         "m" => (Relkind::MaterializedView, false),
         other => {
-            tracing::warn!(
-                "table_structure: unexpected relkind '{other}' for {schema}.{relation}"
-            );
+            tracing::warn!("table_structure: unexpected relkind '{other}' for {schema}.{relation}");
             (Relkind::Table, true)
         }
     };
@@ -771,7 +769,10 @@ mod tests {
             decode_trigger_timing(TRIGGER_TYPE_BEFORE | TRIGGER_TYPE_INSERT),
             TriggerTiming::Before
         );
-        assert_eq!(decode_trigger_timing(TRIGGER_TYPE_INSERT), TriggerTiming::After);
+        assert_eq!(
+            decode_trigger_timing(TRIGGER_TYPE_INSERT),
+            TriggerTiming::After
+        );
     }
 
     #[test]
@@ -781,7 +782,11 @@ mod tests {
         );
         assert_eq!(
             events,
-            vec![TriggerEvent::Insert, TriggerEvent::Update, TriggerEvent::Truncate]
+            vec![
+                TriggerEvent::Insert,
+                TriggerEvent::Update,
+                TriggerEvent::Truncate
+            ]
         );
     }
 

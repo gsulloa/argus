@@ -87,9 +87,7 @@ impl PostgresParams {
     }
 
     pub fn effective_application_name(&self) -> &str {
-        self.application_name
-            .as_deref()
-            .unwrap_or("argus")
+        self.application_name.as_deref().unwrap_or("argus")
     }
 }
 
