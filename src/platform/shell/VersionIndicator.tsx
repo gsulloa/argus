@@ -6,8 +6,8 @@ import { useUpdater } from "@/platform/updater";
 import overlayStyles from "./Dialog.module.css";
 import styles from "./VersionIndicator.module.css";
 
-const PRODUCT_NAME = "Argus Beta";
-const IDENTIFIER = "com.argus.beta.app";
+const PRODUCT_NAME = "Argus";
+const IDENTIFIER = "com.argus.app";
 const BUILD_COMMIT = (import.meta.env.VITE_BUILD_COMMIT ?? "") as string;
 
 export interface VersionIndicatorViewProps {

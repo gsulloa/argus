@@ -25,9 +25,9 @@ pnpm tauri:build
 
 The bundle lands under `src-tauri/target/release/bundle/`.
 
-## Beta release pipeline
+## Release pipeline
 
-Beta builds are produced automatically by GitHub Actions on every merge to `master`,
+Builds are produced automatically by GitHub Actions on every merge to `master`,
 signed and notarized for macOS, and distributed to the team via auto-updater. The
 one-time setup (Apple Developer cert, R2 bucket, updater keypair, GH Secrets) is
 documented in [docs/release-setup.md](docs/release-setup.md).

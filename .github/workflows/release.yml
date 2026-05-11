@@ -55,7 +55,7 @@ jobs:
         run: |
           git config user.name "argus-release-bot"
           git config user.email "argus-release-bot@users.noreply.github.com"
-          git add src-tauri/tauri.conf.json src-tauri/tauri.beta.conf.json package.json src-tauri/Cargo.toml
+          git add src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml
           git commit -m "chore: bump version to v${NEW} [skip ci]"
           git tag "v${NEW}"
           git push origin HEAD:master
@@ -146,7 +146,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: Developer ID Application
         with:
-          args: --config src-tauri/tauri.beta.conf.json --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }}
 
       - name: Collect artifact paths
         id: collect
@@ -160,8 +160,8 @@ jobs:
           test -f "$SIG"
           # Rename to canonical names so the manifest URLs are predictable.
           VERSION="${{ needs.bump.outputs.version }}"
-          BASE_DMG="Argus_Beta_${VERSION}_${{ matrix.arch }}.dmg"
-          BASE_TARBALL="Argus_Beta_${VERSION}_${{ matrix.arch }}.app.tar.gz"
+          BASE_DMG="Argus_${VERSION}_${{ matrix.arch }}.dmg"
+          BASE_TARBALL="Argus_${VERSION}_${{ matrix.arch }}.app.tar.gz"
           mkdir -p staging
           cp "$DMG" "staging/$BASE_DMG"
           cp "$TARBALL" "staging/$BASE_TARBALL"
@@ -215,10 +215,10 @@ jobs:
           VERSION: ${{ needs.bump.outputs.version }}
           PUB_DATE: ${{ github.event.head_commit.timestamp }}
           PUBLIC_URL_BASE: ${{ secrets.R2_PUBLIC_URL }}
-          ARM64_TARBALL: Argus_Beta_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz
-          ARM64_SIG_PATH: staging/Argus_Beta_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz.sig
-          X64_TARBALL: Argus_Beta_${{ needs.bump.outputs.version }}_x64.app.tar.gz
-          X64_SIG_PATH: staging/Argus_Beta_${{ needs.bump.outputs.version }}_x64.app.tar.gz.sig
+          ARM64_TARBALL: Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz
+          ARM64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz.sig
+          X64_TARBALL: Argus_${{ needs.bump.outputs.version }}_x64.app.tar.gz
+          X64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.app.tar.gz.sig
         run: node scripts/build-manifest.mjs
 
       - name: Configure R2 credentials

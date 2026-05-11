@@ -32,7 +32,7 @@ const arm64Tarball = required("ARM64_TARBALL");
 const arm64SigPath = required("ARM64_SIG_PATH");
 const x64Tarball = required("X64_TARBALL");
 const x64SigPath = required("X64_SIG_PATH");
-const notes = process.env.NOTES ?? `Argus Beta v${version}`;
+const notes = process.env.NOTES ?? `Argus v${version}`;
 
 const arm64Sig = readFileSync(arm64SigPath, "utf8").trim();
 const x64Sig = readFileSync(x64SigPath, "utf8").trim();

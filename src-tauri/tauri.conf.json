@@ -42,8 +42,10 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": [],
-      "pubkey": ""
+      "endpoints": [
+        "https://pub-PLACEHOLDER.r2.dev/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_BASE64_ED25519_PUBLIC_KEY"
     }
   }
 }

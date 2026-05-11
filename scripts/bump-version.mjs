@@ -3,21 +3,19 @@
 // Reads the current version from src-tauri/tauri.conf.json (the source of truth),
 // computes next patch, and writes it back to:
 //   - src-tauri/tauri.conf.json
-//   - src-tauri/tauri.beta.conf.json (if present)
 //   - package.json
 //   - src-tauri/Cargo.toml
 //
 // Prints the new version on stdout so CI can capture it for tag creation.
 // Exits 0 silently if no change is needed (file already at target).
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const tauriConfPath = join(root, "src-tauri", "tauri.conf.json");
-const tauriBetaConfPath = join(root, "src-tauri", "tauri.beta.conf.json");
 const packageJsonPath = join(root, "package.json");
 const cargoTomlPath = join(root, "src-tauri", "Cargo.toml");
 
@@ -46,16 +44,6 @@ const next = bumpPatch(current);
 // tauri.conf.json
 tauriConf.version = next;
 writeJson(tauriConfPath, tauriConf);
-
-// tauri.beta.conf.json — only if it has a top-level version field; otherwise
-// it inherits from tauri.conf.json at build time.
-if (existsSync(tauriBetaConfPath)) {
-  const beta = readJson(tauriBetaConfPath);
-  if ("version" in beta) {
-    beta.version = next;
-    writeJson(tauriBetaConfPath, beta);
-  }
-}
 
 // package.json
 const pkg = readJson(packageJsonPath);
