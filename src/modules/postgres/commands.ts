@@ -160,7 +160,7 @@ export function usePostgresCommands(selection: SelectionApi = NOOP_SELECTION) {
             console.warn("[argus] new query: no active connection");
             return;
           }
-          openQueryTab(tabs, { connectionId: c.id, connectionName: c.name });
+          openQueryTab(tabs, { initialConnectionId: c.id, initialConnectionName: c.name, initialSql: "" });
         },
       }),
     );

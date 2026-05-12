@@ -34,29 +34,52 @@ export interface UseQueryRunResult {
   summary: string | null;
   /** `Date.now()` at which the latest run transitioned to `running`, or null otherwise. */
   runStartedAt: number | null;
-  /** Run whatever applies based on the editor state. */
+  /**
+   * Run whatever applies based on the editor state.
+   *
+   * 5.6: `connectionId` is now a required argument passed at call time rather
+   * than captured as a stable closure value. The caller (QueryTab) is
+   * responsible for validating that `connectionId` is non-null before calling
+   * `run()` and for surfacing the "Select a connection first." toast when it is.
+   */
   run(args: {
+    connectionId: string;
     fullSql: string;
     selectionFrom: number;
     selectionTo: number;
     cursor: number;
     forceAll?: boolean;
   }): Promise<void>;
+  /** Reset runner state back to idle (used when switching connections). */
+  reset(): void;
 }
 
-export function useQueryRun(connectionId: string): UseQueryRunResult {
+/**
+ * Hook that manages a single query-run lifecycle.
+ *
+ * 5.6 change: no longer receives `connectionId` as a hook argument.
+ * The connection is passed per-invocation to `run()`, making it safe
+ * to change the connection in the same tab without recreating the runner.
+ */
+export function useQueryRun(): UseQueryRunResult {
   const [state, setState] = useState<RunState>({ status: "idle" });
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
 
+  const reset = useCallback(() => {
+    setState({ status: "idle" });
+    setRunStartedAt(null);
+  }, []);
+
   const run = useCallback(
     async (args: {
+      connectionId: string;
       fullSql: string;
       selectionFrom: number;
       selectionTo: number;
       cursor: number;
       forceAll?: boolean;
     }) => {
-      const { fullSql, selectionFrom, selectionTo, cursor, forceAll = false } = args;
+      const { connectionId, fullSql, selectionFrom, selectionTo, cursor, forceAll = false } = args;
 
       // Decide what to run. Selection wins, then run-all, then statement
       // under cursor. Resolve into either a single SQL string or a
@@ -182,12 +205,12 @@ export function useQueryRun(connectionId: string): UseQueryRunResult {
       }
       setRunStartedAt(null);
     },
-    [connectionId],
+    [],
   );
 
   const summary = summarize(state);
 
-  return { state, summary, runStartedAt, run };
+  return { state, summary, runStartedAt, run, reset };
 }
 
 function summarize(state: RunState): string | null {
@@ -207,4 +230,3 @@ function summarize(state: RunState): string | null {
   const err = state.outcomes.filter((o) => o.status === "err").length;
   return `${ok} ok · ${err} err · ${state.outcomes.length} statements`;
 }
-

@@ -221,9 +221,9 @@ function HistoryTab() {
     const live = liveConnections.find((c) => c.id === entry.connection_id);
     if (!live) return; // disabled in UI
     openQueryTab(tabs, {
-      connectionId: live.id,
-      connectionName: live.name,
-      sql: entry.sql,
+      initialConnectionId: live.id,
+      initialConnectionName: live.name,
+      initialSql: entry.sql,
     });
   }
 

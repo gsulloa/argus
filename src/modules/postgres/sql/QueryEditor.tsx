@@ -59,6 +59,8 @@ export interface QueryEditorProps {
   onRunAll(): void;
   /** Called when the user presses Mod-Shift-F (format the buffer). */
   onFormat(): void;
+  /** Called when the user presses Mod-S (save). Optional — no-op if absent. */
+  onSave?(): void;
 }
 
 /**
@@ -87,6 +89,8 @@ export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
     onRunAllRef.current = props.onRunAll;
     const onFormatRef = useRef(props.onFormat);
     onFormatRef.current = props.onFormat;
+    const onSaveRef = useRef(props.onSave);
+    onSaveRef.current = props.onSave;
     const connectionIdRef = useRef(props.connectionId);
     connectionIdRef.current = props.connectionId;
 
@@ -147,6 +151,14 @@ export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
             preventDefault: true,
             run: () => {
               onFormatRef.current();
+              return true;
+            },
+          },
+          {
+            key: "Mod-s",
+            preventDefault: true,
+            run: () => {
+              onSaveRef.current?.();
               return true;
             },
           },

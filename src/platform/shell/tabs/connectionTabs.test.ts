@@ -7,6 +7,10 @@ function makeTab(id: string, kind: string, payload: unknown): Tab {
 }
 
 describe("listConnectionTabs", () => {
+  // NOTE: postgres-query tabs no longer carry `connectionId` in their payload
+  // (the connection is now runtime state, mutable via the toolbar selector).
+  // Only tab kinds with a stable `connectionId` payload field (e.g. table-data)
+  // are counted by listConnectionTabs.
   const tabs: Tab[] = [
     makeTab("welcome", "welcome", null),
     makeTab(
@@ -22,7 +26,7 @@ describe("listConnectionTabs", () => {
     makeTab(
       "sql-1",
       "postgres-query",
-      { connectionId: "conn-2", connectionName: "analytics" },
+      { initialConnectionId: "conn-2", initialConnectionName: "analytics", initialSql: "" },
     ),
     makeTab("settings", "settings", { foo: "bar" }),
   ];
@@ -31,8 +35,10 @@ describe("listConnectionTabs", () => {
     const c1 = listConnectionTabs(tabs, "conn-1");
     expect(c1.map((t) => t.id)).toEqual(["tv-1", "tv-2"]);
 
+    // postgres-query tabs use initialConnectionId (not connectionId) — they are
+    // NOT included in connection tab counts since the connection is mutable.
     const c2 = listConnectionTabs(tabs, "conn-2");
-    expect(c2.map((t) => t.id)).toEqual(["sql-1"]);
+    expect(c2.map((t) => t.id)).toEqual([]);
   });
 
   it("returns empty when no tab matches", () => {

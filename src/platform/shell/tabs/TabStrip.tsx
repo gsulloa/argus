@@ -61,6 +61,15 @@ export function TabStrip() {
               setDropTarget(null);
             }}
           >
+            {tab.dirty ? (
+              <span
+                className={styles.dirtyDot}
+                title="Unsaved changes"
+                aria-label="Unsaved changes"
+              >
+                ●
+              </span>
+            ) : null}
             <span>{tab.title}</span>
             {tab.closable && (
               <button

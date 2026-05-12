@@ -19,6 +19,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0003_groups.sql",
         include_str!("../../migrations/0003_groups.sql"),
     ),
+    (
+        "0004_saved_queries.sql",
+        include_str!("../../migrations/0004_saved_queries.sql"),
+    ),
 ];
 
 pub fn open_db(app: &AppHandle) -> AppResult<Connection> {

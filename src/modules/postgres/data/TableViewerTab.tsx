@@ -426,7 +426,7 @@ export function TableViewer({
       orderBy,
       limit: pageSize,
     });
-    openQueryTab(tabs, { connectionId, connectionName, sql });
+    openQueryTab(tabs, { initialConnectionId: connectionId, initialConnectionName: connectionName, initialSql: sql });
   }, [
     schema,
     relation,

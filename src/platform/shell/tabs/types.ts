@@ -4,4 +4,6 @@ export interface Tab {
   title: string;
   closable: boolean;
   payload: unknown;
+  /** When true the TabStrip renders a leading ● dirty indicator. */
+  dirty?: boolean;
 }

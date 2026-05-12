@@ -208,8 +208,9 @@ export function ConnectionRow({
                   className={styles.contextItem}
                   onSelect={() =>
                     openQueryTab(tabs, {
-                      connectionId: connection.id,
-                      connectionName: connection.name,
+                      initialConnectionId: connection.id,
+                      initialConnectionName: connection.name,
+                      initialSql: "",
                     })
                   }
                 >

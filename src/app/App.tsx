@@ -32,6 +32,7 @@ import { UpdaterProvider } from "@/platform/updater";
 import { ToastProvider } from "@/platform/toast";
 import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
 import { useQueryHistoryCommands } from "@/modules/query-history";
+import { savedQueriesStore } from "@/modules/saved-queries/store";
 
 export function App() {
   return (
@@ -77,6 +78,7 @@ function ShellMain() {
       <DevCommands />
       <PostgresCommands />
       <QueryHistoryCommands />
+      <SavedQueriesBootstrap />
       <BootstrapTabs />
       <TabStrip />
       <TabContent />
@@ -93,6 +95,13 @@ function PostgresCommands() {
 
 function QueryHistoryCommands() {
   useQueryHistoryCommands();
+  return null;
+}
+
+function SavedQueriesBootstrap() {
+  useEffect(() => {
+    void savedQueriesStore.loadAll();
+  }, []);
   return null;
 }
 

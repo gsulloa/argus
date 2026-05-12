@@ -17,7 +17,8 @@ export { SchemaTree, SchemaToolbar, SchemaPrimaryActions } from "./schema/Schema
 export { useSchemaTree } from "./schema/useSchemaTree";
 export { useVisibleSchemas } from "./schema/useVisibleSchemas";
 export { schemaApi } from "./schema/api";
-export { openQueryTab, POSTGRES_QUERY_KIND } from "./sql";
+export { openQueryTab, openSavedQueryInNewTab, POSTGRES_QUERY_KIND } from "./sql";
+export type { OpenQueryTabArgs } from "./sql";
 export type {
   ExtensionInfo,
   FunctionInfo,
