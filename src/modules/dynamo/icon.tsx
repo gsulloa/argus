@@ -4,12 +4,13 @@ interface IconProps {
 }
 
 /**
- * Minimal DynamoDB mark — a stylised partition-key motif: a vertical bisector
- * inside nested rounded rectangles, evoking hash-key + sort-key composite
- * structure without using AWS iconography.
+ * DynamoDB mark — a stacked-cylinder database glyph.
  *
- * Sized and stroked to match the Lucide icon set's visual weight
- * (1.5px stroke, 16px default), consistent with the Postgres icon.
+ * Shape-category contract: horizontally-banded geometric stack (top lid +
+ * three visible layers + side walls + bottom curve). Deliberately *unlike*
+ * the Postgres organic blob so the two source-kind icons are distinguishable
+ * at 14px by silhouette alone, with no color cues and no AWS iconography.
+ * Hairline stroke (1.5) on a 24px viewBox, inherits currentColor.
  */
 export function DynamoIcon({ size = 16, className }: IconProps) {
   return (
@@ -26,13 +27,14 @@ export function DynamoIcon({ size = 16, className }: IconProps) {
       strokeLinejoin="round"
       className={className}
     >
-      {/* Outer rounded rectangle */}
-      <rect x="4" y="5" width="16" height="14" rx="3" />
-      {/* Vertical bisector — primary partition key */}
-      <line x1="12" y1="5" x2="12" y2="19" />
-      {/* Short inner hash marks — sort key indicators */}
-      <line x1="8" y1="10" x2="8" y2="14" />
-      <line x1="16" y1="10" x2="16" y2="14" />
+      {/* Top lid — full top face of the cylinder */}
+      <ellipse cx="12" cy="5" rx="8" ry="2" />
+      {/* Side walls + bottom face */}
+      <path d="M4 5v13a8 2 0 0 0 16 0V5" />
+      {/* Internal disc separator 1 — upper band */}
+      <path d="M4 9.5a8 2 0 0 0 16 0" />
+      {/* Internal disc separator 2 — lower band */}
+      <path d="M4 14a8 2 0 0 0 16 0" />
     </svg>
   );
 }
