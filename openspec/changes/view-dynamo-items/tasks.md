@@ -8,29 +8,29 @@
 
 ## 2. Backend: Scan command
 
-- [ ] 2.1 Implement `pub async fn scan(...)` in `items.rs` taking `ScanRequest` plus `origin: Option<Origin>`; look up client via `DynamoClientRegistry`, return `AppError::NotFound` when absent.
-- [ ] 2.2 Validate `limit` in `1..=1000` before any AWS call; reject with `AppError::Validation` otherwise.
-- [ ] 2.3 Forward `filter_expression`, `expression_attribute_names`, `expression_attribute_values`, `projection_expression`, `index_name`, `consistent_read`, `select`, `exclusive_start_key` to the AWS SDK call verbatim. Do not parse or rewrite expressions.
-- [ ] 2.4 Funnel AWS errors through `dynamo::errors::translate_aws_error` so the credential-expiration detector fires on `ExpiredToken*` + access-keys + session_token.
-- [ ] 2.5 Emit exactly one `argus:activity-log` event with `kind: "scan_table"` and the compact params payload from 1.5; `metric: { kind: "items", value: response.count }` on success, `null` on failure; `duration_ms` is wall-clock.
-- [ ] 2.6 Register `dynamo.scan` in `src-tauri/src/modules/dynamo/commands.rs` and re-export from `mod.rs`.
-- [ ] 2.7 Add a Tauri integration test (mock SDK or DynamoDB Local) covering the happy path, the `limit` validation rejection, and a `ValidationException` surfaced from AWS.
+- [x] 2.1 Implement `pub async fn scan(...)` in `items.rs` taking `ScanRequest` plus `origin: Option<Origin>`; look up client via `DynamoClientRegistry`, return `AppError::NotFound` when absent.
+- [x] 2.2 Validate `limit` in `1..=1000` before any AWS call; reject with `AppError::Validation` otherwise.
+- [x] 2.3 Forward `filter_expression`, `expression_attribute_names`, `expression_attribute_values`, `projection_expression`, `index_name`, `consistent_read`, `select`, `exclusive_start_key` to the AWS SDK call verbatim. Do not parse or rewrite expressions.
+- [x] 2.4 Funnel AWS errors through `dynamo::errors::translate_aws_error` so the credential-expiration detector fires on `ExpiredToken*` + access-keys + session_token.
+- [x] 2.5 Emit exactly one `argus:activity-log` event with `kind: "scan_table"` and the compact params payload from 1.5; `metric: { kind: "items", value: response.count }` on success, `null` on failure; `duration_ms` is wall-clock.
+- [x] 2.6 Register `dynamo.scan` in `src-tauri/src/modules/dynamo/commands.rs` and re-export from `mod.rs`.
+- [x] 2.7 Add a Tauri integration test (mock SDK or DynamoDB Local) covering the happy path, the `limit` validation rejection, and a `ValidationException` surfaced from AWS.
 
 ## 3. Backend: Query command
 
-- [ ] 3.1 Implement `pub async fn query(...)` mirroring `scan` but with required `key_condition_expression` and optional `scan_index_forward` (default `true`).
-- [ ] 3.2 Validate `key_condition_expression` is non-empty; reject with `AppError::Validation` otherwise.
-- [ ] 3.3 Emit `kind: "query_table"` activity-log event with `params.has_key_condition: true` and `params.scan_index_forward` populated.
-- [ ] 3.4 Register `dynamo.query` and integration-test happy path, reverse sort (`scan_index_forward: false`), and missing-key-condition rejection.
+- [x] 3.1 Implement `pub async fn query(...)` mirroring `scan` but with required `key_condition_expression` and optional `scan_index_forward` (default `true`).
+- [x] 3.2 Validate `key_condition_expression` is non-empty; reject with `AppError::Validation` otherwise.
+- [x] 3.3 Emit `kind: "query_table"` activity-log event with `params.has_key_condition: true` and `params.scan_index_forward` populated.
+- [x] 3.4 Register `dynamo.query` and integration-test happy path, reverse sort (`scan_index_forward: false`), and missing-key-condition rejection.
 
 ## 4. Backend: Count command
 
-- [ ] 4.1 Implement `pub async fn count_items(...)` accepting a `CountRequest` with `mode: "scan" | "query"`, optional filter/index/keys, and `consistent_read`. Reject `mode: "query"` without `key_condition_expression` via `AppError::Validation`.
-- [ ] 4.2 Internally page with `Select: "COUNT"` and `Limit: 1000` per AWS call, accumulating `Count` and `ScannedCount` into `total_count` / `total_scanned_count` until `last_evaluated_key` is null.
-- [ ] 4.3 Track `page_count` (number of AWS calls made). Sum any `ConsumedCapacity` reported by AWS if returned.
-- [ ] 4.4 Funnel AWS errors through the credential-expiration contract; surface `ValidationException` verbatim.
-- [ ] 4.5 Emit one `argus:activity-log` event with `kind: "count_table"` and `metric: { kind: "items", value: total_count }` on success.
-- [ ] 4.6 Register `dynamo.count_items` and integration-test (a) unfiltered scan count over a small Local table, (b) filter-shrinks-count case, (c) query-mode count, (d) missing-key-condition validation.
+- [x] 4.1 Implement `pub async fn count_items(...)` accepting a `CountRequest` with `mode: "scan" | "query"`, optional filter/index/keys, and `consistent_read`. Reject `mode: "query"` without `key_condition_expression` via `AppError::Validation`.
+- [x] 4.2 Internally page with `Select: "COUNT"` and `Limit: 1000` per AWS call, accumulating `Count` and `ScannedCount` into `total_count` / `total_scanned_count` until `last_evaluated_key` is null.
+- [x] 4.3 Track `page_count` (number of AWS calls made). Sum any `ConsumedCapacity` reported by AWS if returned.
+- [x] 4.4 Funnel AWS errors through the credential-expiration contract; surface `ValidationException` verbatim.
+- [x] 4.5 Emit one `argus:activity-log` event with `kind: "count_table"` and `metric: { kind: "items", value: total_count }` on success.
+- [x] 4.6 Register `dynamo.count_items` and integration-test (a) unfiltered scan count over a small Local table, (b) filter-shrinks-count case, (c) query-mode count, (d) missing-key-condition validation.
 
 ## 5. Frontend: types and IPC binding
 

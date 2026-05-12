@@ -14,6 +14,7 @@ use crate::modules::dynamo::commands::{
     dynamo_connect, dynamo_disconnect, dynamo_list_active, dynamo_list_aws_profiles,
     dynamo_test_connection, dynamo_update_credentials,
 };
+use crate::modules::dynamo::items::{dynamo_count_items, dynamo_query, dynamo_scan};
 use crate::modules::dynamo::tables::commands::{dynamo_describe_table, dynamo_list_tables};
 use crate::modules::postgres::{
     postgres_apply_table_edits, postgres_connect, postgres_count_table, postgres_disconnect,
@@ -193,6 +194,9 @@ pub fn run() {
             dynamo_update_credentials,
             dynamo_list_tables,
             dynamo_describe_table,
+            dynamo_scan,
+            dynamo_query,
+            dynamo_count_items,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

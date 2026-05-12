@@ -1,13 +1,21 @@
-/// DynamoDB item types, codec, IPC envelopes, and activity-log helpers.
+/// DynamoDB item types, codec, IPC envelopes, activity-log helpers, and
+/// the Scan/Query/Count command handlers.
 ///
-/// Phase 1 of OpenSpec change `view-dynamo-items` (tasks 1.1–1.5).
-/// Phase 2 will add the actual Scan/Query/Count command handlers on top of these types.
+/// Phase 1 (tasks 1.1–1.5): AttributeValue codec and shared envelopes.
+/// Phase 2 (tasks 2.1–4.6): scan/query/count_items command implementations.
 use std::collections::HashMap;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
-use crate::modules::activity_log::Origin;
+use crate::error::{AppError, AppResult};
+use crate::modules::activity_log::{
+    emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
+};
+use crate::modules::dynamo::client::DynamoClientRegistry;
+use crate::platform::DbState;
 
 // ---------------------------------------------------------------------------
 // §1.1  AttrValue — serde-friendly mirror of AWS AttributeValue
@@ -312,6 +320,690 @@ pub(crate) fn compact_activity_params(
         map.insert("scan_index_forward".into(), serde_json::Value::Bool(fwd));
     }
     serde_json::Value::Object(map)
+}
+
+// ---------------------------------------------------------------------------
+// §2  Internal credential-expiry helper (mirrors tables/commands.rs)
+// ---------------------------------------------------------------------------
+
+async fn handle_aws_err(
+    db: &State<'_, DbState>,
+    registry: &State<'_, DynamoClientRegistry>,
+    connection_id: &Uuid,
+    app_err: AppError,
+) -> AppError {
+    use rusqlite::OptionalExtension;
+    use crate::modules::dynamo::params::DynamoParams;
+
+    let params_opt: Option<DynamoParams> = (|| {
+        let guard = db.0.lock().ok()?;
+        let row: Option<String> = guard
+            .query_row(
+                "SELECT params_json FROM connections WHERE id = ?1",
+                rusqlite::params![connection_id.as_bytes().to_vec()],
+                |r| r.get(0),
+            )
+            .optional()
+            .ok()?;
+        let params_json: serde_json::Value = serde_json::from_str(&row?).ok()?;
+        DynamoParams::from_json(&params_json).ok()
+    })();
+
+    if let Some(params) = params_opt {
+        maybe_access_keys_expired(db, registry, connection_id, &params, app_err).await
+    } else {
+        app_err
+    }
+}
+
+async fn maybe_access_keys_expired(
+    db: &State<'_, DbState>,
+    registry: &State<'_, DynamoClientRegistry>,
+    id: &Uuid,
+    params: &crate::modules::dynamo::params::DynamoParams,
+    app_err: AppError,
+) -> AppError {
+    use crate::modules::dynamo::params::DynamoAuth;
+    use crate::platform::secrets;
+
+    if !matches!(params.auth, DynamoAuth::AccessKeys) {
+        return app_err;
+    }
+    if let AppError::Aws(body) = &app_err {
+        let is_session_expired = matches!(
+            body.code.as_str(),
+            "ExpiredToken" | "ExpiredTokenException" | "InvalidClientTokenId" | "RequestExpired"
+        );
+        if !is_session_expired {
+            return app_err;
+        }
+
+        let secret_str = match secrets::get(id) {
+            Ok(Some(s)) => s,
+            _ => return app_err,
+        };
+        let has_session_token = serde_json::from_str::<serde_json::Value>(&secret_str)
+            .ok()
+            .and_then(|v| {
+                v.get("session_token")
+                    .and_then(|t| t.as_str())
+                    .map(|s| !s.is_empty())
+            })
+            .unwrap_or(false);
+        if !has_session_token {
+            return app_err;
+        }
+
+        let mut new_params = params.clone();
+        new_params.needs_credentials = Some(true);
+        let _ = update_connection_params(db, id, new_params.to_json());
+
+        let _ = registry.remove(id).await;
+    }
+    app_err
+}
+
+fn update_connection_params(
+    db: &State<'_, DbState>,
+    id: &Uuid,
+    new_params: AppResult<serde_json::Value>,
+) -> AppResult<()> {
+    let new_params_json = serde_json::to_string(&new_params?)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let guard = db
+        .0
+        .lock()
+        .map_err(|_| AppError::Internal("db lock poisoned".into()))?;
+    guard.execute(
+        "UPDATE connections SET params_json = ?1, updated_at = ?2 WHERE id = ?3",
+        rusqlite::params![new_params_json, now, id.as_bytes().to_vec()],
+    )?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// §2  SDK error → AppError helper (used by all three commands)
+// ---------------------------------------------------------------------------
+
+fn sdk_scan_err<E>(e: &aws_sdk_dynamodb::error::SdkError<E>) -> AppError
+where
+    E: aws_sdk_dynamodb::error::ProvideErrorMetadata + std::fmt::Debug,
+{
+    use aws_sdk_dynamodb::error::ProvideErrorMetadata;
+    let code = e.meta().code().unwrap_or("Unknown").to_string();
+    let message = e
+        .meta()
+        .message()
+        .map(String::from)
+        .unwrap_or_else(|| format!("{e:?}"));
+    AppError::aws(code, message, false)
+}
+
+// ---------------------------------------------------------------------------
+// §2  SelectMode → AWS SDK Select
+// ---------------------------------------------------------------------------
+
+fn select_mode_to_sdk(mode: SelectMode) -> aws_sdk_dynamodb::types::Select {
+    match mode {
+        SelectMode::AllAttributes => aws_sdk_dynamodb::types::Select::AllAttributes,
+        SelectMode::AllProjectedAttributes => {
+            aws_sdk_dynamodb::types::Select::AllProjectedAttributes
+        }
+        SelectMode::SpecificAttributes => aws_sdk_dynamodb::types::Select::SpecificAttributes,
+        SelectMode::Count => aws_sdk_dynamodb::types::Select::Count,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §2.1–2.6  scan command
+// ---------------------------------------------------------------------------
+
+pub async fn scan(
+    app: AppHandle,
+    db: State<'_, DbState>,
+    registry: State<'_, DynamoClientRegistry>,
+    req: ScanRequest,
+) -> AppResult<ScanResponse> {
+    let origin = req.origin.unwrap_or_default();
+    let started = Instant::now();
+
+    if req.limit < 1 || req.limit > 1000 {
+        let e = AppError::Validation(format!(
+            "limit must be between 1 and 1000, got {}",
+            req.limit
+        ));
+        let duration_ms = started.elapsed().as_millis() as u64;
+        let params = compact_activity_params(
+            &req.table_name,
+            req.index_name.as_deref(),
+            req.filter_expression.is_some(),
+            false,
+            Some(req.limit),
+            req.consistent_read,
+            req.select,
+            Some(req.page),
+            None,
+        );
+        emit_activity(
+            &app,
+            ActivityLogEntryBuilder::new(ActivityKind::ScanTable, origin, duration_ms)
+                .connection(req.connection_id)
+                .params(vec![params.to_string()])
+                .err(&e),
+        );
+        return Err(e);
+    }
+
+    let client = match registry.acquire(&req.connection_id).await {
+        Ok(c) => c,
+        Err(e) => {
+            let duration_ms = started.elapsed().as_millis() as u64;
+            let params = compact_activity_params(
+                &req.table_name,
+                req.index_name.as_deref(),
+                req.filter_expression.is_some(),
+                false,
+                Some(req.limit),
+                req.consistent_read,
+                req.select,
+                Some(req.page),
+                None,
+            );
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::ScanTable, origin, duration_ms)
+                    .connection(req.connection_id)
+                    .params(vec![params.to_string()])
+                    .err(&e),
+            );
+            return Err(e);
+        }
+    };
+
+    let mut builder = client
+        .scan()
+        .table_name(&req.table_name)
+        .limit(req.limit as i32)
+        .consistent_read(req.consistent_read);
+
+    if let Some(idx) = &req.index_name {
+        builder = builder.index_name(idx);
+    }
+    if let Some(fe) = &req.filter_expression {
+        builder = builder.filter_expression(fe);
+    }
+    if let Some(pe) = &req.projection_expression {
+        builder = builder.projection_expression(pe);
+    }
+    if let Some(ean) = req.expression_attribute_names {
+        for (k, v) in ean {
+            builder = builder.expression_attribute_names(k, v);
+        }
+    }
+    if let Some(eav) = req.expression_attribute_values {
+        for (k, v) in eav {
+            builder = builder.expression_attribute_values(k, v.into());
+        }
+    }
+    if let Some(esk) = req.exclusive_start_key {
+        for (k, v) in esk {
+            builder = builder.exclusive_start_key(k, v.into());
+        }
+    }
+    if let Some(sel) = req.select {
+        builder = builder.select(select_mode_to_sdk(sel));
+    }
+
+    let result = builder.send().await;
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    let params_json = compact_activity_params(
+        &req.table_name,
+        req.index_name.as_deref(),
+        req.filter_expression.is_some(),
+        false,
+        Some(req.limit),
+        req.consistent_read,
+        req.select,
+        Some(req.page),
+        None,
+    );
+
+    match result {
+        Ok(resp) => {
+            let items: Vec<HashMap<String, AttrValue>> = resp
+                .items()
+                .iter()
+                .map(|item| item.iter().map(|(k, v)| (k.clone(), AttrValue::from(v.clone()))).collect())
+                .collect();
+            let count = resp.count() as u32;
+            let scanned_count = resp.scanned_count() as u32;
+            let last_evaluated_key = resp
+                .last_evaluated_key()
+                .filter(|m| !m.is_empty())
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), AttrValue::from(v.clone()))).collect());
+
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::ScanTable, origin, duration_ms)
+                    .connection(req.connection_id)
+                    .params(vec![params_json.to_string()])
+                    .ok(Some(Metric::Items { value: count })),
+            );
+
+            Ok(ScanResponse {
+                items,
+                last_evaluated_key,
+                scanned_count,
+                count,
+                consumed_capacity: None,
+            })
+        }
+        Err(e) => {
+            let app_err = sdk_scan_err(&e);
+            let app_err = handle_aws_err(&db, &registry, &req.connection_id, app_err).await;
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::ScanTable, origin, duration_ms)
+                    .connection(req.connection_id)
+                    .params(vec![params_json.to_string()])
+                    .err(&app_err),
+            );
+            Err(app_err)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §3.1–3.4  query command
+// ---------------------------------------------------------------------------
+
+pub async fn query(
+    app: AppHandle,
+    db: State<'_, DbState>,
+    registry: State<'_, DynamoClientRegistry>,
+    req: QueryRequest,
+) -> AppResult<QueryResponse> {
+    let origin = req.origin.unwrap_or_default();
+    let started = Instant::now();
+    let scan_index_forward = req.scan_index_forward.unwrap_or(true);
+
+    let params_json = compact_activity_params(
+        &req.table_name,
+        req.index_name.as_deref(),
+        req.filter_expression.is_some(),
+        true,
+        Some(req.limit),
+        req.consistent_read,
+        req.select,
+        Some(req.page),
+        Some(scan_index_forward),
+    );
+
+    if req.key_condition_expression.trim().is_empty() {
+        let e = AppError::Validation("key_condition_expression must not be empty".into());
+        let duration_ms = started.elapsed().as_millis() as u64;
+        emit_activity(
+            &app,
+            ActivityLogEntryBuilder::new(ActivityKind::QueryTable, origin, duration_ms)
+                .connection(req.connection_id)
+                .params(vec![params_json.to_string()])
+                .err(&e),
+        );
+        return Err(e);
+    }
+
+    if req.limit < 1 || req.limit > 1000 {
+        let e = AppError::Validation(format!(
+            "limit must be between 1 and 1000, got {}",
+            req.limit
+        ));
+        let duration_ms = started.elapsed().as_millis() as u64;
+        emit_activity(
+            &app,
+            ActivityLogEntryBuilder::new(ActivityKind::QueryTable, origin, duration_ms)
+                .connection(req.connection_id)
+                .params(vec![params_json.to_string()])
+                .err(&e),
+        );
+        return Err(e);
+    }
+
+    let client = match registry.acquire(&req.connection_id).await {
+        Ok(c) => c,
+        Err(e) => {
+            let duration_ms = started.elapsed().as_millis() as u64;
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::QueryTable, origin, duration_ms)
+                    .connection(req.connection_id)
+                    .params(vec![params_json.to_string()])
+                    .err(&e),
+            );
+            return Err(e);
+        }
+    };
+
+    let mut builder = client
+        .query()
+        .table_name(&req.table_name)
+        .limit(req.limit as i32)
+        .consistent_read(req.consistent_read)
+        .key_condition_expression(&req.key_condition_expression)
+        .scan_index_forward(scan_index_forward);
+
+    if let Some(idx) = &req.index_name {
+        builder = builder.index_name(idx);
+    }
+    if let Some(fe) = &req.filter_expression {
+        builder = builder.filter_expression(fe);
+    }
+    if let Some(pe) = &req.projection_expression {
+        builder = builder.projection_expression(pe);
+    }
+    if let Some(ean) = req.expression_attribute_names {
+        for (k, v) in ean {
+            builder = builder.expression_attribute_names(k, v);
+        }
+    }
+    if let Some(eav) = req.expression_attribute_values {
+        for (k, v) in eav {
+            builder = builder.expression_attribute_values(k, v.into());
+        }
+    }
+    if let Some(esk) = req.exclusive_start_key {
+        for (k, v) in esk {
+            builder = builder.exclusive_start_key(k, v.into());
+        }
+    }
+    if let Some(sel) = req.select {
+        builder = builder.select(select_mode_to_sdk(sel));
+    }
+
+    let result = builder.send().await;
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(resp) => {
+            let items: Vec<HashMap<String, AttrValue>> = resp
+                .items()
+                .iter()
+                .map(|item| item.iter().map(|(k, v)| (k.clone(), AttrValue::from(v.clone()))).collect())
+                .collect();
+            let count = resp.count() as u32;
+            let scanned_count = resp.scanned_count() as u32;
+            let last_evaluated_key = resp
+                .last_evaluated_key()
+                .filter(|m| !m.is_empty())
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), AttrValue::from(v.clone()))).collect());
+
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::QueryTable, origin, duration_ms)
+                    .connection(req.connection_id)
+                    .params(vec![params_json.to_string()])
+                    .ok(Some(Metric::Items { value: count })),
+            );
+
+            Ok(QueryResponse {
+                items,
+                last_evaluated_key,
+                scanned_count,
+                count,
+                consumed_capacity: None,
+            })
+        }
+        Err(e) => {
+            let app_err = sdk_scan_err(&e);
+            let app_err = handle_aws_err(&db, &registry, &req.connection_id, app_err).await;
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::QueryTable, origin, duration_ms)
+                    .connection(req.connection_id)
+                    .params(vec![params_json.to_string()])
+                    .err(&app_err),
+            );
+            Err(app_err)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §4.1–4.6  count_items command
+// ---------------------------------------------------------------------------
+
+pub async fn count_items(
+    app: AppHandle,
+    db: State<'_, DbState>,
+    registry: State<'_, DynamoClientRegistry>,
+    req: CountRequest,
+) -> AppResult<CountResponse> {
+    let origin = req.origin.unwrap_or_default();
+    let started = Instant::now();
+
+    let params_json = compact_activity_params(
+        &req.table_name,
+        req.index_name.as_deref(),
+        req.filter_expression.is_some(),
+        req.key_condition_expression.is_some(),
+        None,
+        req.consistent_read,
+        None,
+        None,
+        req.scan_index_forward,
+    );
+
+    if matches!(req.mode, CountMode::Query) {
+        let kce = req.key_condition_expression.as_deref().unwrap_or("").trim();
+        if kce.is_empty() {
+            let e = AppError::Validation(
+                "key_condition_expression is required for mode=query".into(),
+            );
+            let duration_ms = started.elapsed().as_millis() as u64;
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::CountTable, origin, duration_ms)
+                    .connection(req.connection_id)
+                    .params(vec![params_json.to_string()])
+                    .err(&e),
+            );
+            return Err(e);
+        }
+    }
+
+    let client = match registry.acquire(&req.connection_id).await {
+        Ok(c) => c,
+        Err(e) => {
+            let duration_ms = started.elapsed().as_millis() as u64;
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::CountTable, origin, duration_ms)
+                    .connection(req.connection_id)
+                    .params(vec![params_json.to_string()])
+                    .err(&e),
+            );
+            return Err(e);
+        }
+    };
+
+    let mut total_count: u64 = 0;
+    let mut total_scanned_count: u64 = 0;
+    let mut page_count: u32 = 0;
+    let mut last_key: Option<HashMap<String, aws_sdk_dynamodb::types::AttributeValue>> = None;
+
+    loop {
+        let app_err: AppError;
+
+        match req.mode {
+            CountMode::Scan => {
+                let mut builder = client
+                    .scan()
+                    .table_name(&req.table_name)
+                    .limit(1000)
+                    .consistent_read(req.consistent_read)
+                    .select(aws_sdk_dynamodb::types::Select::Count);
+
+                if let Some(idx) = &req.index_name {
+                    builder = builder.index_name(idx);
+                }
+                if let Some(fe) = &req.filter_expression {
+                    builder = builder.filter_expression(fe);
+                }
+                if let Some(ean) = &req.expression_attribute_names {
+                    for (k, v) in ean {
+                        builder = builder.expression_attribute_names(k, v);
+                    }
+                }
+                if let Some(eav) = &req.expression_attribute_values {
+                    for (k, v) in eav {
+                        builder = builder.expression_attribute_values(k, v.clone().into());
+                    }
+                }
+                if let Some(ref lk) = last_key {
+                    for (k, v) in lk {
+                        builder = builder.exclusive_start_key(k, v.clone());
+                    }
+                }
+
+                match builder.send().await {
+                    Ok(resp) => {
+                        total_count += resp.count() as u64;
+                        total_scanned_count += resp.scanned_count() as u64;
+                        page_count += 1;
+                        match resp.last_evaluated_key().filter(|m| !m.is_empty()) {
+                            None => break,
+                            Some(m) => {
+                                last_key = Some(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        app_err = sdk_scan_err(&e);
+                    }
+                }
+            }
+            CountMode::Query => {
+                let kce = req.key_condition_expression.as_deref().unwrap_or("");
+                let scan_fwd = req.scan_index_forward.unwrap_or(true);
+
+                let mut builder = client
+                    .query()
+                    .table_name(&req.table_name)
+                    .limit(1000)
+                    .consistent_read(req.consistent_read)
+                    .key_condition_expression(kce)
+                    .scan_index_forward(scan_fwd)
+                    .select(aws_sdk_dynamodb::types::Select::Count);
+
+                if let Some(idx) = &req.index_name {
+                    builder = builder.index_name(idx);
+                }
+                if let Some(fe) = &req.filter_expression {
+                    builder = builder.filter_expression(fe);
+                }
+                if let Some(ean) = &req.expression_attribute_names {
+                    for (k, v) in ean {
+                        builder = builder.expression_attribute_names(k, v);
+                    }
+                }
+                if let Some(eav) = &req.expression_attribute_values {
+                    for (k, v) in eav {
+                        builder = builder.expression_attribute_values(k, v.clone().into());
+                    }
+                }
+                if let Some(ref lk) = last_key {
+                    for (k, v) in lk {
+                        builder = builder.exclusive_start_key(k, v.clone());
+                    }
+                }
+
+                match builder.send().await {
+                    Ok(resp) => {
+                        total_count += resp.count() as u64;
+                        total_scanned_count += resp.scanned_count() as u64;
+                        page_count += 1;
+                        match resp.last_evaluated_key().filter(|m| !m.is_empty()) {
+                            None => break,
+                            Some(m) => {
+                                last_key = Some(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        app_err = sdk_scan_err(&e);
+                    }
+                }
+            }
+        }
+
+        let duration_ms = started.elapsed().as_millis() as u64;
+        let app_err = handle_aws_err(&db, &registry, &req.connection_id, app_err).await;
+        emit_activity(
+            &app,
+            ActivityLogEntryBuilder::new(ActivityKind::CountTable, origin, duration_ms)
+                .connection(req.connection_id)
+                .params(vec![params_json.to_string()])
+                .err(&app_err),
+        );
+        return Err(app_err);
+    }
+
+    let duration_ms = started.elapsed().as_millis() as u64;
+    emit_activity(
+        &app,
+        ActivityLogEntryBuilder::new(ActivityKind::CountTable, origin, duration_ms)
+            .connection(req.connection_id)
+            .params(vec![params_json.to_string()])
+            .ok(Some(Metric::Items {
+                value: total_count.min(u32::MAX as u64) as u32,
+            })),
+    );
+
+    Ok(CountResponse {
+        total_count,
+        total_scanned_count,
+        page_count,
+        consumed_capacity: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// §2.6 / §3.4 / §4.6  Tauri command wrappers
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn dynamo_scan(
+    app: AppHandle,
+    db: State<'_, DbState>,
+    registry: State<'_, DynamoClientRegistry>,
+    req: ScanRequest,
+) -> AppResult<ScanResponse> {
+    scan(app, db, registry, req).await
+}
+
+#[tauri::command]
+pub async fn dynamo_query(
+    app: AppHandle,
+    db: State<'_, DbState>,
+    registry: State<'_, DynamoClientRegistry>,
+    req: QueryRequest,
+) -> AppResult<QueryResponse> {
+    query(app, db, registry, req).await
+}
+
+#[tauri::command]
+pub async fn dynamo_count_items(
+    app: AppHandle,
+    db: State<'_, DbState>,
+    registry: State<'_, DynamoClientRegistry>,
+    req: CountRequest,
+) -> AppResult<CountResponse> {
+    count_items(app, db, registry, req).await
 }
 
 // ---------------------------------------------------------------------------
@@ -710,5 +1402,319 @@ mod tests {
         // Verify the reused Origin type serializes as documented.
         assert_eq!(serde_json::to_value(Origin::User).unwrap(), serde_json::json!("user"));
         assert_eq!(serde_json::to_value(Origin::Auto).unwrap(), serde_json::json!("auto"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2 validation logic tests (pure, no AppHandle/State)
+    // These test the business-rule validation that runs before any AWS call.
+    // -----------------------------------------------------------------------
+
+    fn make_scan_request(limit: u32) -> ScanRequest {
+        ScanRequest {
+            connection_id: Uuid::nil(),
+            table_name: "events".into(),
+            index_name: None,
+            limit,
+            page: 1,
+            exclusive_start_key: None,
+            filter_expression: None,
+            expression_attribute_names: None,
+            expression_attribute_values: None,
+            projection_expression: None,
+            consistent_read: false,
+            select: None,
+            origin: None,
+        }
+    }
+
+    fn make_query_request(key_condition_expression: &str) -> QueryRequest {
+        QueryRequest {
+            connection_id: Uuid::nil(),
+            table_name: "events".into(),
+            index_name: None,
+            limit: 100,
+            page: 1,
+            exclusive_start_key: None,
+            key_condition_expression: key_condition_expression.into(),
+            filter_expression: None,
+            expression_attribute_names: None,
+            expression_attribute_values: None,
+            projection_expression: None,
+            consistent_read: false,
+            select: None,
+            scan_index_forward: None,
+            origin: None,
+        }
+    }
+
+    fn make_count_request(mode: CountMode, kce: Option<&str>) -> CountRequest {
+        CountRequest {
+            connection_id: Uuid::nil(),
+            table_name: "events".into(),
+            mode,
+            index_name: None,
+            key_condition_expression: kce.map(String::from),
+            filter_expression: None,
+            expression_attribute_names: None,
+            expression_attribute_values: None,
+            scan_index_forward: None,
+            consistent_read: false,
+            origin: None,
+        }
+    }
+
+    // §2.2 — limit < 1 should fail validation
+    #[test]
+    fn scan_limit_zero_is_validation_error() {
+        let req = make_scan_request(0);
+        assert!(req.limit < 1, "limit=0 should be below minimum");
+        let is_invalid = req.limit < 1 || req.limit > 1000;
+        assert!(is_invalid);
+    }
+
+    // §2.2 — limit > 1000 should fail validation
+    #[test]
+    fn scan_limit_1001_is_validation_error() {
+        let req = make_scan_request(1001);
+        let is_invalid = req.limit < 1 || req.limit > 1000;
+        assert!(is_invalid);
+    }
+
+    // §2.2 — limit = 1 is valid
+    #[test]
+    fn scan_limit_1_is_valid() {
+        let req = make_scan_request(1);
+        let is_invalid = req.limit < 1 || req.limit > 1000;
+        assert!(!is_invalid);
+    }
+
+    // §2.2 — limit = 1000 is valid
+    #[test]
+    fn scan_limit_1000_is_valid() {
+        let req = make_scan_request(1000);
+        let is_invalid = req.limit < 1 || req.limit > 1000;
+        assert!(!is_invalid);
+    }
+
+    // §3.2 — empty key_condition_expression should fail validation
+    #[test]
+    fn query_empty_key_condition_is_validation_error() {
+        let req = make_query_request("");
+        let is_invalid = req.key_condition_expression.trim().is_empty();
+        assert!(is_invalid);
+    }
+
+    // §3.2 — whitespace-only key_condition_expression should fail validation
+    #[test]
+    fn query_whitespace_key_condition_is_validation_error() {
+        let req = make_query_request("   ");
+        let is_invalid = req.key_condition_expression.trim().is_empty();
+        assert!(is_invalid);
+    }
+
+    // §3.2 — non-empty key_condition_expression is valid
+    #[test]
+    fn query_valid_key_condition_passes() {
+        let req = make_query_request("#pk = :pk");
+        let is_invalid = req.key_condition_expression.trim().is_empty();
+        assert!(!is_invalid);
+    }
+
+    // §4.1 — count mode=query without key_condition_expression is invalid
+    #[test]
+    fn count_query_mode_without_kce_is_validation_error() {
+        let req = make_count_request(CountMode::Query, None);
+        let kce = req.key_condition_expression.as_deref().unwrap_or("").trim();
+        let is_invalid = matches!(req.mode, CountMode::Query) && kce.is_empty();
+        assert!(is_invalid);
+    }
+
+    // §4.1 — count mode=query with key_condition_expression is valid
+    #[test]
+    fn count_query_mode_with_kce_passes() {
+        let req = make_count_request(CountMode::Query, Some("#pk = :pk"));
+        let kce = req.key_condition_expression.as_deref().unwrap_or("").trim();
+        let is_invalid = matches!(req.mode, CountMode::Query) && kce.is_empty();
+        assert!(!is_invalid);
+    }
+
+    // §4.1 — count mode=scan without key_condition_expression is valid
+    #[test]
+    fn count_scan_mode_without_kce_is_valid() {
+        let req = make_count_request(CountMode::Scan, None);
+        let kce = req.key_condition_expression.as_deref().unwrap_or("").trim();
+        let is_invalid = matches!(req.mode, CountMode::Query) && kce.is_empty();
+        assert!(!is_invalid);
+    }
+
+    // -----------------------------------------------------------------------
+    // Activity-log builder shape tests for the three new command kinds
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scan_table_ok_activity_shape() {
+        let id = Uuid::nil();
+        let entry = ActivityLogEntryBuilder::new(ActivityKind::ScanTable, Origin::User, 42)
+            .connection(id)
+            .ok(Some(Metric::Items { value: 25 }));
+        let v = serde_json::to_value(&entry).unwrap();
+        assert_eq!(v["kind"], "scan_table");
+        assert_eq!(v["status"], "ok");
+        assert_eq!(v["origin"], "user");
+        assert_eq!(v["metric"]["kind"], "items");
+        assert_eq!(v["metric"]["value"], 25);
+    }
+
+    #[test]
+    fn scan_table_err_activity_shape() {
+        let id = Uuid::nil();
+        let err = AppError::Validation("limit must be between 1 and 1000, got 0".into());
+        let entry = ActivityLogEntryBuilder::new(ActivityKind::ScanTable, Origin::User, 0)
+            .connection(id)
+            .err(&err);
+        let v = serde_json::to_value(&entry).unwrap();
+        assert_eq!(v["kind"], "scan_table");
+        assert_eq!(v["status"], "err");
+        assert!(v["metric"].is_null());
+        assert!(v["error"]["message"].as_str().unwrap().contains("limit must be"));
+    }
+
+    #[test]
+    fn query_table_ok_activity_shape() {
+        let id = Uuid::nil();
+        let entry = ActivityLogEntryBuilder::new(ActivityKind::QueryTable, Origin::Auto, 10)
+            .connection(id)
+            .ok(Some(Metric::Items { value: 5 }));
+        let v = serde_json::to_value(&entry).unwrap();
+        assert_eq!(v["kind"], "query_table");
+        assert_eq!(v["status"], "ok");
+        assert_eq!(v["origin"], "auto");
+        assert_eq!(v["metric"]["value"], 5);
+    }
+
+    #[test]
+    fn count_table_ok_activity_shape() {
+        let id = Uuid::nil();
+        let entry = ActivityLogEntryBuilder::new(ActivityKind::CountTable, Origin::User, 99)
+            .connection(id)
+            .ok(Some(Metric::Items { value: 1000 }));
+        let v = serde_json::to_value(&entry).unwrap();
+        assert_eq!(v["kind"], "count_table");
+        assert_eq!(v["status"], "ok");
+        assert_eq!(v["metric"]["kind"], "items");
+        assert_eq!(v["metric"]["value"], 1000);
+    }
+
+    #[test]
+    fn count_table_err_activity_shape() {
+        let id = Uuid::nil();
+        let err = AppError::Validation(
+            "key_condition_expression is required for mode=query".into(),
+        );
+        let entry = ActivityLogEntryBuilder::new(ActivityKind::CountTable, Origin::User, 0)
+            .connection(id)
+            .err(&err);
+        let v = serde_json::to_value(&entry).unwrap();
+        assert_eq!(v["kind"], "count_table");
+        assert_eq!(v["status"], "err");
+        assert!(v["metric"].is_null());
+    }
+
+    // -----------------------------------------------------------------------
+    // select_mode_to_sdk mapping test (pure function, no network)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn select_mode_to_sdk_maps_all_variants() {
+        use aws_sdk_dynamodb::types::Select;
+        assert_eq!(
+            select_mode_to_sdk(SelectMode::AllAttributes),
+            Select::AllAttributes
+        );
+        assert_eq!(
+            select_mode_to_sdk(SelectMode::AllProjectedAttributes),
+            Select::AllProjectedAttributes
+        );
+        assert_eq!(
+            select_mode_to_sdk(SelectMode::SpecificAttributes),
+            Select::SpecificAttributes
+        );
+        assert_eq!(select_mode_to_sdk(SelectMode::Count), Select::Count);
+    }
+
+    // -----------------------------------------------------------------------
+    // compact_activity_params — scan/query/count usage patterns
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scan_compact_params_shape() {
+        let params = compact_activity_params(
+            "orders",
+            None,
+            true,
+            false,
+            Some(100),
+            false,
+            None,
+            Some(1),
+            None,
+        );
+        assert_eq!(params["table_name"], "orders");
+        assert_eq!(params["has_filter"], true);
+        assert_eq!(params["has_key_condition"], false);
+        assert_eq!(params["limit"], 100);
+        assert!(params.get("scan_index_forward").is_none());
+    }
+
+    #[test]
+    fn query_compact_params_includes_scan_index_forward() {
+        let params = compact_activity_params(
+            "orders",
+            Some("byCustomer"),
+            false,
+            true,
+            Some(50),
+            false,
+            None,
+            Some(1),
+            Some(false),
+        );
+        assert_eq!(params["has_key_condition"], true);
+        assert_eq!(params["scan_index_forward"], false);
+        assert_eq!(params["index_name"], "byCustomer");
+    }
+
+    #[test]
+    fn count_compact_params_no_limit_no_page() {
+        let params = compact_activity_params(
+            "events",
+            None,
+            false,
+            true,
+            None,
+            true,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(params["consistent_read"], true);
+        assert!(params.get("limit").is_none());
+        assert!(params.get("page").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // §2.7 / §3.4 / §4.6  Registry-level: NotFound when client is absent
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn registry_acquire_missing_returns_not_found_for_scan() {
+        use crate::modules::dynamo::client::DynamoClientRegistry;
+        let registry = DynamoClientRegistry::new();
+        let id = Uuid::new_v4();
+        let err = registry.acquire(&id).await.unwrap_err();
+        assert!(
+            matches!(err, AppError::NotFound(_)),
+            "expected NotFound, got {err:?}"
+        );
     }
 }
