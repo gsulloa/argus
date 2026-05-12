@@ -245,6 +245,22 @@
   position: relative;
 }
 
+/* Toolbar icon button — used for per-row actions like refresh. */
+.toolbarBtn {
+  background: transparent;
+  border: 0;
+  padding: 0 2px;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.toolbarBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 .subtree {
   padding-left: 12px;
   padding-right: 4px;
