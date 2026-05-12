@@ -36,6 +36,7 @@ import {
   CredentialsRefreshedListener,
   useDynamoCommands,
 } from "@/modules/dynamo";
+import { useDataViewLifecycle } from "@/modules/dynamo/data-view/useDataViewLifecycle";
 import { DynamoTablesCacheProvider, useDynamoTablesPaletteCommands } from "@/modules/dynamo/tables";
 import { KindPickerProvider } from "@/platform/shell/useKindPicker";
 import { useQueryHistoryCommands } from "@/modules/query-history";
@@ -92,6 +93,7 @@ function ShellMain() {
       <DevCommands />
       <PostgresCommands />
       <DynamoCommands />
+      <DynamoDataViewLifecycle />
       <DynamoTablesPaletteCommands />
       <QueryHistoryCommands />
       <SavedQueriesBootstrap />
@@ -111,6 +113,11 @@ function PostgresCommands() {
 
 function DynamoCommands() {
   useDynamoCommands();
+  return null;
+}
+
+function DynamoDataViewLifecycle() {
+  useDataViewLifecycle();
   return null;
 }
 

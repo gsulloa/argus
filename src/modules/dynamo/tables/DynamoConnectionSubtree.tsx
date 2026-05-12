@@ -11,7 +11,7 @@
  *   7. Renders loading / error / ready states (Task 6.1).
  *   8. Drives the lazy describe pipeline: each rendered leaf calls requestDescribe
  *      on mount via TableLeaf's useEffect (Task 6.6).
- *   9. Wires leaf activation to open the dynamo-table-placeholder tab (Task 9.5).
+ *   9. Wires leaf activation to open the dynamo-data-view tab (Phase 9 task 14.1).
  *  10. Per-leaf right-click context menu: Open, Copy table name, Copy ARN (Task 10).
  */
 
@@ -27,7 +27,7 @@ import { useDynamoTableCache } from "./CacheProvider";
 import type { DescribeSlot } from "./CacheProvider";
 import { TableSearchInput } from "./TableSearchInput";
 import { TableLeafLabel, TableLeafBadge } from "./TableLeaf";
-import { openPlaceholderTab } from "./openPlaceholderTab";
+import { openTableTab } from "./openTableTab";
 import styles from "./DynamoConnectionSubtree.module.css";
 import sidebarStyles from "@/platform/shell/Sidebar.module.css";
 
@@ -147,7 +147,7 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
       const descSlot = describe.get(tableName);
       const cachedDescribe =
         descSlot?.status === "ready" ? descSlot.value : null;
-      openPlaceholderTab(tabs, {
+      openTableTab(tabs, {
         connectionId,
         connectionName,
         tableName,

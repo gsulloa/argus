@@ -24,6 +24,8 @@ export interface QueryBuilderProps {
   describe: TableDescription;
   onBuilderChange(next: BuilderState): void;
   onValidityChange(isValid: boolean, reason?: string): void;
+  /** When true, all interactive controls are disabled (e.g. needs_credentials). */
+  disabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -465,6 +467,7 @@ export function QueryBuilder({
   describe,
   onBuilderChange,
   onValidityChange,
+  disabled = false,
 }: QueryBuilderProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
 
@@ -631,6 +634,7 @@ export function QueryBuilder({
             className={`${styles.modeBtn} ${builder.mode === "scan" ? styles.modeBtnActive : ""}`}
             onClick={() => setMode("scan")}
             aria-pressed={builder.mode === "scan"}
+            disabled={disabled}
             data-testid="mode-scan"
           >
             Scan
@@ -640,6 +644,7 @@ export function QueryBuilder({
             className={`${styles.modeBtn} ${builder.mode === "query" ? styles.modeBtnActive : ""}`}
             onClick={() => setMode("query")}
             aria-pressed={builder.mode === "query"}
+            disabled={disabled}
             data-testid="mode-query"
           >
             Query
@@ -656,6 +661,7 @@ export function QueryBuilder({
             setIndex(v === "" ? null : v);
           }}
           aria-label="Index"
+          disabled={disabled}
           data-testid="index-select"
         >
           {indexOptions.map((opt) => (

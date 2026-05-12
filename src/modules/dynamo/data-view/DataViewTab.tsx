@@ -3,13 +3,13 @@
  *
  * Orchestrates:
  *   - Toolbar (mode toggle, Run/Reset, page size, Count slot, Load more)
- *   - QueryBuilderPlaceholder (Phase 6 replaces with real builder)
- *   - ResultsPanelPlaceholder (Phase 7 replaces with Tabla/JSON views)
+ *   - QueryBuilder (Scan vs Query, index picker, filter rows)
+ *   - TabView / JsonView (virtualized results in Tabla or JSON mode)
  *   - MetadataView (reachable from toolbar "Metadata" button)
- *   - InspectorPlaceholder (Phase 8 replaces with real inspector dock)
+ *   - Inspector (resizable inspector dock)
  *   - BottomBar (items loaded, count result)
  *
- * Design decisions documented in the commit message:
+ * Design decisions:
  *   (a) Does NOT auto-fetch on open — user must click Run. Rationale: the
  *       page size and mode are persisted, but the user may not have reviewed
  *       the metadata yet; surprising them with a Scan hitting AWS capacity is
@@ -23,20 +23,25 @@
  *       only when `whenInInput` is false. Since the shortcut fires from
  *       inputs, we need an explicit CodeMirror guard. We check whether the
  *       focused element is inside a `.cm-editor` container and bail out.
- *   (d) `needsCredentials` disabling deferred to Phase 9 (task 16.2) as
- *       specified. The notice is rendered here; the control disabling comes
- *       later.
+ *   (d) `needsCredentials` is derived from the persisted connection params
+ *       (task 16.2): `connection.params.needs_credentials === true`. Controls
+ *       (Run, Load more, Count, index, mode) are disabled while true. The
+ *       Toolbar shows an inline "Connection waiting for credentials" notice.
+ *   (e) `dynamo:credentials-refreshed:ui` auto-resume is handled by the
+ *       `useDynamoItems` hook (task 16.1) — no extra logic needed here.
  *
  * Stable tab id: `dynamotbl:<connectionId>:<tableName>`
  * Tab kind: "dynamo-data-view"
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
 import { useShortcuts } from "@/platform/shell/useShortcuts";
 import { useSetting } from "@/platform/settings/useSetting";
-import { useActiveDynamoConnections } from "@/modules/dynamo/useActiveConnections";
+import { useConnections } from "@/platform/connection-registry/useConnections";
+import { DYNAMO_KIND } from "@/modules/dynamo/types";
+import type { DynamoParams } from "@/modules/dynamo/types";
 import { dynamoTablesApi } from "@/modules/dynamo/tables/api";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
 import type { Tab } from "@/platform/shell/tabs/types";
@@ -120,6 +125,18 @@ interface DataViewContentProps {
 function DataViewContent({ payload, active }: DataViewContentProps) {
   const { connectionId, connectionName: _connName, tableName } = payload;
 
+  // ── Connection params — for needs_credentials (task 16.2) ─────────────────
+  // Read from the persisted connection list so the flag is available even when
+  // the active-connection envelope (listActive) doesn't expose it.
+  const { items: allConnections } = useConnections();
+  const needsCredentials = useMemo(() => {
+    const conn = allConnections.find(
+      (c) => c.id === connectionId && c.kind === DYNAMO_KIND,
+    );
+    if (!conn) return false;
+    return (conn.params as unknown as DynamoParams).needs_credentials === true;
+  }, [allConnections, connectionId]);
+
   // ── Describe state ─────────────────────────────────────────────────────────
   const [describe, setDescribe] = useState<TableDescription | null>(
     payload.describe,
@@ -202,16 +219,6 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
     },
     [],
   );
-
-  // ── Connection state ──────────────────────────────────────────────────────
-  const { getActive } = useActiveDynamoConnections();
-  // The ActiveDynamoConnection type doesn't expose needs_credentials directly;
-  // it lives on DynamoParams which is not returned by listActive. We detect
-  // via the absence from the active list: if the connection is not in the
-  // active list it may need credentials. For Phase 5 we do a best-effort
-  // check. Phase 9 (task 16.2) will refine this.
-  const activeCon = getActive(connectionId);
-  const needsCredentials = activeCon === undefined;
 
   // ── Count state — owned by useCount (task 13.1–13.3) ────────────────────
   const {
@@ -470,6 +477,7 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
                 describe={describe}
                 onBuilderChange={handleBuilderChange}
                 onValidityChange={handleValidityChange}
+                disabled={needsCredentials}
               />
             )}
 
@@ -572,8 +580,8 @@ export function openDataViewTab(
 
 // ---------------------------------------------------------------------------
 // Side-effect: register tab kind with TabRegistry at module import time.
-// The placeholder kind "dynamo-table-placeholder" is NOT retired here —
-// that is Phase 9's job (task 14.2).
+// The "dynamo-table-placeholder" kind was retired in Phase 9 (task 14.2);
+// persisted records are migrated via migratePlaceholderTabs in migrateTabKinds.ts.
 // ---------------------------------------------------------------------------
 
 TabRegistry.register(DYNAMO_DATA_VIEW_KIND, DataViewRoot);

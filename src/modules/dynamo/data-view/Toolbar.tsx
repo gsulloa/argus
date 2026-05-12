@@ -79,9 +79,10 @@ export function Toolbar({
   runDisabledReason,
 }: ToolbarProps) {
   const isLoading = status === "loading";
-  const canLoadMore = lastEvaluatedKey !== null && !isLoading;
+  // While waiting for credentials, all interactive controls are disabled (task 16.2).
+  const canLoadMore = lastEvaluatedKey !== null && !isLoading && !needsCredentials;
   const isQueryMode = builder.mode === "query";
-  const runBlocked = isLoading || runDisabled;
+  const runBlocked = isLoading || runDisabled || needsCredentials;
 
   function handlePageSizeCommit(raw: string) {
     const n = parseInt(raw, 10);
@@ -228,8 +229,12 @@ export function Toolbar({
         type="button"
         className={styles.btn}
         onClick={onCount}
-        disabled={countLoading || isLoading}
-        title="Count all matching items (full table scan with SELECT=COUNT)"
+        disabled={countLoading || isLoading || needsCredentials}
+        title={
+          needsCredentials
+            ? "Connection waiting for credentials"
+            : "Count all matching items (full table scan with SELECT=COUNT)"
+        }
         aria-label="Count items"
       >
         {countLoading ? (

@@ -104,23 +104,23 @@
 
 ## 14. Frontend: activation flow swap + placeholder retirement
 
-- [ ] 14.1 Update `src/modules/dynamo/tables/openTableTab.ts` (introduced in #10) so it opens a `dynamo-data-view` tab (kind change only; id stays `dynamotbl:<connectionId>:<tableName>`).
-- [ ] 14.2 Remove the `dynamo-table-placeholder` tab kind from the tab-kind registry; delete the placeholder component if no other call site uses it.
-- [ ] 14.3 Add a session-state migration that, on load, rewrites any persisted tab record with `kind: "dynamo-table-placeholder"` to `kind: "dynamo-data-view"` while preserving its payload's `describe`.
-- [ ] 14.4 Update the per-cached-table palette command `argus.dynamo.openTable:<connectionId>:<tableName>` registration to call the same `openTableTab` helper (already does via shared id) so palette activation opens the data view.
-- [ ] 14.5 Tests: activation opens the data view, session migration rewrites placeholder records, palette command opens the data view.
+- [x] 14.1 Update `src/modules/dynamo/tables/openTableTab.ts` (introduced in #10) so it opens a `dynamo-data-view` tab (kind change only; id stays `dynamotbl:<connectionId>:<tableName>`).
+- [x] 14.2 Remove the `dynamo-table-placeholder` tab kind from the tab-kind registry; delete the placeholder component if no other call site uses it.
+- [x] 14.3 Add a session-state migration that, on load, rewrites any persisted tab record with `kind: "dynamo-table-placeholder"` to `kind: "dynamo-data-view"` while preserving its payload's `describe`.
+- [x] 14.4 Update the per-cached-table palette command `argus.dynamo.openTable:<connectionId>:<tableName>` registration to call the same `openTableTab` helper (already does via shared id) so palette activation opens the data view.
+- [x] 14.5 Tests: activation opens the data view, session migration rewrites placeholder records, palette command opens the data view.
 
 ## 15. Frontend: disconnect / delete tab cleanup
 
-- [ ] 15.1 Hook a listener on `dynamo:active-changed` so that when a connection becomes inactive, any open `dynamo-data-view` tabs for that connection are closed.
-- [ ] 15.2 Hook a listener on `connections.delete` so that deleting a Dynamo connection closes its data view tabs.
-- [ ] 15.3 Tests: disconnect closes the tab; delete closes the tab.
+- [x] 15.1 Hook a listener on `dynamo:active-changed` so that when a connection becomes inactive, any open `dynamo-data-view` tabs for that connection are closed.
+- [x] 15.2 Hook a listener on `connections.delete` so that deleting a Dynamo connection closes its data view tabs.
+- [x] 15.3 Tests: disconnect closes the tab; delete closes the tab.
 
 ## 16. Frontend: credentials-refresh resume
 
-- [ ] 16.1 In `DataViewTab`, observe `dynamo:credentials-refreshed` for the tab's `connectionId` and instruct `useDynamoItems` to re-fire the last failed request automatically.
-- [ ] 16.2 While `params.needs_credentials` is true for the connection, disable Run / Load more / Count / index / mode controls and show the inline "Connection waiting for credentials" notice.
-- [ ] 16.3 Tests: refresh triggers automatic re-run; controls disabled while waiting.
+- [x] 16.1 In `DataViewTab`, observe `dynamo:credentials-refreshed` for the tab's `connectionId` and instruct `useDynamoItems` to re-fire the last failed request automatically.
+- [x] 16.2 While `params.needs_credentials` is true for the connection, disable Run / Load more / Count / index / mode controls and show the inline "Connection waiting for credentials" notice.
+- [x] 16.3 Tests: refresh triggers automatic re-run; controls disabled while waiting.
 
 ## 17. Documentation and design fidelity
 
