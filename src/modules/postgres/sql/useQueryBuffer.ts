@@ -30,7 +30,7 @@ function isTauriRuntime(): boolean {
 export function useQueryBuffer(
   tabId: string,
   fallback: string,
-): { loaded: boolean; initialSql: string; update: (next: string) => void } {
+): { loaded: boolean; initialSql: string; update: (next: string) => void; clearBuffer: () => void } {
   const [loaded, setLoaded] = useState(false);
   const [initialSql, setInitialSql] = useState(fallback);
   const writeTimer = useRef<number | null>(null);
@@ -89,18 +89,25 @@ export function useQueryBuffer(
     };
   }, []);
 
+  const clearBuffer = useCallback(() => {
+    if (isTauriRuntime()) {
+      setSetting(settingsKey(tabId), "").catch(() => {});
+    }
+  }, [tabId]);
+
   // Drop the persisted buffer when the tab actually closes (the registry is
   // consulted by TabStrip's close button). Returning true allows the close;
   // Query tabs don't need a confirm dialog (per spec).
+  // NOTE: This handler may be overridden by QueryTab's useCloseConfirm for
+  // saved-query dirty-state prompting. In that case QueryTab is responsible
+  // for calling clearBuffer() before resolving to true.
   useEffect(() => {
     registerCloseHandler(tabId, () => {
-      if (isTauriRuntime()) {
-        setSetting(settingsKey(tabId), "").catch(() => {});
-      }
+      clearBuffer();
       return true;
     });
     return () => unregisterCloseHandler(tabId);
-  }, [tabId]);
+  }, [tabId, clearBuffer]);
 
-  return { loaded, initialSql, update };
+  return { loaded, initialSql, update, clearBuffer };
 }

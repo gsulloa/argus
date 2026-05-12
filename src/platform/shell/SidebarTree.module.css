@@ -103,3 +103,32 @@
   padding: 0 1px;
   color: var(--text);
 }
+
+/* DnD drop indicator — horizontal line shown between rows */
+.dropIndicator {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Folder highlighted as drop target */
+.row[data-drop-into="true"] {
+  background: var(--accent-soft, rgba(168, 85, 247, 0.12));
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Ghost preview following cursor during drag */
+.dragGhost {
+  opacity: 0.9;
+  background: var(--elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}

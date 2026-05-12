@@ -49,3 +49,14 @@
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+.danger {
+  background: var(--danger);
+  color: #fff;
+  border: 1px solid var(--danger);
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.danger:hover {
+  opacity: 0.85;
+}

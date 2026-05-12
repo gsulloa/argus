@@ -24,6 +24,11 @@ use crate::modules::query_history::{
         query_history_list,
     },
 };
+use crate::modules::saved_queries::commands::{
+    saved_queries_create, saved_queries_delete, saved_queries_duplicate, saved_queries_folder_create,
+    saved_queries_folder_delete, saved_queries_folder_move, saved_queries_folder_update,
+    saved_queries_list, saved_queries_move, saved_queries_update,
+};
 use crate::platform::{
     connection_groups::{
         connection_groups_create, connection_groups_delete, connection_groups_list,
@@ -161,6 +166,16 @@ pub fn run() {
             query_history_delete,
             query_history_clear,
             query_history_distinct_connections,
+            saved_queries_list,
+            saved_queries_folder_create,
+            saved_queries_folder_update,
+            saved_queries_folder_move,
+            saved_queries_folder_delete,
+            saved_queries_create,
+            saved_queries_update,
+            saved_queries_move,
+            saved_queries_delete,
+            saved_queries_duplicate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

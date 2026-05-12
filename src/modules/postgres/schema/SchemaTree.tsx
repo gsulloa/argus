@@ -905,7 +905,7 @@ export function SchemaPrimaryActions({ connectionId }: ToolbarProps) {
       title="New SQL query · ⌘↩ runs"
       onClick={(e) => {
         e.stopPropagation();
-        openQueryTab(tabs, { connectionId, connectionName });
+        openQueryTab(tabs, { initialConnectionId: connectionId, initialConnectionName: connectionName, initialSql: "" });
       }}
       className={styles.toolbarBtn}
     >

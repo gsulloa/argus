@@ -38,6 +38,7 @@ import {
   resolveConnectionDropTarget,
 } from "./dropResolution";
 import { DisconnectConfirmDialog } from "./DisconnectConfirmDialog";
+import { SavedQueriesPanel } from "@/modules/saved-queries/SavedQueriesPanel";
 
 export { UNGROUPED_DROPPABLE_ID };
 
@@ -52,6 +53,7 @@ export function Sidebar() {
         </header>
         <div ref={scrollRef} className={styles.scroll}>
           <ConnectionsSection />
+          <SavedQueriesPanel />
           <PlatformSection />
         </div>
       </div>

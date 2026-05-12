@@ -44,6 +44,13 @@
   flex: 0 0 28px;
 }
 
+.toolbarDivider {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
 .toolbarButton {
   display: inline-flex;
   align-items: center;
@@ -67,6 +74,12 @@
 
 .toolbarButton:active {
   background: var(--bg-elevated, var(--surface));
+}
+
+.toolbarButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .kbd {

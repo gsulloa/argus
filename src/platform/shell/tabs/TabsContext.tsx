@@ -14,6 +14,10 @@ interface TabsCtx {
   activate: (id: string) => void;
   move: (fromIndex: number, toIndex: number) => void;
   cycle: (direction: 1 | -1) => void;
+  /** Update the visible title of a tab by id. No-op if the tab does not exist. */
+  setTabTitle: (id: string, title: string) => void;
+  /** Mark or unmark a tab as dirty. Drives the ● indicator in the tab strip. */
+  setTabDirty: (id: string, dirty: boolean) => void;
 }
 
 const Ctx = createContext<TabsCtx | null>(null);
@@ -102,9 +106,30 @@ export function TabsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const setTabTitle = useCallback((id: string, title: string) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === id);
+      if (idx === -1) return prev;
+      const next = prev.slice();
+      next[idx] = { ...next[idx]!, title };
+      return next;
+    });
+  }, []);
+
+  const setTabDirty = useCallback((id: string, dirty: boolean) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === id);
+      if (idx === -1) return prev;
+      if (prev[idx]!.dirty === dirty) return prev;
+      const next = prev.slice();
+      next[idx] = { ...next[idx]!, dirty };
+      return next;
+    });
+  }, []);
+
   const value = useMemo<TabsCtx>(
-    () => ({ tabs, activeTabId, open, close, activate, move, cycle }),
-    [tabs, activeTabId, open, close, activate, move, cycle],
+    () => ({ tabs, activeTabId, open, close, activate, move, cycle, setTabTitle, setTabDirty }),
+    [tabs, activeTabId, open, close, activate, move, cycle, setTabTitle, setTabDirty],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
