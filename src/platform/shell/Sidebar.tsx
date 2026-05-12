@@ -7,7 +7,8 @@ import { useConnectionGroups } from "@/platform/connection-registry/useConnectio
 import { useExpandedGroups } from "@/platform/connection-registry/useExpandedGroups";
 import { computeMidpointSortOrder } from "@/platform/connection-registry/sortOrder";
 import type { Connection, ConnectionGroup } from "@/platform/connection-registry/types";
-import { postgresApi, useActiveConnections, usePostgresForm } from "@/modules/postgres";
+import { postgresApi, useActiveConnections } from "@/modules/postgres";
+import { useKindPicker } from "./useKindPicker";
 import { openHistoryTab } from "@/modules/query-history";
 import { useTabs } from "@/platform/shell/tabs";
 import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
@@ -69,7 +70,7 @@ interface RenameDialog {
 function ConnectionsSection() {
   const connections = useConnections();
   const groups = useConnectionGroups();
-  const form = usePostgresForm();
+  const picker = useKindPicker();
   const [creatingGroupName, setCreatingGroupName] = useState<string | null>(null);
   const [renameDialog, setRenameDialog] = useState<RenameDialog | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ConnectionGroup | null>(null);
@@ -284,7 +285,7 @@ function ConnectionsSection() {
               <DropdownMenu.Content className={styles.contextMenu} align="end">
                 <DropdownMenu.Item
                   className={styles.contextItem}
-                  onSelect={() => form.openCreate()}
+                  onSelect={() => picker.open()}
                 >
                   New connection
                 </DropdownMenu.Item>
