@@ -18,6 +18,7 @@ pub enum ActivityKind {
     TestConnection,
     Connect,
     Disconnect,
+    UpdateCredentials,
     ListSchemas,
     ListRelations,
     ListStructure,
@@ -53,6 +54,7 @@ pub enum Metric {
     Affected { value: i64 },
     ServerVersion { value: String },
     Items { value: u32 },
+    AwsIdentity { value: String },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

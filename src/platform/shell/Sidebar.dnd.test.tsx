@@ -119,6 +119,27 @@ vi.mock("@/modules/postgres", () => ({
   POSTGRES_KIND: "postgres",
 }));
 
+vi.mock("@/modules/dynamo", () => ({
+  DYNAMO_KIND: "dynamodb",
+  DynamoIcon: () => null,
+  dynamoApi: { connect: vi.fn(), disconnect: vi.fn(), listActive: vi.fn() },
+  useActiveDynamoConnections: () => ({ items: [], isActive: () => false, getActive: () => undefined }),
+  useDynamoForm: () => ({
+    openCreate: vi.fn(),
+    openEdit: vi.fn(),
+    openDuplicate: vi.fn(),
+    openCredentialsOnly: vi.fn(),
+    close: vi.fn(),
+  }),
+  useDynamoErrorHandler: () => vi.fn(),
+}));
+
+vi.mock("@/platform/shell/useKindPicker", () => ({
+  useKindPicker: () => ({ open: vi.fn(), close: vi.fn() }),
+  KindPickerProvider: ({ children }: { children: React.ReactNode }) =>
+    React.createElement(React.Fragment, null, children),
+}));
+
 vi.mock("@/modules/query-history", () => ({
   openHistoryTab: vi.fn(),
 }));

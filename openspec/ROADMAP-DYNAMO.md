@@ -7,7 +7,7 @@ Plan detallado de los `change` que conforman la V2.1: soporte para DynamoDB. Mis
 ## V2.1 — DynamoDB
 
 ```
-9.  add-dynamo-connection         ⏳  AWS credential chain, perfil/región/endpoint
+9.  add-dynamo-connection         ✅  AWS credential chain, perfil/región/endpoint
 10. browse-dynamo-tables          ⏳  lista de tablas + describe (KeySchema, GSIs, LSIs)
 11. view-dynamo-items             ⏳  scan/query, vistas Tabla/JSON, paginación
                                        por LastEvaluatedKey, query builder simple
@@ -85,7 +85,7 @@ Dynamo tiene `TransactWriteItems` pero está limitado a 100 ops y misma región/
 
 ---
 
-### 9. `add-dynamo-connection` ⏳
+### 9. `add-dynamo-connection` ✅
 
 **Meta**: Crear/editar/borrar conexiones reales de DynamoDB con AWS profile, SSO, o access keys; test sincrónico via STS; toggle read-only.
 **Capacidades nuevas**: `dynamo-connection` (módulo Dynamo en `src/modules/dynamo/` y `src-tauri/src/modules/dynamo/`).

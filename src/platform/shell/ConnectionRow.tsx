@@ -1,4 +1,4 @@
-import { GripVertical, Loader2, Power } from "lucide-react";
+import { AlertTriangle, GripVertical, Loader2, Power } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useState } from "react";
@@ -19,12 +19,37 @@ import {
   useActiveConnections,
   usePostgresForm,
 } from "@/modules/postgres";
+import {
+  DYNAMO_KIND,
+  DynamoIcon,
+  dynamoApi,
+  useActiveDynamoConnections,
+  useDynamoForm,
+  useDynamoErrorHandler,
+  type DynamoParams,
+  type ActiveDynamoConnection,
+} from "@/modules/dynamo";
 import { useTabs } from "@/platform/shell/tabs";
 import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
 import { listDirtySummaries } from "@/platform/shell/tabs/useDirtySummary";
 import { DisconnectConfirmDialog } from "./DisconnectConfirmDialog";
 import styles from "./Sidebar.module.css";
 import dialogStyles from "./Dialog.module.css";
+
+function dynamoSubtitle(
+  connection: Connection,
+  active: ActiveDynamoConnection | undefined,
+): string {
+  const params = connection.params as unknown as DynamoParams;
+  const region = params.region;
+  if (active) {
+    return `${region} · ${active.account_id}`;
+  }
+  if (params.auth === "profile" && params.profile) {
+    return `${region} · ${params.profile}`;
+  }
+  return `${region} · access-keys`;
+}
 
 export function ConnectionRow({
   connection,
@@ -33,19 +58,36 @@ export function ConnectionRow({
   connection: Connection;
   draggable?: boolean;
 }) {
-  const { isActive } = useActiveConnections();
+  const pgActive = useActiveConnections();
+  const dyActive = useActiveDynamoConnections();
   const { items: allConnections, remove, move } = useConnections();
   const { items: groups } = useConnectionGroups();
-  const form = usePostgresForm();
+  const pgForm = usePostgresForm();
+  const dyForm = useDynamoForm();
+  const handleDynamoError = useDynamoErrorHandler();
   const tabs = useTabs();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+
   const isPostgres = connection.kind === POSTGRES_KIND;
-  const active = isActive(connection.id);
+  const isDynamo = connection.kind === DYNAMO_KIND;
+
+  const active = isPostgres
+    ? pgActive.isActive(connection.id)
+    : isDynamo
+      ? dyActive.isActive(connection.id)
+      : false;
+
+  const activeDynamoView = isDynamo ? dyActive.getActive(connection.id) : undefined;
+
   const readOnly = Boolean(
     (connection.params as Record<string, unknown>).read_only,
   );
+
+  const needsCredentials =
+    isDynamo &&
+    (connection.params as unknown as DynamoParams).needs_credentials === true;
 
   const sortable = useSortable({ id: connection.id, disabled: !draggable });
   const style = draggable
@@ -62,24 +104,39 @@ export function ConnectionRow({
   );
 
   const dirtyLabels = useMemo(
-    () => (confirmDisconnect ? listDirtySummaries(connection.id).map((s) => s.label) : []),
-    [confirmDisconnect, connection.id],
+    () =>
+      confirmDisconnect && isPostgres
+        ? listDirtySummaries(connection.id).map((s) => s.label)
+        : [],
+    [confirmDisconnect, isPostgres, connection.id],
   );
 
   async function handleRowClick() {
-    if (!isPostgres) return;
     if (active || isConnecting) return;
-    setIsConnecting(true);
-    try {
-      await postgresApi.connect(connection.id);
-    } catch (e) {
-      console.error("[argus] connect:", e);
-    } finally {
-      setIsConnecting(false);
+    if (isPostgres) {
+      setIsConnecting(true);
+      try {
+        await postgresApi.connect(connection.id);
+      } catch (e) {
+        console.error("[argus] connect:", e);
+      } finally {
+        setIsConnecting(false);
+      }
+    } else if (isDynamo) {
+      setIsConnecting(true);
+      try {
+        await dynamoApi.connect(connection.id);
+      } catch (e) {
+        const err = e as Parameters<typeof handleDynamoError>[1];
+        await handleDynamoError(connection.id, err);
+      } finally {
+        setIsConnecting(false);
+      }
     }
+    // unknown kind: no-op
   }
 
-  async function handleDisconnect() {
+  async function handlePostgresDisconnect() {
     try {
       await postgresApi.disconnect(connection.id);
     } catch (e) {
@@ -87,10 +144,22 @@ export function ConnectionRow({
     }
   }
 
+  async function handleDynamoDisconnect() {
+    try {
+      await dynamoApi.disconnect(connection.id);
+    } catch (e) {
+      console.error("[argus] dynamo disconnect:", e);
+    }
+  }
+
   async function handleDelete() {
     try {
       if (active) {
-        await postgresApi.disconnect(connection.id);
+        if (isPostgres) {
+          await postgresApi.disconnect(connection.id);
+        } else if (isDynamo) {
+          await dynamoApi.disconnect(connection.id);
+        }
       }
       await remove(connection.id);
     } catch (e) {
@@ -125,6 +194,9 @@ export function ConnectionRow({
       ? "Connecting…"
       : "Connect";
 
+  // Determine whether the row has any clickable primary action
+  const isClickable = isPostgres || isDynamo;
+
   return (
     <>
       <ContextMenu.Root>
@@ -148,19 +220,39 @@ export function ConnectionRow({
             <button
               type="button"
               className={styles.item}
-              onClick={handleRowClick}
-              title={rowTitle}
+              onClick={isClickable ? handleRowClick : undefined}
+              title={isClickable ? rowTitle : connection.name}
               aria-busy={isConnecting || undefined}
             >
               <span className={styles.icon}>
                 {isPostgres ? (
                   <PostgresIcon size={14} />
+                ) : isDynamo ? (
+                  <DynamoIcon size={14} />
                 ) : (
                   <span className={styles.itemKind}>{connection.kind}</span>
                 )}
               </span>
               <span className={styles.itemName}>{connection.name}</span>
+              {isDynamo && active && activeDynamoView && (
+                <span className={styles.itemSubtitle}>
+                  {dynamoSubtitle(connection, activeDynamoView)}
+                </span>
+              )}
+              {isDynamo && !active && (
+                <span className={styles.itemSubtitle}>
+                  {dynamoSubtitle(connection, undefined)}
+                </span>
+              )}
               {readOnly && <span className={styles.roBadge}>RO</span>}
+              {needsCredentials && (
+                <span
+                  className={styles.warningIndicator}
+                  title="Session token expired"
+                >
+                  <AlertTriangle size={12} />
+                </span>
+              )}
               {dotState === "connecting" ? (
                 <span
                   className={`${styles.activeDot} ${styles.activeDotSpinner}`}
@@ -198,6 +290,20 @@ export function ConnectionRow({
                 </span>
               </>
             )}
+            {isDynamo && active && (
+              <button
+                type="button"
+                className={styles.disconnectBtn}
+                aria-label="Disconnect"
+                title="Disconnect"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDisconnect(true);
+                }}
+              >
+                <Power size={12} strokeWidth={2.5} />
+              </button>
+            )}
           </div>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
@@ -225,18 +331,54 @@ export function ConnectionRow({
                 <ContextMenu.Separator className={styles.contextSeparator} />
               </>
             )}
-            <ContextMenu.Item
-              className={styles.contextItem}
-              onSelect={() => form.openEdit(connection)}
-            >
-              Edit
-            </ContextMenu.Item>
-            <ContextMenu.Item
-              className={styles.contextItem}
-              onSelect={() => form.openDuplicate(connection)}
-            >
-              Duplicate
-            </ContextMenu.Item>
+            {isDynamo && active && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => setConfirmDisconnect(true)}
+                >
+                  Disconnect
+                </ContextMenu.Item>
+                <ContextMenu.Separator className={styles.contextSeparator} />
+              </>
+            )}
+            {isPostgres && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => pgForm.openEdit(connection)}
+                >
+                  Edit
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => pgForm.openDuplicate(connection)}
+                >
+                  Duplicate
+                </ContextMenu.Item>
+              </>
+            )}
+            {isDynamo && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => dyForm.openEdit(connection)}
+                >
+                  Edit
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => dyForm.openDuplicate(connection)}
+                >
+                  Duplicate
+                </ContextMenu.Item>
+              </>
+            )}
+            {!isPostgres && !isDynamo && (
+              <ContextMenu.Item className={styles.contextItem} disabled>
+                {connection.kind}
+              </ContextMenu.Item>
+            )}
             <ContextMenu.Sub>
               <ContextMenu.SubTrigger className={styles.contextItem}>
                 Move to group ▸
@@ -288,7 +430,7 @@ export function ConnectionRow({
         subject={connection.name}
         tabCount={tabCount}
         dirtyLabels={dirtyLabels}
-        onConfirm={handleDisconnect}
+        onConfirm={isPostgres ? handlePostgresDisconnect : handleDynamoDisconnect}
       />
 
       <Dialog.Root open={confirmDelete} onOpenChange={setConfirmDelete}>

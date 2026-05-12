@@ -2,6 +2,13 @@ use serde::Serialize;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AwsErrorBody {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PostgresErrorBody {
     pub code: Option<String>,
     pub message: String,
@@ -33,9 +40,20 @@ pub enum AppError {
 
     #[error("postgres: {}", .0.message)]
     Postgres(PostgresErrorBody),
+
+    #[error("aws: {}", .0.message)]
+    Aws(AwsErrorBody),
 }
 
 impl AppError {
+    pub fn aws(code: impl Into<String>, message: impl Into<String>, retryable: bool) -> Self {
+        AppError::Aws(AwsErrorBody {
+            code: code.into(),
+            message: message.into(),
+            retryable,
+        })
+    }
+
     pub fn postgres(message: impl Into<String>) -> Self {
         AppError::Postgres(PostgresErrorBody {
             code: None,

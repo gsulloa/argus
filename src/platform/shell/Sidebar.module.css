@@ -338,6 +338,24 @@
   color: var(--text-muted);
   display: inline-flex;
 }
+
+.itemSubtitle {
+  font-size: 10.5px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 120px;
+}
+
+.warningIndicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warning, #d97706);
+  flex-shrink: 0;
+}
 .contextMenu {
   background: var(--surface);
   border: 1px solid var(--border);

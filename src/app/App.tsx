@@ -31,6 +31,12 @@ import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
 import { UpdaterProvider } from "@/platform/updater";
 import { ToastProvider } from "@/platform/toast";
 import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
+import {
+  DynamoFormProvider,
+  CredentialsRefreshedListener,
+  useDynamoCommands,
+} from "@/modules/dynamo";
+import { KindPickerProvider } from "@/platform/shell/useKindPicker";
 import { useQueryHistoryCommands } from "@/modules/query-history";
 import { savedQueriesStore } from "@/modules/saved-queries/store";
 
@@ -45,7 +51,12 @@ export function App() {
                 <ConnectionsProvider>
                   <ActivityLogProvider>
                     <PostgresFormProvider>
-                      <Shell />
+                      <DynamoFormProvider>
+                        <KindPickerProvider>
+                          <Shell />
+                          <CredentialsRefreshedListener />
+                        </KindPickerProvider>
+                      </DynamoFormProvider>
                     </PostgresFormProvider>
                   </ActivityLogProvider>
                 </ConnectionsProvider>
@@ -77,6 +88,7 @@ function ShellMain() {
       <ShortcutBindings />
       <DevCommands />
       <PostgresCommands />
+      <DynamoCommands />
       <QueryHistoryCommands />
       <SavedQueriesBootstrap />
       <BootstrapTabs />
@@ -90,6 +102,11 @@ function ShellMain() {
 
 function PostgresCommands() {
   usePostgresCommands();
+  return null;
+}
+
+function DynamoCommands() {
+  useDynamoCommands();
   return null;
 }
 

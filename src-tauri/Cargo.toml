@@ -40,6 +40,11 @@ url = "2"
 percent-encoding = "2"
 time = { version = "0.3", features = ["formatting", "macros", "serde"] }
 async-trait = "0.1"
+aws-sdk-dynamodb = "1.111.0"
+aws-sdk-sts = "1.103.0"
+aws-config = "1.8.16"
+# Transitive dep, pinned explicitly so we can pattern-match on SdkError variants.
+aws-smithy-runtime-api = "1.12.0"
 
 [features]
 # disabled in tests so we can avoid hitting the OS keychain
@@ -49,6 +54,9 @@ live-pg-tests = []
 
 [dev-dependencies]
 tempfile = "3"
+# Pinned to the exact transitive dep version; required for constructing
+# ErrorMetadata test fixtures in dynamo/client.rs §5.5.
+aws-smithy-types = "1.4.7"
 
 [profile.release]
 panic = "abort"

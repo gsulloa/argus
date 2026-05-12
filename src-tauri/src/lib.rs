@@ -9,6 +9,11 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
+use crate::modules::dynamo::client::DynamoClientRegistry;
+use crate::modules::dynamo::commands::{
+    dynamo_connect, dynamo_disconnect, dynamo_list_active, dynamo_list_aws_profiles,
+    dynamo_test_connection, dynamo_update_credentials,
+};
 use crate::modules::postgres::{
     postgres_apply_table_edits, postgres_connect, postgres_count_table, postgres_disconnect,
     postgres_disconnect_all, postgres_get_function_signature, postgres_list_active,
@@ -25,9 +30,9 @@ use crate::modules::query_history::{
     },
 };
 use crate::modules::saved_queries::commands::{
-    saved_queries_create, saved_queries_delete, saved_queries_duplicate, saved_queries_folder_create,
-    saved_queries_folder_delete, saved_queries_folder_move, saved_queries_folder_update,
-    saved_queries_list, saved_queries_move, saved_queries_update,
+    saved_queries_create, saved_queries_delete, saved_queries_duplicate,
+    saved_queries_folder_create, saved_queries_folder_delete, saved_queries_folder_move,
+    saved_queries_folder_update, saved_queries_list, saved_queries_move, saved_queries_update,
 };
 use crate::platform::{
     connection_groups::{
@@ -126,6 +131,7 @@ pub fn run() {
             }
 
             app.manage(PgPoolRegistry::new());
+            app.manage(DynamoClientRegistry::new());
 
             Ok(())
         })
@@ -176,6 +182,13 @@ pub fn run() {
             saved_queries_move,
             saved_queries_delete,
             saved_queries_duplicate,
+            // DynamoDB commands
+            dynamo_list_aws_profiles,
+            dynamo_test_connection,
+            dynamo_connect,
+            dynamo_disconnect,
+            dynamo_list_active,
+            dynamo_update_credentials,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
