@@ -4,8 +4,12 @@ interface IconProps {
 }
 
 /**
- * Minimal Postgres mark — a stylised elephant silhouette sized to match the
- * Lucide icon set's visual weight (1.5px stroke, 16px default).
+ * Postgres mark — an elephant head-and-trunk profile.
+ *
+ * Shape-category contract: organic rounded blob with a clearly directional
+ * curving trunk. Pairs against the DynamoDB stacked-cylinder mark so the two
+ * source-kind icons are distinguishable at 14px by silhouette alone, with no
+ * color cues. Hairline stroke (1.5) on a 24px viewBox, inherits currentColor.
  */
 export function PostgresIcon({ size = 16, className }: IconProps) {
   return (
@@ -22,10 +26,12 @@ export function PostgresIcon({ size = 16, className }: IconProps) {
       strokeLinejoin="round"
       className={className}
     >
-      <path d="M5 14c0-4 3-8 7-8 5 0 7 3 7 7 0 3-2 7-5 7-2 0-3-1-3-3 0-2 1-3 2-3" />
-      <path d="M9 14c0-2 1-4 3-4" />
-      <path d="M5 14c-1 1-1 3 0 4 1 1 3 1 3-1" />
-      <circle cx="14" cy="10" r="0.6" fill="currentColor" />
+      {/* Head: rounded organic blob, symmetric around x=12, occupying the upper frame */}
+      <path d="M12 4c-4 0-8 3-8 7v2c0 3 2 5 5 5h6c3 0 5-2 5-5v-2c0-4-4-7-8-7z" />
+      {/* Trunk: sweeps down from the front of the head with an upward tip flick */}
+      <path d="M5 13c-2 2-2 5 0 7 2 1 3 0 4-1" />
+      {/* Eye */}
+      <circle cx="13" cy="10" r="0.7" fill="currentColor" />
     </svg>
   );
 }
