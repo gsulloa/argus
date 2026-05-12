@@ -66,11 +66,11 @@
 
 ## 9. Frontend: query builder UI
 
-- [ ] 9.1 Add `src/modules/dynamo/data-view/QueryBuilder.tsx` with a mode selector (`Scan` / `Query`), index dropdown (primary + GSIs + LSIs), Query-only partition-key picker (typed) and optional sort-key picker (typed, with operator selector), and a list of filter rows with `attribute / operator / value` per the spec.
-- [ ] 9.2 Implement the typed value editor: `S` (text input), `N` (numeric input with non-numeric rejection), `BOOL` (toggle), `NULL` (switch that sets `{ "NULL": true }`).
-- [ ] 9.3 Add the collapsible "Preview" panel rendering the compiled `KeyConditionExpression` (if Query) and `FilterExpression` plus the names/values JSON.
-- [ ] 9.4 Disable Run when required fields are missing or invalid (partition-key value missing in Query mode, key-picker type mismatch, etc.); show inline hints.
-- [ ] 9.5 Tests: switching modes, adding/removing filter rows, building a `between` filter, building a `begins_with` sort-key clause, type-mismatch validation, Preview reflects the compiled state.
+- [x] 9.1 Add `src/modules/dynamo/data-view/QueryBuilder.tsx` with a mode selector (`Scan` / `Query`), index dropdown (primary + GSIs + LSIs), Query-only partition-key picker (typed) and optional sort-key picker (typed, with operator selector), and a list of filter rows with `attribute / operator / value` per the spec.
+- [x] 9.2 Implement the typed value editor: `S` (text input), `N` (numeric input with non-numeric rejection), `BOOL` (toggle), `NULL` (switch that sets `{ "NULL": true }`).
+- [x] 9.3 Add the collapsible "Preview" panel rendering the compiled `KeyConditionExpression` (if Query) and `FilterExpression` plus the names/values JSON.
+- [x] 9.4 Disable Run when required fields are missing or invalid (partition-key value missing in Query mode, key-picker type mismatch, etc.); show inline hints.
+- [x] 9.5 Tests: switching modes, adding/removing filter rows, building a `between` filter, building a `begins_with` sort-key clause, type-mismatch validation, Preview reflects the compiled state.
 
 ## 10. Frontend: Tabla mode
 

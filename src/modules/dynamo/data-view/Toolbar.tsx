@@ -54,6 +54,10 @@ export interface ToolbarProps {
   // --- Page size (separate from builder — persisted independently) ---
   pageSize: number;
   onPageSizeChange(next: number): void;
+
+  // --- Builder validity (from QueryBuilder via DataViewTab) ---
+  runDisabled?: boolean;
+  runDisabledReason?: string;
 }
 
 export function Toolbar({
@@ -71,10 +75,13 @@ export function Toolbar({
   needsCredentials,
   pageSize,
   onPageSizeChange,
+  runDisabled = false,
+  runDisabledReason,
 }: ToolbarProps) {
   const isLoading = status === "loading";
   const canLoadMore = lastEvaluatedKey !== null && !isLoading;
   const isQueryMode = builder.mode === "query";
+  const runBlocked = isLoading || runDisabled;
 
   function handlePageSizeCommit(raw: string) {
     const n = parseInt(raw, 10);
@@ -127,9 +134,10 @@ export function Toolbar({
         type="button"
         className={styles.btnPrimary}
         onClick={onRun}
-        disabled={isLoading}
-        title="Run scan / query (⌘R)"
+        disabled={runBlocked}
+        title={runDisabled && runDisabledReason ? runDisabledReason : "Run scan / query (⌘R)"}
         aria-label="Run"
+        data-testid="toolbar-run"
       >
         <Play size={10} />
         Run

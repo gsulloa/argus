@@ -47,8 +47,8 @@ import type { BuilderState, AttributeMap } from "./types";
 import { Toolbar, type ViewMode } from "./Toolbar";
 import { MetadataView } from "./MetadataView";
 import { BottomBar, type CountResult } from "./BottomBar";
+import { QueryBuilder } from "./QueryBuilder";
 import {
-  QueryBuilderPlaceholder,
   ResultsPanelPlaceholder,
   InspectorPlaceholder,
 } from "./placeholders";
@@ -170,6 +170,16 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
     scanIndexForward: true,
     filters: [],
   }));
+
+  // ── Builder validity (used to disable Run in Toolbar) ─────────────────────
+  // Scan mode is always valid; Query mode becomes invalid until PK is filled.
+  const [builderValid, setBuilderValid] = useState(true);
+  const [builderInvalidReason, setBuilderInvalidReason] = useState<string | undefined>();
+
+  const handleValidityChange = useCallback((isValid: boolean, reason?: string) => {
+    setBuilderValid(isValid);
+    setBuilderInvalidReason(isValid ? undefined : reason);
+  }, []);
 
   // Keep builder.pageSize in sync when the persisted setting loads.
   useEffect(() => {
@@ -397,6 +407,8 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
         needsCredentials={needsCredentials}
         pageSize={pageSize}
         onPageSizeChange={handlePageSizeChange}
+        runDisabled={!builderValid}
+        runDisabledReason={builderInvalidReason}
       />
 
       {describeError && (
@@ -459,12 +471,13 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
       ) : (
         <div className={styles.body}>
           <div className={styles.mainArea}>
-            {/* QueryBuilder — Phase 6 replaces this placeholder */}
+            {/* QueryBuilder */}
             {describe && (
-              <QueryBuilderPlaceholder
+              <QueryBuilder
                 builder={builder}
                 describe={describe}
                 onBuilderChange={handleBuilderChange}
+                onValidityChange={handleValidityChange}
               />
             )}
 

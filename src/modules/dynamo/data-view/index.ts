@@ -45,4 +45,6 @@ export { MetadataView } from "./MetadataView";
 export type { MetadataViewProps } from "./MetadataView";
 export { Toolbar } from "./Toolbar";
 export type { ToolbarProps, ViewMode } from "./Toolbar";
+export { QueryBuilder } from "./QueryBuilder";
+export type { QueryBuilderProps } from "./QueryBuilder";
 export { useDynamoInspectorWidth } from "./useInspectorWidth";
