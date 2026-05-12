@@ -65,6 +65,11 @@
 .item[data-highlighted] {
   background: var(--surface-2);
 }
+.item.disabled,
+.item[data-disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
 
 .separator {
   height: 1px;

@@ -15,9 +15,11 @@ export interface VersionIndicatorViewProps {
   pendingVersion: string | null;
   availableVersion: string | null;
   skippedVersion: string | null;
+  isInstalling: boolean;
   onForceCheck: () => void;
   onSkip: () => void;
   onClearSkip: () => void;
+  onInstallAndRestart: () => void;
 }
 
 export function VersionIndicatorView(props: VersionIndicatorViewProps) {
@@ -26,9 +28,11 @@ export function VersionIndicatorView(props: VersionIndicatorViewProps) {
     pendingVersion,
     availableVersion,
     skippedVersion,
+    isInstalling,
     onForceCheck,
     onSkip,
     onClearSkip,
+    onInstallAndRestart,
   } = props;
   const [aboutOpen, setAboutOpen] = useState(false);
 
@@ -83,6 +87,21 @@ export function VersionIndicatorView(props: VersionIndicatorViewProps) {
               <DropdownMenu.Item className={styles.item} onSelect={() => onForceCheck()}>
                 Check for updates now
               </DropdownMenu.Item>
+              {pendingVersion !== null && (
+                <DropdownMenu.Item
+                  className={`${styles.item}${isInstalling ? ` ${styles.disabled}` : ""}`}
+                  disabled={isInstalling}
+                  onSelect={(event) => {
+                    if (isInstalling) {
+                      event.preventDefault();
+                      return;
+                    }
+                    onInstallAndRestart();
+                  }}
+                >
+                  {isInstalling ? "Installing…" : "Install update & restart"}
+                </DropdownMenu.Item>
+              )}
               {canSkip && (
                 <DropdownMenu.Item className={styles.item} onSelect={() => onSkip()}>
                   Skip v{skipTarget}
@@ -161,11 +180,15 @@ export function VersionIndicator() {
       pendingVersion={ctx.pendingVersion}
       availableVersion={ctx.availableVersion}
       skippedVersion={ctx.skippedVersion}
+      isInstalling={ctx.isInstalling}
       onForceCheck={() => {
         void ctx.forceCheck();
       }}
       onSkip={() => ctx.skipPending()}
       onClearSkip={() => ctx.clearSkip()}
+      onInstallAndRestart={() => {
+        void ctx.installAndRestart();
+      }}
     />
   );
 }

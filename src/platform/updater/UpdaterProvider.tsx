@@ -10,6 +10,7 @@ import {
 } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { useSetting } from "@/platform/settings/useSetting";
 
 const FIRST_CHECK_DELAY_MS = 5_000;
@@ -21,9 +22,11 @@ type UpdaterCtx = {
   pendingVersion: string | null;
   availableVersion: string | null;
   skippedVersion: string | null;
+  isInstalling: boolean;
   forceCheck: () => Promise<void>;
   skipPending: () => void;
   clearSkip: () => void;
+  installAndRestart: () => Promise<void>;
 };
 
 const Ctx = createContext<UpdaterCtx | null>(null);
@@ -49,6 +52,7 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
     SKIPPED_VERSION_KEY,
     null,
   );
+  const [isInstalling, setIsInstalling] = useState(false);
 
   // Track latest values without re-running effects.
   const skippedRef = useRef(skippedVersion);
@@ -162,24 +166,44 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
     setSkippedVersion(null);
   }, [setSkippedVersion]);
 
+  const installAndRestart = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    if (!pendingRef.current) return;
+    if (installingRef.current) return;
+    installingRef.current = true;
+    setIsInstalling(true);
+    try {
+      await pendingRef.current.install();
+      await relaunch();
+    } catch (err) {
+      console.debug("[updater] install-and-restart failed:", err);
+      installingRef.current = false;
+      setIsInstalling(false);
+    }
+  }, []);
+
   const value = useMemo<UpdaterCtx>(
     () => ({
       currentVersion,
       pendingVersion,
       availableVersion,
       skippedVersion,
+      isInstalling,
       forceCheck,
       skipPending,
       clearSkip,
+      installAndRestart,
     }),
     [
       currentVersion,
       pendingVersion,
       availableVersion,
       skippedVersion,
+      isInstalling,
       forceCheck,
       skipPending,
       clearSkip,
+      installAndRestart,
     ],
   );
 
