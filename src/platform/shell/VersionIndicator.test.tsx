@@ -7,9 +7,11 @@ const baseProps = {
   pendingVersion: null,
   availableVersion: null,
   skippedVersion: null,
+  isInstalling: false,
   onForceCheck: vi.fn(),
   onSkip: vi.fn(),
   onClearSkip: vi.fn(),
+  onInstallAndRestart: vi.fn(),
 };
 
 describe("VersionIndicatorView", () => {
