@@ -6,6 +6,7 @@ import "@/modules/postgres/data/TableViewerTab";
 import "@/modules/postgres/sql/QueryTab";
 import "@/modules/query-history";
 import "@/modules/dynamo/tables/PlaceholderTab";
+import "@/modules/dynamo/data-view/DataViewTab";
 
 export { TabRegistry } from "./TabRegistry";
 export { TabsProvider, useTabs } from "./TabsContext";

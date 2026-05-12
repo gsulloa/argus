@@ -1,0 +1,61 @@
+/* DynamoDB Data View Bottom Bar */
+
+.root {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 24px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-subtle);
+  overflow: hidden;
+}
+
+.count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sep {
+  color: var(--text-subtle);
+}
+
+.countResult {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.status {
+  color: var(--text-subtle);
+}
+
+.statusLoading {
+  color: var(--text-subtle);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.errorText {
+  color: var(--danger);
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

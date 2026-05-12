@@ -57,12 +57,12 @@
 
 ## 8. Frontend: shared data view tab
 
-- [ ] 8.1 Add `src/modules/dynamo/data-view/DataViewTab.tsx` orchestrating the toolbar, query-builder, results panel, inspector, and bottom bar. Read `describe` from payload; fall back to `dynamo.describeTable` on mount when null.
-- [ ] 8.2 Implement the toolbar (`Toolbar.tsx`): mode toggle Tabla/JSON, Run, Reset, Consistent-read toggle, Reverse-order toggle (Query only), Page size input, Count button, Load more button, an inline "Connection waiting for credentials" notice.
-- [ ] 8.3 Wire `⌘R` and `⌘⇧R` shortcuts scoped to the data view tab so they fire regardless of focus inside form controls but NOT when inside CodeMirror in JSON mode (handle the precedence with the existing shortcut router used by `app-shell`).
-- [ ] 8.4 Persist `dynamoView:<connectionId>:<tableName>` and `dynamoLimit:<connectionId>:<tableName>` via the existing settings store.
-- [ ] 8.5 Implement `Metadata` sub-view rendering the describe contents (key schema, attribute definitions, GSIs, LSIs, billing mode, stream state, item count, ARN) and a "Refresh metadata" button.
-- [ ] 8.6 Implement a bottom bar (`BottomBar.tsx`) showing `<N> items loaded` and (when present) `Count: <total> (scanned <scanned>)` with a 1000s grouping locale.
+- [x] 8.1 Add `src/modules/dynamo/data-view/DataViewTab.tsx` orchestrating the toolbar, query-builder, results panel, inspector, and bottom bar. Read `describe` from payload; fall back to `dynamo.describeTable` on mount when null.
+- [x] 8.2 Implement the toolbar (`Toolbar.tsx`): mode toggle Tabla/JSON, Run, Reset, Consistent-read toggle, Reverse-order toggle (Query only), Page size input, Count button, Load more button, an inline "Connection waiting for credentials" notice.
+- [x] 8.3 Wire `⌘R` and `⌘⇧R` shortcuts scoped to the data view tab so they fire regardless of focus inside form controls but NOT when inside CodeMirror in JSON mode (handle the precedence with the existing shortcut router used by `app-shell`).
+- [x] 8.4 Persist `dynamoView:<connectionId>:<tableName>` and `dynamoLimit:<connectionId>:<tableName>` via the existing settings store.
+- [x] 8.5 Implement `Metadata` sub-view rendering the describe contents (key schema, attribute definitions, GSIs, LSIs, billing mode, stream state, item count, ARN) and a "Refresh metadata" button.
+- [x] 8.6 Implement a bottom bar (`BottomBar.tsx`) showing `<N> items loaded` and (when present) `Count: <total> (scanned <scanned>)` with a 1000s grouping locale.
 
 ## 9. Frontend: query builder UI
 

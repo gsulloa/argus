@@ -1,0 +1,238 @@
+/* DynamoDB Metadata sub-view — ported from PlaceholderTab */
+
+.root {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: var(--canvas);
+}
+
+/* ── Loading / error states ─────────────────────────────────────── */
+
+.loadingState,
+.errorState {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.errorState {
+  color: var(--danger);
+}
+
+.errorRetryBtn {
+  margin-left: 4px;
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── Section groups ─────────────────────────────────────────────── */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sectionTitle {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-subtle);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Meta grid ─────────────────────────────────────────────────── */
+
+.metaGrid {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 4px 8px;
+  align-items: start;
+}
+
+.metaLabel {
+  font-size: 11px;
+  color: var(--text-subtle);
+  padding-top: 1px;
+}
+
+.metaValue {
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+  font-family: var(--font-mono);
+}
+
+/* ARN row with copy */
+.arnRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.arnText {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+  flex: 1;
+}
+
+.copyBtn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+  padding: 0;
+  margin-top: 1px;
+  transition: color 80ms, background 80ms;
+}
+
+.copyBtn:hover {
+  color: var(--text-muted);
+  background: var(--surface-2);
+}
+
+/* ── Badge variants ─────────────────────────────────────────────── */
+
+.badge {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+.badgeActive {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+
+.badgeWarning {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 30%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+/* ── Key schema table ────────────────────────────────────────────── */
+
+.keyTable {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+}
+
+.keyTable th {
+  text-align: left;
+  padding: 3px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-subtle);
+  border-bottom: 1px solid var(--border);
+}
+
+.keyTable td {
+  padding: 3px 8px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--hairline, rgba(255,255,255,0.04));
+  font-family: var(--font-mono);
+}
+
+.keyTable tr:last-child td {
+  border-bottom: none;
+}
+
+.keyTypePk {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.keyTypeRange {
+  color: var(--text-muted);
+}
+
+/* ── Index cards ─────────────────────────────────────────────────── */
+
+.indexList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.indexCard {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.indexName {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.indexMeta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.indexMetaItem {
+  font-size: 10.5px;
+  color: var(--text-subtle);
+}
+
+.indexMetaValue {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.emptyIndexList {
+  font-size: 11px;
+  color: var(--text-subtle);
+  padding: 4px 0;
+}

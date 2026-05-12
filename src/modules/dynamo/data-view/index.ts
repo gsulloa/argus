@@ -32,3 +32,17 @@ export type {
   FilterRow,
   BuilderState,
 } from "./types";
+
+// Tab kind
+export {
+  DYNAMO_DATA_VIEW_KIND,
+  openDataViewTab,
+  type DynamoDataViewPayload,
+} from "./DataViewTab";
+export { BottomBar } from "./BottomBar";
+export type { BottomBarProps, CountResult } from "./BottomBar";
+export { MetadataView } from "./MetadataView";
+export type { MetadataViewProps } from "./MetadataView";
+export { Toolbar } from "./Toolbar";
+export type { ToolbarProps, ViewMode } from "./Toolbar";
+export { useDynamoInspectorWidth } from "./useInspectorWidth";
