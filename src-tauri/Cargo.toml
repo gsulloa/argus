@@ -46,6 +46,7 @@ aws-sdk-sts = "1.103.0"
 aws-config = "1.8.16"
 # Transitive dep, pinned explicitly so we can pattern-match on SdkError variants.
 aws-smithy-runtime-api = "1.12.0"
+base64 = "0.22"
 
 [features]
 # disabled in tests so we can avoid hitting the OS keychain

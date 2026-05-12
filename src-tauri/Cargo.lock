@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "argus"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -78,6 +78,7 @@ dependencies = [
  "aws-sdk-sts",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
+ "base64 0.22.1",
  "deadpool-postgres",
  "directories",
  "keyring",
