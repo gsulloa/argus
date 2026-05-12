@@ -9,13 +9,15 @@ import {
   type ReactNode,
 } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 import { useSetting } from "@/platform/settings/useSetting";
+import { logUpdater } from "./log";
 
 const FIRST_CHECK_DELAY_MS = 5_000;
 const PERIODIC_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1_000;
 const SKIPPED_VERSION_KEY = "updater.skippedVersion";
+
+type UpdateInfo = { version: string; body: string | null; date: string | null };
 
 type UpdaterCtx = {
   currentVersion: string;
@@ -23,6 +25,8 @@ type UpdaterCtx = {
   availableVersion: string | null;
   skippedVersion: string | null;
   isInstalling: boolean;
+  installError: string | null;
+  dismissInstallError: () => void;
   forceCheck: () => Promise<void>;
   skipPending: () => void;
   clearSkip: () => void;
@@ -53,12 +57,11 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
     null,
   );
   const [isInstalling, setIsInstalling] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   // Track latest values without re-running effects.
   const skippedRef = useRef(skippedVersion);
   skippedRef.current = skippedVersion;
-  const pendingRef = useRef<Update | null>(null);
-  const installingRef = useRef(false);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -77,28 +80,35 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
 
   const runCheck = useCallback(async () => {
     if (!isTauriRuntime()) return;
-    if (pendingRef.current) return; // already downloaded; waiting for quit
-    let update: Update | null;
+
+    let result: UpdateInfo | null;
     try {
-      update = await check();
+      result = await invoke<UpdateInfo | null>("updater_check_and_download");
     } catch (err) {
-      console.debug("[updater] check failed:", err);
+      logUpdater("warn", "check_failed", { error: String(err) });
       return;
     }
-    if (!update || !update.available) return;
-    if (skippedRef.current && update.version === skippedRef.current) {
-      console.debug("[updater] version", update.version, "is skipped");
-      return;
-    }
-    setAvailableVersion(update.version);
-    try {
-      await update.download();
-      pendingRef.current = update;
-      setPendingVersion(update.version);
-    } catch (err) {
-      console.debug("[updater] download failed:", err);
+
+    if (result === null) {
+      // No update available — clear any stale state.
       setAvailableVersion(null);
+      setPendingVersion(null);
+      return;
     }
+
+    // Skip-version gating: if the user previously skipped this version,
+    // don't surface it in the UI. Note: the bytes are already stored in Rust
+    // state, so a quit while in this state would still apply the update.
+    // TODO: add a `updater_clear_pending` Rust command to fully clear skip.
+    if (skippedRef.current && result.version === skippedRef.current) {
+      logUpdater("info", "skipped_version_seen", { version: result.version });
+      setPendingVersion(null);
+      setAvailableVersion(null);
+      return;
+    }
+
+    setAvailableVersion(result.version);
+    setPendingVersion(result.version);
   }, []);
 
   // First check 5s after mount, then every 4h.
@@ -120,64 +130,43 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
     };
   }, [runCheck]);
 
-  // Apply pending update on app quit. Tauri 2 fires beforeunload when the
-  // user quits via ⌘Q or window close; we intercept synchronously and let
-  // the install run. install() swaps the .app on disk; the next launch
-  // picks up the new binary.
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-    const handler = (event: BeforeUnloadEvent) => {
-      const update = pendingRef.current;
-      if (!update || installingRef.current) return;
-      installingRef.current = true;
-      // We can't await synchronously; fire-and-forget. The user-initiated
-      // quit gives the install enough time on macOS where the swap is fast.
-      event.preventDefault();
-      update
-        .install()
-        .catch((err) => {
-          console.debug("[updater] install on quit failed:", err);
-        })
-        .finally(() => {
-          // Allow the unload to proceed.
-          window.removeEventListener("beforeunload", handler);
-          window.close();
-        });
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, []);
+  // Note: the beforeunload useEffect has been removed. Quit-time install is
+  // now handled by the Rust RunEvent::ExitRequested hook, which deterministically
+  // blocks exit until install completes (with a 10s timeout).
 
   const forceCheck = useCallback(async () => {
+    logUpdater("info", "user_forced_check");
     await runCheck();
   }, [runCheck]);
 
   const skipPending = useCallback(() => {
     const v = pendingVersion ?? availableVersion;
     if (!v) return;
+    logUpdater("info", "user_skipped_version", { version: v });
     setSkippedVersion(v);
-    // Discard the pending download — user explicitly opted out.
-    pendingRef.current = null;
     setPendingVersion(null);
     setAvailableVersion(null);
   }, [pendingVersion, availableVersion, setSkippedVersion]);
 
   const clearSkip = useCallback(() => {
+    logUpdater("info", "user_cleared_skip");
     setSkippedVersion(null);
   }, [setSkippedVersion]);
 
+  const dismissInstallError = useCallback(() => {
+    setInstallError(null);
+  }, []);
+
   const installAndRestart = useCallback(async () => {
     if (!isTauriRuntime()) return;
-    if (!pendingRef.current) return;
-    if (installingRef.current) return;
-    installingRef.current = true;
     setIsInstalling(true);
     try {
-      await pendingRef.current.install();
-      await relaunch();
+      await invoke<void>("updater_install_and_restart");
+      // On success, the process is gone — this line is unreachable.
     } catch (err) {
-      console.debug("[updater] install-and-restart failed:", err);
-      installingRef.current = false;
+      const msg = String(err);
+      setInstallError(msg);
+      logUpdater("error", "install_and_restart_failed", { error: msg });
       setIsInstalling(false);
     }
   }, []);
@@ -189,6 +178,8 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
       availableVersion,
       skippedVersion,
       isInstalling,
+      installError,
+      dismissInstallError,
       forceCheck,
       skipPending,
       clearSkip,
@@ -200,6 +191,8 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
       availableVersion,
       skippedVersion,
       isInstalling,
+      installError,
+      dismissInstallError,
       forceCheck,
       skipPending,
       clearSkip,

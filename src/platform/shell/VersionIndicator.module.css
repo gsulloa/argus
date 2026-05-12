@@ -107,3 +107,52 @@
   font-family: var(--font-mono, ui-monospace, "Geist Mono", monospace);
   font-feature-settings: "zero" on;
 }
+
+.logsPane {
+  font-family: var(--font-mono, ui-monospace, "Geist Mono", monospace);
+  font-size: 11px;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 10px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre;
+  user-select: text;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.errorChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 5px;
+  color: var(--danger);
+  background: transparent;
+  border: 1px solid var(--danger);
+  cursor: pointer;
+  margin-left: 6px;
+}
+
+.logsButton {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-weight: 500;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.logsButton:hover {
+  background: var(--surface-2);
+}
+
+.logsButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

@@ -3,6 +3,7 @@ pub mod connections;
 pub mod secrets;
 pub mod settings;
 pub mod storage;
+pub mod updater;
 
 use std::sync::Mutex;
 
