@@ -49,9 +49,9 @@ import { MetadataView } from "./MetadataView";
 import { BottomBar, type CountResult } from "./BottomBar";
 import { QueryBuilder } from "./QueryBuilder";
 import {
-  ResultsPanelPlaceholder,
   InspectorPlaceholder,
 } from "./placeholders";
+import { TabView } from "./TabView";
 import styles from "./DataViewTab.module.css";
 
 // ---------------------------------------------------------------------------
@@ -191,7 +191,18 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
     useDynamoInspectorWidth(connectionId, tableName);
 
   // ── Inspector selection ────────────────────────────────────────────────────
-  const [selectedItem, setSelectedItem] = useState<AttributeMap | null>(null);
+  // selectedRowIndex: index into items[] (stable across loadMore since items only grow)
+  // selectedAttribute: attribute name to focus in inspector (null = full item)
+  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
+  const [_selectedAttribute, setSelectedAttribute] = useState<string | undefined>(undefined);
+
+  const handleSelectRow = useCallback(
+    (rowIndex: number, attribute?: string) => {
+      setSelectedRowIndex(rowIndex);
+      setSelectedAttribute(attribute);
+    },
+    [],
+  );
 
   // ── Connection state ──────────────────────────────────────────────────────
   const { getActive } = useActiveDynamoConnections();
@@ -235,12 +246,17 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
     loadMore,
     triggerAutoLoadMore,
     reset,
+    autoScrollDisabled,
   } = useDynamoItems({
     connectionId,
     tableName,
     builder,
     describe: describe ?? DUMMY_DESCRIBE,
   });
+
+  // Derived: selected item for the inspector (items only grows, index stable)
+  const selectedItem: AttributeMap | null =
+    selectedRowIndex !== null ? (items[selectedRowIndex] ?? null) : null;
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -481,14 +497,40 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
               />
             )}
 
-            {/* Results panel — Phase 7 replaces this placeholder */}
-            <ResultsPanelPlaceholder
-              items={items}
-              status={status}
-              error={error}
-              triggerAutoLoadMore={triggerAutoLoadMore}
-              onSelectItem={(item, _idx) => setSelectedItem(item)}
-            />
+            {/* Results panel — Tabla view (Phase 7) / JSON placeholder (Phase 8) */}
+            {viewMode === "tabla" ? (
+              <TabView
+                items={items}
+                describe={describe}
+                indexName={builder.indexName}
+                selectedRowIndex={selectedRowIndex}
+                onSelect={handleSelectRow}
+                onLoadMore={triggerAutoLoadMore}
+                hasMore={lastEvaluatedKey !== null}
+                status={status}
+                autoScrollDisabled={autoScrollDisabled}
+              />
+            ) : (
+              <div
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 11,
+                  color: "var(--text-subtle)",
+                  flexDirection: "column",
+                  gap: 6,
+                }}
+              >
+                <span>JSON view — Phase 8</span>
+                {status !== "idle" && (
+                  <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {items.length} items loaded · status: {status}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Inspector dock — Phase 8 replaces this placeholder */}

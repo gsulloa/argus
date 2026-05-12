@@ -74,12 +74,12 @@
 
 ## 10. Frontend: Tabla mode
 
-- [ ] 10.1 Add `src/modules/dynamo/data-view/TabView.tsx` using TanStack Table + TanStack Virtual for a virtualized grid.
-- [ ] 10.2 Implement `useInferredColumns(items, describe)` returning a stable column order: PK, SK (if present), top-N (default 10) attributes by frequency in the loaded sample (alphabetical tie-break), then the fixed `More…` column. Once a column appears it MUST NOT move; new columns may append on the right before `More…` when their frequency exceeds the current Nth column's.
-- [ ] 10.3 Implement type-aware cell rendering: primitives (`S`, `N`, `BOOL`, `NULL`) inline; `B` as `<binary NB>`; `L`/`SS`/`NS`/`BS` as `[N items]`; `M` as `{K keys}`. Complex-type cells are clickable and select the row + focus the inspector on that attribute.
-- [ ] 10.4 Row click selects the row and routes it to the inspector. Selection survives load-more.
-- [ ] 10.5 Implement scroll-to-load: when the last virtual row enters the viewport and `lastEvaluatedKey != null` and `auto_scroll_disabled == false`, dispatch `loadMore("user")`.
-- [ ] 10.6 Tests: column ordering with mixed-shape items, column stability across pages, summary rendering for `L`/`M`/`B`/sets, click-to-inspector routing.
+- [x] 10.1 Add `src/modules/dynamo/data-view/TabView.tsx` using TanStack Table + TanStack Virtual for a virtualized grid.
+- [x] 10.2 Implement `useInferredColumns(items, describe)` returning a stable column order: PK, SK (if present), top-N (default 10) attributes by frequency in the loaded sample (alphabetical tie-break), then the fixed `More…` column. Once a column appears it MUST NOT move; new columns may append on the right before `More…` when their frequency exceeds the current Nth column's.
+- [x] 10.3 Implement type-aware cell rendering: primitives (`S`, `N`, `BOOL`, `NULL`) inline; `B` as `<binary NB>`; `L`/`SS`/`NS`/`BS` as `[N items]`; `M` as `{K keys}`. Complex-type cells are clickable and select the row + focus the inspector on that attribute.
+- [x] 10.4 Row click selects the row and routes it to the inspector. Selection survives load-more.
+- [x] 10.5 Implement scroll-to-load: when the last virtual row enters the viewport and `lastEvaluatedKey != null` and `auto_scroll_disabled == false`, dispatch `loadMore("user")`.
+- [x] 10.6 Tests: column ordering with mixed-shape items, column stability across pages, summary rendering for `L`/`M`/`B`/sets, click-to-inspector routing.
 
 ## 11. Frontend: JSON mode
 
