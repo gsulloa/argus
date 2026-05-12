@@ -40,18 +40,17 @@ import { useActiveDynamoConnections } from "@/modules/dynamo/useActiveConnection
 import { dynamoTablesApi } from "@/modules/dynamo/tables/api";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
 import type { Tab } from "@/platform/shell/tabs/types";
-import { dynamoCountItems } from "./api";
 import { useDynamoItems } from "./useDynamoItems";
 import { useDynamoInspectorWidth } from "./useInspectorWidth";
+import { useCount } from "./useCount";
 import type { BuilderState, AttributeMap } from "./types";
 import { Toolbar, type ViewMode } from "./Toolbar";
 import { MetadataView } from "./MetadataView";
-import { BottomBar, type CountResult } from "./BottomBar";
+import { BottomBar } from "./BottomBar";
 import { QueryBuilder } from "./QueryBuilder";
-import {
-  InspectorPlaceholder,
-} from "./placeholders";
 import { TabView } from "./TabView";
+import { JsonView } from "./JsonView";
+import { Inspector } from "./Inspector";
 import styles from "./DataViewTab.module.css";
 
 // ---------------------------------------------------------------------------
@@ -214,9 +213,13 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
   const activeCon = getActive(connectionId);
   const needsCredentials = activeCon === undefined;
 
-  // ── Count state ───────────────────────────────────────────────────────────
-  const [countLoading, setCountLoading] = useState(false);
-  const [countResult, setCountResult] = useState<CountResult | undefined>();
+  // ── Count state — owned by useCount (task 13.1–13.3) ────────────────────
+  const {
+    countLoading,
+    countResult,
+    triggerCount,
+    clearCount,
+  } = useCount(connectionId, tableName, builder, describe);
 
   // ── useDynamoItems ─────────────────────────────────────────────────────────
   // Hook requires a non-null describe. We defer the hook's actual invocation
@@ -274,47 +277,20 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
       filters: [],
     });
     reset();
-    setCountResult(undefined);
-  }, [reset, pageSize]);
+    clearCount();
+    // Reset selection when items are wiped.
+    setSelectedRowIndex(null);
+  }, [reset, pageSize, clearCount]);
 
   const handleLoadMore = useCallback(() => {
     void loadMore("user");
   }, [loadMore]);
 
+  // Count is now fully owned by the useCount hook (task 13.1).
+  // triggerCount has its own in-flight guard; we just pass it through.
   const handleCount = useCallback(() => {
-    if (countLoading || describe === null) return;
-    setCountLoading(true);
-    dynamoCountItems(
-      connectionId,
-      tableName,
-      {
-        mode: builder.mode,
-        index_name: builder.indexName,
-        key_condition_expression:
-          builder.mode === "query" && builder.query
-            ? null // compiler would build this; for Phase 5 stub we pass null
-            : null,
-        filter_expression: null,
-        expression_attribute_names: null,
-        expression_attribute_values: null,
-        scan_index_forward: builder.scanIndexForward,
-        consistent_read: builder.consistentRead,
-      },
-      "user",
-    )
-      .then((res) => {
-        setCountResult({
-          totalCount: res.total_count,
-          totalScannedCount: res.total_scanned_count,
-        });
-      })
-      .catch(() => {
-        // Count error — silently clear; error will surface in bottom bar in Phase 8
-      })
-      .finally(() => {
-        setCountLoading(false);
-      });
-  }, [countLoading, describe, connectionId, tableName, builder]);
+    triggerCount();
+  }, [triggerCount]);
 
   const handlePageSizeChange = useCallback(
     (next: number) => {
@@ -327,8 +303,8 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
   const handleBuilderChange = useCallback(
     (next: BuilderState) => {
       setBuilder(next);
-      // Clear count result when builder state changes (task 13.3 — plumbed here).
-      setCountResult(undefined);
+      // Count auto-clear (task 13.3) is handled inside useCount via snapshot
+      // comparison. No explicit clear needed here.
     },
     [],
   );
@@ -497,7 +473,7 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
               />
             )}
 
-            {/* Results panel — Tabla view (Phase 7) / JSON placeholder (Phase 8) */}
+            {/* Results panel — Tabla view / JSON view */}
             {viewMode === "tabla" ? (
               <TabView
                 items={items}
@@ -511,29 +487,21 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
                 autoScrollDisabled={autoScrollDisabled}
               />
             ) : (
-              <div
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 11,
-                  color: "var(--text-subtle)",
-                  flexDirection: "column",
-                  gap: 6,
-                }}
-              >
-                <span>JSON view — Phase 8</span>
-                {status !== "idle" && (
-                  <span style={{ fontVariantNumeric: "tabular-nums" }}>
-                    {items.length} items loaded · status: {status}
-                  </span>
-                )}
-              </div>
+              <JsonView
+                items={items}
+                selectedRowIndex={selectedRowIndex}
+                onSelect={(rowIndex) => handleSelectRow(rowIndex)}
+                onLoadMore={triggerAutoLoadMore}
+                hasMore={lastEvaluatedKey !== null}
+                status={status}
+                autoScrollDisabled={autoScrollDisabled}
+                describe={describe}
+                indexName={builder.indexName}
+              />
             )}
           </div>
 
-          {/* Inspector dock — Phase 8 replaces this placeholder */}
+          {/* Inspector dock */}
           {inspectorWidth > inspMin && (
             <>
               <div
@@ -547,10 +515,11 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
                 className={styles.inspectorDock}
                 style={{ width: inspectorWidth }}
               >
-                <InspectorPlaceholder
+                <Inspector
                   item={selectedItem}
                   describe={describe}
-                  width={inspectorWidth}
+                  indexName={builder.indexName}
+                  onClearSelection={() => setSelectedRowIndex(null)}
                 />
               </div>
             </>

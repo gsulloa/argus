@@ -1,0 +1,246 @@
+/**
+ * Inspector.module.css — DynamoDB item attribute tree
+ *
+ * Design tokens from DESIGN.md:
+ *   --canvas, --surface, --surface-2, --text, --text-muted, --text-subtle
+ *   --border, --border-strong, --hairline
+ *   --accent, --accent-soft
+ *   --font-mono, --font-sans
+ *   --text-xs (11px), --text-sm (12px)
+ */
+
+/* ── Root ──────────────────────────────────────────────────────────────────── */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--canvas);
+  overflow: hidden;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+
+.headerTitle {
+  font-family: var(--font-sans, system-ui);
+  font-size: 11px; /* --text-xs */
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em; /* all-caps label spacing from DESIGN.md */
+  user-select: none;
+}
+
+.headerCount {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-subtle);
+}
+
+/* ── Tree — scrollable attribute list ──────────────────────────────────────── */
+
+.tree {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+
+/* ── Tree node wrapper ───────────────────────────────────────────────────────── */
+
+.node {
+  /* Padding-left applied inline via depth * 16px */
+}
+
+/* ── Attribute row ──────────────────────────────────────────────────────────── */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 3px 0;
+  min-height: 24px;
+  border-bottom: 1px solid var(--hairline, rgba(255, 255, 255, 0.04));
+  transition: background 80ms ease-out;
+}
+
+.row:hover {
+  background: var(--surface-2);
+}
+
+/* PK row: accent tint (DESIGN.md §Where the accent is allowed) */
+.rowPk {
+  background: var(--accent-soft, rgba(168, 85, 247, 0.08));
+}
+.rowPk:hover {
+  background: rgba(168, 85, 247, 0.14);
+}
+
+/* SK row: slightly lighter accent tint */
+.rowSk {
+  background: rgba(168, 85, 247, 0.05);
+}
+.rowSk:hover {
+  background: rgba(168, 85, 247, 0.10);
+}
+
+/* ── Expand button / chevron ─────────────────────────────────────────────────── */
+
+.expandBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-subtle);
+  border-radius: 3px; /* --radius-sm */
+}
+
+.expandBtn:hover {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+.chevron {
+  transition: transform 120ms ease-out; /* --duration-short */
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+/* Placeholder so non-expandable rows align with expandable ones */
+.expandPlaceholder {
+  display: inline-block;
+  width: 16px;
+  flex-shrink: 0;
+}
+
+/* ── Attribute name ─────────────────────────────────────────────────────────── */
+
+.attrName {
+  font-family: var(--font-mono);
+  font-size: 12px; /* --text-sm */
+  color: var(--text);
+  flex-shrink: 0;
+  min-width: 60px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Type badge ──────────────────────────────────────────────────────────────── */
+
+.badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-radius: 3px; /* --radius-sm */
+  padding: 0 4px;
+  line-height: 16px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* PK/SK badge: accent color per DESIGN.md */
+.badgeAccent {
+  color: var(--accent);
+  background: var(--accent-soft, rgba(168, 85, 247, 0.12));
+}
+
+/* ── Attribute value ─────────────────────────────────────────────────────────── */
+
+.attrValue {
+  font-family: var(--font-mono);
+  font-size: 12px; /* --text-sm */
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.attrSummary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-subtle);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* BOOL true/false styling */
+.boolTrue {
+  color: var(--success, #4ade80);
+}
+
+.boolFalse {
+  color: var(--text-muted);
+}
+
+/* null */
+.nullValue {
+  color: var(--text-subtle);
+  font-style: italic;
+}
+
+/* ── Set elements (SS/NS/BS expanded rows) ──────────────────────────────────── */
+
+.setElements {
+  /* Padding-left applied inline */
+}
+
+.setElement {
+  display: flex;
+  align-items: center;
+  padding: 2px 12px 2px 0;
+  border-bottom: 1px solid var(--hairline, rgba(255, 255, 255, 0.04));
+  min-height: 22px;
+}
+
+.setValue {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────────── */
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 16px;
+  text-align: center;
+}
+
+.emptyText {
+  font-size: 11px;
+  color: var(--text-subtle);
+  font-family: var(--font-sans, system-ui);
+}

@@ -1,0 +1,109 @@
+/**
+ * JsonView.module.css — JSON mode virtualized CodeMirror blocks
+ *
+ * Design tokens from DESIGN.md:
+ *   --canvas, --surface, --surface-2, --text, --text-muted, --text-subtle
+ *   --border, --accent, --accent-soft
+ *   --font-mono, --text-xs, --text-sm
+ */
+
+/* ── Root ──────────────────────────────────────────────────────────────────── */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--canvas);
+}
+
+/* ── Viewport — scrollable container ───────────────────────────────────────── */
+
+.viewport {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* ── Item block ─────────────────────────────────────────────────────────────── */
+
+.block {
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  position: relative;
+  background: var(--canvas);
+  transition: background 80ms ease-out; /* --duration-instant */
+}
+
+.block:hover {
+  background: var(--surface-2);
+}
+
+/* Selected: left accent stripe + tinted background */
+.blockSelected {
+  background: var(--accent-soft, rgba(168, 85, 247, 0.12));
+}
+
+.blockSelected:hover {
+  background: rgba(168, 85, 247, 0.18);
+}
+
+.blockSelected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* ── Block header ────────────────────────────────────────────────────────────── */
+
+.blockHeader {
+  padding: 6px 12px 4px 14px; /* 14px left to clear accent stripe */
+  font-family: var(--font-mono);
+  font-size: 11px; /* --text-xs */
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  user-select: none;
+  border-bottom: 1px solid var(--hairline, rgba(255, 255, 255, 0.04));
+}
+
+/* ── CodeMirror container ────────────────────────────────────────────────────── */
+
+.editorContainer {
+  padding-left: 2px; /* align content with accent stripe */
+  min-height: 60px;
+  /* Allow the CM editor to grow to its content size. */
+  overflow: hidden;
+}
+
+/* ── Unmounted placeholder — shown when the CM instance is not yet mounted ──── */
+
+.unmountedPlaceholder {
+  font-family: var(--font-mono);
+  font-size: 12px; /* --text-sm */
+  color: var(--text-subtle);
+  padding: 6px 12px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── Empty / idle state ─────────────────────────────────────────────────────── */
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  height: 100%;
+  font-size: 12px;
+  color: var(--text-subtle);
+}

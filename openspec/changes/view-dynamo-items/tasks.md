@@ -83,24 +83,24 @@
 
 ## 11. Frontend: JSON mode
 
-- [ ] 11.1 Add `src/modules/dynamo/data-view/JsonView.tsx` using TanStack Virtual to render one CodeMirror block per item, lazy-mounting on scroll-into-view with a 5-row look-behind/look-ahead window. The selected item's editor stays mounted regardless.
-- [ ] 11.2 Each block renders `Item #i — pk=…, sk=…` header and the pretty JSON; clicking it selects the item in the inspector.
-- [ ] 11.3 Reuse the existing `language-json` CodeMirror lang extension already used by the Postgres module's JSON edit feature.
-- [ ] 11.4 Tests: lazy-mount window size, selected item stays mounted on scroll-away, click selects in inspector.
+- [x] 11.1 Add `src/modules/dynamo/data-view/JsonView.tsx` using TanStack Virtual to render one CodeMirror block per item, lazy-mounting on scroll-into-view with a 5-row look-behind/look-ahead window. The selected item's editor stays mounted regardless.
+- [x] 11.2 Each block renders `Item #i — pk=…, sk=…` header and the pretty JSON; clicking it selects the item in the inspector.
+- [x] 11.3 Reuse the existing `language-json` CodeMirror lang extension already used by the Postgres module's JSON edit feature.
+- [x] 11.4 Tests: lazy-mount window size, selected item stays mounted on scroll-away, click selects in inspector.
 
 ## 12. Frontend: Inspector panel
 
-- [ ] 12.1 Add `src/modules/dynamo/data-view/Inspector.tsx` rendering the selected item as a tree with type badges (`S | N | B | BOOL | NULL | L | M | SS | NS | BS`). PK / SK rows accented per `DESIGN.md`.
-- [ ] 12.2 Nested `L` and `M` expand on click; sets render their elements read-only.
-- [ ] 12.3 Resizable width with persistence per tab (mirror `useInspectorWidth` pattern from Postgres without sharing the hook — copy with a Dynamo-specific storage key).
-- [ ] 12.4 `Escape` clears row selection and empties the inspector.
+- [x] 12.1 Add `src/modules/dynamo/data-view/Inspector.tsx` rendering the selected item as a tree with type badges (`S | N | B | BOOL | NULL | L | M | SS | NS | BS`). PK / SK rows accented per `DESIGN.md`.
+- [x] 12.2 Nested `L` and `M` expand on click; sets render their elements read-only.
+- [x] 12.3 Resizable width with persistence per tab (mirror `useInspectorWidth` pattern from Postgres without sharing the hook — copy with a Dynamo-specific storage key).
+- [x] 12.4 `Escape` clears row selection and empties the inspector.
 
 ## 13. Frontend: Count integration
 
-- [ ] 13.1 Wire the Count button in the toolbar to invoke `dynamoCountItems` with the current builder state. Show a spinner and disable the button while in flight.
-- [ ] 13.2 Render the result (or its absence) in the bottom bar as `Count: <total> (scanned <scanned>)` with comma grouping.
-- [ ] 13.3 Clear the rendered count when the builder state's mode, index, filter, or key condition changes.
-- [ ] 13.4 Tests: never fires automatically, double-click doesn't double-fire, result clears on builder change.
+- [x] 13.1 Wire the Count button in the toolbar to invoke `dynamoCountItems` with the current builder state. Show a spinner and disable the button while in flight.
+- [x] 13.2 Render the result (or its absence) in the bottom bar as `Count: <total> (scanned <scanned>)` with comma grouping.
+- [x] 13.3 Clear the rendered count when the builder state's mode, index, filter, or key condition changes.
+- [x] 13.4 Tests: never fires automatically, double-click doesn't double-fire, result clears on builder change.
 
 ## 14. Frontend: activation flow swap + placeholder retirement
 
