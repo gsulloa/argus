@@ -10,6 +10,12 @@
 export { dynamoScan, dynamoQuery, dynamoCountItems } from "./api";
 export { compile } from "./builderCompiler";
 export type { CompileResult } from "./builderCompiler";
+export { useDynamoItems } from "./useDynamoItems";
+export type {
+  DynamoItemsStatus,
+  UseDynamoItemsParams,
+  UseDynamoItemsResult,
+} from "./useDynamoItems";
 export type {
   AttributeValue,
   AttributeMap,

@@ -49,11 +49,11 @@
 
 ## 7. Frontend: useDynamoItems hook (Scan/Query/pagination)
 
-- [ ] 7.1 In `src/modules/dynamo/data-view/useDynamoItems.ts`, implement a hook that takes `{ connectionId, tableName, builder, describe }` and exposes `{ items, lastEvaluatedKey, count, scannedCount, status: "idle"|"loading"|"ready"|"error", error?, page, run(origin?: "user"|"auto"), loadMore(origin: "user"), reset() }`.
-- [ ] 7.2 `run` resets pagination and fires one Scan or Query (chosen by the builder) with the compiled request; `loadMore` appends a page using the stored `last_evaluated_key`.
-- [ ] 7.3 Track an `auto_scroll_disabled` boolean that flips to `true` after a failed load and resets only when the user invokes `loadMore` manually or `run`.
-- [ ] 7.4 Listen for `dynamo:credentials-refreshed` for the connection id; if a request had failed with `ExpiredToken`, re-fire that request automatically with the same builder state and `exclusive_start_key`.
-- [ ] 7.5 Unit-test the hook with mocked `dynamoScan`/`dynamoQuery`: happy path, append on `loadMore`, scroll-disable on failure, credentials-refreshed auto-resume.
+- [x] 7.1 In `src/modules/dynamo/data-view/useDynamoItems.ts`, implement a hook that takes `{ connectionId, tableName, builder, describe }` and exposes `{ items, lastEvaluatedKey, count, scannedCount, status: "idle"|"loading"|"ready"|"error", error?, page, run(origin?: "user"|"auto"), loadMore(origin: "user"), reset() }`.
+- [x] 7.2 `run` resets pagination and fires one Scan or Query (chosen by the builder) with the compiled request; `loadMore` appends a page using the stored `last_evaluated_key`.
+- [x] 7.3 Track an `auto_scroll_disabled` boolean that flips to `true` after a failed load and resets only when the user invokes `loadMore` manually or `run`.
+- [x] 7.4 Listen for `dynamo:credentials-refreshed` for the connection id; if a request had failed with `ExpiredToken`, re-fire that request automatically with the same builder state and `exclusive_start_key`.
+- [x] 7.5 Unit-test the hook with mocked `dynamoScan`/`dynamoQuery`: happy path, append on `loadMore`, scroll-disable on failure, credentials-refreshed auto-resume.
 
 ## 8. Frontend: shared data view tab
 
