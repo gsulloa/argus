@@ -1,0 +1,87 @@
+/* TableLeaf — inline within a SidebarTree row. */
+
+.name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.match {
+  /* Design system: yellow highlight for search matches, matching SchemaTree.module.css */
+  background: rgba(250, 204, 21, 0.3);
+  border-radius: 2px;
+  padding: 0 1px;
+  /* Reset browser <mark> default */
+  color: inherit;
+}
+
+.badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+/* Muted text badge — billing mode, GSI count */
+.badge {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Warning tone for non-ACTIVE table status */
+.badgeWarning {
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--warning);
+}
+
+/* Streams lightning icon badge */
+.streamBadge {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  cursor: default;
+}
+.streamBadge:hover {
+  color: var(--text);
+}
+
+/* Fixed-width shimmer placeholder while describe is loading.
+   Width matches the typical badge area so the name column doesn't shift. */
+.shimmer {
+  display: inline-block;
+  width: 80px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  flex-shrink: 0;
+  margin-left: 4px;
+  /* No animation — per DESIGN.md, minimal motion. Plain static placeholder. */
+}
+
+/* Inline retry button on describe error */
+.retryBtn {
+  background: transparent;
+  border: 0;
+  padding: 1px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--danger);
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.retryBtn:hover {
+  background: var(--surface-2);
+}

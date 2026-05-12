@@ -36,6 +36,7 @@ import {
   CredentialsRefreshedListener,
   useDynamoCommands,
 } from "@/modules/dynamo";
+import { DynamoTablesCacheProvider, useDynamoTablesPaletteCommands } from "@/modules/dynamo/tables";
 import { KindPickerProvider } from "@/platform/shell/useKindPicker";
 import { useQueryHistoryCommands } from "@/modules/query-history";
 import { savedQueriesStore } from "@/modules/saved-queries/store";
@@ -52,10 +53,12 @@ export function App() {
                   <ActivityLogProvider>
                     <PostgresFormProvider>
                       <DynamoFormProvider>
-                        <KindPickerProvider>
-                          <Shell />
-                          <CredentialsRefreshedListener />
-                        </KindPickerProvider>
+                        <DynamoTablesCacheProvider>
+                          <KindPickerProvider>
+                            <Shell />
+                            <CredentialsRefreshedListener />
+                          </KindPickerProvider>
+                        </DynamoTablesCacheProvider>
                       </DynamoFormProvider>
                     </PostgresFormProvider>
                   </ActivityLogProvider>
@@ -89,6 +92,7 @@ function ShellMain() {
       <DevCommands />
       <PostgresCommands />
       <DynamoCommands />
+      <DynamoTablesPaletteCommands />
       <QueryHistoryCommands />
       <SavedQueriesBootstrap />
       <BootstrapTabs />
@@ -107,6 +111,11 @@ function PostgresCommands() {
 
 function DynamoCommands() {
   useDynamoCommands();
+  return null;
+}
+
+function DynamoTablesPaletteCommands() {
+  useDynamoTablesPaletteCommands();
   return null;
 }
 

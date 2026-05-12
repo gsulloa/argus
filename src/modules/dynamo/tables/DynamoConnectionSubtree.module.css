@@ -1,0 +1,101 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px dashed var(--border);
+}
+
+/* Loading state row */
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.spinner {
+  animation: dynamo-spin 1s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes dynamo-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Error state */
+.error {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.retryBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-muted);
+  align-self: flex-start;
+}
+.retryBtn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* No-match hint */
+.noMatch {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-subtle);
+  font-style: italic;
+}
+
+/* Empty state hint when list is truly empty */
+.emptyHint {
+  color: var(--text-subtle);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* Load-more affordance row at the bottom */
+.loadMoreRow {
+  border-top: 1px solid var(--border);
+  padding: 0;
+}
+
+.loadMoreBtn {
+  display: block;
+  width: 100%;
+  padding: 5px 12px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  font-size: 11px;
+  color: var(--text-subtle);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.loadMoreBtn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.loadMoreLoading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--text-subtle);
+}

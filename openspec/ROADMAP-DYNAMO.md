@@ -8,7 +8,7 @@ Plan detallado de los `change` que conforman la V2.1: soporte para DynamoDB. Mis
 
 ```
 9.  add-dynamo-connection         ✅  AWS credential chain, perfil/región/endpoint
-10. browse-dynamo-tables          ⏳  lista de tablas + describe (KeySchema, GSIs, LSIs)
+10. browse-dynamo-tables          ✅  lista de tablas + describe (KeySchema, GSIs, LSIs)
 11. view-dynamo-items             ⏳  scan/query, vistas Tabla/JSON, paginación
                                        por LastEvaluatedKey, query builder simple
 12. edit-dynamo-items             ⏳  put/update/delete atómicos, sin diff multi-row,
@@ -114,7 +114,7 @@ Dynamo tiene `TransactWriteItems` pero está limitado a 100 ops y misma región/
 
 ---
 
-### 10. `browse-dynamo-tables` ⏳
+### 10. `browse-dynamo-tables` ✅
 
 **Meta**: Sidebar muestra tablas bajo cada conexión Dynamo con búsqueda local; describe completo (KeySchema, GSIs, LSIs, billing, streams) accesible al click.
 **Capacidades nuevas**: `dynamo-table-browser`.

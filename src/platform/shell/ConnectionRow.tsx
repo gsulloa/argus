@@ -1,4 +1,4 @@
-import { AlertTriangle, GripVertical, Loader2, Power } from "lucide-react";
+import { AlertTriangle, GripVertical, Loader2, Power, RotateCw } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useState } from "react";
@@ -29,6 +29,7 @@ import {
   type DynamoParams,
   type ActiveDynamoConnection,
 } from "@/modules/dynamo";
+import { DynamoConnectionSubtree, useDynamoTableCache } from "@/modules/dynamo/tables";
 import { useTabs } from "@/platform/shell/tabs";
 import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
 import { listDirtySummaries } from "@/platform/shell/tabs/useDirtySummary";
@@ -291,18 +292,23 @@ export function ConnectionRow({
               </>
             )}
             {isDynamo && active && (
-              <button
-                type="button"
-                className={styles.disconnectBtn}
-                aria-label="Disconnect"
-                title="Disconnect"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirmDisconnect(true);
-                }}
-              >
-                <Power size={12} strokeWidth={2.5} />
-              </button>
+              <>
+                <button
+                  type="button"
+                  className={styles.disconnectBtn}
+                  aria-label="Disconnect"
+                  title="Disconnect"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDisconnect(true);
+                  }}
+                >
+                  <Power size={12} strokeWidth={2.5} />
+                </button>
+                <span className={styles.rowToolbar}>
+                  <DynamoRefreshButton connectionId={connection.id} />
+                </span>
+              </>
             )}
           </div>
         </ContextMenu.Trigger>
@@ -423,6 +429,11 @@ export function ConnectionRow({
           <SchemaTree connectionId={connection.id} />
         </div>
       )}
+      {isDynamo && active && (
+        <div className={styles.subtree}>
+          <DynamoConnectionSubtree connectionId={connection.id} connectionName={connection.name} />
+        </div>
+      )}
 
       <DisconnectConfirmDialog
         open={confirmDisconnect}
@@ -452,5 +463,28 @@ export function ConnectionRow({
         </Dialog.Portal>
       </Dialog.Root>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DynamoRefreshButton — rendered in the toolbar slot of an active Dynamo row.
+// Uses useDynamoTableCache which requires DynamoTablesCacheProvider in the tree.
+// ---------------------------------------------------------------------------
+
+function DynamoRefreshButton({ connectionId }: { connectionId: string }) {
+  const { refresh } = useDynamoTableCache(connectionId);
+  return (
+    <button
+      type="button"
+      aria-label="Refresh tables"
+      title="Refresh tables"
+      onClick={(e) => {
+        e.stopPropagation();
+        refresh();
+      }}
+      className={styles.toolbarBtn}
+    >
+      <RotateCw size={13} />
+    </button>
   );
 }
