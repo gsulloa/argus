@@ -34,18 +34,18 @@
 
 ## 5. Frontend: types and IPC binding
 
-- [ ] 5.1 In `src/modules/dynamo/data-view/types.ts`, define the TS `AttributeValue` union mirroring the backend tag shape (`{S}|{N}|{BOOL}|{NULL}|{L}|{M}|{SS}|{NS}|{BS}|{B}`), plus `AttributeMap = Record<string, AttributeValue>`.
-- [ ] 5.2 Define the `TypedValue`, `FilterRow`, `BuilderState`, `ScanRequest`, `QueryRequest`, `CountRequest` TS types matching the backend envelopes.
-- [ ] 5.3 In `src/modules/dynamo/data-view/api.ts`, export thin wrappers `dynamoScan`, `dynamoQuery`, `dynamoCountItems` over the existing `invoke` helper, passing `origin` explicitly.
-- [ ] 5.4 Wire the new wrappers through the Dynamo module's `index.ts` so consumers import from `@/modules/dynamo` only.
+- [x] 5.1 In `src/modules/dynamo/data-view/types.ts`, define the TS `AttributeValue` union mirroring the backend tag shape (`{S}|{N}|{BOOL}|{NULL}|{L}|{M}|{SS}|{NS}|{BS}|{B}`), plus `AttributeMap = Record<string, AttributeValue>`.
+- [x] 5.2 Define the `TypedValue`, `FilterRow`, `BuilderState`, `ScanRequest`, `QueryRequest`, `CountRequest` TS types matching the backend envelopes.
+- [x] 5.3 In `src/modules/dynamo/data-view/api.ts`, export thin wrappers `dynamoScan`, `dynamoQuery`, `dynamoCountItems` over the existing `invoke` helper, passing `origin` explicitly.
+- [x] 5.4 Wire the new wrappers through the Dynamo module's `index.ts` so consumers import from `@/modules/dynamo` only.
 
 ## 6. Frontend: builder state and expression compiler
 
-- [ ] 6.1 In `src/modules/dynamo/data-view/builderCompiler.ts`, implement `compile(builder: BuilderState, describe: TableDescription)` returning `{ scan: ScanRequest } | { query: QueryRequest }` ready for the backend. Always use `#nN`/`#kN` and `:vN`/`:kN` placeholders; never inline names or values.
-- [ ] 6.2 Implement filter-row compilation for every operator listed in the spec (`=`, `<>`, `<`, `<=`, `>`, `>=`, `between`, `contains`, `begins_with`, `attribute_exists`, `attribute_not_exists`, `is_null`, `is_not_null`, `attribute_type`).
-- [ ] 6.3 Implement sort-key compilation for `Query` mode operators (`=`, `<`, `<=`, `>`, `>=`, `between`, `begins_with`).
-- [ ] 6.4 Validate types client-side: key pickers reject values whose type does not match `attribute_definitions[index].key_schema`; numeric values are validated as numeric strings.
-- [ ] 6.5 Unit-test the compiler: each operator produces the expected expression text + names + values; reserved-word attribute names round-trip safely; `between` uses two placeholders.
+- [x] 6.1 In `src/modules/dynamo/data-view/builderCompiler.ts`, implement `compile(builder: BuilderState, describe: TableDescription)` returning `{ scan: ScanRequest } | { query: QueryRequest }` ready for the backend. Always use `#nN`/`#kN` and `:vN`/`:kN` placeholders; never inline names or values.
+- [x] 6.2 Implement filter-row compilation for every operator listed in the spec (`=`, `<>`, `<`, `<=`, `>`, `>=`, `between`, `contains`, `begins_with`, `attribute_exists`, `attribute_not_exists`, `is_null`, `is_not_null`, `attribute_type`).
+- [x] 6.3 Implement sort-key compilation for `Query` mode operators (`=`, `<`, `<=`, `>`, `>=`, `between`, `begins_with`).
+- [x] 6.4 Validate types client-side: key pickers reject values whose type does not match `attribute_definitions[index].key_schema`; numeric values are validated as numeric strings.
+- [x] 6.5 Unit-test the compiler: each operator produces the expected expression text + names + values; reserved-word attribute names round-trip safely; `between` uses two placeholders.
 
 ## 7. Frontend: useDynamoItems hook (Scan/Query/pagination)
 

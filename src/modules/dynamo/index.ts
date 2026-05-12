@@ -21,3 +21,25 @@ export { useDynamoErrorHandler, CredentialsRefreshedListener } from "./Expiratio
 export { AWS_REGIONS } from "./regions";
 export type { AwsRegion } from "./regions";
 export { useDynamoCommands } from "./commands";
+export {
+  dynamoScan,
+  dynamoQuery,
+  dynamoCountItems,
+  compile as compileDynamoBuilder,
+} from "./data-view";
+export type {
+  AttributeValue,
+  AttributeMap,
+  SelectMode,
+  CountMode,
+  ScanRequest,
+  ScanResponse,
+  QueryRequest,
+  QueryResponse,
+  CountRequest,
+  CountResponse,
+  TypedValue,
+  FilterRow,
+  BuilderState,
+  CompileResult,
+} from "./data-view";
