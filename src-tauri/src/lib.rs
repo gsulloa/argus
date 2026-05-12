@@ -46,6 +46,10 @@ use crate::platform::{
     },
     settings::{self, settings_get, settings_set},
     storage, DbState,
+    updater::commands::{
+        log_updater_event, updater_check_and_download, updater_install_and_restart,
+        updater_logs_reveal, updater_logs_tail,
+    },
 };
 
 const QUERY_HISTORY_RETENTION_DAYS_KEY: &str = "queryHistory.retentionDays";
@@ -80,7 +84,7 @@ fn init_tracing(app: &AppHandle) {
     if cfg!(debug_assertions) {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(filter)
-            .with_target(false)
+            .with_target(true)
             .try_init();
     } else if let Ok(log_dir) = app.path().app_log_dir() {
         let _ = std::fs::create_dir_all(&log_dir);
@@ -88,7 +92,7 @@ fn init_tracing(app: &AppHandle) {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(appender)
-            .with_target(false)
+            .with_target(true)
             .with_ansi(false)
             .try_init();
     }
@@ -134,6 +138,7 @@ pub fn run() {
 
             app.manage(PgPoolRegistry::new());
             app.manage(DynamoClientRegistry::new());
+            app.manage(platform::updater::UpdaterState::default());
 
             Ok(())
         })
@@ -193,7 +198,46 @@ pub fn run() {
             dynamo_update_credentials,
             dynamo_list_tables,
             dynamo_describe_table,
+            // Updater commands
+            updater_check_and_download,
+            updater_install_and_restart,
+            log_updater_event,
+            updater_logs_tail,
+            updater_logs_reveal,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error building tauri application")
+        .run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            let state = app_handle.state::<platform::updater::UpdaterState>();
+            let installing =
+                state.installing.load(std::sync::atomic::Ordering::Acquire);
+            let has_pending = tauri::async_runtime::block_on(async {
+                state.pending.lock().await.is_some()
+            });
+
+            if has_pending && !installing {
+                api.prevent_exit();
+                let app_clone = app_handle.clone();
+                tauri::async_runtime::block_on(async {
+                    platform::updater::commands::apply_pending_on_exit(&app_clone).await;
+                });
+                app_handle.exit(0);
+            } else if installing {
+                api.prevent_exit();
+                // Wait up to 10 s for the in-flight install to settle.
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while state
+                    .installing
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                app_handle.exit(0);
+            }
+            // else: no pending update → fall through, default exit proceeds
+        }
+    });
 }

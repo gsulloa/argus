@@ -1,8 +1,9 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useUpdater } from "@/platform/updater";
+import { UpdaterLogsDialog } from "./UpdaterLogsDialog";
 import overlayStyles from "./Dialog.module.css";
 import styles from "./VersionIndicator.module.css";
 
@@ -16,6 +17,8 @@ export interface VersionIndicatorViewProps {
   availableVersion: string | null;
   skippedVersion: string | null;
   isInstalling: boolean;
+  installError: string | null;
+  onDismissInstallError: () => void;
   onForceCheck: () => void;
   onSkip: () => void;
   onClearSkip: () => void;
@@ -29,12 +32,22 @@ export function VersionIndicatorView(props: VersionIndicatorViewProps) {
     availableVersion,
     skippedVersion,
     isInstalling,
+    installError,
+    onDismissInstallError,
     onForceCheck,
     onSkip,
     onClearSkip,
     onInstallAndRestart,
   } = props;
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
+
+  // Auto-dismiss the error chip after 10 seconds.
+  useEffect(() => {
+    if (!installError) return;
+    const id = window.setTimeout(() => onDismissInstallError(), 10_000);
+    return () => window.clearTimeout(id);
+  }, [installError, onDismissInstallError]);
 
   if (!currentVersion) return null;
 
@@ -112,6 +125,12 @@ export function VersionIndicatorView(props: VersionIndicatorViewProps) {
                   Clear skipped version (v{skippedVersion})
                 </DropdownMenu.Item>
               )}
+              <DropdownMenu.Item
+                className={styles.item}
+                onSelect={() => setLogsOpen(true)}
+              >
+                View update logs…
+              </DropdownMenu.Item>
               <DropdownMenu.Separator className={styles.separator} />
               <DropdownMenu.Item
                 className={styles.item}
@@ -122,6 +141,18 @@ export function VersionIndicatorView(props: VersionIndicatorViewProps) {
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
+
+        {installError !== null && (
+          <button
+            className={styles.errorChip}
+            onClick={() => {
+              setLogsOpen(true);
+              onDismissInstallError();
+            }}
+          >
+            Install failed — view logs
+          </button>
+        )}
       </Tooltip.Provider>
 
       <Dialog.Root open={aboutOpen} onOpenChange={setAboutOpen}>
@@ -168,6 +199,8 @@ export function VersionIndicatorView(props: VersionIndicatorViewProps) {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      <UpdaterLogsDialog open={logsOpen} onClose={() => setLogsOpen(false)} />
     </>
   );
 }
@@ -181,6 +214,8 @@ export function VersionIndicator() {
       availableVersion={ctx.availableVersion}
       skippedVersion={ctx.skippedVersion}
       isInstalling={ctx.isInstalling}
+      installError={ctx.installError}
+      onDismissInstallError={() => ctx.dismissInstallError()}
       onForceCheck={() => {
         void ctx.forceCheck();
       }}
