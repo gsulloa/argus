@@ -92,7 +92,7 @@ function describeOutcome(entry: HistoryEntry): { label: string; isErr: boolean }
   return { label: `${entry.duration_ms} ms`, isErr: false };
 }
 
-function HistoryTabRoot({ tab: _tab }: { tab: Tab }) {
+function HistoryTabRoot({ tab: _tab }: { tab: Tab; active: boolean }) {
   return <HistoryTab />;
 }
 
