@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppError } from "@/platform/errors/AppError";
 import { EditableCell, looksLikeBytea } from "./EditableCell";
+import { pixelYToRowIndex } from "./dragRowIndex";
 import { cycleSort, sortIndexFor } from "./sortHelpers";
 import { isCellEnvelope, type CellValue, type DataColumn, type EditValue, type OrderBy } from "./types";
 import type { UseEditBufferResult } from "./useEditBuffer";
@@ -28,12 +29,16 @@ export interface DataGridProps {
   status: string;
   nextError: AppError | null;
   reachedEnd: boolean;
-  selectedRowIndex: number | null;
+  /** Multi-row selection: anchor + active indices (both null = nothing selected). */
+  selection: { anchor: number | null; active: number | null };
+  /** When true (effective selection >= 2 and pkColumns != null), inline cell
+   *  editing is suppressed so the inspector bulk-edit UI handles all edits. */
+  bulkEditActive: boolean;
   isReadOnly: boolean;
   pkColumns: string[] | null;
   enumValuesByColumn: Record<string, string[]>;
   buffer: UseEditBufferResult;
-  onSelectRow(index: number | null): void;
+  onSelectionChange(next: { anchor: number | null; active: number | null }): void;
   onSortChange(next: OrderBy[]): void;
   onLoadNextPage(): void;
   onRetryNextPage(): void;
@@ -48,18 +53,20 @@ export function DataGrid(props: DataGridProps) {
     status,
     nextError,
     reachedEnd,
-    selectedRowIndex,
+    selection,
+    bulkEditActive,
     isReadOnly,
     pkColumns,
     enumValuesByColumn,
     buffer,
-    onSelectRow,
+    onSelectionChange,
     onSortChange,
     onLoadNextPage,
     onRetryNextPage,
   } = props;
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -84,37 +91,202 @@ export function DataGrid(props: DataGridProps) {
   // Track the active editor: at most one cell at a time.
   const [editing, setEditing] = useState<{ rowIndex: number; col: string } | null>(null);
 
-  // Keyboard handler at the grid level: Backspace toggles delete, Escape clears selection.
+  // -----------------------------------------------------------------------
+  // Drag-to-select state
+  // -----------------------------------------------------------------------
+  interface DragState {
+    status: "pending" | "active";
+    anchorIndex: number;
+    anchorClientX: number;
+    anchorClientY: number;
+    /** Snapshot of selection when mousedown fired — used for toggle-deselect on click. */
+    prevSelection: { anchor: number | null; active: number | null };
+  }
+  const dragRef = useRef<DragState | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+  // Last known clientY during an active drag — read by the RAF auto-scroll loop.
+  const dragClientYRef = useRef<number>(0);
+  // Derived range bounds (re-derived each render from selection).
+  const rangeStart =
+    selection.anchor === null
+      ? -1
+      : Math.min(selection.anchor, selection.active ?? selection.anchor);
+  const rangeEnd =
+    selection.anchor === null
+      ? -1
+      : Math.max(selection.anchor, selection.active ?? selection.anchor);
+
+  // -----------------------------------------------------------------------
+  // Keyboard handler: Backspace / Delete toggles bulk delete; Escape clears
+  // -----------------------------------------------------------------------
   function onGridKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     if (editing) return; // editor handles its own keys
-    if ((e.key === "Backspace" || e.key === "Delete") && selectedRowIndex !== null) {
-      const r = rows[selectedRowIndex];
-      if (!r) return;
+
+    if (e.key === "Backspace" || e.key === "Delete") {
+      if (selection.anchor === null) return;
       if (isReadOnly) return;
-      if (r.source === "insert") {
-        e.preventDefault();
-        buffer.removeInsertRow(r.rowKey);
-        return;
-      }
-      if (!pkColumns) return; // no-PK relation: can't delete existing rows
       e.preventDefault();
-      if (buffer.isRowDeleted(r.rowKey)) {
-        buffer.markRowUndelete(r.rowKey);
-      } else {
-        const pk: Record<string, EditValue> = {};
-        for (const col of pkColumns) {
-          const idx = columns.findIndex((c) => c.name === col);
-          if (idx >= 0) pk[col] = (r.cells[idx] ?? null) as EditValue;
+      const entries: Array<{
+        rowKey: string;
+        source: "insert" | "server";
+        pk?: Record<string, EditValue>;
+        currentlyDeleted: boolean;
+      }> = [];
+      for (let i = rangeStart; i <= rangeEnd; i++) {
+        const r = rows[i];
+        if (!r || !r.rowKey) continue;
+        if (r.source === "insert") {
+          entries.push({ rowKey: r.rowKey, source: "insert", currentlyDeleted: false });
+        } else {
+          if (!pkColumns) continue; // no-PK relation: can't delete server rows
+          const pk: Record<string, EditValue> = {};
+          for (const col of pkColumns) {
+            const idx = columns.findIndex((c) => c.name === col);
+            if (idx >= 0) pk[col] = (r.cells[idx] ?? null) as EditValue;
+          }
+          const currentlyDeleted = buffer.isRowDeleted(r.rowKey);
+          entries.push({ rowKey: r.rowKey, source: "server", pk, currentlyDeleted });
         }
-        buffer.markRowDelete(r.rowKey, pk);
+      }
+      if (entries.length > 0) {
+        buffer.bulkDeleteToggle(entries);
+      }
+      return;
+    }
+
+    if (e.key === "Escape") {
+      if (selection.anchor !== null) {
+        onSelectionChange({ anchor: null, active: null });
       }
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Drag event effect
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    if (!dragActive) return;
+
+    let rafId: number | null = null;
+
+    function getBodyRect(): DOMRect | null {
+      return bodyRef.current?.getBoundingClientRect() ?? null;
+    }
+
+    function getScrollTop(): number {
+      return viewportRef.current?.scrollTop ?? 0;
+    }
+
+    function computeActiveIndex(clientY: number): number {
+      const bodyRect = getBodyRect();
+      if (!bodyRect) return dragRef.current?.anchorIndex ?? 0;
+      const scrollTop = getScrollTop();
+      return pixelYToRowIndex(scrollTop, clientY, bodyRect.top, ROW_HEIGHT, rows.length);
+    }
+
+    function handleMouseMove(e: MouseEvent) {
+      const drag = dragRef.current;
+      if (!drag) return;
+      dragClientYRef.current = e.clientY;
+
+      if (drag.status === "pending") {
+        const dx = e.clientX - drag.anchorClientX;
+        const dy = e.clientY - drag.anchorClientY;
+        if (Math.sqrt(dx * dx + dy * dy) >= 4) {
+          drag.status = "active";
+          onSelectionChange({ anchor: drag.anchorIndex, active: drag.anchorIndex });
+        }
+      }
+
+      if (drag.status === "active") {
+        const rowIndex = computeActiveIndex(e.clientY);
+        onSelectionChange({ anchor: drag.anchorIndex, active: rowIndex });
+      }
+    }
+
+    function handleMouseUp(e: MouseEvent) {
+      const drag = dragRef.current;
+      if (!drag) {
+        setDragActive(false);
+        return;
+      }
+
+      if (drag.status === "active") {
+        // Drag completed — finalize selection (already up-to-date from last mousemove).
+        // Ensure final active index reflects mouseup position.
+        const rowIndex = computeActiveIndex(e.clientY);
+        onSelectionChange({ anchor: drag.anchorIndex, active: rowIndex });
+      } else {
+        // Click (pending, never crossed threshold).
+        const prev = drag.prevSelection;
+        const isSingleRowSelected =
+          prev.anchor !== null &&
+          prev.anchor === prev.active &&
+          prev.anchor === drag.anchorIndex;
+        if (isSingleRowSelected) {
+          // Toggle deselect.
+          onSelectionChange({ anchor: null, active: null });
+        } else {
+          onSelectionChange({ anchor: drag.anchorIndex, active: drag.anchorIndex });
+        }
+      }
+
+      // Focus the grid root so Escape / Backspace work immediately after click/drag.
+      const rootEl = viewportRef.current?.parentElement as HTMLElement | null;
+      rootEl?.focus();
+
+      dragRef.current = null;
+      setDragActive(false);
+    }
+
+    // Auto-scroll RAF loop.
+    function startAutoScroll() {
+      function tick() {
+        const drag = dragRef.current;
+        if (!drag || drag.status !== "active") return;
+        const bodyRect = getBodyRect();
+        if (!bodyRect || !viewportRef.current) return;
+        const clientY = dragClientYRef.current;
+        let scrolled = false;
+        if (clientY < bodyRect.top + 20) {
+          const speed = (bodyRect.top + 20 - clientY) * 0.5;
+          viewportRef.current.scrollTop = Math.max(0, viewportRef.current.scrollTop - speed);
+          scrolled = true;
+        } else if (clientY > bodyRect.bottom - 20) {
+          const speed = (clientY - (bodyRect.bottom - 20)) * 0.5;
+          viewportRef.current.scrollTop += speed;
+          scrolled = true;
+        }
+        if (scrolled) {
+          // After scrolling, update active row to follow cursor.
+          const rowIndex = computeActiveIndex(clientY);
+          onSelectionChange({ anchor: drag.anchorIndex, active: rowIndex });
+        }
+        rafId = requestAnimationFrame(tick);
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    startAutoScroll();
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragActive, rows.length]);
+
   const totalWidth = Math.max(columns.length * COLUMN_WIDTH, 1);
 
   return (
-    <div className={styles.root} tabIndex={0} onKeyDown={onGridKeyDown}>
+    <div
+      className={`${styles.root} ${bulkEditActive ? styles.bulkActive : ""}`}
+      tabIndex={0}
+      onKeyDown={onGridKeyDown}
+    >
       <div className={styles.viewport} ref={viewportRef}>
         <div className={styles.thead} style={{ width: totalWidth }}>
           <div className={styles.headerRow} style={{ height: HEADER_HEIGHT }}>
@@ -149,6 +321,7 @@ export function DataGrid(props: DataGridProps) {
           </div>
         </div>
         <div
+          ref={bodyRef}
           className={styles.body}
           style={{
             height: virtualizer.getTotalSize(),
@@ -163,7 +336,7 @@ export function DataGrid(props: DataGridProps) {
             // TypeScript doesn't widen `row` back to `T | undefined` after
             // the `if (!row) return null` guard.
             const r = row;
-            const selected = selectedRowIndex === vi.index;
+            const selected = vi.index >= rangeStart && vi.index <= rangeEnd;
             const isInsert = r.source === "insert";
             const isDeleted = r.rowKey ? buffer.isRowDeleted(r.rowKey) : false;
             const rowClasses = [
@@ -186,7 +359,19 @@ export function DataGrid(props: DataGridProps) {
                   height: ROW_HEIGHT,
                   transform: `translateY(${vi.start}px)`,
                 }}
-                onClick={() => onSelectRow(selected ? null : vi.index)}
+                onMouseDown={(e) => {
+                  // Only respond to primary mouse button.
+                  if (e.button !== 0) return;
+                  dragRef.current = {
+                    status: "pending",
+                    anchorIndex: vi.index,
+                    anchorClientX: e.clientX,
+                    anchorClientY: e.clientY,
+                    prevSelection: { anchor: selection.anchor, active: selection.active },
+                  };
+                  dragClientYRef.current = e.clientY;
+                  setDragActive(true);
+                }}
               >
                 {columns.map((col) => {
                   const colIdx = columns.findIndex((c) => c.name === col.name);
@@ -215,6 +400,8 @@ export function DataGrid(props: DataGridProps) {
                     editing.col === col.name;
 
                   function onStartEdit() {
+                    // Suppress inline editing when bulk-edit mode is active.
+                    if (bulkEditActive) return;
                     setEditing({ rowIndex: vi.index, col: col.name });
                   }
                   function onCancelEdit() {

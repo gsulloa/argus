@@ -63,7 +63,27 @@ type UndoEntry =
       removeRowIfEmpty: boolean;
     }
   | { kind: "remove-row"; rowKey: RowKey; entry: RowEdits }
-  | { kind: "restore-row"; rowKey: RowKey; entry: RowEdits };
+  | { kind: "restore-row"; rowKey: RowKey; entry: RowEdits }
+  | {
+      kind: "bulk-set-cell-prev";
+      entries: Array<{
+        rowKey: RowKey;
+        column: string;
+        hadEdit: boolean;
+        previous?: EditValue;
+        // True when the row entry did NOT exist before this batch step.
+        // Used so undo can drop the row entirely when the batch's only edits
+        // were to that row.
+        removeRowIfEmpty: boolean;
+      }>;
+    }
+  | {
+      kind: "bulk-delete-toggle-prev";
+      entries: Array<
+        | { kind: "remove-row"; rowKey: RowKey; entry: RowEdits }
+        | { kind: "restore-row"; rowKey: RowKey; entry: RowEdits }
+      >;
+    };
 
 type Action =
   | {
@@ -75,8 +95,28 @@ type Action =
       originalRow: CellValue[] | null;
       originalColumns: string[] | null;
     }
+  | {
+      type: "bulk-set-cell";
+      entries: Array<{
+        rowKey: RowKey;
+        column: string;
+        value: EditValue;
+        pk: Record<string, EditValue>;
+        originalRow: CellValue[] | null;
+        originalColumns: string[] | null;
+      }>;
+    }
   | { type: "mark-delete"; rowKey: RowKey; pk: Record<string, EditValue> }
   | { type: "unmark-delete"; rowKey: RowKey }
+  | {
+      type: "bulk-delete-toggle";
+      entries: Array<{
+        rowKey: RowKey;
+        source: "insert" | "server";
+        pk?: Record<string, EditValue>;
+        currentlyDeleted: boolean;
+      }>;
+    }
   | {
       type: "add-insert";
       rowKey: RowKey;
@@ -147,6 +187,75 @@ function reducer(state: BufferState, action: Action): BufferState {
       }
       return { rows: next, undoStack: [...state.undoStack, undo] };
     }
+    case "bulk-set-cell": {
+      // Empty entries — no-op.
+      if (action.entries.length === 0) return state;
+      const next = new Map(state.rows);
+      const undoEntries: Array<{
+        rowKey: RowKey;
+        column: string;
+        hadEdit: boolean;
+        previous?: EditValue;
+        removeRowIfEmpty: boolean;
+      }> = [];
+      for (const { rowKey, column, value, pk, originalRow, originalColumns } of action.entries) {
+        const cur = next.get(rowKey);
+        // If the row is in delete state, silently skip the cell edit.
+        if (cur?.kind === "delete") continue;
+        const previousChanges = cur?.changes ?? {};
+        const hadEdit = column in previousChanges;
+        const previous = previousChanges[column];
+        const merged: RowEdits = {
+          kind: cur?.kind ?? "update",
+          pk: cur?.pk ?? pk,
+          changes: { ...previousChanges, [column]: value },
+          originalRow: cur?.originalRow ?? originalRow,
+          originalColumns: cur?.originalColumns ?? originalColumns,
+        };
+        // Drop the cell edit if it equals the original.
+        if (
+          merged.kind !== "insert" &&
+          (cur?.originalRow ?? originalRow) !== null &&
+          (cur?.originalColumns ?? originalColumns) !== null
+        ) {
+          const origRow = cur?.originalRow ?? originalRow;
+          const origCols = cur?.originalColumns ?? originalColumns;
+          const idx = origCols!.indexOf(column);
+          if (idx >= 0 && cellEquals(origRow![idx] ?? null, value)) {
+            delete merged.changes[column];
+          }
+        }
+        const isEmptyUpdate = merged.kind === "update" && Object.keys(merged.changes).length === 0;
+        if (isEmptyUpdate) {
+          next.delete(rowKey);
+          // For undo: if the row existed before, we need restore-row logic.
+          // Encode as a "set-cell-prev" with removeRowIfEmpty so the undo branch
+          // handles it consistently. If there was an existing cur we record it
+          // differently below, but since isEmptyUpdate already collapsed we just
+          // track the cell-prev entry.
+          undoEntries.push({
+            rowKey,
+            column,
+            hadEdit,
+            previous,
+            removeRowIfEmpty: true,
+          });
+        } else {
+          next.set(rowKey, merged);
+          undoEntries.push({
+            rowKey,
+            column,
+            hadEdit,
+            previous,
+            removeRowIfEmpty: !cur,
+          });
+        }
+      }
+      // If nothing actually changed (all entries were for delete-state rows), no-op.
+      if (undoEntries.length === 0) return state;
+      const batchUndo: UndoEntry = { kind: "bulk-set-cell-prev", entries: undoEntries };
+      return { rows: next, undoStack: [...state.undoStack, batchUndo] };
+    }
     case "mark-delete": {
       const next = new Map(state.rows);
       const cur = next.get(action.rowKey);
@@ -188,6 +297,61 @@ function reducer(state: BufferState, action: Action): BufferState {
           { kind: "restore-row", rowKey: action.rowKey, entry: cur },
         ],
       };
+    }
+    case "bulk-delete-toggle": {
+      // Empty entries — no-op.
+      if (action.entries.length === 0) return state;
+      const next = new Map(state.rows);
+      type BulkDeleteUndoEntry =
+        | { kind: "remove-row"; rowKey: RowKey; entry: RowEdits }
+        | { kind: "restore-row"; rowKey: RowKey; entry: RowEdits };
+      const undoEntries: BulkDeleteUndoEntry[] = [];
+      for (const { rowKey, source, pk, currentlyDeleted } of action.entries) {
+        if (source === "insert") {
+          // Remove insert row from buffer.
+          const cur = next.get(rowKey);
+          if (!cur || cur.kind !== "insert") continue;
+          next.delete(rowKey);
+          undoEntries.push({ kind: "restore-row", rowKey, entry: cur });
+        } else if (source === "server" && !currentlyDeleted && pk !== undefined) {
+          // Mark delete (analogous to mark-delete case).
+          const cur = next.get(rowKey);
+          if (cur?.kind === "delete") continue;
+          const undoEntry: BulkDeleteUndoEntry = cur
+            ? { kind: "restore-row", rowKey, entry: cur }
+            : {
+                kind: "remove-row",
+                rowKey,
+                entry: {
+                  kind: "delete",
+                  pk,
+                  changes: {},
+                  originalRow: null,
+                  originalColumns: null,
+                },
+              };
+          const merged: RowEdits = {
+            kind: "delete",
+            pk,
+            changes: {},
+            originalRow: cur?.originalRow ?? null,
+            originalColumns: cur?.originalColumns ?? null,
+          };
+          next.set(rowKey, merged);
+          undoEntries.push(undoEntry);
+        } else if (source === "server" && currentlyDeleted) {
+          // Unmark delete (analogous to unmark-delete case).
+          const cur = next.get(rowKey);
+          if (!cur || cur.kind !== "delete") continue;
+          next.delete(rowKey);
+          undoEntries.push({ kind: "restore-row", rowKey, entry: cur });
+        }
+        // Silently skip invalid combinations (e.g. server row with no pk and not deleted).
+      }
+      // If nothing actually changed, no-op.
+      if (undoEntries.length === 0) return state;
+      const batchUndo: UndoEntry = { kind: "bulk-delete-toggle-prev", entries: undoEntries };
+      return { rows: next, undoStack: [...state.undoStack, batchUndo] };
     }
     case "add-insert": {
       const next = new Map(state.rows);
@@ -252,6 +416,45 @@ function reducer(state: BufferState, action: Action): BufferState {
         next.delete(last.rowKey);
         return { rows: next, undoStack };
       }
+      if (last.kind === "bulk-set-cell-prev") {
+        // Iterate in reverse order so nested per-cell undos mirror the forward order.
+        for (let i = last.entries.length - 1; i >= 0; i--) {
+          const e = last.entries[i];
+          if (!e) continue;
+          const cur = next.get(e.rowKey);
+          if (!cur) continue;
+          const changes = { ...cur.changes };
+          if (e.hadEdit) {
+            changes[e.column] = e.previous as EditValue;
+          } else {
+            delete changes[e.column];
+          }
+          if (
+            e.removeRowIfEmpty &&
+            Object.keys(changes).length === 0 &&
+            cur.kind === "update"
+          ) {
+            next.delete(e.rowKey);
+          } else {
+            next.set(e.rowKey, { ...cur, changes });
+          }
+        }
+        return { rows: next, undoStack };
+      }
+      if (last.kind === "bulk-delete-toggle-prev") {
+        // Iterate in reverse order to mirror the forward pass.
+        for (let i = last.entries.length - 1; i >= 0; i--) {
+          const e = last.entries[i];
+          if (!e) continue;
+          if (e.kind === "remove-row") {
+            next.delete(e.rowKey);
+          } else {
+            // restore-row
+            next.set(e.rowKey, e.entry);
+          }
+        }
+        return { rows: next, undoStack };
+      }
       // restore-row
       next.set(last.rowKey, last.entry);
       return { rows: next, undoStack };
@@ -310,8 +513,26 @@ export interface UseEditBufferResult {
     originalRow: CellValue[] | null;
     originalColumns: string[] | null;
   }): void;
+  bulkSetCellEdit(
+    entries: Array<{
+      rowKey: RowKey;
+      column: string;
+      value: EditValue;
+      pk: Record<string, EditValue>;
+      originalRow: CellValue[] | null;
+      originalColumns: string[] | null;
+    }>,
+  ): void;
   markRowDelete(rowKey: RowKey, pk: Record<string, EditValue>): void;
   markRowUndelete(rowKey: RowKey): void;
+  bulkDeleteToggle(
+    entries: Array<{
+      rowKey: RowKey;
+      source: "insert" | "server";
+      pk?: Record<string, EditValue>;
+      currentlyDeleted: boolean;
+    }>,
+  ): void;
   addInsertRow(values?: Record<string, EditValue>): RowKey;
   removeInsertRow(rowKey: RowKey): void;
   undo(): void;
@@ -384,6 +605,22 @@ export function useEditBuffer(): UseEditBufferResult {
     [],
   );
 
+  const bulkSetCellEdit = useCallback(
+    (
+      entries: Array<{
+        rowKey: RowKey;
+        column: string;
+        value: EditValue;
+        pk: Record<string, EditValue>;
+        originalRow: CellValue[] | null;
+        originalColumns: string[] | null;
+      }>,
+    ) => {
+      dispatch({ type: "bulk-set-cell", entries });
+    },
+    [],
+  );
+
   const markRowDelete = useCallback(
     (rowKey: RowKey, pk: Record<string, EditValue>) => {
       dispatch({ type: "mark-delete", rowKey, pk });
@@ -394,6 +631,20 @@ export function useEditBuffer(): UseEditBufferResult {
   const markRowUndelete = useCallback((rowKey: RowKey) => {
     dispatch({ type: "unmark-delete", rowKey });
   }, []);
+
+  const bulkDeleteToggle = useCallback(
+    (
+      entries: Array<{
+        rowKey: RowKey;
+        source: "insert" | "server";
+        pk?: Record<string, EditValue>;
+        currentlyDeleted: boolean;
+      }>,
+    ) => {
+      dispatch({ type: "bulk-delete-toggle", entries });
+    },
+    [],
+  );
 
   const addInsertRow = useCallback((values?: Record<string, EditValue>) => {
     const rowKey = nextTmpKey();
@@ -446,8 +697,10 @@ export function useEditBuffer(): UseEditBufferResult {
     isCellDirty,
     isRowDeleted,
     setCellEdit,
+    bulkSetCellEdit,
     markRowDelete,
     markRowUndelete,
+    bulkDeleteToggle,
     addInsertRow,
     removeInsertRow,
     undo,

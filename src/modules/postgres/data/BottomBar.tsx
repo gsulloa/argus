@@ -22,11 +22,14 @@ interface Props {
   noPkBanner: boolean;
   /** Sum of dirty entries (updates + inserts + deletes) — drives the Save badge. */
   dirtyCount: number;
+  /** Number of currently-selected rows. Chip renders when >= 2. */
+  selectedCount: number;
   onPageSizeChange(next: number): void;
   onCountRows(): void;
   onClearFilters(): void;
   onAddRow(): void;
   onSave(): void;
+  onClearSelection(): void;
 }
 
 function formatNumber(n: number): string {
@@ -50,11 +53,13 @@ export function BottomBar(props: Props) {
     readOnlyBanner,
     noPkBanner,
     dirtyCount,
+    selectedCount,
     onPageSizeChange,
     onCountRows,
     onClearFilters,
     onAddRow,
     onSave,
+    onClearSelection,
   } = props;
 
   const showing =
@@ -70,6 +75,20 @@ export function BottomBar(props: Props) {
         Page <strong>{Math.max(1, highestLoadedPage)}</strong>
       </span>
       <span className={styles.spacer} />
+      {selectedCount >= 2 && (
+        <span className={styles.chip}>
+          {selectedCount} rows selected
+          <button
+            type="button"
+            className={styles.chipBtn}
+            onClick={onClearSelection}
+            aria-label="Clear selection"
+            title="Clear row selection"
+          >
+            Clear
+          </button>
+        </span>
+      )}
       {filterCount > 0 && (
         <span className={styles.chip}>
           {filterCount} filter{filterCount === 1 ? "" : "s"}

@@ -154,3 +154,100 @@ textarea.editor {
   color: var(--warning);
   padding-top: 4px;
 }
+
+/* ─── Bulk-edit mode styles ──────────────────────────────────────────────── */
+
+.fieldTouched {
+  border-left: 2px solid var(--accent);
+  padding-left: 6px;
+}
+
+.touchedDot {
+  color: var(--accent);
+  margin-left: 4px;
+  font-size: 9px;
+}
+
+.revertButton {
+  font-size: 11px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.revertButton:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.bulkPlaceholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.bulkFooter {
+  position: sticky;
+  bottom: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  padding: 8px 12px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.bulkApplyBtn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-text);
+  border: 1px solid var(--accent);
+  cursor: pointer;
+}
+.bulkApplyBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.bulkApplyBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.bulkCancelBtn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+}
+.bulkCancelBtn:hover {
+  background: var(--bg-hover);
+}
+
+.bulkBanner {
+  padding: 10px 12px;
+  margin: 8px 12px;
+  background: var(--bg-active);
+  color: var(--text-muted);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.bulkFieldRow {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+.bulkFieldRow > :first-child {
+  flex: 1;
+}
