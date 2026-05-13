@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Plus } from "lucide-react";
 import { ConditionRow } from "./ConditionRow";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -15,9 +15,11 @@ import {
   removeRootChild,
   setOrChild,
   setRootChild,
+  setRootCombinator,
 } from "./treeMutations";
 import {
   filterModelEquals,
+  getRootCombinator,
   type Condition,
   type DataColumn,
   type FilterMode,
@@ -35,6 +37,8 @@ import {
   PrimaryButton,
   SecondaryButton,
   EmptyBodyRow,
+  RootCombinatorToggle,
+  type FilterBarHandle,
 } from "../../../shared/filter-bar";
 import styles from "./FilterBar.module.css";
 
@@ -48,24 +52,32 @@ export interface FilterBarProps {
   onApply(): void;
   onReset(): void;
   onOpenInSqlEditor(): void;
+  /** Called when the user clicks the per-row Apply button on a root child. */
+  onApplyOnlyRow?: (index: number) => void;
 }
 
-export function FilterBar({
-  draft,
-  applied,
-  columns,
-  rawError,
-  onDraftChange,
-  onApply,
-  onReset,
-  onOpenInSqlEditor,
-}: FilterBarProps) {
+export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(function FilterBar(
+  {
+    draft,
+    applied,
+    columns,
+    rawError,
+    onDraftChange,
+    onApply,
+    onReset,
+    onOpenInSqlEditor,
+    onApplyOnlyRow,
+  },
+  ref,
+) {
   const [collapsed, setCollapsed] = useState(false);
   const [showConfirmRawToStructured, setShowConfirmRawToStructured] =
     useState(false);
   // rootRef attaches to the outermost DOM element so keyboard-shortcut
   // handlers can scope containment checks to the entire filter bar.
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // bodyRef allows focus() to query first focus target within the body.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
 
   const isDirty = useMemo(
     () => !filterModelEquals(draft, applied),
@@ -120,6 +132,62 @@ export function FilterBar({
     }
   }
 
+  // Imperative focus() method exposed via ref.
+  // Resolves focus target in order per Decision 2.
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus() {
+        function focusFirst() {
+          const body = bodyRef.current;
+          if (!body) return;
+          // Find the element marked as the focus target.
+          const target = body.querySelector<HTMLElement>(
+            "[data-filter-focus-target='true']",
+          );
+          if (target) {
+            // If the target is a CodeMirror container, focus its contenteditable.
+            const cmContent = target.querySelector<HTMLElement>(".cm-content");
+            if (cmContent) {
+              cmContent.focus();
+              return;
+            }
+            // If the target itself is focusable (button, input, etc.), focus it directly.
+            const tag = target.tagName;
+            if (tag === "BUTTON" || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+              target.focus();
+              return;
+            }
+            // Otherwise, find the first focusable child inside the target.
+            const child = target.querySelector<HTMLElement>(
+              "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]",
+            );
+            child?.focus();
+            return;
+          }
+          // Fallback: first focusable element inside a container marked with the attribute.
+          const container = body.querySelector<HTMLElement>(
+            "[data-filter-focus-target-container='true']",
+          );
+          const child = container?.querySelector<HTMLElement>(
+            "button:not([disabled]), input:not([disabled]), textarea:not([disabled])",
+          );
+          child?.focus();
+        }
+
+        if (collapsed) {
+          setCollapsed(false);
+          // Wait for the state-driven reveal before querying the DOM.
+          requestAnimationFrame(focusFirst);
+          return;
+        }
+        focusFirst();
+      },
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [collapsed, draft.mode, draft.tree.children.length],
+  );
+
   // The outer wrapper is a display:contents div that carries the ref and
   // onKeyDown handler. display:contents removes its layout box so FilterBarShell
   // remains the visual root — the wrapper is transparent to CSS layout while
@@ -172,19 +240,22 @@ export function FilterBar({
         {!collapsed && (
           <>
             <FilterBarBody>
-              {draft.mode === "structured" ? (
-                <StructuredBody
-                  tree={draft.tree}
-                  columns={columns}
-                  onTreeChange={updateTree}
-                />
-              ) : (
-                <RawBody
-                  value={draft.raw}
-                  rawError={rawError}
-                  onChange={(next) => onDraftChange({ ...draft, raw: next })}
-                />
-              )}
+              <div ref={bodyRef} style={{ display: "contents" }}>
+                {draft.mode === "structured" ? (
+                  <StructuredBody
+                    tree={draft.tree}
+                    columns={columns}
+                    onTreeChange={updateTree}
+                    onApplyOnlyRow={onApplyOnlyRow}
+                  />
+                ) : (
+                  <RawBody
+                    value={draft.raw}
+                    rawError={rawError}
+                    onChange={(next) => onDraftChange({ ...draft, raw: next })}
+                  />
+                )}
+              </div>
             </FilterBarBody>
             <FilterBarActions
               left={
@@ -226,23 +297,28 @@ export function FilterBar({
       </FilterBarShell>
     </div>
   );
-}
+});
 
 interface StructuredBodyProps {
   tree: FilterTree;
   columns: DataColumn[];
   onTreeChange(next: FilterTree): void;
+  onApplyOnlyRow?: (index: number) => void;
 }
 
-function StructuredBody({ tree, columns, onTreeChange }: StructuredBodyProps) {
+function StructuredBody({ tree, columns, onTreeChange, onApplyOnlyRow }: StructuredBodyProps) {
   if (tree.children.length === 0) {
     return (
       <EmptyBodyRow label="No filters yet">
-        <FilterRowAddButton
-          onClick={() => onTreeChange(addRootCondition(tree, emptyCondition()))}
-        >
-          <Plus size={10} /> AND row
-        </FilterRowAddButton>
+        {/* data-filter-focus-target-container marks the first add button for
+            keyboard focus routing (⌘F → focus()). */}
+        <span data-filter-focus-target-container="true" style={{ display: "contents" }}>
+          <FilterRowAddButton
+            onClick={() => onTreeChange(addRootCondition(tree, emptyCondition()))}
+          >
+            <Plus size={10} /> AND row
+          </FilterRowAddButton>
+        </span>
         <FilterRowAddButton
           onClick={() => onTreeChange(addRootOrGroup(tree, emptyCondition()))}
         >
@@ -251,6 +327,8 @@ function StructuredBody({ tree, columns, onTreeChange }: StructuredBodyProps) {
       </EmptyBodyRow>
     );
   }
+
+  const rootCombinator = getRootCombinator(tree);
 
   return (
     <div className={styles.structuredBody}>
@@ -263,26 +341,29 @@ function StructuredBody({ tree, columns, onTreeChange }: StructuredBodyProps) {
           };
           return (
             <div key={i} className={styles.row}>
-              {i > 0 && <FilterConnector label="AND" />}
+              {i > 0 && <FilterConnector label={rootCombinator} />}
               <ConditionRow
                 condition={cond}
                 columns={columns}
+                isFocusTarget={i === 0}
                 onChange={(next) =>
                   onTreeChange(
                     setRootChild(tree, i, { kind: "condition", ...next }),
                   )
                 }
                 onRemove={() => onTreeChange(removeRootChild(tree, i))}
+                onApplyOnly={onApplyOnlyRow ? () => onApplyOnlyRow(i) : undefined}
               />
             </div>
           );
         }
         return (
           <div key={i} className={styles.row}>
-            {i > 0 && <FilterConnector label="AND" />}
+            {i > 0 && <FilterConnector label={rootCombinator} />}
             <OrGroup
               group={node}
               columns={columns}
+              isFocusTarget={i === 0}
               onUpdateChild={(childIndex, next) =>
                 onTreeChange(
                   setOrChild(tree, i, childIndex, {
@@ -298,11 +379,16 @@ function StructuredBody({ tree, columns, onTreeChange }: StructuredBodyProps) {
                 onTreeChange(addOrChildCondition(tree, i, emptyCondition()))
               }
               onRemoveGroup={() => onTreeChange(removeRootChild(tree, i))}
+              onApplyOnly={onApplyOnlyRow ? () => onApplyOnlyRow(i) : undefined}
             />
           </div>
         );
       })}
       <div className={styles.addRow}>
+        <RootCombinatorToggle
+          value={rootCombinator}
+          onChange={(c) => onTreeChange(setRootCombinator(tree, c))}
+        />
         <FilterRowAddButton
           onClick={() => onTreeChange(addRootCondition(tree, emptyCondition()))}
         >

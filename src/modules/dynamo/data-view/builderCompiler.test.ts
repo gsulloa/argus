@@ -565,6 +565,149 @@ describe("compile — query mode with filters", () => {
 });
 
 // ---------------------------------------------------------------------------
+// filterCombinator — AND vs OR joining
+// ---------------------------------------------------------------------------
+
+describe("compile — filterCombinator", () => {
+  it("AND (default): two filters joined with AND — regression", () => {
+    const b: BuilderState = {
+      ...defaultScan(),
+      filters: [
+        { kind: "compare", attribute: "status", op: "=", value: tv("S", "ok") },
+        { kind: "compare", attribute: "count", op: ">=", value: tvN("5") },
+      ],
+    };
+    const result = compile(b, DESC_PK_S);
+    if (result.kind !== "scan") throw new Error("expected scan");
+    expect(result.request.filter_expression).toBe("#n0 = :v0 AND #n1 >= :v1");
+  });
+
+  it("AND explicit: two filters joined with AND when filterCombinator is set to AND", () => {
+    const b: BuilderState = {
+      ...defaultScan(),
+      filterCombinator: "AND",
+      filters: [
+        { kind: "compare", attribute: "status", op: "=", value: tv("S", "ok") },
+        { kind: "compare", attribute: "count", op: ">=", value: tvN("5") },
+      ],
+    };
+    const result = compile(b, DESC_PK_S);
+    if (result.kind !== "scan") throw new Error("expected scan");
+    expect(result.request.filter_expression).toBe("#n0 = :v0 AND #n1 >= :v1");
+    expect(result.request.expression_attribute_names).toEqual({
+      "#n0": "status",
+      "#n1": "count",
+    });
+    expect(result.request.expression_attribute_values).toEqual({
+      ":v0": { S: "ok" },
+      ":v1": { N: "5" },
+    });
+  });
+
+  it("OR: two filters joined with OR", () => {
+    const b: BuilderState = {
+      ...defaultScan(),
+      filterCombinator: "OR",
+      filters: [
+        { kind: "compare", attribute: "status", op: "=", value: tv("S", "ok") },
+        { kind: "compare", attribute: "count", op: ">=", value: tvN("5") },
+      ],
+    };
+    const result = compile(b, DESC_PK_S);
+    if (result.kind !== "scan") throw new Error("expected scan");
+    expect(result.request.filter_expression).toBe("#n0 = :v0 OR #n1 >= :v1");
+    expect(result.request.expression_attribute_names).toEqual({
+      "#n0": "status",
+      "#n1": "count",
+    });
+    expect(result.request.expression_attribute_values).toEqual({
+      ":v0": { S: "ok" },
+      ":v1": { N: "5" },
+    });
+  });
+
+  it("single filter with filterCombinator OR — no separator emitted", () => {
+    const b: BuilderState = {
+      ...defaultScan(),
+      filterCombinator: "OR",
+      filters: [
+        { kind: "compare", attribute: "status", op: "=", value: tv("S", "ok") },
+      ],
+    };
+    const result = compile(b, DESC_PK_S);
+    if (result.kind !== "scan") throw new Error("expected scan");
+    // No OR separator — single item, same output as single-filter AND
+    expect(result.request.filter_expression).toBe("#n0 = :v0");
+  });
+
+  it("single filter with filterCombinator AND — no separator emitted", () => {
+    const b: BuilderState = {
+      ...defaultScan(),
+      filterCombinator: "AND",
+      filters: [
+        { kind: "compare", attribute: "status", op: "=", value: tv("S", "ok") },
+      ],
+    };
+    const result = compile(b, DESC_PK_S);
+    if (result.kind !== "scan") throw new Error("expected scan");
+    expect(result.request.filter_expression).toBe("#n0 = :v0");
+  });
+
+  it("empty filters with filterCombinator OR — no FilterExpression emitted", () => {
+    const b: BuilderState = {
+      ...defaultScan(),
+      filterCombinator: "OR",
+      filters: [],
+    };
+    const result = compile(b, DESC_PK_S);
+    if (result.kind !== "scan") throw new Error("expected scan");
+    expect(result.request.filter_expression).toBeNull();
+    expect(result.request.expression_attribute_names).toBeNull();
+    expect(result.request.expression_attribute_values).toBeNull();
+  });
+
+  it("empty filters with filterCombinator AND — no FilterExpression emitted (regression)", () => {
+    const b: BuilderState = {
+      ...defaultScan(),
+      filterCombinator: "AND",
+      filters: [],
+    };
+    const result = compile(b, DESC_PK_S);
+    if (result.kind !== "scan") throw new Error("expected scan");
+    expect(result.request.filter_expression).toBeNull();
+  });
+
+  it("placeholder indices are sequential regardless of combinator", () => {
+    // Verifies that placeholder allocation (#n0, #n1, :v0, :v1) is
+    // unchanged when switching to OR.
+    const b: BuilderState = {
+      ...defaultScan(),
+      filterCombinator: "OR",
+      filters: [
+        { kind: "compare", attribute: "a", op: "=", value: tv("S", "x") },
+        { kind: "compare", attribute: "b", op: "=", value: tv("S", "y") },
+        { kind: "compare", attribute: "c", op: "=", value: tv("S", "z") },
+      ],
+    };
+    const result = compile(b, DESC_PK_S);
+    if (result.kind !== "scan") throw new Error("expected scan");
+    expect(result.request.filter_expression).toBe(
+      "#n0 = :v0 OR #n1 = :v1 OR #n2 = :v2",
+    );
+    expect(result.request.expression_attribute_names).toEqual({
+      "#n0": "a",
+      "#n1": "b",
+      "#n2": "c",
+    });
+    expect(result.request.expression_attribute_values).toEqual({
+      ":v0": { S: "x" },
+      ":v1": { S: "y" },
+      ":v2": { S: "z" },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // scan_index_forward forwarded in query mode
 // ---------------------------------------------------------------------------
 

@@ -89,9 +89,12 @@
   flex-wrap: wrap;
 }
 
-/* Add-row affordances below the row list */
+/* Add-row affordances below the row list.
+   align-items: center keeps the RootCombinatorToggle vertically aligned with
+   the + AND row / + OR group add buttons. */
 .addRow {
   display: flex;
+  align-items: center;
   gap: var(--space-xs);
 }
 

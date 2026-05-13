@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { Plus } from "lucide-react";
 import { ConditionRow } from "./ConditionRow";
+import { RowApplyButton } from "../../../shared/filter-bar";
 import type { Condition, DataColumn, FilterNode } from "../types";
 import styles from "./FilterBar.module.css";
 
@@ -11,6 +12,10 @@ interface Props {
   onRemoveChild(childIndex: number): void;
   onAddChild(): void;
   onRemoveGroup(): void;
+  /** Called when the user clicks the per-row Apply button on this OR group. */
+  onApplyOnly?: () => void;
+  /** When true, marks the first row's column picker as the keyboard focus target (⌘F). */
+  isFocusTarget?: boolean;
 }
 
 export function OrGroup({
@@ -20,12 +25,21 @@ export function OrGroup({
   onRemoveChild,
   onAddChild,
   onRemoveGroup,
+  onApplyOnly,
+  isFocusTarget,
 }: Props) {
   return (
     <div className={styles.orGroup}>
       <div className={styles.orGroupHeader}>
         <span>OR group</span>
         <span style={{ flex: 1 }} />
+        {onApplyOnly && (
+          <RowApplyButton
+            onClick={onApplyOnly}
+            aria-label="Apply only this OR group"
+            title="Apply only this OR group (replaces active filter)"
+          />
+        )}
         <button
           type="button"
           className={styles.removeBtn}
@@ -48,6 +62,7 @@ export function OrGroup({
                 value: child.value,
               }}
               columns={columns}
+              isFocusTarget={isFocusTarget && i === 0}
               onChange={(next) => onUpdateChild(i, next)}
               onRemove={() => onRemoveChild(i)}
             />

@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { useSetting } from "@/platform/settings/useSetting";
 import { EMPTY_FILTER_MODEL, type FilterModel } from "./types";
 
-interface PersistedFilter {
+export interface PersistedFilter {
   draft: FilterModel;
   applied: FilterModel;
 }
@@ -10,6 +10,27 @@ interface PersistedFilter {
 const DEFAULT: PersistedFilter = {
   draft: EMPTY_FILTER_MODEL,
   applied: EMPTY_FILTER_MODEL,
+}
+
+/**
+ * Normalize a `PersistedFilter` read from storage. Coerces a missing
+ * `combinator` field on each tree to `"AND"` for backward compatibility
+ * with records written before this field existed.
+ *
+ * Exported for unit testing only; prefer `useTableFilter` in production code.
+ */
+export function normalizePersistedFilter(value: PersistedFilter): PersistedFilter {
+  const normTree = (model: FilterModel): FilterModel => ({
+    ...model,
+    tree: {
+      ...model.tree,
+      combinator: model.tree.combinator ?? "AND",
+    },
+  });
+  return {
+    draft: normTree(value.draft),
+    applied: normTree(value.applied),
+  };
 };
 
 function settingsKey(connectionId: string, schema: string, relation: string): string {
@@ -40,10 +61,14 @@ export function useTableFilter(
   schema: string,
   relation: string,
 ): UseTableFilterResult {
-  const [value, set, isLoaded] = useSetting<PersistedFilter>(
+  const [raw, set, isLoaded] = useSetting<PersistedFilter>(
     settingsKey(connectionId, schema, relation),
     DEFAULT,
   );
+
+  // Normalize on every read: coerce missing `combinator` to "AND" so that
+  // records persisted before this field existed behave correctly.
+  const value = normalizePersistedFilter(raw);
 
   const setDraft = useCallback(
     (next: FilterModel) => {

@@ -127,8 +127,10 @@ describe("TableViewerTab — filter persistence (jsdom, memory-cache lane)", () 
     const valueInputs = await screen.findAllByPlaceholderText(/value/i);
     fireEvent.change(valueInputs[0]!, { target: { value: "CL" } });
 
-    // Apply commits draft → applied.
-    fireEvent.click(screen.getByRole("button", { name: /^Apply/ }));
+    // Apply commits draft → applied. When draft is dirty the button label is
+    // "Apply (unsaved changes)"; we use the exact label to avoid ambiguity
+    // with the per-row "Apply only this row" button added in Wave 2.
+    fireEvent.click(screen.getByRole("button", { name: "Apply (unsaved changes)" }));
 
     // Sanity: the bar should show the filter row.
     expect(valueInputs[0]).toHaveValue("CL");
@@ -170,7 +172,7 @@ describe("TableViewerTab — filter persistence (jsdom, memory-cache lane)", () 
     fireEvent.click(screen.getByRole("button", { name: /AND row/ }));
     const valueInputsA = await screen.findAllByPlaceholderText(/value/i);
     fireEvent.change(valueInputsA[0]!, { target: { value: "CL" } });
-    fireEvent.click(screen.getByRole("button", { name: /^Apply/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply (unsaved changes)" }));
 
     rerender(
       <React.StrictMode>
@@ -215,7 +217,7 @@ describe("TableViewerTab — filter persistence (jsdom, memory-cache lane)", () 
     fireEvent.click(screen.getByRole("button", { name: /AND row/ }));
     const valueInputsA = await screen.findAllByPlaceholderText(/value/i);
     fireEvent.change(valueInputsA[0]!, { target: { value: "CL" } });
-    fireEvent.click(screen.getByRole("button", { name: /^Apply/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply (unsaved changes)" }));
 
     // Now switch the SAME instance to relation B (no unmount — TabsContent
     // reuse pattern). Bar must be empty.
@@ -244,7 +246,7 @@ describe("TableViewerTab — filter persistence (jsdom, memory-cache lane)", () 
     fireEvent.click(screen.getByRole("button", { name: /AND row/ }));
     const valueInputs = await screen.findAllByPlaceholderText(/value/i);
     fireEvent.change(valueInputs[0]!, { target: { value: "CL" } });
-    fireEvent.click(screen.getByRole("button", { name: /^Apply/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply (unsaved changes)" }));
 
     unmount();
     renderViewer({ ...baseArgs, connectionId: "conn-B" });

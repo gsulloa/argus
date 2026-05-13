@@ -235,6 +235,13 @@ export interface UseDynamoItemsResult {
   /** Explicit user-initiated run — resets pagination. */
   run(origin?: Origin): Promise<void>;
   /**
+   * Run with a transient BuilderState override (e.g. per-row Apply).
+   * Uses the override state for compilation only; the host's visible builder
+   * is NOT mutated. After the run, the hook returns to reading the real builder
+   * on the next regular run() call.
+   */
+  runWithOverride(override: BuilderState, origin?: Origin): Promise<void>;
+  /**
    * Manual "load more" — always resets autoScrollDisabled before firing.
    * This is what the toolbar "Load more" button calls.
    */
@@ -308,18 +315,20 @@ export function useDynamoItems(
   /**
    * Compiles the current builder state and issues one Scan or Query.
    * Throws an AppError on compile error or AWS error.
+   * @param builderOverride When provided, use this builder instead of builderRef.current.
    */
   const executePage = useCallback(
     async (
       exclusiveStartKey: AttributeMap | null,
       origin: Origin,
       pageNumber: number,
+      builderOverride?: BuilderState,
     ): Promise<{
       items: AttributeMap[];
       lastEvaluatedKey: AttributeMap | null;
       scannedCount: number;
     }> => {
-      const compiled = compile(builderRef.current, describeRef.current);
+      const compiled = compile(builderOverride ?? builderRef.current, describeRef.current);
 
       if (compiled.kind === "error") {
         throw new AppError("Validation", compiled.reason);
@@ -402,6 +411,38 @@ export function useDynamoItems(
         if (generationRef.current !== generation) return;
         const err = asError(e);
         // Keep pendingReplayRef set so credentials-refreshed can replay.
+        dispatch({ type: "run-error", error: err });
+      }
+    },
+    [executePage],
+  );
+
+  // ---------------------------------------------------------------------------
+  // runWithOverride() — per-row Apply path
+  // ---------------------------------------------------------------------------
+
+  const runWithOverride = useCallback(
+    async (override: BuilderState, origin: Origin = "user"): Promise<void> => {
+      const generation = generationRef.current + 1;
+      generationRef.current = generation;
+
+      dispatch({ type: "run-start" });
+
+      pendingReplayRef.current = { kind: "run", origin };
+
+      try {
+        const result = await executePage(null, origin, 1, override);
+        if (generationRef.current !== generation) return;
+        pendingReplayRef.current = null;
+        dispatch({
+          type: "run-success",
+          items: result.items,
+          lastEvaluatedKey: result.lastEvaluatedKey,
+          scannedCount: result.scannedCount,
+        });
+      } catch (e) {
+        if (generationRef.current !== generation) return;
+        const err = asError(e);
         dispatch({ type: "run-error", error: err });
       }
     },
@@ -569,6 +610,7 @@ export function useDynamoItems(
     page: state.page,
     autoScrollDisabled: state.autoScrollDisabled,
     run,
+    runWithOverride,
     loadMore,
     triggerAutoLoadMore,
     reset,

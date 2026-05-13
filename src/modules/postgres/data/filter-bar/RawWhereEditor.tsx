@@ -75,6 +75,7 @@ export function RawWhereEditor({ value, onChange }: Props) {
       className={styles.rawEditor}
       role="textbox"
       aria-label="Raw WHERE clause"
+      data-filter-focus-target="true"
     />
   );
 }
