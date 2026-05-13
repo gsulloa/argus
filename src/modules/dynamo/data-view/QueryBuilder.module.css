@@ -1,32 +1,14 @@
-/* QueryBuilder — DSL-less structured query builder for DynamoDB data view */
+/* QueryBuilder — Dynamo-specific layout only. Shell/header/body/action chrome
+   is owned by the shared FilterBar primitives. See src/modules/shared/filter-bar/. */
 
-.root {
-  border-bottom: 1px solid var(--border);
-  background: var(--canvas);
-  flex-shrink: 0;
-  font-size: 12px;
-  font-family: var(--font-sans, inherit);
-}
-
-/* ── Top row: mode selector + index dropdown ─────────────────────── */
-
-.topRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-}
-
-/* ── Mode segmented control ──────────────────────────────────────── */
+/* ── Header: mode toggle ─────────────────────────────────────────── */
 
 .modeGroup {
   display: flex;
   align-items: center;
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  overflow: hidden;
+  border-radius: var(--radius-md);
+  overflow: visible;
   flex-shrink: 0;
 }
 
@@ -39,13 +21,18 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 80ms, color 80ms;
+  transition: background var(--duration-instant), color var(--duration-instant);
   border-right: 1px solid var(--border-strong);
   white-space: nowrap;
 }
 
+.modeBtn:first-child {
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
 .modeBtn:last-child {
   border-right: none;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
 }
 
 .modeBtn:hover {
@@ -53,9 +40,17 @@
   color: var(--text);
 }
 
+.modeBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--accent);
+  position: relative;
+  z-index: 1;
+}
+
 .modeBtnActive {
-  background: var(--surface-2);
-  color: var(--text);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 /* ── Labels ──────────────────────────────────────────────────────── */
@@ -75,30 +70,28 @@
   padding: 3px 8px;
   font-size: 11px;
   font-family: inherit;
-  background: var(--canvas);
+  background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   outline: none;
-  transition: border-color 80ms;
+  transition: border-color var(--duration-instant);
   min-width: 120px;
   max-width: 280px;
 }
 
-.select:focus {
+.select:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-/* ── Key pickers section ─────────────────────────────────────────── */
+/* ── Key section (Dynamo-specific: PK + SK rows) ─────────────────── */
 
 .keySection {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-xs);
 }
 
 .keyRow {
@@ -116,49 +109,32 @@
   min-width: 70px;
 }
 
-/* ── Type badge (static, schema-dictated) ────────────────────────── */
-
-.typeBadge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 5px;
-  font-size: 10px;
-  font-family: var(--font-mono, monospace);
-  font-weight: 500;
-  background: var(--surface-2);
-  color: var(--text-muted);
-  border-radius: 3px;
-  flex-shrink: 0;
-  letter-spacing: 0.04em;
-  border: 1px solid var(--border-strong);
-}
-
 /* ── Text input ──────────────────────────────────────────────────── */
 
 .textInput {
   padding: 3px 8px;
   font-size: 11px;
-  font-family: var(--font-sans, inherit);
-  background: var(--canvas);
+  font-family: var(--font-stack, inherit);
+  background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   outline: none;
-  transition: border-color 80ms, box-shadow 80ms;
+  transition: border-color var(--duration-instant), box-shadow var(--duration-instant);
   min-width: 120px;
 }
 
-.textInput:focus {
+.textInput:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 .textInput.inputError {
   border-color: var(--danger);
 }
 
-.textInput.inputError:focus {
-  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.18); /* 3px per DESIGN.md focus ring spec */
+.textInput.inputError:focus-visible {
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.18);
 }
 
 /* ── Sort key operator selector ──────────────────────────────────── */
@@ -167,18 +143,18 @@
   padding: 3px 6px;
   font-size: 11px;
   font-family: var(--font-mono, monospace);
-  background: var(--canvas);
+  background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   outline: none;
-  transition: border-color 80ms;
+  transition: border-color var(--duration-instant);
 }
 
-.skOpSelect:focus {
+.skOpSelect:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 /* ── Inline validation hint ──────────────────────────────────────── */
@@ -191,16 +167,12 @@
   gap: 4px;
 }
 
-/* ── Filters section ─────────────────────────────────────────────── */
+/* ── Filters section (Dynamo-specific: filter-rows container) ────── */
 
 .filtersSection {
-  padding: 4px 10px 6px;
-}
-
-.filterRows {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-xs);
 }
 
 /* ── Filter row ──────────────────────────────────────────────────── */
@@ -215,58 +187,58 @@
 .filterAttrInput {
   padding: 3px 8px;
   font-size: 11px;
-  font-family: var(--font-sans, inherit);
-  background: var(--canvas);
+  font-family: var(--font-stack, inherit);
+  background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   outline: none;
-  transition: border-color 80ms, box-shadow 80ms;
+  transition: border-color var(--duration-instant), box-shadow var(--duration-instant);
   min-width: 90px;
   width: 100px;
 }
 
-.filterAttrInput:focus {
+.filterAttrInput:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 .filterOpSelect {
   padding: 3px 6px;
   font-size: 11px;
   font-family: var(--font-mono, monospace);
-  background: var(--canvas);
+  background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   outline: none;
-  transition: border-color 80ms;
+  transition: border-color var(--duration-instant);
   min-width: 90px;
 }
 
-.filterOpSelect:focus {
+.filterOpSelect:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 .filterTypeSelect {
   padding: 3px 6px;
   font-size: 10px;
   font-family: var(--font-mono, monospace);
-  background: var(--canvas);
+  background: var(--surface);
   color: var(--text-muted);
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   outline: none;
-  transition: border-color 80ms;
+  transition: border-color var(--duration-instant);
   width: 54px;
 }
 
-.filterTypeSelect:focus {
+.filterTypeSelect:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 .removeBtn {
@@ -281,10 +253,10 @@
   background: transparent;
   color: var(--text-subtle);
   border: none;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 80ms, color 80ms;
+  transition: background var(--duration-instant), color var(--duration-instant);
 }
 
 .removeBtn:hover {
@@ -292,7 +264,7 @@
   color: var(--danger);
 }
 
-/* ── Bool toggle ─────────────────────────────────────────────────── */
+/* ── Bool toggle (BOOL-type value input) ─────────────────────────── */
 
 .boolToggle {
   display: flex;
@@ -306,9 +278,9 @@
   height: 14px;
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
-  border-radius: 3px; /* --radius-sm; 999px is reserved for status pills per DESIGN.md */
+  border-radius: var(--radius-sm);
   position: relative;
-  transition: background 80ms, border-color 80ms;
+  transition: background var(--duration-instant), border-color var(--duration-instant);
   flex-shrink: 0;
 }
 
@@ -325,7 +297,7 @@
   height: 10px;
   border-radius: 50%;
   background: var(--text-subtle);
-  transition: transform 80ms, background 80ms;
+  transition: transform var(--duration-instant), background var(--duration-instant);
 }
 
 .boolToggleThumbOn {
@@ -340,14 +312,7 @@
   user-select: none;
 }
 
-/* ── Null switch ─────────────────────────────────────────────────── */
-
-.nullSwitch {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
-}
+/* ── Null switch label ────────────────────────────────────────────── */
 
 .nullSwitchLabel {
   font-size: 11px;
@@ -356,35 +321,11 @@
   user-select: none;
 }
 
-/* ── Add filter button ───────────────────────────────────────────── */
-
-.addFilterBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 4px;
-  padding: 3px 8px;
-  font-size: 11px;
-  font-family: inherit;
-  background: transparent;
-  color: var(--text-muted);
-  border: 1px dashed var(--border-strong);
-  border-radius: 5px;
-  cursor: pointer;
-  transition: background 80ms, color 80ms, border-color 80ms;
-}
-
-.addFilterBtn:hover {
-  background: var(--surface-2);
-  color: var(--text);
-  border-color: var(--text-subtle);
-  border-style: solid;
-}
-
-/* ── Preview disclosure ──────────────────────────────────────────── */
+/* ── Preview disclosure (Dynamo-specific: collapsible) ───────────── */
 
 .previewSection {
   border-top: 1px solid var(--border);
+  margin-top: var(--space-xs);
 }
 
 .previewToggle {
@@ -392,7 +333,7 @@
   align-items: center;
   gap: 5px;
   width: 100%;
-  padding: 5px 10px;
+  padding: 5px var(--space-sm);
   font-size: 11px;
   font-family: inherit;
   background: transparent;
@@ -400,7 +341,7 @@
   border: none;
   cursor: pointer;
   text-align: left;
-  transition: background 80ms, color 80ms;
+  transition: background var(--duration-instant), color var(--duration-instant);
 }
 
 .previewToggle:hover {
@@ -408,9 +349,14 @@
   color: var(--text-muted);
 }
 
+.previewToggle:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent-glow);
+}
+
 .previewCaret {
   font-size: 9px;
-  transition: transform 120ms;
+  transition: transform var(--duration-short);
   flex-shrink: 0;
 }
 
@@ -419,7 +365,7 @@
 }
 
 .previewBody {
-  padding: 8px 10px;
+  padding: var(--space-xs) var(--space-sm);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -443,9 +389,9 @@
   color: var(--text-muted);
   white-space: pre-wrap;
   word-break: break-all;
-  background: var(--canvas);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 5px 8px;
   margin: 0;
 }
@@ -455,10 +401,29 @@
   color: var(--danger);
 }
 
-/* ── Between connector ───────────────────────────────────────────── */
+/* ── Between connector label ─────────────────────────────────────── */
 
 .betweenAnd {
   font-size: 11px;
   color: var(--text-subtle);
   flex-shrink: 0;
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .modeBtn,
+  .select,
+  .textInput,
+  .skOpSelect,
+  .filterAttrInput,
+  .filterOpSelect,
+  .filterTypeSelect,
+  .removeBtn,
+  .boolToggleTrack,
+  .boolToggleThumb,
+  .previewToggle,
+  .previewCaret {
+    transition: none;
+  }
 }

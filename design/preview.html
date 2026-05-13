@@ -529,6 +529,651 @@
         </div>
       </div>
 
+      <h2 class="section">Filter bars · Postgres &amp; Dynamo</h2>
+      <p class="lede">Both filter surfaces share one visual system: 32px header / flexible body / 32px action row, segmented mode toggle, violet dirty-pip on the primary CTA, keyboard-hint chips, and an explicit empty state. Six states × two themes rendered below without booting the app.</p>
+
+      <style>
+        /* Allow [data-theme] on non-root elements so individual tiles can carry their own theme. */
+        [data-theme="dark"] {
+          --canvas:#0b0b0f; --elevated:#15151b; --surface:#1c1c24; --surface-2:#23232c;
+          --text:#f2f3f7; --text-muted:#a0a2ad; --text-subtle:#6b6e7b;
+          --border:#23232c; --border-strong:#2e2f3a; --hairline:rgba(255,255,255,.04);
+          --accent:#a855f7; --accent-hover:#c084fc; --accent-soft:rgba(168,85,247,.12); --accent-glow:rgba(168,85,247,.18);
+          --radius-sm:3px; --radius-md:5px; --radius-lg:8px;
+          --space-2xs:4px; --space-xs:8px; --space-sm:12px; --space-md:16px;
+        }
+        [data-theme="light"] {
+          --canvas:#fafaf9; --elevated:#fff; --surface:#fff; --surface-2:#f4f4f3;
+          --text:#0f0f12; --text-muted:#5b5d68; --text-subtle:#8d8f9b;
+          --border:#e7e7e4; --border-strong:#d4d4d0; --hairline:rgba(0,0,0,.04);
+          --accent:#7c3aed; --accent-hover:#6d28d9; --accent-soft:rgba(124,58,237,.10); --accent-glow:rgba(124,58,237,.16);
+          --radius-sm:3px; --radius-md:5px; --radius-lg:8px;
+          --space-2xs:4px; --space-xs:8px; --space-sm:12px; --space-md:16px;
+        }
+
+        /* ── Filter bar tile layout ── */
+        .fb-grid {
+          display:grid;
+          grid-template-columns:repeat(3,1fr);
+          gap:24px;
+          margin-bottom:32px;
+        }
+        .fb-theme-row { margin-bottom:8px }
+        .fb-theme-label {
+          font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.16em;
+          color:var(--text-subtle); margin:0 0 10px; display:block;
+        }
+        .fb-tile-wrap { display:flex; flex-direction:column; gap:4px }
+        .fb-caption {
+          font-size:11px; color:var(--text-subtle);
+          font-family:"Geist Mono",ui-monospace,monospace;
+          text-align:center;
+        }
+
+        /* ── Filter bar shell ── */
+        .fb-shell {
+          background:var(--surface);
+          border:1px solid var(--border);
+          border-radius:var(--radius-lg);
+          overflow:hidden;
+          font-size:12px;
+          font-family:"Geist",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+          color:var(--text);
+          -webkit-font-smoothing:antialiased;
+        }
+
+        /* ── Header row ── */
+        .fb-header {
+          min-height:32px;
+          display:flex;
+          align-items:center;
+          gap:var(--space-xs);
+          padding:0 var(--space-sm);
+          border-bottom:1px solid var(--border);
+          background:var(--surface);
+        }
+        .fb-header-title {
+          font-size:11px; font-weight:500; text-transform:uppercase;
+          letter-spacing:.14em; color:var(--text-subtle); flex:1;
+        }
+
+        /* ── Segmented toggle ── */
+        .fb-toggle {
+          display:inline-flex;
+          border:1px solid var(--border-strong);
+          border-radius:var(--radius-md);
+          overflow:visible;
+          height:24px;
+        }
+        .fb-toggle-opt {
+          display:inline-flex;
+          align-items:center;
+          padding:0 10px;
+          font-size:11px;
+          font-weight:500;
+          cursor:pointer;
+          color:var(--text-muted);
+          background:transparent;
+          border:0;
+          border-right:1px solid var(--border-strong);
+          border-radius:0;
+          font-family:inherit;
+          line-height:1;
+          white-space:nowrap;
+        }
+        .fb-toggle-opt:last-child { border-right:0 }
+        .fb-toggle-opt:first-child { border-radius:var(--radius-md) 0 0 var(--radius-md) }
+        .fb-toggle-opt:last-child { border-radius:0 var(--radius-md) var(--radius-md) 0 }
+        .fb-toggle-opt.active {
+          background:var(--accent-soft);
+          color:var(--accent);
+        }
+
+        /* ── Body ── */
+        .fb-body {
+          padding:var(--space-xs) var(--space-sm);
+          display:flex;
+          flex-direction:column;
+          gap:var(--space-xs);
+          min-height:56px;
+        }
+
+        /* ── Condition row ── */
+        .fb-condition {
+          display:flex;
+          align-items:center;
+          gap:var(--space-xs);
+          font-size:12px;
+        }
+        .fb-connector {
+          font-family:"Geist Mono",ui-monospace,monospace;
+          font-size:10px;
+          letter-spacing:.14em;
+          text-transform:uppercase;
+          color:var(--text-subtle);
+          width:28px;
+          text-align:center;
+          flex-shrink:0;
+        }
+        .fb-select {
+          font:inherit;
+          font-size:12px;
+          background:var(--canvas,var(--surface));
+          border:1px solid var(--border-strong);
+          border-radius:var(--radius-md);
+          padding:3px 8px;
+          color:var(--text);
+          flex:1;
+          min-width:0;
+        }
+        .fb-badge {
+          font-family:"Geist Mono",ui-monospace,monospace;
+          font-size:10px;
+          letter-spacing:.16em;
+          background:var(--surface-2);
+          color:var(--text-muted);
+          border-radius:var(--radius-sm);
+          padding:1px 5px;
+          flex-shrink:0;
+        }
+
+        /* ── Empty state row ── */
+        .fb-empty {
+          height:24px;
+          display:flex;
+          align-items:center;
+          gap:6px;
+          font-size:11px;
+          color:var(--text-subtle);
+        }
+        .fb-empty-add {
+          font-size:11px;
+          color:var(--text-subtle);
+          border:1px dashed var(--border-strong);
+          border-radius:var(--radius-md);
+          padding:1px 8px;
+          background:transparent;
+          cursor:pointer;
+          font-family:inherit;
+        }
+
+        /* ── Actions row ── */
+        .fb-actions {
+          min-height:32px;
+          display:flex;
+          align-items:center;
+          gap:var(--space-xs);
+          padding:0 var(--space-sm);
+          border-top:1px solid var(--border);
+          background:var(--surface);
+        }
+        .fb-spacer { flex:1 }
+
+        /* ── Key hint chip ── */
+        .fb-hint {
+          font-family:"Geist Mono",ui-monospace,monospace;
+          font-size:10px;
+          letter-spacing:.16em;
+          border:1px solid var(--border);
+          border-radius:var(--radius-sm);
+          padding:1px 5px;
+          color:var(--text-subtle);
+          background:transparent;
+        }
+
+        /* ── Primary button ── */
+        .fb-btn-primary {
+          font:inherit;
+          font-size:11px;
+          font-weight:500;
+          padding:4px 12px;
+          border-radius:var(--radius-md);
+          border:1px solid var(--accent);
+          background:var(--accent);
+          color:#fff;
+          cursor:pointer;
+          position:relative;
+          display:inline-flex;
+          align-items:center;
+          gap:6px;
+        }
+        /* dirty pip: 4px violet dot at top-right edge of button */
+        .fb-btn-primary.dirty::before {
+          content:"";
+          position:absolute;
+          top:-2px;
+          right:-2px;
+          width:6px;
+          height:6px;
+          border-radius:999px;
+          background:var(--accent-hover,#c084fc);
+          border:2px solid var(--surface);
+        }
+
+        /* ── Secondary button ── */
+        .fb-btn-secondary {
+          font:inherit;
+          font-size:11px;
+          font-weight:500;
+          padding:4px 10px;
+          border-radius:var(--radius-md);
+          border:1px solid var(--border-strong);
+          background:transparent;
+          color:var(--text-muted);
+          cursor:pointer;
+        }
+      </style>
+
+      <!-- ─────────────── POSTGRES FILTER BAR ─────────────── -->
+      <div class="fb-theme-row">
+        <span class="fb-theme-label">Postgres FilterBar</span>
+        <div class="fb-grid">
+
+          <!-- default · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>paid</option></select>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector">AND</div>
+                    <select class="fb-select"><option>created_at</option></select>
+                    <select class="fb-select"><option>≥</option></select>
+                    <select class="fb-select"><option>2026-01-01</option></select>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <button class="fb-btn-secondary">Reset</button>
+                  <span class="fb-hint">⎋</span>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · default · dark</div>
+          </div>
+
+          <!-- dirty · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>pending</option></select>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <button class="fb-btn-secondary">Reset</button>
+                  <span class="fb-hint">⎋</span>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary dirty">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · dirty · dark</div>
+          </div>
+
+          <!-- empty · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-empty">
+                    No filters
+                    <span style="color:var(--text-subtle)">·</span>
+                    <button class="fb-empty-add">+ AND row</button>
+                    <span style="color:var(--text-subtle)">·</span>
+                    <button class="fb-empty-add">+ OR group</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · empty · dark</div>
+          </div>
+
+          <!-- default · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>paid</option></select>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector">AND</div>
+                    <select class="fb-select"><option>created_at</option></select>
+                    <select class="fb-select"><option>≥</option></select>
+                    <select class="fb-select"><option>2026-01-01</option></select>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <button class="fb-btn-secondary">Reset</button>
+                  <span class="fb-hint">⎋</span>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · default · light</div>
+          </div>
+
+          <!-- dirty · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>pending</option></select>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <button class="fb-btn-secondary">Reset</button>
+                  <span class="fb-hint">⎋</span>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary dirty">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · dirty · light</div>
+          </div>
+
+          <!-- empty · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-empty">
+                    No filters
+                    <span style="color:var(--text-subtle)">·</span>
+                    <button class="fb-empty-add">+ AND row</button>
+                    <span style="color:var(--text-subtle)">·</span>
+                    <button class="fb-empty-add">+ OR group</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · empty · light</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ─────────────── DYNAMO QUERY BUILDER ─────────────── -->
+      <div class="fb-theme-row">
+        <span class="fb-theme-label">Dynamo QueryBuilder</span>
+        <div class="fb-grid">
+
+          <!-- default · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <span class="fb-badge">S</span>
+                    <select class="fb-select"><option>userId</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>u_8f2a1b</option></select>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <button class="fb-btn-secondary">Reset</button>
+                  <span class="fb-hint">⌘⇧R</span>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · default · dark</div>
+          </div>
+
+          <!-- dirty · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <span class="fb-badge">S</span>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>active</option></select>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector">AND</div>
+                    <span class="fb-badge">N</span>
+                    <select class="fb-select"><option>amount</option></select>
+                    <select class="fb-select"><option>&gt; gt</option></select>
+                    <select class="fb-select"><option>100</option></select>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <button class="fb-btn-secondary">Reset</button>
+                  <span class="fb-hint">⌘⇧R</span>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary dirty">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · dirty · dark</div>
+          </div>
+
+          <!-- empty · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-empty">
+                    No filters
+                    <span style="color:var(--text-subtle)">·</span>
+                    Run scans everything
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · empty · dark</div>
+          </div>
+
+          <!-- default · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <span class="fb-badge">S</span>
+                    <select class="fb-select"><option>userId</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>u_8f2a1b</option></select>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <button class="fb-btn-secondary">Reset</button>
+                  <span class="fb-hint">⌘⇧R</span>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · default · light</div>
+          </div>
+
+          <!-- dirty · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <span class="fb-badge">S</span>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>active</option></select>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector">AND</div>
+                    <span class="fb-badge">N</span>
+                    <select class="fb-select"><option>amount</option></select>
+                    <select class="fb-select"><option>&gt; gt</option></select>
+                    <select class="fb-select"><option>100</option></select>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <button class="fb-btn-secondary">Reset</button>
+                  <span class="fb-hint">⌘⇧R</span>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary dirty">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · dirty · light</div>
+          </div>
+
+          <!-- empty · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-empty">
+                    No filters
+                    <span style="color:var(--text-subtle)">·</span>
+                    Run scans everything
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · empty · light</div>
+          </div>
+
+        </div>
+      </div>
+
       <h2 class="section">Command palette · ⌘K</h2>
       <p class="lede">The accent earns another loud moment here. Active row gets the violet edge + soft glow; matched substring gets violet text. Everything else stays quiet so the focus actually lands.</p>
       <div class="palette">

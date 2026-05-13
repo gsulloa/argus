@@ -1,0 +1,37 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-stack);
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background var(--duration-instant) ease-out,
+    border-color var(--duration-instant) ease-out;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.button:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button {
+    transition: none !important;
+  }
+}

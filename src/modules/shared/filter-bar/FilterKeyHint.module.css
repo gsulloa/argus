@@ -1,0 +1,13 @@
+.hint {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--text-subtle);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  user-select: none;
+}

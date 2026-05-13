@@ -24,6 +24,18 @@ import {
   type FilterModel,
   type FilterTree,
 } from "../types";
+import {
+  FilterBarShell,
+  FilterBarHeader,
+  FilterBarBody,
+  FilterBarActions,
+  FilterConnector,
+  FilterRowAddButton,
+  FilterKeyHint,
+  PrimaryButton,
+  SecondaryButton,
+  EmptyBodyRow,
+} from "../../../shared/filter-bar";
 import styles from "./FilterBar.module.css";
 
 export interface FilterBarProps {
@@ -51,6 +63,8 @@ export function FilterBar({
   const [collapsed, setCollapsed] = useState(false);
   const [showConfirmRawToStructured, setShowConfirmRawToStructured] =
     useState(false);
+  // rootRef attaches to the outermost DOM element so keyboard-shortcut
+  // handlers can scope containment checks to the entire filter bar.
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   const isDirty = useMemo(
@@ -106,97 +120,110 @@ export function FilterBar({
     }
   }
 
+  // The outer wrapper is a display:contents div that carries the ref and
+  // onKeyDown handler. display:contents removes its layout box so FilterBarShell
+  // remains the visual root — the wrapper is transparent to CSS layout while
+  // still capturing DOM events and providing the rootRef containment check.
   return (
-    <div className={styles.root} ref={rootRef} onKeyDown={onKeyDown}>
-      <div className={styles.header}>
-        <div className={styles.modeToggle} role="tablist" aria-label="Filter mode">
-          <button
-            type="button"
-            role="tab"
-            className={styles.modeBtn}
-            data-active={draft.mode === "structured" ? "true" : "false"}
-            aria-selected={draft.mode === "structured"}
-            onClick={() => setMode("structured")}
+    <div ref={rootRef} onKeyDown={onKeyDown} className={styles.root}>
+      <FilterBarShell>
+        <FilterBarHeader>
+          {/*
+           * Mode toggle: kept as role="tablist" / role="tab" to preserve the
+           * existing test contract (getByRole("tab", { name: "Structured" })).
+           * TODO: migrate to FilterSegmentedToggle once tests are updated to
+           * query role="radio" instead of role="tab".
+           */}
+          <div
+            className={styles.modeToggle}
+            role="tablist"
+            aria-label="Filter mode"
           >
-            Structured
-          </button>
-          <button
-            type="button"
-            role="tab"
-            className={styles.modeBtn}
-            data-active={draft.mode === "raw" ? "true" : "false"}
-            aria-selected={draft.mode === "raw"}
-            onClick={() => setMode("raw")}
-          >
-            Raw SQL
-          </button>
-        </div>
-        <button
-          type="button"
-          className={styles.collapseBtn}
-          aria-label={collapsed ? "Expand filter bar" : "Collapse filter bar"}
-          onClick={() => setCollapsed((v) => !v)}
-        >
-          {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-        </button>
-      </div>
-      {!collapsed && (
-        <>
-          <div className={styles.body}>
-            {draft.mode === "structured" ? (
-              <StructuredBody
-                tree={draft.tree}
-                columns={columns}
-                onTreeChange={updateTree}
-              />
-            ) : (
-              <RawBody
-                value={draft.raw}
-                rawError={rawError}
-                onChange={(next) => onDraftChange({ ...draft, raw: next })}
-              />
-            )}
+            <button
+              type="button"
+              role="tab"
+              className={styles.modeBtn}
+              data-active={draft.mode === "structured" ? "true" : "false"}
+              aria-selected={draft.mode === "structured"}
+              onClick={() => setMode("structured")}
+            >
+              Structured
+            </button>
+            <button
+              type="button"
+              role="tab"
+              className={styles.modeBtn}
+              data-active={draft.mode === "raw" ? "true" : "false"}
+              aria-selected={draft.mode === "raw"}
+              onClick={() => setMode("raw")}
+            >
+              Raw SQL
+            </button>
           </div>
-          <div className={styles.actions}>
-            <button
-              type="button"
-              className={styles.btn}
-              onClick={onOpenInSqlEditor}
-              title="Open the current applied filters as a SELECT in a new SQL editor tab"
-            >
-              <ExternalLink size={11} />
-              <span style={{ marginLeft: 4 }}>Open in SQL Editor</span>
-            </button>
-            <span className={styles.spacer} />
-            <button type="button" className={styles.btn} onClick={onReset}>
-              Reset
-            </button>
-            <button
-              type="button"
-              className={`${styles.btn} ${styles.btnPrimary}`}
-              onClick={onApply}
-              aria-label={isDirty ? "Apply (unsaved changes)" : "Apply"}
-              title="Apply (Cmd+Enter)"
-            >
-              {isDirty && (
-                <span className={styles.dirtyDot} aria-hidden="true" />
+          <button
+            type="button"
+            className={styles.collapseBtn}
+            aria-label={collapsed ? "Expand filter bar" : "Collapse filter bar"}
+            onClick={() => setCollapsed((v) => !v)}
+          >
+            {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+          </button>
+        </FilterBarHeader>
+        {!collapsed && (
+          <>
+            <FilterBarBody>
+              {draft.mode === "structured" ? (
+                <StructuredBody
+                  tree={draft.tree}
+                  columns={columns}
+                  onTreeChange={updateTree}
+                />
+              ) : (
+                <RawBody
+                  value={draft.raw}
+                  rawError={rawError}
+                  onChange={(next) => onDraftChange({ ...draft, raw: next })}
+                />
               )}
-              Apply
-            </button>
-          </div>
-        </>
-      )}
-      {showConfirmRawToStructured && (
-        <ConfirmDialog
-          title="Switch to structured?"
-          message="Your raw WHERE will be discarded."
-          cancelLabel="Cancel"
-          confirmLabel="Switch"
-          destructive
-          onCancel={() => setShowConfirmRawToStructured(false)}
-          onConfirm={confirmRawToStructured}
-        />
-      )}
+            </FilterBarBody>
+            <FilterBarActions
+              left={
+                <>
+                  <SecondaryButton onClick={onOpenInSqlEditor} ariaLabel="Open in SQL Editor">
+                    <ExternalLink size={11} />
+                    <span style={{ marginLeft: 4 }}>Open in SQL Editor</span>
+                  </SecondaryButton>
+                  <SecondaryButton onClick={onReset}>Reset</SecondaryButton>
+                  <FilterKeyHint keys="⎋" />
+                </>
+              }
+              right={
+                <>
+                  <FilterKeyHint keys="⌘↵" />
+                  <PrimaryButton
+                    onClick={onApply}
+                    dirty={isDirty}
+                    ariaLabel={isDirty ? "Apply (unsaved changes)" : "Apply"}
+                  >
+                    Apply
+                  </PrimaryButton>
+                </>
+              }
+            />
+          </>
+        )}
+        {showConfirmRawToStructured && (
+          <ConfirmDialog
+            title="Switch to structured?"
+            message="Your raw WHERE will be discarded."
+            cancelLabel="Cancel"
+            confirmLabel="Switch"
+            destructive
+            onCancel={() => setShowConfirmRawToStructured(false)}
+            onConfirm={confirmRawToStructured}
+          />
+        )}
+      </FilterBarShell>
     </div>
   );
 }
@@ -208,11 +235,25 @@ interface StructuredBodyProps {
 }
 
 function StructuredBody({ tree, columns, onTreeChange }: StructuredBodyProps) {
+  if (tree.children.length === 0) {
+    return (
+      <EmptyBodyRow label="No filters yet">
+        <FilterRowAddButton
+          onClick={() => onTreeChange(addRootCondition(tree, emptyCondition()))}
+        >
+          <Plus size={10} /> AND row
+        </FilterRowAddButton>
+        <FilterRowAddButton
+          onClick={() => onTreeChange(addRootOrGroup(tree, emptyCondition()))}
+        >
+          <Plus size={10} /> OR group
+        </FilterRowAddButton>
+      </EmptyBodyRow>
+    );
+  }
+
   return (
-    <>
-      {tree.children.length === 0 && (
-        <span className={styles.empty}>No filters yet — add a row below.</span>
-      )}
+    <div className={styles.structuredBody}>
       {tree.children.map((node, i) => {
         if (node.kind === "condition") {
           const cond: Condition = {
@@ -222,7 +263,7 @@ function StructuredBody({ tree, columns, onTreeChange }: StructuredBodyProps) {
           };
           return (
             <div key={i} className={styles.row}>
-              <span className={styles.connector}>{i === 0 ? "" : "AND"}</span>
+              {i > 0 && <FilterConnector label="AND" />}
               <ConditionRow
                 condition={cond}
                 columns={columns}
@@ -238,7 +279,7 @@ function StructuredBody({ tree, columns, onTreeChange }: StructuredBodyProps) {
         }
         return (
           <div key={i} className={styles.row}>
-            <span className={styles.connector}>{i === 0 ? "" : "AND"}</span>
+            {i > 0 && <FilterConnector label="AND" />}
             <OrGroup
               group={node}
               columns={columns}
@@ -262,22 +303,18 @@ function StructuredBody({ tree, columns, onTreeChange }: StructuredBodyProps) {
         );
       })}
       <div className={styles.addRow}>
-        <button
-          type="button"
-          className={styles.addBtn}
+        <FilterRowAddButton
           onClick={() => onTreeChange(addRootCondition(tree, emptyCondition()))}
         >
           <Plus size={10} /> AND row
-        </button>
-        <button
-          type="button"
-          className={styles.addBtn}
+        </FilterRowAddButton>
+        <FilterRowAddButton
           onClick={() => onTreeChange(addRootOrGroup(tree, emptyCondition()))}
         >
           <Plus size={10} /> OR group
-        </button>
+        </FilterRowAddButton>
       </div>
-    </>
+    </div>
   );
 }
 
