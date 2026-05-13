@@ -98,6 +98,12 @@
   border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
+
+/* When bulk-edit mode is active, prevent the text cursor on cells so the
+   user clearly sees that inline editing is suppressed. */
+.bulkActive .cell {
+  cursor: default;
+}
 .row:hover {
   background: var(--bg-hover);
 }

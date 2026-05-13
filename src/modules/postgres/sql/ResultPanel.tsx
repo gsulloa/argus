@@ -123,8 +123,20 @@ function RowsResultView({
         <div className={styles.rowsInspector}>
           <RowInspector
             columns={result.columns}
-            row={selectedRow !== null ? (result.rows[selectedRow] ?? null) : null}
-            rowKey={null}
+            selectedRows={
+              selectedRow !== null && result.rows[selectedRow]
+                ? [
+                    {
+                      rowKey: "",
+                      row: result.rows[selectedRow]!,
+                      pk: {},
+                      source: "server" as const,
+                      isDeleted: false,
+                    },
+                  ]
+                : []
+            }
+            bulkEditAvailable={false}
             isReadOnly={true}
             pkColumns={null}
             enumValuesByColumn={{}}

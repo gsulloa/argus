@@ -113,7 +113,10 @@ export function TableViewer({
     setOrderBy,
   } = useTableOrderBy(connectionId, schema, relation);
   const [rawError, setRawError] = useState<string | null>(null);
-  const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  const [selection, setSelection] = useState<{ anchor: number | null; active: number | null }>({
+    anchor: null,
+    active: null,
+  });
   const [activeSubtab, setActiveSubtab] = useState<Subtab>("data");
   const structureCache = useTableStructureCache(connectionId, schema, relation);
 
@@ -190,9 +193,9 @@ export function TableViewer({
     return out;
   }, [data.rows, data.columns, buffer.rows, insertRowKeys, pkColumns]);
 
-  // Reset row selection whenever the buffer rebuilds.
+  // Reset row selection whenever sort/filter/pageSize/relation changes.
   useEffect(() => {
-    setSelectedRow(null);
+    setSelection({ anchor: null, active: null });
   }, [pageSize, orderBy, applied, connectionId, schema, relation]);
 
   // Surface postgres errors from the data hook back into the bar when they
@@ -256,16 +259,59 @@ export function TableViewer({
     [inspectorWidth, max, min, setWidth],
   );
 
-  const selectedRowData = useMemo(() => {
-    if (selectedRow === null) return null;
-    const r = unifiedRows[selectedRow];
-    return r ? r.cells : null;
-  }, [selectedRow, unifiedRows]);
+  // Derive the array of selected rows (raw selection range, pre-filter).
+  const selectedRows = useMemo(() => {
+    if (selection.anchor === null) return [];
+    const lo = Math.min(selection.anchor, selection.active ?? selection.anchor);
+    const hi = Math.max(selection.anchor, selection.active ?? selection.anchor);
+    const out: Array<{
+      rowKey: string;
+      row: CellValue[];
+      pk: Record<string, EditValue>;
+      source: "insert" | "server";
+      isDeleted: boolean;
+    }> = [];
+    for (let i = lo; i <= hi; i++) {
+      const r = unifiedRows[i];
+      if (!r) continue;
+      const pk: Record<string, EditValue> = {};
+      if (pkColumns && r.source === "server") {
+        for (const col of pkColumns) {
+          const idx = data.columns.findIndex((c) => c.name === col);
+          if (idx >= 0) pk[col] = (r.cells[idx] ?? null) as EditValue;
+        }
+      }
+      out.push({
+        rowKey: r.rowKey,
+        row: r.cells,
+        pk,
+        source: r.source,
+        isDeleted: r.rowKey ? buffer.isRowDeleted(r.rowKey) : false,
+      });
+    }
+    return out;
+  }, [selection, unifiedRows, pkColumns, data.columns, buffer]);
 
-  const selectedRowKey = useMemo(() => {
-    if (selectedRow === null) return null;
-    return unifiedRows[selectedRow]?.rowKey ?? null;
-  }, [selectedRow, unifiedRows]);
+  // Count of eligible rows for bulk-edit (server, not deleted, has rowKey).
+  const eligibleCount = useMemo(
+    () =>
+      selectedRows.filter(
+        (r) => r.source === "server" && !r.isDeleted && r.rowKey,
+      ).length,
+    [selectedRows],
+  );
+
+  // Bulk-edit is active when >= 2 eligible server rows are selected and relation has a PK.
+  const bulkEditActive = eligibleCount >= 2 && pkColumns !== null;
+
+  // Whether bulk editing is structurally possible (writable + has PK).
+  const bulkEditAvailable = !isReadOnly && pkColumns !== null;
+
+  // Derived selection count for the BottomBar chip.
+  const selectedCount =
+    selection.anchor === null
+      ? 0
+      : Math.abs((selection.active ?? selection.anchor) - selection.anchor) + 1;
 
   // `idle` covers the brief window between mount and the first-page fetch
   // firing — including the case where we've deferred the fetch via
@@ -400,7 +446,7 @@ export function TableViewer({
     if (relationKind !== "table") return; // Views/mat-views: no insert.
     buffer.addInsertRow({});
     // Select the newly inserted row (it appears first).
-    setSelectedRow(0);
+    setSelection({ anchor: 0, active: 0 });
   }
 
   const onApplyFilters = useCallback(() => {
@@ -513,12 +559,13 @@ export function TableViewer({
                 status={data.status}
                 nextError={data.error}
                 reachedEnd={data.reachedEnd}
-                selectedRowIndex={selectedRow}
+                selection={selection}
+                bulkEditActive={bulkEditActive}
                 isReadOnly={isReadOnly}
                 pkColumns={pkColumns}
                 enumValuesByColumn={enumValuesByColumn}
                 buffer={buffer}
-                onSelectRow={setSelectedRow}
+                onSelectionChange={setSelection}
                 onSortChange={setOrderBy}
                 onLoadNextPage={data.loadNextPage}
                 onRetryNextPage={data.retryNextPage}
@@ -537,8 +584,8 @@ export function TableViewer({
           >
             <Inspector
               columns={data.columns}
-              row={selectedRowData}
-              rowKey={selectedRowKey}
+              selectedRows={selectedRows}
+              bulkEditAvailable={bulkEditAvailable}
               isReadOnly={isReadOnly}
               pkColumns={pkColumns}
               enumValuesByColumn={enumValuesByColumn}
@@ -566,11 +613,13 @@ export function TableViewer({
             buffer.dirtyCounts.inserts +
             buffer.dirtyCounts.deletes
           }
+          selectedCount={selectedCount}
           onPageSizeChange={setPageSize}
           onCountRows={onCountRows}
           onClearFilters={onClearFiltersFromBottomBar}
           onAddRow={onAddRow}
           onSave={onSave}
+          onClearSelection={() => setSelection({ anchor: null, active: null })}
         />
       </div>
       {activeSubtab === "structure" && (
