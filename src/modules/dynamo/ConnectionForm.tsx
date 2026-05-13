@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { toAppError } from "@/platform/errors/AppError";
 import { connectionsApi } from "@/platform/connection-registry/api";
+import { useConnections } from "@/platform/connection-registry/useConnections";
 import type { ConnectionUpdate } from "@/platform/connection-registry/types";
 import type { Connection } from "@/platform/connection-registry/types";
 import { dynamoApi } from "./api";
@@ -27,6 +28,10 @@ export interface DynamoConnectionFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: FormMode;
+  /** Notified once a connection is saved (created or updated). */
+  onSaved?: (saved: Connection) => void;
+  /** Notified after a successful Save & Connect — passes the newly active id. */
+  onConnected?: (id: string) => void;
 }
 
 interface FormState {
@@ -99,7 +104,10 @@ export function DynamoConnectionForm({
   open,
   onOpenChange,
   mode,
+  onSaved,
+  onConnected,
 }: DynamoConnectionFormProps) {
+  const { create, update } = useConnections();
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
@@ -296,19 +304,17 @@ export function DynamoConnectionForm({
         profile: form.auth === "profile" ? form.profile : undefined,
       };
 
+      let saved: Connection | null = null;
       if (mode.kind === "create" || mode.kind === "duplicate") {
         const secret = await buildSecret();
-        const created = await connectionsApi.create({
+        saved = await create({
           name: form.name.trim(),
           kind: DYNAMO_KIND,
           params: params as unknown as Record<string, unknown>,
           ...(secret ? { secret } : {}),
         });
-        if (variant === "save-and-connect") {
-          await dynamoApi.connect(created.id);
-        }
       } else if (mode.kind === "edit") {
-        const update: ConnectionUpdate = {
+        const patch: ConnectionUpdate = {
           name: form.name.trim(),
           params: params as unknown as Record<string, unknown>,
         };
@@ -317,12 +323,17 @@ export function DynamoConnectionForm({
           form.auth === "access_keys" &&
           (form.accessKeyId.trim() || form.secretAccessKey.trim() || form.sessionToken.trim())
         ) {
-          update.secret = await buildSecret();
+          patch.secret = await buildSecret();
         }
         // profile mode: never set secret
-        await connectionsApi.update(mode.connection.id, update);
+        saved = await update(mode.connection.id, patch);
+      }
+
+      if (saved) {
+        onSaved?.(saved);
         if (variant === "save-and-connect") {
-          await dynamoApi.connect(mode.connection.id);
+          await dynamoApi.connect(saved.id);
+          onConnected?.(saved.id);
         }
       }
 
