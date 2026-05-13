@@ -45,3 +45,51 @@ export function useCloseConfirm(tabId: string, handler: CloseHandler) {
     return () => unregisterCloseHandler(tabId);
   }, [tabId, handler]);
 }
+
+// ---------------------------------------------------------------------------
+// Tab-switch (activate) guard — same pattern as close, consulted by TabStrip
+// ---------------------------------------------------------------------------
+
+/**
+ * Handler signature for intercepting a tab-switch. The handler receives the
+ * tab id that is about to be *deactivated* (i.e., the currently active tab
+ * that may have unsaved state). Return `true` to allow the switch, `false` to
+ * cancel it. The handler is responsible for surfacing any confirmation UI.
+ */
+type ActivateHandler = (leavingTabId: string) => boolean | Promise<boolean>;
+
+const activateHandlers = new Map<string, ActivateHandler>();
+
+export function registerActivateHandler(tabId: string, handler: ActivateHandler) {
+  activateHandlers.set(tabId, handler);
+}
+
+export function unregisterActivateHandler(tabId: string) {
+  activateHandlers.delete(tabId);
+}
+
+/**
+ * Consult the activate handler for the tab that is about to be *left*.
+ * Returns `true` (allow switch) when no handler is registered.
+ */
+export async function shouldActivateTab(leavingTabId: string): Promise<boolean> {
+  const h = activateHandlers.get(leavingTabId);
+  if (!h) return true;
+  try {
+    return await h(leavingTabId);
+  } catch (e) {
+    console.warn("[tabs] activate handler threw, allowing switch:", e);
+    return true;
+  }
+}
+
+/**
+ * React hook: register an activate (switch-away) handler for the given tab id
+ * for the lifetime of the component.
+ */
+export function useActivateConfirm(tabId: string, handler: ActivateHandler) {
+  useEffect(() => {
+    registerActivateHandler(tabId, handler);
+    return () => unregisterActivateHandler(tabId);
+  }, [tabId, handler]);
+}

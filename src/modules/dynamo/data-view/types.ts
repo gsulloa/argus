@@ -115,6 +115,68 @@ export interface CountResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Edit IPC envelopes (put_item / update_item / delete_item)
+// ---------------------------------------------------------------------------
+
+export type ReturnValues =
+  | "NONE"
+  | "ALL_OLD"
+  | "ALL_NEW"
+  | "UPDATED_NEW"
+  | "UPDATED_OLD";
+
+export interface PutItemRequest {
+  connection_id: string;
+  table_name: string;
+  item: AttributeMap;
+  condition_expression: string | null;
+  expression_attribute_names: Record<string, string> | null;
+  expression_attribute_values: AttributeMap | null;
+  return_values: ReturnValues | null;
+  origin: Origin | null;
+}
+
+export interface PutItemResponse {
+  attributes: AttributeMap | null;
+}
+
+export interface UpdateOps {
+  set: AttributeMap;
+  remove: string[];
+}
+
+export interface UpdateItemRequest {
+  connection_id: string;
+  table_name: string;
+  key: AttributeMap;
+  updates: UpdateOps;
+  condition_expression: string | null;
+  expression_attribute_names: Record<string, string> | null;
+  expression_attribute_values: AttributeMap | null;
+  return_values: ReturnValues | null;
+  origin: Origin | null;
+}
+
+export interface UpdateItemResponse {
+  attributes: AttributeMap | null;
+}
+
+export interface DeleteItemRequest {
+  connection_id: string;
+  table_name: string;
+  key: AttributeMap;
+  condition_expression: string | null;
+  expression_attribute_names: Record<string, string> | null;
+  expression_attribute_values: AttributeMap | null;
+  return_values: ReturnValues | null;
+  origin: Origin | null;
+}
+
+export interface DeleteItemResponse {
+  attributes: AttributeMap | null;
+}
+
+// ---------------------------------------------------------------------------
 // §5.2  Internal builder types — camelCase (TS-side state, not IPC)
 // ---------------------------------------------------------------------------
 

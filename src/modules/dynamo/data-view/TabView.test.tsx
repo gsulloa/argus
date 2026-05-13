@@ -113,12 +113,20 @@ function baseProps(overrides?: Partial<React.ComponentProps<typeof TabView>>) {
     items: [] as AttributeMap[],
     describe: makeDescribe("pk"),
     indexName: null,
-    selectedRowIndex: null,
+    selectedRowIndices: new Set<number>(),
+    primarySelectedRowIndex: null,
     onSelect: vi.fn(),
     onLoadMore: vi.fn(),
     hasMore: false,
     status: "ready" as const,
     autoScrollDisabled: false,
+    // Edit-in-place defaults (new in task 6.1)
+    editingCell: null,
+    onStartEdit: vi.fn(),
+    onCommitEdit: vi.fn(),
+    onCancelEdit: vi.fn(),
+    savingCell: null,
+    isReadOnly: false,
     ...overrides,
   };
 }
@@ -314,8 +322,8 @@ describe("TabView — click routing", () => {
     const rows = screen.getAllByTestId("tabla-row");
     fireEvent.click(rows[0]!);
 
-    // Row click: onSelect(0) with no second arg
-    expect(onSelect).toHaveBeenCalledWith(0);
+    // Row click: onSelect(0, undefined, gesture) — gesture has shiftKey/metaKey from event
+    expect(onSelect).toHaveBeenCalledWith(0, undefined, expect.objectContaining({ shiftKey: false, metaKey: false }));
     expect(onSelect.mock.calls[0]?.[1]).toBeUndefined();
   });
 
@@ -331,7 +339,8 @@ describe("TabView — click routing", () => {
     const moreBtn = screen.getByTestId("tabla-cell-more");
     fireEvent.click(moreBtn);
 
-    expect(onSelect).toHaveBeenCalledWith(0);
+    // More button calls onSelect(rowIndex) with no gesture
+    expect(onSelect.mock.calls[0]?.[0]).toBe(0);
     expect(onSelect.mock.calls[0]?.[1]).toBeUndefined();
   });
 
@@ -367,7 +376,7 @@ describe("TabView — row selection", () => {
     ];
     render(
       <TabView
-        {...baseProps({ items, selectedRowIndex: 1, status: "ready" })}
+        {...baseProps({ items, selectedRowIndices: new Set([1]), primarySelectedRowIndex: 1, status: "ready" })}
       />,
     );
 

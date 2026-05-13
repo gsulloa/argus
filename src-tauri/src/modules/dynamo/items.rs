@@ -326,7 +326,7 @@ pub(crate) fn compact_activity_params(
 // §2  Internal credential-expiry helper (mirrors tables/commands.rs)
 // ---------------------------------------------------------------------------
 
-async fn handle_aws_err(
+pub(crate) async fn handle_aws_err(
     db: &State<'_, DbState>,
     registry: &State<'_, DynamoClientRegistry>,
     connection_id: &Uuid,
@@ -428,7 +428,7 @@ fn update_connection_params(
 // §2  SDK error → AppError helper (used by all three commands)
 // ---------------------------------------------------------------------------
 
-fn sdk_scan_err<E>(e: &aws_sdk_dynamodb::error::SdkError<E>) -> AppError
+pub(crate) fn sdk_scan_err<E>(e: &aws_sdk_dynamodb::error::SdkError<E>) -> AppError
 where
     E: aws_sdk_dynamodb::error::ProvideErrorMetadata + std::fmt::Debug,
 {

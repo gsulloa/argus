@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { useState } from "react";
 import { useTabs } from "./TabsContext";
-import { shouldCloseTab } from "./useCloseConfirm";
+import { shouldCloseTab, shouldActivateTab } from "./useCloseConfirm";
 import styles from "./TabStrip.module.css";
 
 export function TabStrip() {
@@ -32,7 +32,13 @@ export function TabStrip() {
             data-drop-before={isDropBefore}
             data-drop-after={isDropAfter}
             draggable
-            onClick={() => activate(tab.id)}
+            onClick={() => {
+              if (tab.id === activeTabId) return; // already active — no switch
+              // Consult the leaving tab's activate handler before switching.
+              void shouldActivateTab(activeTabId ?? "").then((ok) => {
+                if (ok) activate(tab.id);
+              });
+            }}
             onDragStart={(e) => {
               setDragIdx(idx);
               e.dataTransfer.effectAllowed = "move";

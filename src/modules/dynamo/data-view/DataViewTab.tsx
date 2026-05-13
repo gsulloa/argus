@@ -45,17 +45,26 @@ import type { DynamoParams } from "@/modules/dynamo/types";
 import { dynamoTablesApi } from "@/modules/dynamo/tables/api";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
 import type { Tab } from "@/platform/shell/tabs/types";
+import { useCloseConfirm, useActivateConfirm } from "@/platform/shell/tabs/useCloseConfirm";
 import { useDynamoItems } from "./useDynamoItems";
 import { useDynamoInspectorWidth } from "./useInspectorWidth";
 import { useCount } from "./useCount";
-import type { BuilderState, AttributeMap } from "./types";
+import type { BuilderState, AttributeMap, AttributeValue } from "./types";
 import { Toolbar, type ViewMode } from "./Toolbar";
 import { MetadataView } from "./MetadataView";
 import { BottomBar } from "./BottomBar";
 import { QueryBuilder } from "./QueryBuilder";
-import { TabView } from "./TabView";
+import { TabView, type EditingCell, type SelectGesture } from "./TabView";
 import { JsonView } from "./JsonView";
 import { Inspector } from "./Inspector";
+import { dynamoUpdateItem } from "./api";
+import { useToast } from "@/platform/toast";
+import { InsertModal } from "./edit/InsertModal";
+import { DeleteConfirmationModal, type DeleteRow } from "./edit/DeleteConfirmationModal";
+import { OptimisticLockingDialog } from "./edit/OptimisticLockingDialog";
+import { buildLockingCondition } from "./edit/lockingCondition";
+import { useUnsavedDraft } from "./edit/useUnsavedDraft";
+import { DiscardChangesDialog } from "./edit/DiscardChangesDialog";
 import styles from "./DataViewTab.module.css";
 
 // ---------------------------------------------------------------------------
@@ -101,6 +110,29 @@ function focusIsInCodeMirror(): boolean {
   return el.closest(".cm-editor") !== null;
 }
 
+/**
+ * Resolves the key attribute names (pk + optional sk) for the active index.
+ * Mirrors the helper in Inspector.tsx — duplicated to avoid coupling modules.
+ */
+function resolveKeyNamesForEdit(
+  describe: TableDescription | null,
+  indexName: string | null,
+): string[] {
+  if (!describe) return [];
+  let schema = describe.key_schema;
+  if (indexName !== null) {
+    const gsi = describe.global_secondary_indexes.find(
+      (g) => g.index_name === indexName,
+    );
+    const lsi = describe.local_secondary_indexes.find(
+      (l) => l.index_name === indexName,
+    );
+    if (gsi) schema = gsi.key_schema;
+    else if (lsi) schema = lsi.key_schema;
+  }
+  return schema.map((k) => k.attribute_name);
+}
+
 // ---------------------------------------------------------------------------
 // DataViewRoot — registered renderer
 // ---------------------------------------------------------------------------
@@ -122,20 +154,135 @@ interface DataViewContentProps {
   active: boolean;
 }
 
-function DataViewContent({ payload, active }: DataViewContentProps) {
+function DataViewContent({ tab, payload, active }: DataViewContentProps) {
   const { connectionId, connectionName: _connName, tableName } = payload;
+  const tabId = tab.id;
 
   // ── Connection params — for needs_credentials (task 16.2) ─────────────────
   // Read from the persisted connection list so the flag is available even when
   // the active-connection envelope (listActive) doesn't expose it.
   const { items: allConnections } = useConnections();
-  const needsCredentials = useMemo(() => {
+
+  const connParams = useMemo(() => {
     const conn = allConnections.find(
       (c) => c.id === connectionId && c.kind === DYNAMO_KIND,
     );
-    if (!conn) return false;
-    return (conn.params as unknown as DynamoParams).needs_credentials === true;
+    return conn ? (conn.params as unknown as DynamoParams) : null;
   }, [allConnections, connectionId]);
+
+  const needsCredentials = connParams?.needs_credentials === true;
+  /** Whether the connection is read-only — used to gate all edit affordances. */
+  const isReadOnly = connParams?.read_only === true;
+
+  // ── Toast ─────────────────────────────────────────────────────────────────
+  const toast = useToast();
+
+  // ── Edit-in-place state (task 6.3) ─────────────────────────────────────────
+  const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
+  const [savingCell, setSavingCell] = useState<EditingCell | null>(null);
+
+  // ── Insert modal state (task 8.8) ──────────────────────────────────────────
+  const [insertModalOpen, setInsertModalOpen] = useState(false);
+
+  // ── Delete modal state (task 9.3) ──────────────────────────────────────────
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+
+  // ── Inspector editing state (task 9.2 guard) ──────────────────────────────
+  const [inspectorIsEditing, setInspectorIsEditing] = useState(false);
+
+  // ── Unsaved-draft guard (task 11.1) ────────────────────────────────────────
+  const {
+    hasUnsavedDraft,
+    setInlineCellDirty,
+    setInspectorDirty,
+    setInsertModalDirty,
+  } = useUnsavedDraft();
+
+  // Track inline cell dirty state — any open editor is considered dirty.
+  useEffect(() => {
+    setInlineCellDirty(editingCell !== null);
+  // setInlineCellDirty is stable (from useCallback in useUnsavedDraft)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingCell]);
+
+  // ── Discard dialog state — guards for close / switch / row-change ──────────
+  type DiscardReason = "tab-close" | "tab-switch" | "row-change";
+  const [discardDialog, setDiscardDialog] = useState<{
+    reason: DiscardReason;
+    context: string;
+    onConfirm: () => void;
+  } | null>(null);
+
+  // Keep stable resolve callbacks for the close/switch guards.
+  const pendingCloseResolveRef = useRef<((ok: boolean) => void) | null>(null);
+  const pendingSwitchResolveRef = useRef<((ok: boolean) => void) | null>(null);
+
+  // ── Tab-close guard (task 11.2) ────────────────────────────────────────────
+  useCloseConfirm(
+    tabId,
+    useCallback(async () => {
+      if (!hasUnsavedDraft) return true;
+      // Surface the dialog and suspend the close until the user responds.
+      return new Promise<boolean>((resolve) => {
+        pendingCloseResolveRef.current = resolve;
+        setDiscardDialog({
+          reason: "tab-close",
+          context: "close the tab",
+          onConfirm: () => {
+            resolve(true);
+            pendingCloseResolveRef.current = null;
+            setDiscardDialog(null);
+          },
+        });
+      });
+    }, [hasUnsavedDraft]),
+  );
+
+  // ── Tab-switch (activate) guard (task 11.2) ────────────────────────────────
+  useActivateConfirm(
+    tabId,
+    useCallback(async () => {
+      if (!hasUnsavedDraft) return true;
+      return new Promise<boolean>((resolve) => {
+        pendingSwitchResolveRef.current = resolve;
+        setDiscardDialog({
+          reason: "tab-switch",
+          context: "switch tabs",
+          onConfirm: () => {
+            resolve(true);
+            pendingSwitchResolveRef.current = null;
+            setDiscardDialog(null);
+          },
+        });
+      });
+    }, [hasUnsavedDraft]),
+  );
+
+  // ── Row-change guard when inspector is editing (task 11.2) ─────────────────
+  // The pending selection is captured in the dialog's onConfirm closure, so we
+  // only need a flag to clear in the cancel path. Use a ref to avoid re-renders.
+  const pendingRowSelectRef = useRef<{
+    rowIndex: number;
+    attribute?: string;
+    gesture?: SelectGesture;
+  } | null>(null);
+
+  // ── Credential-refresh bypass (task 11.3) ─────────────────────────────────
+  // When `dynamo:credentials-refreshed:ui` fires, drafts are preserved silently.
+  // The guard is only triggered on user actions (tab close, tab switch, row
+  // select) — not on background events — so no explicit suppression is needed.
+  // In-flight saves retry automatically via the existing `useDynamoItems`
+  // retry handler; this listener is a no-op placeholder for documentation.
+  useEffect(() => {
+    function onCredentialsRefreshed(e: Event) {
+      const detail = (e as CustomEvent<{ id?: string }>).detail;
+      if (detail?.id !== connectionId) return;
+      // NOTE: Retries for in-flight saves happen in useDynamoItems.
+      // Drafts are NOT cleared here — they persist silently per spec §11.
+    }
+    window.addEventListener("dynamo:credentials-refreshed:ui", onCredentialsRefreshed);
+    return () => window.removeEventListener("dynamo:credentials-refreshed:ui", onCredentialsRefreshed);
+  }, [connectionId]);
 
   // ── Describe state ─────────────────────────────────────────────────────────
   const [describe, setDescribe] = useState<TableDescription | null>(
@@ -177,6 +324,14 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
   const pageSizeKey = `dynamoLimit:${connectionId}:${tableName}`;
   const [pageSize, setPageSize] = useSetting<number>(pageSizeKey, 100);
 
+  // ── Settings — version attribute for optimistic locking (task 10.1) ───────
+  const versionAttrKey = `dynamoVersionAttr:${connectionId}:${tableName}`;
+  const [versionAttr, setVersionAttr] = useSetting<string>(versionAttrKey, "");
+
+  // ── Optimistic locking — session state (task 10.3) ────────────────────────
+  const [useConditionExpression, setUseConditionExpression] = useState(false);
+  const [lockingDialogOpen, setLockingDialogOpen] = useState(false);
+
   // ── Builder state ──────────────────────────────────────────────────────────
   const [builder, setBuilder] = useState<BuilderState>(() => ({
     mode: "scan",
@@ -206,19 +361,83 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
   const { width: inspectorWidth, setWidth: setInspectorWidth, min: inspMin } =
     useDynamoInspectorWidth(connectionId, tableName);
 
-  // ── Inspector selection ────────────────────────────────────────────────────
-  // selectedRowIndex: index into items[] (stable across loadMore since items only grow)
-  // selectedAttribute: attribute name to focus in inspector (null = full item)
-  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
+  // ── Inspector selection — multi-row (task 9.1) ────────────────────────────
+  // selectedRowIndices: set of all selected row indices
+  // primarySelectedRowIndex: the most recently clicked row (for inspector)
+  // anchorRowIndex: the anchor for shift-click range selection
+  const [selectedRowIndices, setSelectedRowIndices] = useState<Set<number>>(new Set());
+  const [primarySelectedRowIndex, setPrimarySelectedRowIndex] = useState<number | null>(null);
+  const anchorRowIndexRef = useRef<number | null>(null);
   const [_selectedAttribute, setSelectedAttribute] = useState<string | undefined>(undefined);
 
-  const handleSelectRow = useCallback(
-    (rowIndex: number, attribute?: string) => {
-      setSelectedRowIndex(rowIndex);
+  // ── applyRowSelect: the real selection logic, called after guard passes ─────
+  const applyRowSelect = useCallback(
+    (rowIndex: number, attribute?: string, gesture?: SelectGesture) => {
       setSelectedAttribute(attribute);
+
+      if (gesture?.shiftKey && anchorRowIndexRef.current !== null) {
+        // Range select from anchor to clicked row
+        const anchor = anchorRowIndexRef.current;
+        const lo = Math.min(anchor, rowIndex);
+        const hi = Math.max(anchor, rowIndex);
+        const range = new Set<number>();
+        for (let i = lo; i <= hi; i++) range.add(i);
+        setSelectedRowIndices(range);
+        setPrimarySelectedRowIndex(rowIndex);
+        // Do NOT update anchor on shift-click
+      } else if (gesture?.metaKey) {
+        // Toggle this row in the selection
+        setSelectedRowIndices((prev) => {
+          const next = new Set(prev);
+          if (next.has(rowIndex)) {
+            next.delete(rowIndex);
+          } else {
+            next.add(rowIndex);
+          }
+          return next;
+        });
+        setPrimarySelectedRowIndex(rowIndex);
+        anchorRowIndexRef.current = rowIndex;
+      } else {
+        // Plain click — replace selection with just this row
+        setSelectedRowIndices(new Set([rowIndex]));
+        setPrimarySelectedRowIndex(rowIndex);
+        anchorRowIndexRef.current = rowIndex;
+      }
     },
     [],
   );
+
+  const handleSelectRow = useCallback(
+    (rowIndex: number, attribute?: string, gesture?: SelectGesture) => {
+      // ── Row-change guard (task 11.2) ───────────────────────────────────────
+      // When the inspector JSON editor has a dirty draft AND the user clicks a
+      // different row, prompt "Discard changes?" before changing the selection.
+      if (
+        inspectorIsEditing &&
+        rowIndex !== primarySelectedRowIndex
+      ) {
+        pendingRowSelectRef.current = { rowIndex, attribute, gesture };
+        setDiscardDialog({
+          reason: "row-change",
+          context: "select a different row",
+          onConfirm: () => {
+            applyRowSelect(rowIndex, attribute, gesture);
+            pendingRowSelectRef.current = null;
+            setDiscardDialog(null);
+            // Clear inspector dirty state after discard
+            setInspectorDirty(false);
+          },
+        });
+        return;
+      }
+      applyRowSelect(rowIndex, attribute, gesture);
+    },
+    [inspectorIsEditing, primarySelectedRowIndex, applyRowSelect, setInspectorDirty],
+  );
+
+  // Derived: primary selected row index (for inspector)
+  const selectedRowIndex = primarySelectedRowIndex;
 
   // ── Count state — owned by useCount (task 13.1–13.3) ────────────────────
   const {
@@ -257,6 +476,8 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
     triggerAutoLoadMore,
     reset,
     autoScrollDisabled,
+    replaceItem,
+    removeItems,
   } = useDynamoItems({
     connectionId,
     tableName,
@@ -267,6 +488,70 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
   // Derived: selected item for the inspector (items only grows, index stable)
   const selectedItem: AttributeMap | null =
     selectedRowIndex !== null ? (items[selectedRowIndex] ?? null) : null;
+
+  // ── handleCommitCell (task 6.3) ────────────────────────────────────────────
+  // Fires dynamo.update_item with the row's key and the new value.
+  // Placed after useDynamoItems so it has access to `items` and `replaceItem`.
+  const handleCommitCell = useCallback(
+    async (rowIndex: number, attrName: string, nextValue: AttributeValue) => {
+      const row = items[rowIndex];
+      if (!row) return;
+
+      const keyNames = resolveKeyNamesForEdit(describe, builder.indexName);
+      const key: AttributeMap = {};
+      for (const k of keyNames) {
+        if (!row[k]) {
+          toast.show(`Row is missing key attribute "${k}"`, "error");
+          setEditingCell(null);
+          return;
+        }
+        key[k] = row[k]!;
+      }
+
+      // ── Optimistic locking condition (task 10.5) ──────────────────────────
+      let conditionExpression: string | null = null;
+      let conditionNames: Record<string, string> | null = null;
+      let conditionValues: import("./types").AttributeMap | null = null;
+
+      if (useConditionExpression && versionAttr) {
+        const pkAttr = describe?.key_schema?.[0]?.attribute_name ?? "";
+        const prevValue = row[versionAttr];
+        const locking = buildLockingCondition(versionAttr, prevValue, pkAttr);
+        if (locking) {
+          conditionExpression = locking.condition_expression;
+          conditionNames = locking.expression_attribute_names;
+          conditionValues = locking.expression_attribute_values;
+        }
+      }
+
+      setSavingCell({ rowIndex, attrName });
+      try {
+        const resp = await dynamoUpdateItem(connectionId, tableName, {
+          key,
+          updates: { set: { [attrName]: nextValue }, remove: [] },
+          condition_expression: conditionExpression,
+          expression_attribute_names: conditionNames,
+          expression_attribute_values: conditionValues,
+          return_values: "ALL_NEW",
+        });
+        // Update local item from response attributes.
+        if (resp.attributes) {
+          replaceItem(rowIndex, resp.attributes);
+        }
+      } catch (e) {
+        const err = e as { message?: string };
+        const msg = err?.message ?? "Update failed";
+        toast.show(msg, "error");
+        // Revert is automatic — we never wrote optimistically.
+      } finally {
+        setSavingCell(null);
+        setEditingCell(null);
+      }
+    },
+    // deps: stable refs via useCallback; items/describe/builder read via closure
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, describe, builder.indexName, connectionId, tableName, replaceItem, toast, useConditionExpression, versionAttr],
+  );
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -286,7 +571,9 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
     reset();
     clearCount();
     // Reset selection when items are wiped.
-    setSelectedRowIndex(null);
+    setPrimarySelectedRowIndex(null);
+    setSelectedRowIndices(new Set());
+    anchorRowIndexRef.current = null;
   }, [reset, pageSize, clearCount]);
 
   const handleLoadMore = useCallback(() => {
@@ -368,9 +655,77 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
               handleReset();
             },
           },
+          // ⌘N — open Insert modal (no-op on read-only or CodeMirror focus)
+          {
+            key: "n",
+            mod: true,
+            shift: false,
+            whenInInput: true,
+            handler: () => {
+              if (isReadOnly) return;
+              if (focusIsInCodeMirror()) return;
+              setInsertModalOpen(true);
+            },
+          },
         ]
       : [],
   );
+
+  // ── Backspace handler — open delete modal (task 9.2) ──────────────────────
+  // Guards (all must pass):
+  //   - tab is active
+  //   - not read-only
+  //   - no inline cell editor open
+  //   - inspector is not in edit mode
+  //   - focus not in CodeMirror
+  //   - focus not in a native text input/textarea/select/contentEditable
+  //   - at least one row selected
+  useEffect(() => {
+    if (!active) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Backspace" && e.key !== "Delete") return;
+      if (isReadOnly) return;
+      if (editingCell !== null) return;
+      if (inspectorIsEditing) return;
+      if (focusIsInCodeMirror()) return;
+      const el = document.activeElement;
+      if (el) {
+        const tag = el.tagName.toUpperCase();
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if ((el as HTMLElement).isContentEditable) return;
+      }
+      if (selectedRowIndices.size === 0) return;
+      e.preventDefault();
+      setDeleteModalOpen(true);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, isReadOnly, editingCell, inspectorIsEditing, selectedRowIndices]);
+
+  // ── deleteRows — derived from selectedRowIndices (task 9.3) ───────────────
+  const deleteRows = useMemo<DeleteRow[]>(() => {
+    const keyNames = resolveKeyNamesForEdit(describe, builder.indexName);
+    return Array.from(selectedRowIndices)
+      .sort((a, b) => a - b)
+      .map((rowIndex) => {
+        const item = items[rowIndex];
+        if (!item) return null;
+        const key: Record<string, import("./types").AttributeValue> = {};
+        for (const k of keyNames) {
+          if (item[k]) key[k] = item[k]!;
+        }
+        // Build human-readable label: pk=value, sk=value
+        const label = Object.entries(key)
+          .map(([k, v]) => {
+            const val = "S" in v ? v.S : "N" in v ? v.N : "BOOL" in v ? String(v.BOOL) : "?";
+            return `${k}=${val}`;
+          })
+          .join(", ");
+        return { rowIndex, key, label };
+      })
+      .filter((r): r is DeleteRow => r !== null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRowIndices, items, describe, builder.indexName]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -408,6 +763,11 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
         onPageSizeChange={handlePageSizeChange}
         runDisabled={!builderValid}
         runDisabledReason={builderInvalidReason}
+        isReadOnly={isReadOnly}
+        onInsert={!isReadOnly ? () => setInsertModalOpen(true) : undefined}
+        useConditionExpression={useConditionExpression}
+        onUseConditionExpressionChange={!isReadOnly ? setUseConditionExpression : undefined}
+        onOpenLockingDialog={!isReadOnly ? () => setLockingDialogOpen(true) : undefined}
       />
 
       {describeError && (
@@ -487,12 +847,23 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
                 items={items}
                 describe={describe}
                 indexName={builder.indexName}
-                selectedRowIndex={selectedRowIndex}
+                selectedRowIndices={selectedRowIndices}
+                primarySelectedRowIndex={primarySelectedRowIndex}
                 onSelect={handleSelectRow}
                 onLoadMore={triggerAutoLoadMore}
                 hasMore={lastEvaluatedKey !== null}
                 status={status}
                 autoScrollDisabled={autoScrollDisabled}
+                editingCell={editingCell}
+                onStartEdit={(rowIndex, attrName) =>
+                  setEditingCell({ rowIndex, attrName })
+                }
+                onCommitEdit={(rowIndex, attrName, next) => {
+                  void handleCommitCell(rowIndex, attrName, next);
+                }}
+                onCancelEdit={() => setEditingCell(null)}
+                savingCell={savingCell}
+                isReadOnly={isReadOnly}
               />
             ) : (
               <JsonView
@@ -527,7 +898,23 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
                   item={selectedItem}
                   describe={describe}
                   indexName={builder.indexName}
-                  onClearSelection={() => setSelectedRowIndex(null)}
+                  onClearSelection={() => {
+                    setPrimarySelectedRowIndex(null);
+                    setSelectedRowIndices(new Set());
+                    anchorRowIndexRef.current = null;
+                  }}
+                  isReadOnly={isReadOnly}
+                  connectionId={connectionId}
+                  tableName={tableName}
+                  rowIndex={selectedRowIndex ?? undefined}
+                  onPatchItem={replaceItem}
+                  onEditingChange={setInspectorIsEditing}
+                  onDirtyChange={setInspectorDirty}
+                  locking={!isReadOnly ? {
+                    versionAttr,
+                    enabled: useConditionExpression,
+                    pkAttr: describe?.key_schema?.[0]?.attribute_name ?? "",
+                  } : undefined}
                 />
               </div>
             </>
@@ -541,6 +928,84 @@ function DataViewContent({ payload, active }: DataViewContentProps) {
         error={error}
         countResult={countResult}
       />
+
+      {/* Insert modal — task 8.8 */}
+      {describe && (
+        <InsertModal
+          open={insertModalOpen}
+          describe={describe}
+          indexName={builder.indexName}
+          connectionId={connectionId}
+          tableName={tableName}
+          onClose={() => {
+            setInsertModalOpen(false);
+            setInsertModalDirty(false);
+          }}
+          onSuccess={() => {
+            setInsertModalDirty(false);
+            handleRun();
+          }}
+          onDirtyChange={setInsertModalDirty}
+        />
+      )}
+
+      {/* Delete confirmation modal — task 9.3 */}
+      {deleteModalOpen && deleteRows.length > 0 && (
+        <DeleteConfirmationModal
+          open={deleteModalOpen}
+          rows={deleteRows}
+          connectionId={connectionId}
+          tableName={tableName}
+          onClose={() => {
+            setDeleteModalOpen(false);
+          }}
+          onComplete={(deletedIndices) => {
+            // Remove successfully deleted rows from local state (task 9.4)
+            removeItems(deletedIndices);
+            // Clear selection of deleted rows; keep any remaining failures selected
+            setSelectedRowIndices((prev) => {
+              const next = new Set(prev);
+              for (const idx of deletedIndices) {
+                next.delete(idx);
+              }
+              return next;
+            });
+            if (deletedIndices.includes(primarySelectedRowIndex ?? -1)) {
+              setPrimarySelectedRowIndex(null);
+            }
+            anchorRowIndexRef.current = null;
+          }}
+        />
+      )}
+
+      {/* Optimistic locking config dialog — task 10.2 */}
+      <OptimisticLockingDialog
+        open={lockingDialogOpen}
+        versionAttr={versionAttr}
+        onChange={setVersionAttr}
+        onClose={() => setLockingDialogOpen(false)}
+      />
+
+      {/* Unsaved-draft guard dialog — task 11.2 */}
+      {discardDialog && (
+        <DiscardChangesDialog
+          context={discardDialog.context}
+          onDiscard={discardDialog.onConfirm}
+          onCancel={() => {
+            // Resolve any pending promise with false (cancel the navigation).
+            if (discardDialog.reason === "tab-close") {
+              pendingCloseResolveRef.current?.(false);
+              pendingCloseResolveRef.current = null;
+            } else if (discardDialog.reason === "tab-switch") {
+              pendingSwitchResolveRef.current?.(false);
+              pendingSwitchResolveRef.current = null;
+            } else if (discardDialog.reason === "row-change") {
+              pendingRowSelectRef.current = null;
+            }
+            setDiscardDialog(null);
+          }}
+        />
+      )}
     </div>
   );
 }
