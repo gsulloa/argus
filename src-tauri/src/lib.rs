@@ -218,6 +218,16 @@ pub fn run() {
         .run(|app_handle, event| {
         if let tauri::RunEvent::ExitRequested { api, .. } = event {
             let state = app_handle.state::<platform::updater::UpdaterState>();
+            // If a user-triggered install just called app.restart(), let Tauri's
+            // relaunch sequence proceed — do NOT prevent_exit and do NOT block.
+            if state
+                .relaunching
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                tracing::info!(target: "updater", "relaunch_allowed_by_exit_handler");
+                let _ = api;
+                return;
+            }
             let installing =
                 state.installing.load(std::sync::atomic::Ordering::Acquire);
             let has_pending = tauri::async_runtime::block_on(async {

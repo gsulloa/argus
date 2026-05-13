@@ -13,6 +13,7 @@ pub struct PendingUpdate {
 pub struct UpdaterState {
     pub pending: Mutex<Option<PendingUpdate>>,
     pub installing: AtomicBool,
+    pub relaunching: AtomicBool,
 }
 
 impl Default for UpdaterState {
@@ -20,6 +21,7 @@ impl Default for UpdaterState {
         Self {
             pending: Mutex::new(None),
             installing: AtomicBool::new(false),
+            relaunching: AtomicBool::new(false),
         }
     }
 }

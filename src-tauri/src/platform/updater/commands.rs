@@ -100,6 +100,10 @@ pub async fn updater_install_and_restart(
     match pending.update.install(&pending.bytes) {
         Ok(()) => {
             tracing::info!(target: "updater", version = %version, "install_complete");
+            // Arm the ExitRequested short-circuit BEFORE clearing `installing`, so any
+            // quit racing the two writes still sees an intercepting state.
+            state.relaunching.store(true, Ordering::Release);
+            state.installing.store(false, Ordering::Release);
             tracing::info!(target: "updater", "relaunch_invoked");
             app.restart();
         }
