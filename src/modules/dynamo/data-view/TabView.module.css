@@ -53,6 +53,7 @@
   flex: 0 0 auto;
   user-select: none;
   gap: 6px;
+  position: relative;
 }
 .headerCell:last-child {
   border-right: 0;

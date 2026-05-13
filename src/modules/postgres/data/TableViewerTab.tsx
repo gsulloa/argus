@@ -596,6 +596,9 @@ export function TableViewer({
                 pkColumns={pkColumns}
                 enumValuesByColumn={enumValuesByColumn}
                 buffer={buffer}
+                connectionId={connectionId}
+                schema={schema}
+                relation={relation}
                 onSelectionChange={setSelection}
                 onSortChange={setOrderBy}
                 onLoadNextPage={data.loadNextPage}

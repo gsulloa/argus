@@ -117,6 +117,8 @@ function EditingHarness({
       items={items}
       describe={describe}
       indexName={null}
+      connectionId="test-conn"
+      tableName="test-table"
       selectedRowIndices={new Set<number>()}
       primarySelectedRowIndex={null}
       onSelect={handleSelect}

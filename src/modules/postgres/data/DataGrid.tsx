@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppError } from "@/platform/errors/AppError";
+import { useColumnWidths } from "@/platform/table/columnWidths";
+import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import { EditableCell, looksLikeBytea } from "./EditableCell";
 import { pixelYToRowIndex } from "./dragRowIndex";
 import { cycleSort, sortIndexFor } from "./sortHelpers";
+import { categorize } from "./typeHelpers";
 import { isCellEnvelope, type CellValue, type DataColumn, type EditValue, type OrderBy } from "./types";
 import type { UseEditBufferResult } from "./useEditBuffer";
 import styles from "./DataGrid.module.css";
@@ -12,7 +15,6 @@ import styles from "./DataGrid.module.css";
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
 const STATUS_ROW_HEIGHT = 28;
-const COLUMN_WIDTH = 180;
 const SCROLL_LOOKAHEAD_ROWS = (pageSize: number) => pageSize * 2;
 
 export interface UnifiedRow {
@@ -38,6 +40,12 @@ export interface DataGridProps {
   pkColumns: string[] | null;
   enumValuesByColumn: Record<string, string[]>;
   buffer: UseEditBufferResult;
+  /** Connection identifier — used for per-relation column-width persistence. */
+  connectionId: string;
+  /** Schema name — used for per-relation column-width persistence. */
+  schema: string;
+  /** Relation name — used for per-relation column-width persistence. */
+  relation: string;
   onSelectionChange(next: { anchor: number | null; active: number | null }): void;
   onSortChange(next: OrderBy[]): void;
   onLoadNextPage(): void;
@@ -59,11 +67,33 @@ export function DataGrid(props: DataGridProps) {
     pkColumns,
     enumValuesByColumn,
     buffer,
+    connectionId,
+    schema,
+    relation,
     onSelectionChange,
     onSortChange,
     onLoadNextPage,
     onRetryNextPage,
   } = props;
+
+  // Map DataColumn[] to the shape useColumnWidths expects.
+  // isKey: true when the column is part of the primary key (PK columns are
+  // provided by the parent via `pkColumns`). The +16px KEY_BADGE_PAD widens
+  // PK columns to accommodate a future key badge without truncation.
+  const mappedColumns = useMemo(
+    () =>
+      columns.map((c) => ({
+        name: c.name,
+        category: categorize(c.data_type),
+        isKey: pkColumns?.includes(c.name) ?? false,
+      })),
+    [columns, pkColumns],
+  );
+
+  const { widthFor, totalWidth, setWidth, resetWidth } = useColumnWidths({
+    storageKey: `pgColumnWidths:${connectionId}:${schema}:${relation}`,
+    columns: mappedColumns,
+  });
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -279,8 +309,6 @@ export function DataGrid(props: DataGridProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragActive, rows.length]);
 
-  const totalWidth = Math.max(columns.length * COLUMN_WIDTH, 1);
-
   return (
     <div
       className={`${styles.root} ${bulkEditActive ? styles.bulkActive : ""}`}
@@ -298,7 +326,7 @@ export function DataGrid(props: DataGridProps) {
                 <div
                   key={col.name}
                   className={styles.headerCell}
-                  style={{ width: COLUMN_WIDTH }}
+                  style={{ width: widthFor(col.name) }}
                   role="columnheader"
                   onClick={(e) => {
                     onSortChange(cycleSort(col.name, orderBy, e.shiftKey));
@@ -315,6 +343,11 @@ export function DataGrid(props: DataGridProps) {
                     </span>
                   )}
                   <span className={styles.colType}>{col.data_type}</span>
+                  <ResizeHandle
+                    currentWidth={widthFor(col.name)}
+                    onChange={(px) => setWidth(col.name, px)}
+                    onReset={() => resetWidth(col.name)}
+                  />
                 </div>
               );
             })}
@@ -450,7 +483,7 @@ export function DataGrid(props: DataGridProps) {
                       onStartEdit={onStartEdit}
                       onCommitEdit={onCommitEdit}
                       onCancelEdit={onCancelEdit}
-                      style={{ width: COLUMN_WIDTH }}
+                      style={{ width: widthFor(col.name) }}
                     />
                   );
                 })}
