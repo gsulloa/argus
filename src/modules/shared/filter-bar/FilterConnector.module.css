@@ -1,0 +1,11 @@
+.connector {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 28px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--text-subtle);
+  text-transform: uppercase;
+}

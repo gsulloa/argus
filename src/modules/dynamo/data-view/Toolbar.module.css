@@ -33,7 +33,7 @@
   display: flex;
   align-items: center;
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -47,7 +47,7 @@
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 80ms, color 80ms;
+  transition: background var(--duration-instant), color var(--duration-instant);
   border-right: 1px solid var(--border-strong);
   white-space: nowrap;
 }
@@ -61,12 +61,17 @@
   color: var(--text);
 }
 
-.modeBtnActive {
-  background: var(--surface-2);
-  color: var(--text);
+.modeBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-/* ── Primary action buttons (Run, Metadata) ──────────────────────── */
+.modeBtnActive {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ── Primary action buttons (Run) ────────────────────────────────── */
 
 .btnPrimary {
   display: flex;
@@ -77,17 +82,23 @@
   font-family: inherit;
   font-weight: 500;
   background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: 5px;
+  color: var(--accent-text, #fff);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 80ms;
+  transition: background var(--duration-instant);
   white-space: nowrap;
 }
 
 .btnPrimary:hover {
   background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btnPrimary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 .btnPrimary:disabled {
@@ -108,10 +119,10 @@
   background: transparent;
   color: var(--text-muted);
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 80ms, color 80ms, border-color 80ms;
+  transition: background var(--duration-instant), color var(--duration-instant), border-color var(--duration-instant);
   white-space: nowrap;
 }
 
@@ -119,6 +130,12 @@
   background: var(--surface-2);
   color: var(--text);
   border-color: var(--text-subtle);
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--accent);
 }
 
 .btn:disabled {
@@ -146,19 +163,19 @@
   padding: 3px 6px;
   font-size: 11px;
   font-family: var(--font-mono, monospace);
-  background: var(--canvas);
+  background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   flex-shrink: 0;
   text-align: right;
-  transition: border-color 80ms;
+  transition: border-color var(--duration-instant);
 }
 
-.pageSizeInput:focus {
+.pageSizeInput:focus-visible {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 /* ── Credentials notice ──────────────────────────────────────────── */
@@ -194,10 +211,10 @@
 /* ── Read-only badge (task 12.1) ─────────────────────────────────── */
 
 .readOnlyBadge {
-  background: rgba(96, 165, 250, 0.12);
+  background: var(--surface-2);
   color: var(--info, #60a5fa);
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;

@@ -1,0 +1,8 @@
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 32px;
+  padding: 6px var(--space-sm);
+  border-bottom: 1px solid var(--border);
+}

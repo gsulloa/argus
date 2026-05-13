@@ -1,4 +1,5 @@
-import { Plus, X } from "lucide-react";
+import { X } from "lucide-react";
+import { Plus } from "lucide-react";
 import { ConditionRow } from "./ConditionRow";
 import type { Condition, DataColumn, FilterNode } from "../types";
 import styles from "./FilterBar.module.css";
@@ -54,6 +55,8 @@ export function OrGroup({
         );
       })}
       <div className={styles.addRow}>
+        {/* Use a raw button here to preserve aria-label="Add OR row" for test compatibility.
+            FilterRowAddButton does not expose an aria-label prop. */}
         <button
           type="button"
           className={styles.addBtn}

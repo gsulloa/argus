@@ -9,10 +9,23 @@
  * builder is in an invalid state (e.g., Query mode with no PK value).
  */
 
-import { useState } from "react";
+import React, { useState, useRef } from "react";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
 import { compile } from "./builderCompiler";
 import type { BuilderState, FilterRow, TypedValue } from "./types";
+import {
+  FilterBarShell,
+  FilterBarHeader,
+  FilterBarBody,
+  FilterBarActions,
+  FilterTypeBadge,
+  FilterConnector,
+  FilterRowAddButton,
+  FilterKeyHint,
+  PrimaryButton,
+  SecondaryButton,
+  EmptyBodyRow,
+} from "@/modules/shared/filter-bar";
 import styles from "./QueryBuilder.module.css";
 
 // ---------------------------------------------------------------------------
@@ -24,6 +37,8 @@ export interface QueryBuilderProps {
   describe: TableDescription;
   onBuilderChange(next: BuilderState): void;
   onValidityChange(isValid: boolean, reason?: string): void;
+  onRun?(): void;
+  onReset?(): void;
   /** When true, all interactive controls are disabled (e.g. needs_credentials). */
   disabled?: boolean;
 }
@@ -136,7 +151,7 @@ function TypedValueEditor({
   }
 
   const typeSelector = fixedType ? (
-    <span className={styles.typeBadge} aria-label={`Type: ${fixedType}`}>{fixedType}</span>
+    <FilterTypeBadge aria-label={`Type: ${fixedType}`}>{fixedType}</FilterTypeBadge>
   ) : (
     <select
       className={styles.filterTypeSelect}
@@ -459,6 +474,19 @@ const SK_OPS = ["=", "<", "<=", ">", ">=", "between", "begins_with"] as const;
 type SkOp = typeof SK_OPS[number];
 
 // ---------------------------------------------------------------------------
+// Dirty-state normalizer
+// ---------------------------------------------------------------------------
+
+function normalizeForDirty(builder: BuilderState): string {
+  return JSON.stringify({
+    mode: builder.mode,
+    indexName: builder.indexName,
+    query: builder.query,
+    filters: builder.filters,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Main QueryBuilder
 // ---------------------------------------------------------------------------
 
@@ -467,19 +495,17 @@ export function QueryBuilder({
   describe,
   onBuilderChange,
   onValidityChange,
+  onRun,
+  onReset,
   disabled = false,
 }: QueryBuilderProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
 
+  // lastRunState tracks what was last executed so we can show the dirty pip
+  const lastRunStateRef = useRef<string | null>(null);
+
   const indexOptions = buildIndexOptions(describe);
   const keySchema = resolveKeySchema(builder, describe);
-
-  // ── Validity check ─────────────────────────────────────────────────────────
-  // We compute validity inline and call onValidityChange. Since this is a
-  // render-time side-effect pattern, we do it synchronously in the render by
-  // computing validity and comparing with a ref-like approach — but to keep
-  // this pure and avoid useEffect ordering issues, we let the parent call
-  // compile() as well. Here we just fire the callback after each change.
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -607,6 +633,19 @@ export function QueryBuilder({
     }
   }
 
+  function handleRun() {
+    // Mark current state as last-run so pip clears
+    lastRunStateRef.current = normalizeForDirty(builder);
+    if (onRun) onRun();
+  }
+
+  function handleReset() {
+    // After reset the state will change; we track the clean reset state
+    if (onReset) onReset();
+    // Clear lastRunState so pip is not shown in cleaned state
+    lastRunStateRef.current = null;
+  }
+
   // ── Compute validity for inline hints ──────────────────────────────────────
   const compileResult = compile(builder, describe);
   const isValid = compileResult.kind !== "error";
@@ -623,11 +662,20 @@ export function QueryBuilder({
   // ── Sort key picker: visible in Query mode + index has SK ─────────────────
   const showSortKey = builder.mode === "query" && !!keySchema?.skName;
 
+  // ── Dirty pip ─────────────────────────────────────────────────────────────
+  const currentStateNormalized = normalizeForDirty(builder);
+  const isDirty = lastRunStateRef.current !== null
+    ? lastRunStateRef.current !== currentStateNormalized
+    : false;
+
+  const canRun = isValid && !disabled;
+
   return (
-    <div className={styles.root}>
-      {/* ── Top row: mode + index ─────────────────────────────────────── */}
-      <div className={styles.topRow}>
-        {/* Mode segmented control */}
+    <FilterBarShell>
+      {/* ── Header: mode toggle + index ────────────────────────────────── */}
+      <FilterBarHeader>
+        {/* Scan/Query segmented control — custom tablist to preserve aria-pressed
+            test assertions (data-testid="mode-scan/query" + aria-pressed). */}
         <div className={styles.modeGroup} role="group" aria-label="Data mode">
           <button
             type="button"
@@ -668,250 +716,283 @@ export function QueryBuilder({
             <option key={opt.value ?? ""} value={opt.value ?? ""}>{opt.label}</option>
           ))}
         </select>
-      </div>
+      </FilterBarHeader>
 
-      {/* ── Key pickers (Query mode only) ─────────────────────────────── */}
-      {builder.mode === "query" && keySchema && (
-        <div className={styles.keySection}>
-          {/* Partition key */}
-          <div className={styles.keyRow}>
-            <span className={styles.keyLabel}>Partition key</span>
-            <span className={styles.typeBadge} aria-label={`PK type: ${keySchema.pkType}`}>{keySchema.pkType}</span>
-            <TypedValueEditor
-              value={builder.query?.partitionKey.value ?? defaultTypedValue(keySchema.pkType)}
-              onChange={setPkValue}
-              fixedType={keySchema.pkType}
-              data-testid="pk-value"
-            />
-            {pkHint && (
-              <span className={styles.hint} role="alert" data-testid="pk-hint">
-                {pkTypeMismatch ? `Expected ${keySchema.pkType}` : pkHint}
-              </span>
+      {/* ── Body ───────────────────────────────────────────────────────── */}
+      <FilterBarBody>
+        {/* Key section — Query mode only */}
+        {builder.mode === "query" && keySchema && (
+          <div className={styles.keySection}>
+            {/* Partition key */}
+            <div className={styles.keyRow}>
+              <span className={styles.keyLabel}>Partition key</span>
+              <FilterTypeBadge aria-label={`PK type: ${keySchema.pkType}`}>{keySchema.pkType}</FilterTypeBadge>
+              <TypedValueEditor
+                value={builder.query?.partitionKey.value ?? defaultTypedValue(keySchema.pkType)}
+                onChange={setPkValue}
+                fixedType={keySchema.pkType}
+                data-testid="pk-value"
+              />
+              {pkHint && (
+                <span className={styles.hint} role="alert" data-testid="pk-hint">
+                  {pkTypeMismatch ? `Expected ${keySchema.pkType}` : pkHint}
+                </span>
+              )}
+            </div>
+
+            {/* Sort key (visible only when the index has a SK) */}
+            {showSortKey && (
+              <div className={styles.keyRow}>
+                <span className={styles.keyLabel}>Sort key</span>
+                <FilterTypeBadge aria-label={`SK type: ${keySchema.skType}`}>{keySchema.skType ?? "S"}</FilterTypeBadge>
+
+                {builder.query?.sortKey ? (
+                  <>
+                    <select
+                      className={styles.skOpSelect}
+                      value={builder.query.sortKey.op}
+                      onChange={(e) => setSkOp(e.target.value as SkOp)}
+                      aria-label="Sort key operator"
+                      data-testid="sk-op"
+                    >
+                      {SK_OPS.map((op) => (
+                        <option key={op} value={op}>{op}</option>
+                      ))}
+                    </select>
+
+                    {builder.query.sortKey.op === "between" ? (
+                      <>
+                        <input
+                          type="text"
+                          inputMode={keySchema.skType === "N" ? "decimal" : "text"}
+                          className={styles.textInput}
+                          value={
+                            !isTypedValue(builder.query.sortKey.value)
+                              ? (builder.query.sortKey.value.min.type === "N" || builder.query.sortKey.value.min.type === "S"
+                                ? builder.query.sortKey.value.min.value
+                                : "")
+                              : ""
+                          }
+                          onChange={(e) => {
+                            const existing = builder.query!.sortKey!;
+                            const prevMax = !isTypedValue(existing.value) ? existing.value.max : defaultTypedValue(keySchema.skType ?? "S");
+                            const newMin: TypedValue = keySchema.skType === "N"
+                              ? { type: "N", value: e.target.value }
+                              : { type: "S", value: e.target.value };
+                            setSkValue({ min: newMin, max: prevMax });
+                          }}
+                          placeholder="min"
+                          aria-label="Sort key between min"
+                          data-testid="sk-between-min"
+                        />
+                        <span className={styles.betweenAnd}>and</span>
+                        <input
+                          type="text"
+                          inputMode={keySchema.skType === "N" ? "decimal" : "text"}
+                          className={styles.textInput}
+                          value={
+                            !isTypedValue(builder.query.sortKey.value)
+                              ? (builder.query.sortKey.value.max.type === "N" || builder.query.sortKey.value.max.type === "S"
+                                ? builder.query.sortKey.value.max.value
+                                : "")
+                              : ""
+                          }
+                          onChange={(e) => {
+                            const existing = builder.query!.sortKey!;
+                            const prevMin = !isTypedValue(existing.value) ? existing.value.min : defaultTypedValue(keySchema.skType ?? "S");
+                            const newMax: TypedValue = keySchema.skType === "N"
+                              ? { type: "N", value: e.target.value }
+                              : { type: "S", value: e.target.value };
+                            setSkValue({ min: prevMin, max: newMax });
+                          }}
+                          placeholder="max"
+                          aria-label="Sort key between max"
+                          data-testid="sk-between-max"
+                        />
+                      </>
+                    ) : (
+                      <input
+                        type="text"
+                        inputMode={keySchema.skType === "N" ? "decimal" : "text"}
+                        className={styles.textInput}
+                        value={
+                          isTypedValue(builder.query.sortKey.value)
+                            ? (builder.query.sortKey.value.type === "N" || builder.query.sortKey.value.type === "S"
+                              ? builder.query.sortKey.value.value
+                              : "")
+                            : ""
+                        }
+                        onChange={(e) => {
+                          const newVal: TypedValue = keySchema.skType === "N"
+                            ? { type: "N", value: e.target.value }
+                            : { type: "S", value: e.target.value };
+                          setSkValue(newVal);
+                        }}
+                        placeholder="sort key value"
+                        aria-label="Sort key value"
+                        data-testid="sk-value"
+                      />
+                    )}
+
+                    <button
+                      type="button"
+                      className={styles.removeBtn}
+                      onClick={clearSk}
+                      aria-label="Remove sort key clause"
+                      data-testid="sk-remove"
+                      title="Remove sort key clause"
+                    >
+                      ×
+                    </button>
+                  </>
+                ) : (
+                  <FilterRowAddButton
+                    onClick={() => {
+                      if (!keySchema?.skName) return;
+                      const defaultSk = {
+                        name: keySchema.skName,
+                        op: "=" as SkOp,
+                        value: defaultTypedValue(keySchema.skType ?? "S"),
+                      };
+                      const next: BuilderState = {
+                        ...builder,
+                        query: { ...builder.query!, sortKey: defaultSk },
+                      };
+                      onBuilderChange(next);
+                      revalidate(next);
+                    }}
+                    data-testid="sk-add"
+                  >
+                    + Add sort key clause
+                  </FilterRowAddButton>
+                )}
+              </div>
             )}
           </div>
+        )}
 
-          {/* Sort key (visible only when the index has a SK) */}
-          {showSortKey && (
-            <div className={styles.keyRow}>
-              <span className={styles.keyLabel}>Sort key</span>
-              <span className={styles.typeBadge} aria-label={`SK type: ${keySchema.skType}`}>{keySchema.skType ?? "S"}</span>
+        {/* Filters section */}
+        <div className={styles.filtersSection}>
+          {builder.filters.length === 0 ? (
+            <EmptyBodyRow label="No filters">
+              <FilterRowAddButton
+                key="add"
+                onClick={addFilter}
+                data-testid="add-filter"
+              >
+                + Filter
+              </FilterRowAddButton>
+            </EmptyBodyRow>
+          ) : (
+            <>
+              {builder.filters.map((row, i) => (
+                <React.Fragment key={i}>
+                  {i > 0 && <FilterConnector label="AND" />}
+                  <FilterRowEditor
+                    row={row}
+                    index={i}
+                    onChange={(next) => updateFilter(i, next)}
+                    onRemove={() => removeFilter(i)}
+                  />
+                </React.Fragment>
+              ))}
+              <FilterRowAddButton
+                onClick={addFilter}
+                data-testid="add-filter"
+              >
+                + Filter
+              </FilterRowAddButton>
+            </>
+          )}
+        </div>
 
-              {builder.query?.sortKey ? (
-                <>
-                  <select
-                    className={styles.skOpSelect}
-                    value={builder.query.sortKey.op}
-                    onChange={(e) => setSkOp(e.target.value as SkOp)}
-                    aria-label="Sort key operator"
-                    data-testid="sk-op"
-                  >
-                    {SK_OPS.map((op) => (
-                      <option key={op} value={op}>{op}</option>
-                    ))}
-                  </select>
+        {/* Preview disclosure */}
+        <div className={styles.previewSection}>
+          <button
+            type="button"
+            className={styles.previewToggle}
+            onClick={() => setPreviewOpen((o) => !o)}
+            aria-expanded={previewOpen}
+            data-testid="preview-toggle"
+          >
+            <span className={`${styles.previewCaret} ${previewOpen ? styles.previewCaretOpen : ""}`}>▶</span>
+            Preview compiled expression
+          </button>
 
-                  {builder.query.sortKey.op === "between" ? (
-                    <>
-                      <input
-                        type="text"
-                        inputMode={keySchema.skType === "N" ? "decimal" : "text"}
-                        className={styles.textInput}
-                        value={
-                          !isTypedValue(builder.query.sortKey.value)
-                            ? (builder.query.sortKey.value.min.type === "N" || builder.query.sortKey.value.min.type === "S"
-                              ? builder.query.sortKey.value.min.value
-                              : "")
-                            : ""
-                        }
-                        onChange={(e) => {
-                          const existing = builder.query!.sortKey!;
-                          const prevMax = !isTypedValue(existing.value) ? existing.value.max : defaultTypedValue(keySchema.skType ?? "S");
-                          const newMin: TypedValue = keySchema.skType === "N"
-                            ? { type: "N", value: e.target.value }
-                            : { type: "S", value: e.target.value };
-                          setSkValue({ min: newMin, max: prevMax });
-                        }}
-                        placeholder="min"
-                        aria-label="Sort key between min"
-                        data-testid="sk-between-min"
-                      />
-                      <span className={styles.betweenAnd}>and</span>
-                      <input
-                        type="text"
-                        inputMode={keySchema.skType === "N" ? "decimal" : "text"}
-                        className={styles.textInput}
-                        value={
-                          !isTypedValue(builder.query.sortKey.value)
-                            ? (builder.query.sortKey.value.max.type === "N" || builder.query.sortKey.value.max.type === "S"
-                              ? builder.query.sortKey.value.max.value
-                              : "")
-                            : ""
-                        }
-                        onChange={(e) => {
-                          const existing = builder.query!.sortKey!;
-                          const prevMin = !isTypedValue(existing.value) ? existing.value.min : defaultTypedValue(keySchema.skType ?? "S");
-                          const newMax: TypedValue = keySchema.skType === "N"
-                            ? { type: "N", value: e.target.value }
-                            : { type: "S", value: e.target.value };
-                          setSkValue({ min: prevMin, max: newMax });
-                        }}
-                        placeholder="max"
-                        aria-label="Sort key between max"
-                        data-testid="sk-between-max"
-                      />
-                    </>
-                  ) : (
-                    <input
-                      type="text"
-                      inputMode={keySchema.skType === "N" ? "decimal" : "text"}
-                      className={styles.textInput}
-                      value={
-                        isTypedValue(builder.query.sortKey.value)
-                          ? (builder.query.sortKey.value.type === "N" || builder.query.sortKey.value.type === "S"
-                            ? builder.query.sortKey.value.value
-                            : "")
-                          : ""
-                      }
-                      onChange={(e) => {
-                        const newVal: TypedValue = keySchema.skType === "N"
-                          ? { type: "N", value: e.target.value }
-                          : { type: "S", value: e.target.value };
-                        setSkValue(newVal);
-                      }}
-                      placeholder="sort key value"
-                      aria-label="Sort key value"
-                      data-testid="sk-value"
-                    />
-                  )}
-
-                  <button
-                    type="button"
-                    className={styles.removeBtn}
-                    onClick={clearSk}
-                    aria-label="Remove sort key clause"
-                    data-testid="sk-remove"
-                    title="Remove sort key clause"
-                  >
-                    ×
-                  </button>
-                </>
+          {previewOpen && (
+            <div className={styles.previewBody} data-testid="preview-body">
+              {compileResult.kind === "error" ? (
+                <span className={styles.previewError} role="alert" data-testid="preview-error">
+                  {compileResult.reason}
+                </span>
               ) : (
-                <button
-                  type="button"
-                  className={styles.addFilterBtn}
-                  onClick={() => {
-                    if (!keySchema?.skName) return;
-                    const defaultSk = {
-                      name: keySchema.skName,
-                      op: "=" as SkOp,
-                      value: defaultTypedValue(keySchema.skType ?? "S"),
-                    };
-                    const next: BuilderState = {
-                      ...builder,
-                      query: { ...builder.query!, sortKey: defaultSk },
-                    };
-                    onBuilderChange(next);
-                    revalidate(next);
-                  }}
-                  data-testid="sk-add"
-                >
-                  + Add sort key clause
-                </button>
+                <>
+                  {compileResult.kind === "query" && (
+                    <div>
+                      <div className={styles.previewLabel}>KeyConditionExpression</div>
+                      <pre className={styles.previewCode} data-testid="preview-kce">
+                        {compileResult.request.key_condition_expression}
+                      </pre>
+                    </div>
+                  )}
+                  {(compileResult.request.filter_expression) && (
+                    <div>
+                      <div className={styles.previewLabel}>FilterExpression</div>
+                      <pre className={styles.previewCode} data-testid="preview-fe">
+                        {compileResult.request.filter_expression}
+                      </pre>
+                    </div>
+                  )}
+                  {compileResult.request.expression_attribute_names && (
+                    <div>
+                      <div className={styles.previewLabel}>ExpressionAttributeNames</div>
+                      <pre className={styles.previewCode} data-testid="preview-names">
+                        {JSON.stringify(compileResult.request.expression_attribute_names, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                  {compileResult.request.expression_attribute_values && (
+                    <div>
+                      <div className={styles.previewLabel}>ExpressionAttributeValues</div>
+                      <pre className={styles.previewCode} data-testid="preview-values">
+                        {JSON.stringify(compileResult.request.expression_attribute_values, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                  {compileResult.kind === "scan" && !compileResult.request.filter_expression && (
+                    <span className={styles.previewCode} style={{ color: "var(--text-subtle)" }}>
+                      No filter expression (full scan)
+                    </span>
+                  )}
+                </>
               )}
             </div>
           )}
         </div>
-      )}
+      </FilterBarBody>
 
-      {/* ── Filter rows ────────────────────────────────────────────────── */}
-      <div className={styles.filtersSection}>
-        {builder.filters.length > 0 && (
-          <div className={styles.filterRows}>
-            {builder.filters.map((row, i) => (
-              <FilterRowEditor
-                key={i}
-                row={row}
-                index={i}
-                onChange={(next) => updateFilter(i, next)}
-                onRemove={() => removeFilter(i)}
-              />
-            ))}
-          </div>
-        )}
-        <button
-          type="button"
-          className={styles.addFilterBtn}
-          onClick={addFilter}
-          data-testid="add-filter"
-        >
-          + Add filter
-        </button>
-      </div>
-
-      {/* ── Preview disclosure ─────────────────────────────────────────── */}
-      <div className={styles.previewSection}>
-        <button
-          type="button"
-          className={styles.previewToggle}
-          onClick={() => setPreviewOpen((o) => !o)}
-          aria-expanded={previewOpen}
-          data-testid="preview-toggle"
-        >
-          <span className={`${styles.previewCaret} ${previewOpen ? styles.previewCaretOpen : ""}`}>▶</span>
-          Preview compiled expression
-        </button>
-
-        {previewOpen && (
-          <div className={styles.previewBody} data-testid="preview-body">
-            {compileResult.kind === "error" ? (
-              <span className={styles.previewError} role="alert" data-testid="preview-error">
-                {compileResult.reason}
-              </span>
-            ) : (
-              <>
-                {compileResult.kind === "query" && (
-                  <div>
-                    <div className={styles.previewLabel}>KeyConditionExpression</div>
-                    <pre className={styles.previewCode} data-testid="preview-kce">
-                      {compileResult.request.key_condition_expression}
-                    </pre>
-                  </div>
-                )}
-                {(compileResult.request.filter_expression) && (
-                  <div>
-                    <div className={styles.previewLabel}>FilterExpression</div>
-                    <pre className={styles.previewCode} data-testid="preview-fe">
-                      {compileResult.request.filter_expression}
-                    </pre>
-                  </div>
-                )}
-                {compileResult.request.expression_attribute_names && (
-                  <div>
-                    <div className={styles.previewLabel}>ExpressionAttributeNames</div>
-                    <pre className={styles.previewCode} data-testid="preview-names">
-                      {JSON.stringify(compileResult.request.expression_attribute_names, null, 2)}
-                    </pre>
-                  </div>
-                )}
-                {compileResult.request.expression_attribute_values && (
-                  <div>
-                    <div className={styles.previewLabel}>ExpressionAttributeValues</div>
-                    <pre className={styles.previewCode} data-testid="preview-values">
-                      {JSON.stringify(compileResult.request.expression_attribute_values, null, 2)}
-                    </pre>
-                  </div>
-                )}
-                {compileResult.kind === "scan" && !compileResult.request.filter_expression && (
-                  <span className={styles.previewCode} style={{ color: "var(--text-subtle)" }}>
-                    No filter expression (full scan)
-                  </span>
-                )}
-              </>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+      {/* ── Action row ─────────────────────────────────────────────────── */}
+      <FilterBarActions
+        left={
+          <>
+            <SecondaryButton onClick={handleReset} disabled={disabled}>Reset</SecondaryButton>
+            <FilterKeyHint keys="⌘⇧R" />
+          </>
+        }
+        right={
+          <>
+            <FilterKeyHint keys="⌘↵" />
+            <PrimaryButton
+              onClick={handleRun}
+              dirty={isDirty}
+              disabled={!canRun}
+            >
+              Run
+            </PrimaryButton>
+          </>
+        }
+      />
+    </FilterBarShell>
   );
 }
 
@@ -949,3 +1030,4 @@ function resolveKeySchemaFor(
     skType: skAttr?.attribute_type as "S" | "N" | "B" | undefined,
   };
 }
+

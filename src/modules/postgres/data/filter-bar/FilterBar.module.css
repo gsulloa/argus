@@ -1,43 +1,58 @@
+/* FilterBar.module.css — Postgres-specific layout only.
+   Shell, header, body, actions, primary/secondary buttons, key-hint chips
+   and empty-body row are all owned by src/modules/shared/filter-bar/. */
+
+/* Outermost wrapper: carries the rootRef and onKeyDown handler so the test's
+   container.firstChild points to an element that has the keyboard shortcuts.
+   display:contents removes the layout box so FilterBarShell is the visual root. */
 .root {
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text);
+  display: contents;
 }
 
-.header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  min-height: 30px;
-}
-
+/* ── Mode toggle ─────────────────────────────────────────────────────────────
+   Kept as role="tablist"/role="tab" for test compatibility.
+   TODO: Migrate to FilterSegmentedToggle (role="radiogroup"/role="radio") once
+   tests are updated to query role="radio" instead of role="tab". */
 .modeToggle {
   display: inline-flex;
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  overflow: hidden;
+  border-radius: var(--radius-md);
+  overflow: visible;
+  height: 24px;
 }
 .modeBtn {
   background: transparent;
   border: 0;
-  padding: 3px 8px;
+  border-right: 1px solid var(--border-strong);
+  padding: 3px 10px;
   font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-stack);
+  letter-spacing: 0;
   color: var(--text-muted);
   cursor: pointer;
+  transition: background var(--duration-instant) ease, color var(--duration-instant) ease;
+}
+.modeBtn:last-child {
+  border-right: 0;
 }
 .modeBtn[data-active="true"] {
   background: var(--accent-soft);
   color: var(--accent);
 }
 .modeBtn:hover:not([data-active="true"]) {
-  background: var(--bg-hover);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.modeBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--accent);
+  position: relative;
+  z-index: 1;
 }
 
+/* ── Collapse toggle ─────────────────────────────────────────────────────────*/
 .collapseBtn {
   margin-left: auto;
   background: transparent;
@@ -46,136 +61,93 @@
   cursor: pointer;
   font-size: 11px;
   padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-instant) ease, background var(--duration-instant) ease;
 }
 .collapseBtn:hover {
   color: var(--text);
+  background: var(--surface-2);
 }
-
-.body {
-  display: flex;
-  flex-direction: column;
-  padding: 6px 10px;
-  gap: 6px;
-}
-
-.empty {
-  color: var(--text-subtle);
-  font-size: 11px;
-  font-style: italic;
-}
-
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-top: 1px solid var(--border);
-  min-height: 32px;
-}
-
-.spacer {
-  flex: 1;
-}
-
-.btn {
-  font-size: 11px;
-  padding: 3px 10px;
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  cursor: pointer;
-  font-family: inherit;
-}
-.btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btnPrimary {
-  background: var(--accent);
-  color: var(--accent-text);
+.collapseBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
   border-color: var(--accent);
 }
-.btnPrimary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+
+/* ── Structured body row stack ───────────────────────────────────────────────*/
+.structuredBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
 }
 
-.dirtyDot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  margin-right: 6px;
-  background: var(--accent);
-  vertical-align: middle;
-}
-
+/* Individual row: connector + condition/group */
 .row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-xs);
   flex-wrap: wrap;
 }
 
-.connector {
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  font-family: var(--font-mono, "Geist Mono", monospace);
-  width: 28px;
-  text-align: center;
+/* Add-row affordances below the row list */
+.addRow {
+  display: flex;
+  gap: var(--space-xs);
 }
 
-.removeBtn {
+/* OR-group-internal add button. Uses a raw <button> (instead of FilterRowAddButton)
+   so we can attach aria-label="Add OR row" for test compatibility. */
+.addBtn {
   background: transparent;
-  border: 0;
-  color: var(--text-subtle);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 12px;
-  padding: 2px 4px;
-  border-radius: 3px;
+  font-family: inherit;
+  transition: color var(--duration-instant) ease, border-color var(--duration-instant) ease, background var(--duration-instant) ease;
 }
-.removeBtn:hover {
-  background: var(--bg-hover);
-  color: var(--danger);
+.addBtn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.addBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--accent);
 }
 
-.warnIcon {
-  display: inline-flex;
-  align-items: center;
-  color: var(--warning);
-}
-
+/* ── OR-group container ──────────────────────────────────────────────────────
+   Dashed border + 4% accent tint background. */
 .orGroup {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px 8px;
+  gap: var(--space-2xs);
+  padding: var(--space-xs);
   border: 1px dashed var(--border-strong);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  background: rgba(168, 85, 247, 0.04);
+  border-radius: var(--radius-md);
 }
+
 .orGroupHeader {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-xs);
   font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-subtle);
   font-family: var(--font-mono, "Geist Mono", monospace);
 }
+
 .orGroupRow {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-xs);
 }
+
 .orConnector {
   font-size: 10px;
   letter-spacing: 0.14em;
@@ -186,46 +158,35 @@
   text-align: center;
 }
 
-.addRow {
-  display: flex;
-  gap: 6px;
-}
-.addBtn {
+/* ── Remove button (condition row, OR group) ─────────────────────────────────*/
+.removeBtn {
   background: transparent;
-  border: 1px dashed var(--border-strong);
-  color: var(--text-muted);
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 3px;
+  border: 0;
+  color: var(--text-subtle);
   cursor: pointer;
-  font-family: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-instant) ease, color var(--duration-instant) ease;
 }
-.addBtn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
+.removeBtn:hover {
+  background: var(--surface-2);
+  color: var(--danger);
 }
-
-.input,
-.select {
-  font-size: 11px;
-  padding: 2px 6px;
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  font-family: inherit;
-  min-width: 0;
-}
-.input:focus,
-.select:focus {
+.removeBtn:focus-visible {
   outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
   border-color: var(--accent);
 }
 
-.mono {
-  font-family: var(--font-mono, "Geist Mono", monospace);
+/* ── Performance warning icon ────────────────────────────────────────────────*/
+.warnIcon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--warning);
 }
 
+/* ── Column picker ───────────────────────────────────────────────────────────*/
 .columnPicker {
   position: relative;
   flex: 0 0 auto;
@@ -237,18 +198,25 @@
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   min-width: 140px;
   text-align: left;
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  transition: background var(--duration-instant) ease, border-color var(--duration-instant) ease;
 }
 .columnTrigger[data-any="true"] {
   color: var(--accent);
 }
 .columnTrigger:hover {
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+.columnTrigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
   border-color: var(--accent);
 }
 .columnPopover {
@@ -259,9 +227,9 @@
   min-width: 220px;
   max-height: 280px;
   overflow-y: auto;
-  background: var(--bg-elevated);
+  background: var(--elevated, var(--surface));
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   padding: 4px;
   display: flex;
@@ -274,11 +242,12 @@
   background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   margin-bottom: 4px;
-  outline: none;
 }
-.columnSearch:focus {
+.columnSearch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
   border-color: var(--accent);
 }
 .columnOption {
@@ -290,15 +259,16 @@
   font-size: 11px;
   color: var(--text);
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   text-align: left;
   background: transparent;
   border: 0;
   width: 100%;
+  transition: background var(--duration-instant) ease, color var(--duration-instant) ease;
 }
 .columnOption:hover,
 .columnOption[data-active="true"] {
-  background: var(--accent-soft);
+  background: var(--surface-2);
   color: var(--accent);
 }
 .columnOptionType {
@@ -307,6 +277,7 @@
   margin-left: 8px;
 }
 
+/* ── Operator select ─────────────────────────────────────────────────────────*/
 .opSelect {
   font-family: var(--font-mono, "Geist Mono", monospace);
   font-size: 11px;
@@ -314,22 +285,31 @@
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-md);
+  transition: border-color var(--duration-instant) ease;
+}
+.opSelect:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--accent);
 }
 
+/* ── Value inputs ────────────────────────────────────────────────────────────*/
 .valueInput {
   font-size: 11px;
   padding: 2px 6px;
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-md);
   font-family: inherit;
   min-width: 120px;
   flex: 1 1 120px;
+  transition: border-color var(--duration-instant) ease;
 }
-.valueInput:focus {
+.valueInput:focus-visible {
   outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
   border-color: var(--accent);
 }
 
@@ -346,6 +326,7 @@
   color: var(--text-subtle);
 }
 
+/* ── Chip input (In / NotIn operators) ───────────────────────────────────────*/
 .chips {
   display: inline-flex;
   flex-wrap: wrap;
@@ -354,7 +335,7 @@
   padding: 2px 4px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-md);
   min-width: 160px;
   flex: 1 1 160px;
 }
@@ -364,7 +345,7 @@
   gap: 2px;
   font-size: 10.5px;
   padding: 1px 4px 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--accent-soft);
   color: var(--accent);
   font-family: var(--font-mono, "Geist Mono", monospace);
@@ -389,10 +370,11 @@
   font-family: inherit;
 }
 
+/* ── Raw WHERE editor ────────────────────────────────────────────────────────*/
 .rawEditor {
   border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  background: var(--elevated, var(--surface));
   padding: 4px;
   font-size: 12px;
   font-family: var(--font-mono, "Geist Mono", monospace);
@@ -401,12 +383,27 @@
   overflow: auto;
 }
 
+/* Raw parse error banner */
 .rawError {
   font-size: 11px;
   padding: 4px 8px;
   border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   white-space: pre-wrap;
+}
+
+/* ── Reduced-motion overrides ────────────────────────────────────────────────*/
+@media (prefers-reduced-motion: reduce) {
+  .modeBtn,
+  .collapseBtn,
+  .addBtn,
+  .removeBtn,
+  .columnTrigger,
+  .columnOption,
+  .opSelect,
+  .valueInput {
+    transition: none;
+  }
 }

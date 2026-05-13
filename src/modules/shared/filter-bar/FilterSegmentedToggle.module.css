@@ -1,0 +1,69 @@
+.toggle {
+  display: inline-flex;
+  align-items: stretch;
+  overflow: visible;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  height: 24px;
+}
+
+.option {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-stack);
+  letter-spacing: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border: 0;
+  cursor: pointer;
+  transition:
+    background var(--duration-instant) ease-out,
+    color var(--duration-instant) ease-out;
+}
+
+/* Inter-option divider: every option that is NOT the last */
+.optionNotLast {
+  border-right: 1px solid var(--border-strong);
+}
+
+/* Round the outer corners of the first and last options */
+.optionFirst {
+  border-top-left-radius: calc(var(--radius-md) - 1px);
+  border-bottom-left-radius: calc(var(--radius-md) - 1px);
+}
+
+.optionLast {
+  border-top-right-radius: calc(var(--radius-md) - 1px);
+  border-bottom-right-radius: calc(var(--radius-md) - 1px);
+}
+
+.option:hover:not(.optionActive) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.optionActive {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.option:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  position: relative;
+  z-index: 1;
+  outline: none;
+}
+
+.option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .option {
+    transition: none !important;
+  }
+}

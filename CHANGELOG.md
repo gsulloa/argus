@@ -18,6 +18,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 
 ### Changed
 
+- **Visual refresh of the Postgres filter bar and Dynamo query builder.** Both surfaces now share one rhythm, focus halo, segmented toggle, and dirty-pip treatment, and consume a shared primitive layer under `src/modules/shared/filter-bar/`. Empty-state rows replace the prior orphan whitespace, and keyboard-hint chips (`⌘↵`, `⎋`, `⌘⇧R`) appear next to the relevant actions.
+- **Accent color swap.** The app-wide accent has shifted from blue to **Argus violet** (`#A855F7` dark, `#7C3AED` light) per the original design system. This affects every surface that uses the accent token — primary CTAs, active row stripes, focus halos, tab underlines, and the command palette match highlight.
 - Tab IDs for SQL editor tabs are now `pgquery:<uuid>` (no embedded connection ID). Existing in-session tab buffers stored under the old format (`pgquery:<connId>:<uuid>`) are silently discarded on first launch after upgrade — SQL is preserved in the editor until the tab is closed.
 
 ---
