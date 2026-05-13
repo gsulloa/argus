@@ -58,6 +58,20 @@ export interface ToolbarProps {
   // --- Builder validity (from QueryBuilder via DataViewTab) ---
   runDisabled?: boolean;
   runDisabledReason?: string;
+
+  // --- Insert affordance (task 8.8) ---
+  /** Called when the user clicks the + Insert button. */
+  onInsert?: () => void;
+  /** When true, the + button is hidden. */
+  isReadOnly?: boolean;
+
+  // --- Optimistic locking (task 10.3) ---
+  /** Whether the "Use ConditionExpression on update" toggle is on. */
+  useConditionExpression?: boolean;
+  /** Called when the toggle changes. */
+  onUseConditionExpressionChange?: (next: boolean) => void;
+  /** Called when the user clicks "Locking…" to open the config dialog. */
+  onOpenLockingDialog?: () => void;
 }
 
 export function Toolbar({
@@ -77,6 +91,11 @@ export function Toolbar({
   onPageSizeChange,
   runDisabled = false,
   runDisabledReason,
+  onInsert,
+  isReadOnly = false,
+  useConditionExpression = false,
+  onUseConditionExpressionChange,
+  onOpenLockingDialog,
 }: ToolbarProps) {
   const isLoading = status === "loading";
   // While waiting for credentials, all interactive controls are disabled (task 16.2).
@@ -262,6 +281,73 @@ export function Toolbar({
       </button>
 
       <span className={styles.spacer} />
+
+      {/* Read-only badge — visible only when isReadOnly (task 12.1) */}
+      {isReadOnly && (
+        <span
+          className={styles.readOnlyBadge}
+          data-testid="toolbar-readonly-badge"
+          aria-label="Read-only connection"
+          title="This connection is read-only — edits are disabled"
+        >
+          Read-only
+        </span>
+      )}
+
+      {/* Insert button — hidden on read-only connections (task 8.8) */}
+      {!isReadOnly && onInsert && (
+        <button
+          type="button"
+          className={styles.btn}
+          onClick={onInsert}
+          title="Insert item (⌘N)"
+          aria-label="Insert item"
+          data-testid="toolbar-insert-btn"
+        >
+          + Insert
+        </button>
+      )}
+
+      {/* Optimistic locking controls (task 10.3) — hidden on read-only */}
+      {!isReadOnly && onUseConditionExpressionChange && (
+        <>
+          <div className={styles.sep} />
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              cursor: "pointer",
+              fontSize: 12,
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-sans, system-ui)",
+              userSelect: "none",
+            }}
+            title="When on, every update carries attribute_exists(pk) AND #version = :prev (requires version attribute to be configured)"
+          >
+            <input
+              type="checkbox"
+              data-testid="use-condition-expression-toggle"
+              checked={useConditionExpression}
+              onChange={(e) => onUseConditionExpressionChange(e.target.checked)}
+              style={{ cursor: "pointer" }}
+            />
+            Use CondExpr
+          </label>
+          {onOpenLockingDialog && (
+            <button
+              type="button"
+              className={styles.btn}
+              onClick={onOpenLockingDialog}
+              title="Configure optimistic locking version attribute"
+              aria-label="Optimistic locking settings"
+              data-testid="toolbar-locking-btn"
+            >
+              Locking…
+            </button>
+          )}
+        </>
+      )}
 
       {/* Inline credentials notice */}
       {needsCredentials && (

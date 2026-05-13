@@ -32,6 +32,7 @@ import type { AttributeMap, AttributeValue } from "./types";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
 import { MORE_COLUMN_ID, useInferredColumns } from "./useInferredColumns";
 import type { DynamoItemsStatus } from "./useDynamoItems";
+import { InlineCellEditor } from "./edit/InlineCellEditor";
 import styles from "./TabView.module.css";
 
 // ---------------------------------------------------------------------------
@@ -47,16 +48,44 @@ const MORE_COLUMN_WIDTH = 40;
 // Props
 // ---------------------------------------------------------------------------
 
+/** Identifies the cell currently open for inline editing. */
+export interface EditingCell {
+  rowIndex: number;
+  attrName: string;
+}
+
+/** Gesture modifiers passed from row click events. */
+export interface SelectGesture {
+  shiftKey?: boolean;
+  metaKey?: boolean;
+}
+
 export interface TabViewProps {
   items: AttributeMap[];
   describe: TableDescription | null;
   indexName: string | null; // null = primary index
-  selectedRowIndex: number | null;
-  onSelect: (rowIndex: number, attribute?: string) => void;
+  /** Multi-row selection set. */
+  selectedRowIndices: Set<number>;
+  /** Primary selected row (most recently clicked). Used for inspector. */
+  primarySelectedRowIndex: number | null;
+  onSelect: (rowIndex: number, attribute?: string, gesture?: SelectGesture) => void;
   onLoadMore: () => void; // triggerAutoLoadMore from the hook
   hasMore: boolean; // lastEvaluatedKey != null
   status: DynamoItemsStatus;
   autoScrollDisabled: boolean;
+  // ── Edit-in-place (task 6.1) ─────────────────────────────────────────────
+  /** The cell currently in edit mode, or null. */
+  editingCell: EditingCell | null;
+  /** Called when a double-click on a primitive non-key cell requests edit mode. */
+  onStartEdit: (rowIndex: number, attrName: string) => void;
+  /** Called when the editor commits a new value. */
+  onCommitEdit: (rowIndex: number, attrName: string, next: AttributeValue) => void;
+  /** Called when the editor is dismissed without saving (Escape). */
+  onCancelEdit: () => void;
+  /** The cell whose commit is currently in flight, or null. */
+  savingCell: EditingCell | null;
+  /** Disables all double-click edit affordances when true. */
+  isReadOnly: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,10 +105,30 @@ interface CellContentProps {
   value: AttributeValue | undefined;
   attrName: string;
   rowIndex: number;
-  onSelect: (rowIndex: number, attribute?: string) => void;
+  onSelect: (rowIndex: number, attribute?: string, gesture?: SelectGesture) => void;
+  // Edit-in-place props (task 6.1)
+  isEditing: boolean;
+  onStartEdit: (rowIndex: number, attrName: string) => void;
+  onCommitEdit: (rowIndex: number, attrName: string, next: AttributeValue) => void;
+  onCancelEdit: () => void;
+  saving: boolean;
+  isKeyColumn: boolean;
+  isReadOnly: boolean;
 }
 
-function CellContent({ value, attrName, rowIndex, onSelect }: CellContentProps) {
+function CellContent({
+  value,
+  attrName,
+  rowIndex,
+  onSelect,
+  isEditing,
+  onStartEdit,
+  onCommitEdit,
+  onCancelEdit,
+  saving,
+  isKeyColumn,
+  isReadOnly,
+}: CellContentProps) {
   const handleComplexClick = useCallback(
     (e: React.MouseEvent) => {
       // Complex-cell click: select the row AND focus inspector on this attribute.
@@ -90,6 +139,17 @@ function CellContent({ value, attrName, rowIndex, onSelect }: CellContentProps) 
     [rowIndex, attrName, onSelect],
   );
 
+  // Double-click on a primitive cell opens the inline editor.
+  // Key columns and read-only connections never allow editing.
+  const handlePrimitiveDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (isKeyColumn || isReadOnly) return;
+      onStartEdit(rowIndex, attrName);
+    },
+    [rowIndex, attrName, onStartEdit, isKeyColumn, isReadOnly],
+  );
+
   if (value === undefined) {
     return (
       <span className={styles.cellEmpty} data-testid="tabla-cell-empty">
@@ -98,17 +158,41 @@ function CellContent({ value, attrName, rowIndex, onSelect }: CellContentProps) 
     );
   }
 
-  // Primitives — render inline
+  // ── Inline editor branch — only for editing primitives ──────────────────
+  if (isEditing && value !== undefined && ("S" in value || "N" in value || "BOOL" in value || "NULL" in value)) {
+    return (
+      <InlineCellEditor
+        value={value}
+        onCommit={(next) => onCommitEdit(rowIndex, attrName, next)}
+        onCancel={onCancelEdit}
+        saving={saving}
+      />
+    );
+  }
+
+  // Primitives — render inline, with double-click handler when editable
+  const canEdit = !isKeyColumn && !isReadOnly;
+
   if ("S" in value) {
     return (
-      <span className={styles.cellPrimitive} data-testid="tabla-cell">
+      <span
+        className={styles.cellPrimitive}
+        data-testid="tabla-cell"
+        onDoubleClick={canEdit ? handlePrimitiveDoubleClick : undefined}
+        title={canEdit ? "Double-click to edit" : undefined}
+      >
         {value.S}
       </span>
     );
   }
   if ("N" in value) {
     return (
-      <span className={styles.cellPrimitive} data-testid="tabla-cell">
+      <span
+        className={styles.cellPrimitive}
+        data-testid="tabla-cell"
+        onDoubleClick={canEdit ? handlePrimitiveDoubleClick : undefined}
+        title={canEdit ? "Double-click to edit" : undefined}
+      >
         {value.N}
       </span>
     );
@@ -118,6 +202,8 @@ function CellContent({ value, attrName, rowIndex, onSelect }: CellContentProps) 
       <span
         className={value.BOOL ? styles.boolTrue : styles.boolFalse}
         data-testid="tabla-cell"
+        onDoubleClick={canEdit ? handlePrimitiveDoubleClick : undefined}
+        title={canEdit ? "Double-click to edit" : undefined}
       >
         {value.BOOL ? "true" : "false"}
       </span>
@@ -125,7 +211,12 @@ function CellContent({ value, attrName, rowIndex, onSelect }: CellContentProps) 
   }
   if ("NULL" in value) {
     return (
-      <span className={styles.cellNull} data-testid="tabla-cell">
+      <span
+        className={styles.cellNull}
+        data-testid="tabla-cell"
+        onDoubleClick={canEdit ? handlePrimitiveDoubleClick : undefined}
+        title={canEdit ? "Double-click to edit" : undefined}
+      >
         null
       </span>
     );
@@ -229,15 +320,38 @@ export function TabView({
   items,
   describe,
   indexName,
-  selectedRowIndex,
+  selectedRowIndices,
+  primarySelectedRowIndex: _primarySelectedRowIndex,
   onSelect,
   onLoadMore,
   hasMore,
   status,
   autoScrollDisabled,
+  editingCell,
+  onStartEdit,
+  onCommitEdit,
+  onCancelEdit,
+  savingCell,
+  isReadOnly,
 }: TabViewProps) {
   // ── Inferred columns ─────────────────────────────────────────────────────
   const inferredCols = useInferredColumns(items, describe, indexName);
+
+  // ── Key columns (PK + SK names for the active index) ─────────────────────
+  // Used to prevent double-click editing on key columns (task 6.1).
+  const keyColumns = useMemo<Set<string>>(() => {
+    const names = new Set<string>();
+    if (!describe) return names;
+    let schema = describe.key_schema;
+    if (indexName !== null) {
+      const gsi = describe.global_secondary_indexes.find((g) => g.index_name === indexName);
+      const lsi = describe.local_secondary_indexes.find((l) => l.index_name === indexName);
+      if (gsi) schema = gsi.key_schema;
+      else if (lsi) schema = lsi.key_schema;
+    }
+    for (const k of schema) names.add(k.attribute_name);
+    return names;
+  }, [describe, indexName]);
 
   // ── TanStack Table columns ────────────────────────────────────────────────
   // We use `ColumnDef<AttributeMap, unknown>[]` to let both display columns and
@@ -276,19 +390,33 @@ export function TabView({
           accessorFn: (row: AttributeMap) => row[col.id],
           cell: (info) => {
             const val = info.getValue() as AttributeValue | undefined;
+            const rowIdx = info.row.index;
+            const isEditing =
+              editingCell?.rowIndex === rowIdx &&
+              editingCell?.attrName === col.id;
+            const saving =
+              savingCell?.rowIndex === rowIdx &&
+              savingCell?.attrName === col.id;
             return (
               <CellContent
                 value={val}
                 attrName={col.id}
-                rowIndex={info.row.index}
+                rowIndex={rowIdx}
                 onSelect={onSelect}
+                isEditing={isEditing}
+                onStartEdit={onStartEdit}
+                onCommitEdit={onCommitEdit}
+                onCancelEdit={onCancelEdit}
+                saving={saving}
+                isKeyColumn={keyColumns.has(col.id)}
+                isReadOnly={isReadOnly}
               />
             );
           },
         };
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inferredCols, onSelect],
+    [inferredCols, onSelect, editingCell, savingCell, keyColumns, isReadOnly, onStartEdit, onCommitEdit, onCancelEdit],
   );
 
   // ── TanStack Table instance ───────────────────────────────────────────────
@@ -433,7 +561,7 @@ export function TabView({
           {virtualItems.map((vi) => {
             const row = tableRows[vi.index];
             if (!row) return null;
-            const selected = selectedRowIndex === vi.index;
+            const selected = selectedRowIndices.has(vi.index);
             return (
               <div
                 key={vi.key}
@@ -446,9 +574,13 @@ export function TabView({
                   width: totalWidth,
                   minWidth: "100%",
                 }}
-                onClick={() => {
+                onClick={(e) => {
                   // Row-level click: select row, no specific attribute
-                  onSelect(vi.index);
+                  // Pass gesture modifiers for multi-row selection (task 9.1)
+                  onSelect(vi.index, undefined, {
+                    shiftKey: e.shiftKey,
+                    metaKey: e.metaKey || e.ctrlKey,
+                  });
                 }}
               >
                 {row.getVisibleCells().map((cell) => {

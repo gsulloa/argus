@@ -32,6 +32,9 @@ pub enum ActivityKind {
     ListTables,
     DescribeTable,
     ScanTable,
+    PutItem,
+    UpdateItem,
+    DeleteItem,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -296,6 +299,9 @@ mod tests {
             (ActivityKind::TableStructure, "table_structure"),
             (ActivityKind::ListTables, "list_tables"),
             (ActivityKind::DescribeTable, "describe_table"),
+            (ActivityKind::PutItem, "put_item"),
+            (ActivityKind::UpdateItem, "update_item"),
+            (ActivityKind::DeleteItem, "delete_item"),
         ];
         for (kind, expected) in cases {
             let json = serde_json::to_value(&kind).unwrap();

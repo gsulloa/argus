@@ -26,10 +26,11 @@
  *   the accent background.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { AttributeMap, AttributeValue } from "./types";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
+import { InspectorJsonEditor } from "./edit/InspectorJsonEditor";
 import styles from "./Inspector.module.css";
 
 // ---------------------------------------------------------------------------
@@ -335,11 +336,33 @@ function AttributeNode({ name, value, depth, isPk, isSk }: AttributeNodeProps) {
 // Inspector — public component
 // ---------------------------------------------------------------------------
 
+export interface LockingConfig {
+  versionAttr: string;
+  enabled: boolean;
+  pkAttr: string;
+}
+
 export interface InspectorProps {
   item: AttributeMap | null;
   describe: TableDescription | null;
   indexName: string | null;
   onClearSelection: () => void;
+  /** When true the "Edit item" button is hidden. */
+  isReadOnly?: boolean;
+  /** Connection id — forwarded to InspectorJsonEditor for API calls. */
+  connectionId?: string;
+  /** Table name — forwarded to InspectorJsonEditor. */
+  tableName?: string;
+  /** Row index in the items list — forwarded to InspectorJsonEditor. */
+  rowIndex?: number;
+  /** Called with updated item on successful Save. */
+  onPatchItem?: (rowIndex: number, next: AttributeMap) => void;
+  /** Optional: notified when editing state changes (for §11 unsaved-draft). */
+  onEditingChange?: (editing: boolean) => void;
+  /** Optional: notified when the JSON editor's draft is dirty (task 11.1). */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** Optimistic locking config — forwarded to InspectorJsonEditor (task 10.5). */
+  locking?: LockingConfig;
 }
 
 export function Inspector({
@@ -347,22 +370,64 @@ export function Inspector({
   describe,
   indexName,
   onClearSelection,
+  isReadOnly = false,
+  connectionId,
+  tableName,
+  rowIndex,
+  onPatchItem,
+  onEditingChange,
+  onDirtyChange,
+  locking,
 }: InspectorProps) {
   const keyNames = resolveKeyNames(describe, indexName);
+
+  // ── Editing state — task 7.1 ───────────────────────────────────────────────
+  const [isEditing, setIsEditing] = useState(false);
+
+  // When the item changes (e.g. user selects a different row), exit editing mode.
+  const prevItemRef = useRef<AttributeMap | null>(null);
+  useEffect(() => {
+    if (item !== prevItemRef.current) {
+      prevItemRef.current = item;
+      if (isEditing) {
+        setIsEditing(false);
+        onEditingChange?.(false);
+      }
+    }
+  });
+
+  const enterEditing = useCallback(() => {
+    setIsEditing(true);
+    onEditingChange?.(true);
+  }, [onEditingChange]);
+
+  const exitEditing = useCallback(() => {
+    setIsEditing(false);
+    onEditingChange?.(false);
+    // Clear dirty state when the editor is closed.
+    onDirtyChange?.(false);
+  }, [onEditingChange, onDirtyChange]);
 
   // ── Escape handler — task 12.4 ─────────────────────────────────────────────
   // Precedence mirrors Phase 5's shortcut guard:
   //   1. Don't fire if focus is inside CodeMirror (.cm-editor).
   //   2. Don't fire if focus is inside a native text input/textarea/select/[contenteditable].
-  //   3. Otherwise clear the selection.
+  //   3. Otherwise clear the selection (or exit editing if in editor mode).
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
       if (!item) return; // nothing to clear
 
-      // Guard: CodeMirror
+      // Guard: CodeMirror — let CodeMirror handle its own Escape (close editor via cancel btn)
       const active = document.activeElement;
-      if (active?.closest(".cm-editor")) return;
+      if (active?.closest(".cm-editor")) {
+        // When in editor mode, Escape cancels editing
+        if (isEditing) {
+          e.preventDefault();
+          exitEditing();
+        }
+        return;
+      }
 
       // Guard: native text inputs
       const tag = (active as HTMLElement | null)?.tagName?.toLowerCase() ?? "";
@@ -376,18 +441,69 @@ export function Inspector({
       }
 
       e.preventDefault();
-      onClearSelection();
+      if (isEditing) {
+        exitEditing();
+      } else {
+        onClearSelection();
+      }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [item, onClearSelection]);
+  }, [item, onClearSelection, isEditing, exitEditing]);
 
   // ── Empty state ────────────────────────────────────────────────────────────
   if (!item) {
     return (
       <div className={styles.empty} data-testid="inspector-empty">
         <span className={styles.emptyText}>Select a row to inspect</span>
+      </div>
+    );
+  }
+
+  // ── Resolved key names as an array for InspectorJsonEditor ────────────────
+  const resolvedKeyNames: string[] = [
+    keyNames.pkName,
+    keyNames.skName,
+  ].filter((n): n is string => n !== null);
+
+  // ── Editor mode ─────────────────────────────────────────────────────────────
+  if (isEditing && connectionId && tableName && rowIndex !== undefined && onPatchItem) {
+    return (
+      <div className={styles.root} data-testid="inspector-root">
+        <div className={styles.header}>
+          <span className={styles.headerTitle}>Edit item</span>
+          <button
+            type="button"
+            data-testid="inspector-back-btn"
+            onClick={exitEditing}
+            style={{
+              padding: "2px 8px",
+              fontSize: 11,
+              fontFamily: "inherit",
+              background: "transparent",
+              border: "1px solid var(--border-strong, #2e2f3a)",
+              borderRadius: 4,
+              color: "var(--text-muted)",
+              cursor: "pointer",
+            }}
+          >
+            ← Back
+          </button>
+        </div>
+        <div style={{ flex: 1, padding: "8px 12px", minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <InspectorJsonEditor
+            item={item}
+            keyNames={resolvedKeyNames}
+            connectionId={connectionId}
+            tableName={tableName}
+            rowIndex={rowIndex}
+            onClose={exitEditing}
+            onPatchItem={onPatchItem}
+            onDirtyChange={onDirtyChange}
+            locking={locking}
+          />
+        </div>
       </div>
     );
   }
@@ -412,9 +528,31 @@ export function Inspector({
     <div className={styles.root} data-testid="inspector-root">
       <div className={styles.header}>
         <span className={styles.headerTitle}>Inspector</span>
-        <span className={styles.headerCount}>
-          {entries.length} attribute{entries.length !== 1 ? "s" : ""}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className={styles.headerCount}>
+            {entries.length} attribute{entries.length !== 1 ? "s" : ""}
+          </span>
+          {/* Edit item button — task 7.1: hidden on read-only */}
+          {!isReadOnly && connectionId && tableName && rowIndex !== undefined && onPatchItem && (
+            <button
+              type="button"
+              data-testid="inspector-edit-btn"
+              onClick={enterEditing}
+              style={{
+                padding: "2px 8px",
+                fontSize: 11,
+                fontFamily: "inherit",
+                background: "transparent",
+                border: "1px solid var(--border-strong, #2e2f3a)",
+                borderRadius: 4,
+                color: "var(--text-muted)",
+                cursor: "pointer",
+              }}
+            >
+              Edit item
+            </button>
+          )}
+        </div>
       </div>
       <div className={styles.tree}>
         {sorted.map(([attrName, attrValue]) => (

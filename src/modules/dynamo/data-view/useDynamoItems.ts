@@ -70,7 +70,9 @@ type DynamoItemsAction =
       scannedCount: number;
     }
   | { type: "load-more-error"; error: { message: string; code?: string } }
-  | { type: "reset" };
+  | { type: "reset" }
+  | { type: "replace-item"; index: number; next: AttributeMap }
+  | { type: "remove-items"; indices: number[] };
 
 function initialState(): DynamoItemsState {
   return {
@@ -155,6 +157,27 @@ function reducer(
     case "reset":
       return initialState();
 
+    case "replace-item": {
+      // Replace a single item in the list at the given index (task 6.3).
+      if (action.index < 0 || action.index >= state.items.length) return state;
+      const newItems = [...state.items];
+      newItems[action.index] = action.next;
+      return { ...state, items: newItems };
+    }
+
+    case "remove-items": {
+      // Remove items at the given indices (task 9.4).
+      // Process in descending order so earlier indices remain stable.
+      const sorted = [...action.indices].sort((a, b) => b - a);
+      const newItems = [...state.items];
+      for (const idx of sorted) {
+        if (idx >= 0 && idx < newItems.length) {
+          newItems.splice(idx, 1);
+        }
+      }
+      return { ...state, items: newItems };
+    }
+
     default:
       return state;
   }
@@ -223,6 +246,17 @@ export interface UseDynamoItemsResult {
    */
   triggerAutoLoadMore(): void;
   reset(): void;
+  /**
+   * Replace a single loaded item at `index` with `next`.
+   * Used by the inline cell editor on a successful update_item response (task 6.3).
+   */
+  replaceItem(index: number, next: AttributeMap): void;
+  /**
+   * Remove items at the given indices from the local list.
+   * Used by DeleteConfirmationModal after sequential delete (task 9.4).
+   * Indices are processed in descending order to avoid shift bugs.
+   */
+  removeItems(indices: number[]): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +488,22 @@ export function useDynamoItems(
   }, []);
 
   // ---------------------------------------------------------------------------
+  // replaceItem() — task 6.3
+  // ---------------------------------------------------------------------------
+
+  const replaceItem = useCallback((index: number, next: AttributeMap): void => {
+    dispatch({ type: "replace-item", index, next });
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // removeItems() — task 9.4
+  // ---------------------------------------------------------------------------
+
+  const removeItems = useCallback((indices: number[]): void => {
+    dispatch({ type: "remove-items", indices });
+  }, []);
+
+  // ---------------------------------------------------------------------------
   // §7.4  Credentials-refreshed auto-resume
   //
   // CredentialsRefreshedListener bridges Tauri "dynamo:credentials-refreshed"
@@ -522,5 +572,7 @@ export function useDynamoItems(
     loadMore,
     triggerAutoLoadMore,
     reset,
+    replaceItem,
+    removeItems,
   };
 }
