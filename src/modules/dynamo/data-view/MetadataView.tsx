@@ -392,21 +392,7 @@ export function MetadataView({
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, paddingBottom: 4 }}>
         <button
           type="button"
-          className={undefined}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 5,
-            padding: "3px 8px",
-            border: "1px solid var(--border-strong)",
-            borderRadius: 3,
-            background: "transparent",
-            color: "var(--text-muted)",
-            cursor: "pointer",
-            fontSize: 11,
-            fontFamily: "inherit",
-            transition: "color 80ms, border-color 80ms",
-          }}
+          className={styles.refreshBtn}
           onClick={doFetch}
           disabled={isLoading}
           aria-label="Refresh metadata"

@@ -1,10 +1,9 @@
 /**
- * src/modules/dynamo/data-view — owns the DynamoDB data view:
- *   - IPC wrappers for scan, query, and countItems
- *   - TS mirrors of the backend IPC envelopes and AttributeValue union
- *   - BuilderState → AWS expression compiler
- *
- * Does NOT own: item editing (lands in #12), PartiQL (#13), export/import.
+ * src/modules/dynamo/data-view — Scan / Query browsing of DynamoDB items.
+ * Owns: DataViewTab (Toolbar, QueryBuilder, Tabla grid, JSON view, Inspector,
+ *   BottomBar), IPC wrappers (dynamoScan/Query/Count), AttributeValue types,
+ *   BuilderState → AWS expression compiler, useDynamoItems / useCount hooks.
+ * Does NOT own: item editing (#12), PartiQL (#13), export (#13 family).
  */
 
 export { dynamoScan, dynamoQuery, dynamoCountItems } from "./api";

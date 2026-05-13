@@ -124,9 +124,9 @@
 
 ## 17. Documentation and design fidelity
 
-- [ ] 17.1 Update `design/preview.html` if any new component classes / tokens are introduced so the preview reflects the Dynamo data view.
-- [ ] 17.2 Verify every new component against `DESIGN.md`: font choices, accent color, border radii, motion. No decorative gradients, no AI-slop layouts.
-- [ ] 17.3 Add a brief module-level comment at the top of `src/modules/dynamo/data-view/index.ts` summarizing what this directory owns and what it does not (no editing, no PartiQL, no export — those land in #12 and #13).
+- [x] 17.1 Update `design/preview.html` if any new component classes / tokens are introduced so the preview reflects the Dynamo data view.
+- [x] 17.2 Verify every new component against `DESIGN.md`: font choices, accent color, border radii, motion. No decorative gradients, no AI-slop layouts.
+- [x] 17.3 Add a brief module-level comment at the top of `src/modules/dynamo/data-view/index.ts` summarizing what this directory owns and what it does not (no editing, no PartiQL, no export — those land in #12 and #13).
 
 ## 18. End-to-end validation
 

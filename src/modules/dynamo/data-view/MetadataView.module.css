@@ -56,10 +56,10 @@
 }
 
 .sectionTitle {
-  font-size: 10.5px;
+  font-size: 11px; /* --text-xs; 10.5px was off-scale per DESIGN.md */
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em; /* all-caps label spacing from DESIGN.md */
   color: var(--text-subtle);
   padding-bottom: 4px;
   border-bottom: 1px solid var(--border);
@@ -85,6 +85,33 @@
   color: var(--text-muted);
   word-break: break-all;
   font-family: var(--font-mono);
+}
+
+/* ── Refresh button ────────────────────────────────────────────── */
+
+.refreshBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px; /* --radius-sm */
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px; /* --text-xs */
+  font-family: inherit;
+  transition: color 80ms ease-out, border-color 80ms ease-out;
+}
+
+.refreshBtn:hover {
+  color: var(--text);
+  border-color: var(--text-subtle);
+}
+
+.refreshBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ARN row with copy */
@@ -127,7 +154,7 @@
 /* ── Badge variants ─────────────────────────────────────────────── */
 
 .badge {
-  font-size: 10.5px;
+  font-size: 11px; /* --text-xs; 10.5px is off the design scale */
   font-weight: 500;
   padding: 1px 5px;
   border-radius: 3px;
@@ -162,7 +189,7 @@
 .keyTable th {
   text-align: left;
   padding: 3px 8px;
-  font-size: 10.5px;
+  font-size: 11px; /* --text-xs; 10.5px is off the design scale */
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -222,7 +249,7 @@
 }
 
 .indexMetaItem {
-  font-size: 10.5px;
+  font-size: 11px; /* --text-xs; 10.5px is off the design scale */
   color: var(--text-subtle);
 }
 
