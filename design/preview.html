@@ -762,6 +762,75 @@
           color:var(--text-muted);
           cursor:pointer;
         }
+
+        /* ── Root combinator toggle (AND/OR) ── */
+        .fb-combinator {
+          display:inline-flex;
+          border:1px solid var(--border-strong);
+          border-radius:var(--radius-md);
+          overflow:visible;
+          height:22px;
+          flex-shrink:0;
+        }
+        .fb-combinator-opt {
+          display:inline-flex;
+          align-items:center;
+          padding:0 8px;
+          font-size:10px;
+          font-weight:500;
+          font-family:"Geist Mono",ui-monospace,monospace;
+          letter-spacing:.16em;
+          text-transform:uppercase;
+          background:transparent;
+          color:var(--text-muted);
+          border:0;
+          cursor:pointer;
+          line-height:1;
+        }
+        .fb-combinator-opt:first-child { border-radius:calc(var(--radius-md) - 1px) 0 0 calc(var(--radius-md) - 1px) }
+        .fb-combinator-opt:last-child  { border-radius:0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px) 0 }
+        .fb-combinator-sep { width:1px; background:var(--border-strong); align-self:stretch; flex-shrink:0 }
+        .fb-combinator-opt.active {
+          background:var(--accent-soft);
+          color:var(--accent);
+        }
+        .fb-combinator-opt:focus-visible {
+          outline:none;
+          box-shadow:0 0 0 3px var(--accent-glow);
+          position:relative; z-index:1;
+        }
+
+        /* ── Per-row Apply (▶) button ── */
+        .fb-row-apply {
+          background:transparent;
+          border:1px solid var(--border-strong);
+          color:var(--text-subtle);
+          cursor:pointer;
+          font-size:10px;
+          padding:1px 5px;
+          border-radius:var(--radius-sm);
+          display:inline-flex;
+          align-items:center;
+          flex-shrink:0;
+          line-height:1;
+        }
+        .fb-row-apply:hover {
+          background:var(--accent-soft);
+          color:var(--accent);
+          border-color:var(--accent);
+        }
+        .fb-row-apply:focus-visible {
+          outline:none;
+          box-shadow:0 0 0 3px var(--accent-glow);
+          border-color:var(--accent);
+        }
+
+        /* ── Actions row: combinator sits left of add buttons ── */
+        .fb-add-group {
+          display:inline-flex;
+          align-items:center;
+          gap:6px;
+        }
       </style>
 
       <!-- ─────────────── POSTGRES FILTER BAR ─────────────── -->
@@ -1169,6 +1238,528 @@
               </div>
             </div>
             <div class="fb-caption">Dynamo · empty · light</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ─────────────── COMBINATOR + PER-ROW APPLY (new affordances) ─────────────── -->
+      <h2 class="section">Filter bars · combinator toggle + per-row Apply (2026-05-14)</h2>
+      <p class="lede">Two new affordances live-side the existing filter rows. The AND/OR segmented control reuses the same visual treatment as the Structured/Raw mode toggle (same <code>--radius-md</code> border, <code>--accent-soft</code> active fill, <code>--accent-glow</code> halo). The ▶ per-row Apply button fires the filter for that single row only. Inter-row connector pills reflect the selected combinator. Four variants: AND-dark, OR-dark, AND-light, OR-light — each across Postgres and Dynamo.</p>
+
+      <!-- ─── Postgres: AND-root (dark) ─── -->
+      <div class="fb-theme-row">
+        <span class="fb-theme-label">Postgres FilterBar · with combinator toggle + per-row Apply</span>
+        <div class="fb-grid">
+
+          <!-- AND · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>paid</option></select>
+                    <button class="fb-row-apply" title="Apply this row only">▶</button>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector">AND</div>
+                    <select class="fb-select"><option>created_at</option></select>
+                    <select class="fb-select"><option>≥</option></select>
+                    <select class="fb-select"><option>2026-01-01</option></select>
+                    <button class="fb-row-apply" title="Apply this row only">▶</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <div class="fb-add-group">
+                    <div class="fb-combinator">
+                      <button class="fb-combinator-opt active">AND</button>
+                      <span class="fb-combinator-sep"></span>
+                      <button class="fb-combinator-opt">OR</button>
+                    </div>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ AND row</button>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ OR group</button>
+                  </div>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary dirty">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · AND-root · dark</div>
+          </div>
+
+          <!-- OR · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>paid</option></select>
+                    <button class="fb-row-apply" title="Apply this row only">▶</button>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector" style="color:var(--accent-hover)">OR</div>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>shipped</option></select>
+                    <button class="fb-row-apply" title="Apply this row only">▶</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <div class="fb-add-group">
+                    <div class="fb-combinator">
+                      <button class="fb-combinator-opt">AND</button>
+                      <span class="fb-combinator-sep"></span>
+                      <button class="fb-combinator-opt active">OR</button>
+                    </div>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ OR row</button>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ OR group</button>
+                  </div>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary dirty">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · OR-root · dark</div>
+          </div>
+
+          <!-- empty · dark (no toggle visible) -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-empty">
+                    No filters
+                    <span style="color:var(--text-subtle)">·</span>
+                    <button class="fb-empty-add">+ AND row</button>
+                    <span style="color:var(--text-subtle)">·</span>
+                    <button class="fb-empty-add">+ OR group</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <!-- combinator hidden when no rows -->
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · empty (toggle hidden) · dark</div>
+          </div>
+
+          <!-- AND · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>paid</option></select>
+                    <button class="fb-row-apply" title="Apply this row only">▶</button>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector">AND</div>
+                    <select class="fb-select"><option>created_at</option></select>
+                    <select class="fb-select"><option>≥</option></select>
+                    <select class="fb-select"><option>2026-01-01</option></select>
+                    <button class="fb-row-apply" title="Apply this row only">▶</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <div class="fb-add-group">
+                    <div class="fb-combinator">
+                      <button class="fb-combinator-opt active">AND</button>
+                      <span class="fb-combinator-sep"></span>
+                      <button class="fb-combinator-opt">OR</button>
+                    </div>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ AND row</button>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ OR group</button>
+                  </div>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · AND-root · light</div>
+          </div>
+
+          <!-- OR · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>paid</option></select>
+                    <button class="fb-row-apply" title="Apply this row only">▶</button>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector" style="color:var(--accent)">OR</div>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>shipped</option></select>
+                    <button class="fb-row-apply" title="Apply this row only">▶</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <div class="fb-add-group">
+                    <div class="fb-combinator">
+                      <button class="fb-combinator-opt">AND</button>
+                      <span class="fb-combinator-sep"></span>
+                      <button class="fb-combinator-opt active">OR</button>
+                    </div>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ OR row</button>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ OR group</button>
+                  </div>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary dirty">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · OR-root · light</div>
+          </div>
+
+          <!-- empty · light (no toggle) -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Structured</button>
+                    <button class="fb-toggle-opt">Raw SQL</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-empty">
+                    No filters
+                    <span style="color:var(--text-subtle)">·</span>
+                    <button class="fb-empty-add">+ AND row</button>
+                    <span style="color:var(--text-subtle)">·</span>
+                    <button class="fb-empty-add">+ OR group</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Apply</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Postgres · empty (toggle hidden) · light</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ─── Dynamo: AND-root + OR-root ─── -->
+      <div class="fb-theme-row">
+        <span class="fb-theme-label">Dynamo QueryBuilder · with combinator toggle + per-row Apply</span>
+        <div class="fb-grid">
+
+          <!-- AND · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <span class="fb-badge">S</span>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>active</option></select>
+                    <button class="fb-row-apply" title="Apply this filter only">▶</button>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector">AND</div>
+                    <span class="fb-badge">N</span>
+                    <select class="fb-select"><option>amount</option></select>
+                    <select class="fb-select"><option>&gt; gt</option></select>
+                    <select class="fb-select"><option>100</option></select>
+                    <button class="fb-row-apply" title="Apply this filter only">▶</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <div class="fb-add-group">
+                    <div class="fb-combinator">
+                      <button class="fb-combinator-opt active">AND</button>
+                      <span class="fb-combinator-sep"></span>
+                      <button class="fb-combinator-opt">OR</button>
+                    </div>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ Filter</button>
+                  </div>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary dirty">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · AND-root · dark</div>
+          </div>
+
+          <!-- OR · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <span class="fb-badge">S</span>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>active</option></select>
+                    <button class="fb-row-apply" title="Apply this filter only">▶</button>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector" style="color:var(--accent-hover)">OR</div>
+                    <span class="fb-badge">S</span>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>pending</option></select>
+                    <button class="fb-row-apply" title="Apply this filter only">▶</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <div class="fb-add-group">
+                    <div class="fb-combinator">
+                      <button class="fb-combinator-opt">AND</button>
+                      <span class="fb-combinator-sep"></span>
+                      <button class="fb-combinator-opt active">OR</button>
+                    </div>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ Filter</button>
+                  </div>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary dirty">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · OR-root · dark</div>
+          </div>
+
+          <!-- empty · dark -->
+          <div class="fb-tile-wrap">
+            <div data-theme="dark">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-empty">
+                    No filters
+                    <span style="color:var(--text-subtle)">·</span>
+                    Run scans everything
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <!-- combinator hidden when no filters -->
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · empty (toggle hidden) · dark</div>
+          </div>
+
+          <!-- AND · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <span class="fb-badge">S</span>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>active</option></select>
+                    <button class="fb-row-apply" title="Apply this filter only">▶</button>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector">AND</div>
+                    <span class="fb-badge">N</span>
+                    <select class="fb-select"><option>amount</option></select>
+                    <select class="fb-select"><option>&gt; gt</option></select>
+                    <select class="fb-select"><option>100</option></select>
+                    <button class="fb-row-apply" title="Apply this filter only">▶</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <div class="fb-add-group">
+                    <div class="fb-combinator">
+                      <button class="fb-combinator-opt active">AND</button>
+                      <span class="fb-combinator-sep"></span>
+                      <button class="fb-combinator-opt">OR</button>
+                    </div>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ Filter</button>
+                  </div>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · AND-root · light</div>
+          </div>
+
+          <!-- OR · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-condition">
+                    <div class="fb-connector">—</div>
+                    <span class="fb-badge">S</span>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>active</option></select>
+                    <button class="fb-row-apply" title="Apply this filter only">▶</button>
+                  </div>
+                  <div class="fb-condition">
+                    <div class="fb-connector" style="color:var(--accent)">OR</div>
+                    <span class="fb-badge">S</span>
+                    <select class="fb-select"><option>status</option></select>
+                    <select class="fb-select"><option>= equals</option></select>
+                    <select class="fb-select"><option>pending</option></select>
+                    <button class="fb-row-apply" title="Apply this filter only">▶</button>
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <div class="fb-add-group">
+                    <div class="fb-combinator">
+                      <button class="fb-combinator-opt">AND</button>
+                      <span class="fb-combinator-sep"></span>
+                      <button class="fb-combinator-opt active">OR</button>
+                    </div>
+                    <button class="fb-btn-secondary" style="font-size:10px;padding:3px 8px">+ Filter</button>
+                  </div>
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary dirty">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · OR-root · light</div>
+          </div>
+
+          <!-- empty · light -->
+          <div class="fb-tile-wrap">
+            <div data-theme="light">
+              <div class="fb-shell">
+                <div class="fb-header">
+                  <div class="fb-toggle">
+                    <button class="fb-toggle-opt active">Scan</button>
+                    <button class="fb-toggle-opt">Query</button>
+                  </div>
+                  <div class="fb-header-title"></div>
+                  <span class="fb-hint" style="font-size:10px;letter-spacing:.1em">⌘F</span>
+                </div>
+                <div class="fb-body">
+                  <div class="fb-empty">
+                    No filters
+                    <span style="color:var(--text-subtle)">·</span>
+                    Run scans everything
+                  </div>
+                </div>
+                <div class="fb-actions">
+                  <span class="fb-spacer"></span>
+                  <button class="fb-btn-primary">Run</button>
+                  <span class="fb-hint">⌘↵</span>
+                </div>
+              </div>
+            </div>
+            <div class="fb-caption">Dynamo · empty (toggle hidden) · light</div>
           </div>
 
         </div>

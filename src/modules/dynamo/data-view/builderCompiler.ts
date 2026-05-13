@@ -34,6 +34,7 @@ import type {
   ScanRequest,
   TypedValue,
 } from "./types";
+import { getFilterCombinator } from "./types";
 
 // ---------------------------------------------------------------------------
 // Public return type
@@ -308,8 +309,9 @@ export function compile(
     compileFilterRow(row, filterAccum);
   }
 
+  const filterSeparator = ` ${getFilterCombinator(builder)} `;
   const filterExpression =
-    filterAccum.parts.length > 0 ? filterAccum.parts.join(" AND ") : null;
+    filterAccum.parts.length > 0 ? filterAccum.parts.join(filterSeparator) : null;
   const mergedNames: Record<string, string> = { ...filterAccum.names };
   const mergedValues: Record<string, AttributeValue> = { ...filterAccum.values };
 

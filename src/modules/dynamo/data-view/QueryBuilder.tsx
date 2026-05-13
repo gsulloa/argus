@@ -9,10 +9,11 @@
  * builder is in an invalid state (e.g., Query mode with no PK value).
  */
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useImperativeHandle } from "react";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
 import { compile } from "./builderCompiler";
 import type { BuilderState, FilterRow, TypedValue } from "./types";
+import { getFilterCombinator } from "./types";
 import {
   FilterBarShell,
   FilterBarHeader,
@@ -25,6 +26,9 @@ import {
   PrimaryButton,
   SecondaryButton,
   EmptyBodyRow,
+  RootCombinatorToggle,
+  RowApplyButton,
+  type FilterBarHandle,
 } from "@/modules/shared/filter-bar";
 import styles from "./QueryBuilder.module.css";
 
@@ -39,6 +43,16 @@ export interface QueryBuilderProps {
   onValidityChange(isValid: boolean, reason?: string): void;
   onRun?(): void;
   onReset?(): void;
+  /**
+   * Called when the user clicks the per-row Apply button on filter row `index`.
+   * The host receives a transient BuilderState containing only that one filter
+   * row (with mode, indexName, query, filterCombinator preserved) and is
+   * responsible for compiling and dispatching the scan/query.
+   *
+   * Option B: host-owned dispatch. QueryBuilder internally marks lastRunStateRef
+   * to that transient state so the dirty pip remains accurate.
+   */
+  onApplyOnlyFilter?(transient: BuilderState): void;
   /** When true, all interactive controls are disabled (e.g. needs_credentials). */
   disabled?: boolean;
 }
@@ -123,6 +137,8 @@ interface TypedValueEditorProps {
   fixedType?: "S" | "N" | "B";
   className?: string;
   "data-testid"?: string;
+  /** When provided, sets `data-filter-focus-target` on the value input. */
+  "data-filter-focus-target"?: string;
 }
 
 function TypedValueEditor({
@@ -130,6 +146,7 @@ function TypedValueEditor({
   onChange,
   fixedType,
   "data-testid": testId,
+  "data-filter-focus-target": focusTarget,
 }: TypedValueEditorProps) {
   const effectiveType = fixedType ?? value.type;
 
@@ -178,6 +195,7 @@ function TypedValueEditor({
         onChange={(e) => onChange({ type: "S", value: e.target.value })}
         placeholder="string value"
         data-testid={testId}
+        data-filter-focus-target={focusTarget}
         aria-label="String value"
       />
     );
@@ -198,6 +216,7 @@ function TypedValueEditor({
         }}
         placeholder="numeric value"
         data-testid={testId}
+        data-filter-focus-target={focusTarget}
         aria-label="Numeric value"
       />
     );
@@ -210,6 +229,7 @@ function TypedValueEditor({
         onClick={() => onChange({ type: "BOOL", value: !v })}
         aria-label={`Boolean value: ${v ? "true" : "false"}`}
         data-testid={testId}
+        data-filter-focus-target={focusTarget}
       >
         <span className={`${styles.boolToggleTrack} ${v ? styles.boolToggleTrackOn : ""}`}>
           <span className={`${styles.boolToggleThumb} ${v ? styles.boolToggleThumbOn : ""}`} />
@@ -284,9 +304,12 @@ interface FilterRowEditorProps {
   index: number;
   onChange(next: FilterRow): void;
   onRemove(): void;
+  onApplyOnly?(): void;
+  /** When true, this is the first filter row and should receive the focus target marker. */
+  isFirst?: boolean;
 }
 
-function FilterRowEditor({ row, index, onChange, onRemove }: FilterRowEditorProps) {
+function FilterRowEditor({ row, index, onChange, onRemove, onApplyOnly, isFirst }: FilterRowEditorProps) {
   const currentOp = filterRowOp(row);
 
   function handleAttrChange(attr: string) {
@@ -432,6 +455,7 @@ function FilterRowEditor({ row, index, onChange, onRemove }: FilterRowEditorProp
         placeholder="attribute"
         aria-label={`Filter ${index} attribute name`}
         data-testid={`filter-${index}-attr`}
+        data-filter-focus-target={isFirst ? "first-filter" : undefined}
       />
       <select
         className={styles.filterOpSelect}
@@ -445,6 +469,13 @@ function FilterRowEditor({ row, index, onChange, onRemove }: FilterRowEditorProp
         ))}
       </select>
       {valueEditor}
+      {onApplyOnly && (
+        <RowApplyButton
+          onClick={onApplyOnly}
+          aria-label="Apply only this filter"
+          title="Apply only this filter (replaces active filter)"
+        />
+      )}
       <button
         type="button"
         className={styles.removeBtn}
@@ -483,6 +514,7 @@ function normalizeForDirty(builder: BuilderState): string {
     indexName: builder.indexName,
     query: builder.query,
     filters: builder.filters,
+    filterCombinator: builder.filterCombinator,
   });
 }
 
@@ -490,19 +522,73 @@ function normalizeForDirty(builder: BuilderState): string {
 // Main QueryBuilder
 // ---------------------------------------------------------------------------
 
-export function QueryBuilder({
-  builder,
-  describe,
-  onBuilderChange,
-  onValidityChange,
-  onRun,
-  onReset,
-  disabled = false,
-}: QueryBuilderProps) {
+// QueryBuilder is exported as a named function (forwardRef preserves the name).
+export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>(
+  function QueryBuilder(
+    {
+      builder,
+      describe,
+      onBuilderChange,
+      onValidityChange,
+      onRun,
+      onReset,
+      onApplyOnlyFilter,
+      disabled = false,
+    }: QueryBuilderProps,
+    ref,
+  ) {
   const [previewOpen, setPreviewOpen] = useState(false);
 
   // lastRunState tracks what was last executed so we can show the dirty pip
   const lastRunStateRef = useRef<string | null>(null);
+
+  // rootRef scopes the data-filter-focus-target query inside focus()
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Compute whether the PK value is empty (used for focus target resolution)
+  const isPkEmpty = builder.mode === "query" && (() => {
+    const v = builder.query?.partitionKey.value;
+    if (!v) return true;
+    if (v.type === "S" || v.type === "N") return v.value === "";
+    if (v.type === "BOOL") return false;
+    if (v.type === "NULL") return false;
+    return true;
+  })();
+
+  // Expose FilterBarHandle via forwardRef
+  useImperativeHandle(ref, () => ({
+    focus() {
+      const root = rootRef.current;
+      if (!root) return;
+      // Priority 1: Query mode with empty PK → focus PK value input
+      if (builder.mode === "query" && isPkEmpty) {
+        const pkInput = root.querySelector<HTMLElement>('[data-filter-focus-target="pk"]');
+        pkInput?.focus();
+        return;
+      }
+      // Priority 2: Filters exist → focus first filter row's attribute input
+      if (builder.filters.length > 0) {
+        const filterInput = root.querySelector<HTMLElement>('[data-filter-focus-target="first-filter"]');
+        filterInput?.focus();
+        return;
+      }
+      // Priority 3: Empty → focus the + Filter add button (queried by testid)
+      const addBtn = root.querySelector<HTMLElement>('[data-testid="add-filter"]');
+      addBtn?.focus();
+    },
+  }), [builder.mode, builder.filters.length, isPkEmpty]);
+
+  // Per-row Apply handler: build a transient BuilderState with one filter,
+  // mark lastRunStateRef so the dirty pip remains accurate, then delegate to host.
+  function handleApplyOnlyRow(i: number) {
+    const transient: BuilderState = {
+      ...builder,
+      filters: [builder.filters[i]!],
+    };
+    // Mark the transient state as last-run so pip shows divergence from full draft
+    lastRunStateRef.current = normalizeForDirty(transient);
+    onApplyOnlyFilter?.(transient);
+  }
 
   const indexOptions = buildIndexOptions(describe);
   const keySchema = resolveKeySchema(builder, describe);
@@ -671,6 +757,7 @@ export function QueryBuilder({
   const canRun = isValid && !disabled;
 
   return (
+    <div ref={rootRef}>
     <FilterBarShell>
       {/* ── Header: mode toggle + index ────────────────────────────────── */}
       <FilterBarHeader>
@@ -732,6 +819,7 @@ export function QueryBuilder({
                 onChange={setPkValue}
                 fixedType={keySchema.pkType}
                 data-testid="pk-value"
+                data-filter-focus-target={isPkEmpty ? "pk" : undefined}
               />
               {pkHint && (
                 <span className={styles.hint} role="alert" data-testid="pk-hint">
@@ -887,21 +975,35 @@ export function QueryBuilder({
             <>
               {builder.filters.map((row, i) => (
                 <React.Fragment key={i}>
-                  {i > 0 && <FilterConnector label="AND" />}
+                  {i > 0 && <FilterConnector label={getFilterCombinator(builder)} />}
                   <FilterRowEditor
                     row={row}
                     index={i}
                     onChange={(next) => updateFilter(i, next)}
                     onRemove={() => removeFilter(i)}
+                    onApplyOnly={onApplyOnlyFilter ? () => handleApplyOnlyRow(i) : undefined}
+                    isFirst={i === 0}
                   />
                 </React.Fragment>
               ))}
-              <FilterRowAddButton
-                onClick={addFilter}
-                data-testid="add-filter"
-              >
-                + Filter
-              </FilterRowAddButton>
+              <div className={styles.filtersActions}>
+                {/* AND|OR toggle — hidden when no filters */}
+                <RootCombinatorToggle
+                  value={getFilterCombinator(builder)}
+                  onChange={(c) => {
+                    const next = { ...builder, filterCombinator: c };
+                    onBuilderChange(next);
+                    revalidate(next);
+                  }}
+                  aria-label="Filter combinator"
+                />
+                <FilterRowAddButton
+                  onClick={addFilter}
+                  data-testid="add-filter"
+                >
+                  + Filter
+                </FilterRowAddButton>
+              </div>
             </>
           )}
         </div>
@@ -993,8 +1095,12 @@ export function QueryBuilder({
         }
       />
     </FilterBarShell>
+    </div>
   );
-}
+  },
+);
+
+QueryBuilder.displayName = "QueryBuilder";
 
 // ---------------------------------------------------------------------------
 // Private helper: resolveKeySchema for a specific indexName

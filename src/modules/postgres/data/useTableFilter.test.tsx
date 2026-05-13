@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { useTableFilter } from "./useTableFilter";
+import { normalizePersistedFilter, useTableFilter } from "./useTableFilter";
 import { EMPTY_FILTER_MODEL, type FilterModel } from "./types";
 
 const filterA: FilterModel = {
@@ -14,15 +14,69 @@ const filterA: FilterModel = {
         value: "CL",
       },
     ],
+    combinator: "AND",
   },
   raw: "",
 };
 
 const filterB: FilterModel = {
   mode: "raw",
-  tree: { children: [] },
+  tree: { children: [], combinator: "AND" },
   raw: "id > 10",
 };
+
+// ---------------------------------------------------------------------------
+// normalizePersistedFilter — backward-compat coercion
+// ---------------------------------------------------------------------------
+
+describe("normalizePersistedFilter", () => {
+  it("coerces missing combinator to AND on both trees", () => {
+    // Simulate a legacy persisted record without the combinator field.
+    const legacy = {
+      draft: {
+        mode: "structured" as const,
+        tree: { children: [] }, // no combinator field
+        raw: "",
+      },
+      applied: {
+        mode: "structured" as const,
+        tree: {
+          children: [
+            {
+              kind: "condition" as const,
+              column: { kind: "named" as const, name: "x" },
+              op: "=" as const,
+              value: "1",
+            },
+          ],
+          // no combinator field
+        },
+        raw: "",
+      },
+    };
+    const normalized = normalizePersistedFilter(legacy);
+    expect(normalized.draft.tree.combinator).toBe("AND");
+    expect(normalized.applied.tree.combinator).toBe("AND");
+  });
+
+  it("preserves an explicitly set combinator", () => {
+    const record = {
+      draft: {
+        mode: "structured" as const,
+        tree: { children: [], combinator: "OR" as const },
+        raw: "",
+      },
+      applied: {
+        mode: "structured" as const,
+        tree: { children: [], combinator: "AND" as const },
+        raw: "",
+      },
+    };
+    const normalized = normalizePersistedFilter(record);
+    expect(normalized.draft.tree.combinator).toBe("OR");
+    expect(normalized.applied.tree.combinator).toBe("AND");
+  });
+});
 
 describe("useTableFilter", () => {
   it("starts at EMPTY_FILTER_MODEL when nothing is persisted", () => {

@@ -1,4 +1,5 @@
 import {
+  getRootCombinator,
   trimLeadingWhere,
   type ColumnRef,
   type Condition,
@@ -50,7 +51,8 @@ function compileTree(tree: FilterTree, columns: DataColumn[]): string {
       parts.push(`(${inner.join(" OR ")})`);
     }
   }
-  return parts.join(" AND ");
+  const combinator = getRootCombinator(tree);
+  return parts.join(combinator === "OR" ? " OR " : " AND ");
 }
 
 function compileCondition(c: Condition, columns: DataColumn[]): string {

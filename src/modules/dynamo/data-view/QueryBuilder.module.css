@@ -175,6 +175,15 @@
   gap: var(--space-xs);
 }
 
+/* ── Filters actions row (combinator toggle + add button) ────────── */
+
+.filtersActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 /* ── Filter row ──────────────────────────────────────────────────── */
 
 .filterRow {

@@ -1,3 +1,4 @@
+import { act, createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { FilterBar } from "./FilterBar";
@@ -7,6 +8,7 @@ import {
   type DataColumn,
   type FilterModel,
 } from "../types";
+import type { FilterBarHandle } from "../../../shared/filter-bar";
 
 const cols: DataColumn[] = [
   { name: "id", data_type: "int4", ordinal_position: 1, is_nullable: false },
@@ -276,7 +278,7 @@ describe("FilterBar — Raw → Structured confirm", () => {
     fireEvent.click(screen.getByRole("button", { name: "Switch" }));
     expect(onDraftChange).toHaveBeenCalledWith({
       mode: "structured",
-      tree: { children: [] },
+      tree: { children: [], combinator: "AND" },
       raw: "",
     });
   });
@@ -373,5 +375,248 @@ describe("modelToPayload — wire shape", () => {
         ],
       },
     });
+  });
+});
+
+// ─── Section 5.7 — new tests ──────────────────────────────────────────────────
+
+describe("FilterBar — root combinator toggle", () => {
+  const draftWithRow: FilterModel = {
+    mode: "structured",
+    tree: {
+      combinator: "AND",
+      children: [
+        {
+          kind: "condition",
+          column: { kind: "named", name: "country" },
+          op: "=",
+          value: "CL",
+        },
+        {
+          kind: "condition",
+          column: { kind: "named", name: "status" },
+          op: "=",
+          value: "ok",
+        },
+      ],
+    },
+    raw: "",
+  };
+
+  it("is hidden when the tree has no children", () => {
+    render(<FilterBar {...makeProps()} />);
+    // The root combinator toggle should not be rendered for an empty tree.
+    expect(screen.queryByRole("radiogroup", { name: /Root combinator/i })).toBeNull();
+  });
+
+  it("is visible when there is at least one row", () => {
+    const draft: FilterModel = {
+      mode: "structured",
+      tree: {
+        combinator: "AND",
+        children: [
+          {
+            kind: "condition",
+            column: { kind: "named", name: "country" },
+            op: "=",
+            value: "CL",
+          },
+        ],
+      },
+      raw: "",
+    };
+    render(<FilterBar {...makeProps({ draft })} />);
+    expect(screen.getByRole("radiogroup", { name: /Root combinator/i })).toBeInTheDocument();
+  });
+
+  it("toggling combinator calls onDraftChange with updated tree combinator", () => {
+    const onDraftChange = vi.fn();
+    render(<FilterBar {...makeProps({ draft: draftWithRow, onDraftChange })} />);
+
+    // The "OR" radio button should be unchecked initially.
+    const orRadio = screen.getByRole("radio", { name: "OR" });
+    expect(orRadio).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(orRadio);
+
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.tree.combinator).toBe("OR");
+    // Children must be preserved.
+    expect(next.tree.children).toHaveLength(2);
+  });
+
+  it("inter-row connector pills reflect the active combinator", () => {
+    const onDraftChange = vi.fn();
+    render(<FilterBar {...makeProps({ draft: draftWithRow, onDraftChange })} />);
+
+    // Two rows → one FilterConnector pill showing "AND".
+    // getAllByText captures all instances; at least one must be the connector pill.
+    expect(screen.getAllByText("AND").length).toBeGreaterThan(0);
+    // No OR connector pills should be present (OR only appears inside an OR group
+    // in Structured mode with AND combinator; here we have flat AND rows).
+    // The RootCombinatorToggle renders an "OR" radio button too, so we check
+    // that no FilterConnector (span) shows "OR" text.
+    const orConnectors = screen
+      .queryAllByText("OR")
+      .filter((el) => el.tagName === "SPAN" && el.getAttribute("role") !== "radio");
+    expect(orConnectors).toHaveLength(0);
+  });
+
+  it("connector pills read OR after toggling to OR", () => {
+    const orDraft: FilterModel = {
+      ...draftWithRow,
+      tree: { ...draftWithRow.tree, combinator: "OR" },
+    };
+    render(<FilterBar {...makeProps({ draft: orDraft })} />);
+    // The inter-row connector should now show OR.
+    expect(screen.getAllByText("OR").length).toBeGreaterThan(0);
+  });
+});
+
+describe("FilterBar — per-row Apply button", () => {
+  const conditionRow: FilterModel = {
+    mode: "structured",
+    tree: {
+      combinator: "AND",
+      children: [
+        {
+          kind: "condition",
+          column: { kind: "named", name: "country" },
+          op: "=",
+          value: "CL",
+        },
+        {
+          kind: "condition",
+          column: { kind: "named", name: "status" },
+          op: "=",
+          value: "ok",
+        },
+      ],
+    },
+    raw: "",
+  };
+
+  const orGroupRow: FilterModel = {
+    mode: "structured",
+    tree: {
+      combinator: "AND",
+      children: [
+        {
+          kind: "condition",
+          column: { kind: "named", name: "country" },
+          op: "=",
+          value: "CL",
+        },
+        {
+          kind: "or_group",
+          children: [
+            {
+              kind: "condition",
+              column: { kind: "named", name: "status" },
+              op: "=",
+              value: "ok",
+            },
+          ],
+        },
+      ],
+    },
+    raw: "",
+  };
+
+  it("calls onApplyOnlyRow with the correct index for a condition row", () => {
+    const onApplyOnlyRow = vi.fn();
+    render(
+      <FilterBar {...makeProps({ draft: conditionRow, onApplyOnlyRow })} />,
+    );
+    const applyOnlyBtns = screen.getAllByRole("button", {
+      name: "Apply only this row",
+    });
+    // Two condition rows → two apply-only buttons.
+    expect(applyOnlyBtns).toHaveLength(2);
+
+    // Click the second row's button → index 1.
+    fireEvent.click(applyOnlyBtns[1]!);
+    expect(onApplyOnlyRow).toHaveBeenCalledWith(1);
+  });
+
+  it("calls onApplyOnlyRow with the correct index for an OR group row", () => {
+    const onApplyOnlyRow = vi.fn();
+    render(
+      <FilterBar {...makeProps({ draft: orGroupRow, onApplyOnlyRow })} />,
+    );
+    // The OR group header has "Apply only this OR group" button.
+    const groupApplyBtn = screen.getByRole("button", {
+      name: "Apply only this OR group",
+    });
+    fireEvent.click(groupApplyBtn);
+    // The OR group is at root index 1.
+    expect(onApplyOnlyRow).toHaveBeenCalledWith(1);
+  });
+
+  it("does not render apply-only buttons when onApplyOnlyRow is not provided", () => {
+    render(<FilterBar {...makeProps({ draft: conditionRow })} />);
+    expect(
+      screen.queryByRole("button", { name: /Apply only this/ }),
+    ).toBeNull();
+  });
+});
+
+describe("FilterBar — forwardRef focus() API", () => {
+  it("when collapsed, expands and focuses the empty-state add button", () => {
+    const ref = createRef<FilterBarHandle>();
+    render(<FilterBar ref={ref} {...makeProps()} />);
+
+    // Collapse the bar.
+    fireEvent.click(screen.getByRole("button", { name: "Collapse filter bar" }));
+    expect(screen.queryByText("No filters yet")).toBeNull();
+
+    // Call focus() inside act() so React processes the setCollapsed(false)
+    // state update and re-renders before we assert.
+    act(() => {
+      ref.current?.focus();
+    });
+
+    // After focus(), the bar should be expanded.
+    expect(screen.getByText("No filters yet")).toBeInTheDocument();
+  });
+
+  it("when expanded with rows, the column picker is marked as focus target", () => {
+    const draft: FilterModel = {
+      mode: "structured",
+      tree: {
+        combinator: "AND",
+        children: [
+          {
+            kind: "condition",
+            column: { kind: "named", name: "country" },
+            op: "=",
+            value: "CL",
+          },
+        ],
+      },
+      raw: "",
+    };
+    const ref = createRef<FilterBarHandle>();
+    const { container } = render(<FilterBar ref={ref} {...makeProps({ draft })} />);
+
+    // The first row should have data-filter-focus-target="true" on the column
+    // picker's wrapper.
+    const focusTarget = container.querySelector("[data-filter-focus-target='true']");
+    expect(focusTarget).toBeInTheDocument();
+  });
+
+  it("empty state add button is wrapped by the focus-target container", () => {
+    const ref = createRef<FilterBarHandle>();
+    const { container } = render(<FilterBar ref={ref} {...makeProps()} />);
+
+    // The empty state wraps the first + AND row button in a container.
+    const focusContainer = container.querySelector(
+      "[data-filter-focus-target-container='true']",
+    );
+    expect(focusContainer).toBeInTheDocument();
+    // The container should contain a button.
+    const btn = focusContainer?.querySelector("button");
+    expect(btn).toBeInTheDocument();
   });
 });

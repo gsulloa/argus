@@ -30,11 +30,14 @@ import {
 } from "../structure/SubtabHeader";
 import { useTableStructureCache } from "../structure/useTableStructureCache";
 import {
+  getRootCombinator,
   modelToPayload,
   type CellValue,
   type EditValue,
+  type FilterModel,
   type RelationKind,
 } from "./types";
+import type { FilterBarHandle } from "../../shared/filter-bar";
 import styles from "./TableViewerTab.module.css";
 
 export const POSTGRES_TABLE_DATA_KIND = "postgres-table-data";
@@ -390,6 +393,8 @@ export function TableViewer({
   // Keyboard shortcuts at the tab root. Only attach when this tab is active
   // so multiple mounted tabs don't double-fire window-level shortcuts.
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // Ref to the FilterBar imperative handle for ⌘F keyboard shortcut.
+  const filterBarRef = useRef<FilterBarHandle>(null);
   useEffect(() => {
     if (!active) return;
     function onKey(e: KeyboardEvent) {
@@ -436,10 +441,20 @@ export function TableViewer({
           }
         }
       }
+      // ⌘F / Ctrl+F → focus the filter bar (Data subtab only).
+      // Skip when focus is inside a CodeMirror surface so its built-in ⌘F
+      // search panel keeps working.
+      if ((e.metaKey || e.ctrlKey) && e.key === "f" && !e.shiftKey && !e.altKey) {
+        const focused = document.activeElement as HTMLElement | null;
+        if (focused?.closest(".cm-editor")) return;
+        if (activeSubtab !== "data") return;
+        e.preventDefault();
+        filterBarRef.current?.focus();
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, onSave, buffer]);
+  }, [active, onSave, buffer, activeSubtab]);
 
   function onAddRow() {
     if (isReadOnly) return;
@@ -452,6 +467,20 @@ export function TableViewer({
   const onApplyFilters = useCallback(() => {
     setRawError(null);
     setApplied(draft);
+  }, [draft, setApplied]);
+
+  const onApplyOnlyRow = useCallback((index: number) => {
+    const child = draft.tree.children[index];
+    if (!child) return;
+    setRawError(null);
+    const single: FilterModel = {
+      ...draft,
+      tree: {
+        children: [child],
+        combinator: getRootCombinator(draft.tree),
+      },
+    };
+    setApplied(single);
   }, [draft, setApplied]);
 
   const onResetFilters = useCallback(() => {
@@ -530,6 +559,7 @@ export function TableViewer({
           </div>
         )}
         <FilterBar
+          ref={filterBarRef}
           draft={draft}
           applied={applied}
           columns={data.columns}
@@ -538,6 +568,7 @@ export function TableViewer({
           onApply={onApplyFilters}
           onReset={onResetFilters}
           onOpenInSqlEditor={onOpenInSqlEditor}
+          onApplyOnlyRow={onApplyOnlyRow}
         />
         <div className={styles.body}>
           <div className={styles.gridArea}>

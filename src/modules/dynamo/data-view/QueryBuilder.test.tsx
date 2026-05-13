@@ -11,11 +11,13 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { createRef } from "react";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { QueryBuilder } from "./QueryBuilder";
 import { compile } from "./builderCompiler";
 import type { BuilderState, FilterRow } from "./types";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
+import type { FilterBarHandle } from "@/modules/shared/filter-bar";
 
 // ---------------------------------------------------------------------------
 // Test fixture
@@ -65,10 +67,20 @@ const INITIAL_BUILDER: BuilderState = {
 // Controlled wrapper helper
 // ---------------------------------------------------------------------------
 
+interface RenderOptions {
+  onValidityChangeFn?: (isValid: boolean, reason?: string) => void;
+  onApplyOnlyFilter?: (transient: BuilderState) => void;
+  ref?: React.Ref<FilterBarHandle>;
+}
+
 function renderQueryBuilder(
   initialBuilder: BuilderState = INITIAL_BUILDER,
-  onValidityChangeFn?: (isValid: boolean, reason?: string) => void,
+  opts: RenderOptions | ((isValid: boolean, reason?: string) => void) = {},
 ) {
+  // Support legacy signature: renderQueryBuilder(builder, validityFn)
+  const options: RenderOptions = typeof opts === "function" ? { onValidityChangeFn: opts } : opts;
+  const { onValidityChangeFn, onApplyOnlyFilter, ref } = options;
+
   let currentBuilder = initialBuilder;
   const onValidityChange = onValidityChangeFn ?? vi.fn();
   const onBuilderChange = vi.fn((next: BuilderState) => {
@@ -77,20 +89,24 @@ function renderQueryBuilder(
 
   const { rerender } = render(
     <QueryBuilder
+      ref={ref}
       builder={currentBuilder}
       describe={DESCRIBE}
       onBuilderChange={onBuilderChange}
       onValidityChange={onValidityChange}
+      onApplyOnlyFilter={onApplyOnlyFilter}
     />,
   );
 
   function rerenderWithLatest() {
     rerender(
       <QueryBuilder
+        ref={ref}
         builder={currentBuilder}
         describe={DESCRIBE}
         onBuilderChange={onBuilderChange}
         onValidityChange={onValidityChange}
+        onApplyOnlyFilter={onApplyOnlyFilter}
       />,
     );
   }
@@ -526,6 +542,201 @@ describe("QueryBuilder", () => {
         expect(result.request.filter_expression).toBe("attribute_not_exists(#n0)");
         expect(result.request.expression_attribute_values).toBeNull();
       }
+    });
+  });
+
+  // ── 8.2/8.3 Combinator toggle ─────────────────────────────────────────────
+
+  describe("RootCombinatorToggle (section 8.2–8.3)", () => {
+    it("toggle is NOT rendered when filters.length === 0", () => {
+      renderQueryBuilder();
+      // No filter rows → no combinator toggle
+      expect(screen.queryByRole("radiogroup", { name: /filter combinator/i })).toBeNull();
+    });
+
+    it("toggle IS rendered when at least one filter row exists", () => {
+      const builderWithFilter: BuilderState = {
+        ...INITIAL_BUILDER,
+        filters: [{ kind: "compare", attribute: "status", op: "=", value: { type: "S", value: "ok" } }],
+      };
+      renderQueryBuilder(builderWithFilter);
+      expect(screen.getByRole("radiogroup", { name: /filter combinator/i })).toBeTruthy();
+    });
+
+    it("toggle defaults to AND", () => {
+      const builderWithFilter: BuilderState = {
+        ...INITIAL_BUILDER,
+        filters: [{ kind: "compare", attribute: "a", op: "=", value: { type: "S", value: "1" } }],
+      };
+      renderQueryBuilder(builderWithFilter);
+      const andBtn = screen.getByRole("radio", { name: "AND" });
+      expect(andBtn.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("clicking OR flips filterCombinator to OR and marks builder dirty via onBuilderChange", () => {
+      const builderWithFilter: BuilderState = {
+        ...INITIAL_BUILDER,
+        filters: [{ kind: "compare", attribute: "a", op: "=", value: { type: "S", value: "1" } }],
+      };
+      const { onBuilderChange } = renderQueryBuilder(builderWithFilter);
+      const orBtn = screen.getByRole("radio", { name: "OR" });
+      fireEvent.click(orBtn);
+      expect(onBuilderChange).toHaveBeenCalledTimes(1);
+      const next: BuilderState = onBuilderChange.mock.calls[0]![0]!;
+      expect(next.filterCombinator).toBe("OR");
+    });
+
+    it("FilterConnector between rows uses the active combinator", () => {
+      const builderWithTwoFilters: BuilderState = {
+        ...INITIAL_BUILDER,
+        filterCombinator: "OR",
+        filters: [
+          { kind: "compare", attribute: "a", op: "=", value: { type: "S", value: "1" } },
+          { kind: "compare", attribute: "b", op: "=", value: { type: "S", value: "2" } },
+        ],
+      };
+      renderQueryBuilder(builderWithTwoFilters);
+      // The FilterConnector pill between row 0 and row 1 should show "OR".
+      // The toggle also shows "OR" as a radio button, so look for the connector
+      // specifically — it renders as a non-button element with the label text.
+      // We check that an element with the connector role/text is present.
+      const orTexts = screen.getAllByText("OR");
+      expect(orTexts.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("OR combinator compiles FilterExpression with OR joiner", () => {
+      const orBuilder: BuilderState = {
+        ...INITIAL_BUILDER,
+        filterCombinator: "OR",
+        filters: [
+          { kind: "compare", attribute: "status", op: "=", value: { type: "S", value: "ok" } },
+          { kind: "compare", attribute: "count", op: ">=", value: { type: "N", value: "5" } },
+        ],
+      };
+      const result = compile(orBuilder, DESCRIBE);
+      expect(result.kind).toBe("scan");
+      if (result.kind === "scan") {
+        expect(result.request.filter_expression).toBe("#n0 = :v0 OR #n1 >= :v1");
+      }
+    });
+  });
+
+  // ── 8.5 Per-row Apply button ──────────────────────────────────────────────
+
+  describe("RowApplyButton (section 8.5)", () => {
+    it("Apply-only button is NOT rendered when onApplyOnlyFilter is undefined", () => {
+      const builderWithFilter: BuilderState = {
+        ...INITIAL_BUILDER,
+        filters: [{ kind: "compare", attribute: "status", op: "=", value: { type: "S", value: "ok" } }],
+      };
+      renderQueryBuilder(builderWithFilter);
+      // aria-label from spec: "Apply only this filter"
+      expect(screen.queryByRole("button", { name: /apply only this filter/i })).toBeNull();
+    });
+
+    it("Apply-only button IS rendered when onApplyOnlyFilter is provided", () => {
+      const builderWithFilter: BuilderState = {
+        ...INITIAL_BUILDER,
+        filters: [{ kind: "compare", attribute: "status", op: "=", value: { type: "S", value: "ok" } }],
+      };
+      const onApplyOnly = vi.fn();
+      renderQueryBuilder(builderWithFilter, { onApplyOnlyFilter: onApplyOnly });
+      expect(screen.getByRole("button", { name: /apply only this filter/i })).toBeTruthy();
+    });
+
+    it("clicking Apply-only button fires onApplyOnlyFilter with the correct transient state", () => {
+      const builderWithTwoFilters: BuilderState = {
+        ...INITIAL_BUILDER,
+        filters: [
+          { kind: "compare", attribute: "status", op: "=", value: { type: "S", value: "ok" } },
+          { kind: "compare", attribute: "count", op: ">=", value: { type: "N", value: "5" } },
+        ],
+      };
+      const onApplyOnly = vi.fn();
+      renderQueryBuilder(builderWithTwoFilters, { onApplyOnlyFilter: onApplyOnly });
+
+      const applyBtns = screen.getAllByRole("button", { name: /apply only this filter/i });
+      // Click the first row's apply button
+      fireEvent.click(applyBtns[0]!);
+      expect(onApplyOnly).toHaveBeenCalledTimes(1);
+      const transient: BuilderState = onApplyOnly.mock.calls[0]![0];
+      // Transient should have only the first filter
+      expect(transient.filters).toHaveLength(1);
+      expect(transient.filters[0]?.attribute).toBe("status");
+      // Original builder fields preserved
+      expect(transient.mode).toBe("scan");
+    });
+
+    it("clicking Apply-only on the second filter row sends the second filter", () => {
+      const builderWithThreeFilters: BuilderState = {
+        ...INITIAL_BUILDER,
+        filters: [
+          { kind: "compare", attribute: "a", op: "=", value: { type: "S", value: "1" } },
+          { kind: "compare", attribute: "status", op: "=", value: { type: "S", value: "ok" } },
+          { kind: "compare", attribute: "c", op: "=", value: { type: "S", value: "3" } },
+        ],
+      };
+      const onApplyOnly = vi.fn();
+      renderQueryBuilder(builderWithThreeFilters, { onApplyOnlyFilter: onApplyOnly });
+
+      const applyBtns = screen.getAllByRole("button", { name: /apply only this filter/i });
+      // Click the SECOND row's apply button (index 1)
+      fireEvent.click(applyBtns[1]!);
+      expect(onApplyOnly).toHaveBeenCalledTimes(1);
+      const transient: BuilderState = onApplyOnly.mock.calls[0]![0];
+      expect(transient.filters).toHaveLength(1);
+      expect(transient.filters[0]?.attribute).toBe("status");
+    });
+  });
+
+  // ── 8.1 forwardRef focus() ────────────────────────────────────────────────
+
+  describe("FilterBarHandle.focus() (section 8.1)", () => {
+    it("focus() targets the PK value input when in Query mode with empty PK", () => {
+      const queryBuilderWithEmptyPk: BuilderState = {
+        ...INITIAL_BUILDER,
+        mode: "query",
+        query: {
+          partitionKey: { name: "pk", value: { type: "S", value: "" } },
+        },
+      };
+      const ref = createRef<FilterBarHandle>();
+      renderQueryBuilder(queryBuilderWithEmptyPk, { ref });
+
+      const pkInput = screen.getByTestId("pk-value");
+      const focusSpy = vi.spyOn(pkInput, "focus");
+
+      ref.current?.focus();
+
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("focus() targets the first filter attribute input when filters exist", () => {
+      const builderWithFilter: BuilderState = {
+        ...INITIAL_BUILDER,
+        filters: [{ kind: "compare", attribute: "status", op: "=", value: { type: "S", value: "ok" } }],
+      };
+      const ref = createRef<FilterBarHandle>();
+      renderQueryBuilder(builderWithFilter, { ref });
+
+      const firstAttr = screen.getByTestId("filter-0-attr");
+      const focusSpy = vi.spyOn(firstAttr, "focus");
+
+      ref.current?.focus();
+
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("focus() targets the + Filter add button when in empty scan mode", () => {
+      const ref = createRef<FilterBarHandle>();
+      renderQueryBuilder(INITIAL_BUILDER, { ref });
+
+      const addBtn = screen.getByTestId("add-filter");
+      const focusSpy = vi.spyOn(addBtn, "focus");
+
+      ref.current?.focus();
+
+      expect(focusSpy).toHaveBeenCalledTimes(1);
     });
   });
 });

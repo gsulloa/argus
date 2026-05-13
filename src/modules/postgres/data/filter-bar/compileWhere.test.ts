@@ -219,6 +219,106 @@ describe("compileWhere", () => {
     expect(r.body).toBe(`(FALSE)`);
   });
 
+  it("ORs flat root conditions when combinator is OR", () => {
+    const r = compileWhere(
+      structured({
+        tree: {
+          children: [
+            {
+              kind: "condition",
+              column: { kind: "named", name: "country" },
+              op: "=",
+              value: "CL",
+            },
+            {
+              kind: "condition",
+              column: { kind: "named", name: "country" },
+              op: "=",
+              value: "AR",
+            },
+            {
+              kind: "condition",
+              column: { kind: "named", name: "country" },
+              op: "=",
+              value: "BR",
+            },
+          ],
+          combinator: "OR",
+        },
+      }),
+    );
+    expect(r.body).toBe(`"country" = 'CL' OR "country" = 'AR' OR "country" = 'BR'`);
+  });
+
+  it("OR-root with OR-group child: root uses OR, group still parenthesized", () => {
+    const r = compileWhere(
+      structured({
+        tree: {
+          children: [
+            {
+              kind: "condition",
+              column: { kind: "named", name: "a" },
+              op: "=",
+              value: "x",
+            },
+            {
+              kind: "or_group",
+              children: [
+                {
+                  kind: "condition",
+                  column: { kind: "named", name: "b" },
+                  op: "=",
+                  value: "y",
+                },
+                {
+                  kind: "condition",
+                  column: { kind: "named", name: "c" },
+                  op: "=",
+                  value: "z",
+                },
+              ],
+            },
+          ],
+          combinator: "OR",
+        },
+      }),
+    );
+    expect(r.body).toBe(`"a" = 'x' OR ("b" = 'y' OR "c" = 'z')`);
+  });
+
+  it("empty tree emits no WHERE regardless of combinator", () => {
+    const r = compileWhere(
+      structured({
+        tree: { children: [], combinator: "OR" },
+      }),
+    );
+    expect(r.body).toBe("");
+  });
+
+  it("AND-root regression: multiple conditions join with AND", () => {
+    const r = compileWhere(
+      structured({
+        tree: {
+          children: [
+            {
+              kind: "condition",
+              column: { kind: "named", name: "status" },
+              op: "=",
+              value: "active",
+            },
+            {
+              kind: "condition",
+              column: { kind: "named", name: "deleted_at" },
+              op: "IS NULL",
+            },
+          ],
+          combinator: "AND",
+        },
+      }),
+    );
+    expect(r.body).toBe(`"status" = 'active' AND "deleted_at" IS NULL`);
+  });
+
   it("passes through raw mode verbatim and trims a leading WHERE", () => {
     const r = compileWhere({
       mode: "raw",
