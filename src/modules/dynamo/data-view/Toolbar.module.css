@@ -1,0 +1,192 @@
+/* Dynamo Data View Toolbar */
+
+.root {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  height: 36px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.root::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Separator ───────────────────────────────────────────────────── */
+
+.sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border-strong);
+  flex-shrink: 0;
+  margin: 0 4px;
+}
+
+/* ── Mode toggle group ───────────────────────────────────────────── */
+
+.modeGroup {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.modeBtn {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 80ms, color 80ms;
+  border-right: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+
+.modeBtn:last-child {
+  border-right: none;
+}
+
+.modeBtn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.modeBtnActive {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ── Primary action buttons (Run, Metadata) ──────────────────────── */
+
+.btnPrimary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 80ms;
+  white-space: nowrap;
+}
+
+.btnPrimary:hover {
+  background: var(--accent-hover);
+}
+
+.btnPrimary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Secondary buttons ───────────────────────────────────────────── */
+
+.btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 80ms, color 80ms, border-color 80ms;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--text-subtle);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btnActive {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--text-subtle);
+}
+
+/* ── Page size input ─────────────────────────────────────────────── */
+
+.pageSizeLabel {
+  font-size: 11px;
+  color: var(--text-subtle);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.pageSizeInput {
+  width: 52px;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  background: var(--canvas);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  flex-shrink: 0;
+  text-align: right;
+  transition: border-color 80ms;
+}
+
+.pageSizeInput:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+}
+
+/* ── Credentials notice ──────────────────────────────────────────── */
+
+.credNotice {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--warning);
+  flex-shrink: 0;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+
+/* ── Spacer ──────────────────────────────────────────────────────── */
+
+.spacer {
+  flex: 1;
+}
+
+/* ── Spinner for count ────────────────────────────────────────────── */
+
+.spinnerIcon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

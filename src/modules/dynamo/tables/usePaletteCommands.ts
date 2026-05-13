@@ -22,7 +22,7 @@ import { useToast } from "@/platform/toast";
 import { DYNAMO_KIND } from "@/modules/dynamo/types";
 import { useActiveDynamoConnections } from "@/modules/dynamo/useActiveConnections";
 import { useDynamoTableCacheRegistry } from "./CacheProvider";
-import { openPlaceholderTab } from "./openPlaceholderTab";
+import { openTableTab } from "./openTableTab";
 
 interface SelectionApi {
   selectedConnectionId: string | null;
@@ -118,7 +118,7 @@ export function useDynamoTablesPaletteCommands(selection: SelectionApi = NOOP_SE
             run: () => {
               const cachedDescribe =
                 describe?.status === "ready" ? describe.value : null;
-              openPlaceholderTab(tabs, {
+              openTableTab(tabs, {
                 connectionId,
                 connectionName,
                 tableName,

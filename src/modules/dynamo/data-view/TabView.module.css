@@ -1,0 +1,236 @@
+/**
+ * TabView.module.css — Dynamo Tabla view grid styles
+ *
+ * Design tokens from DESIGN.md:
+ *   --canvas, --surface, --surface-2, --text, --text-muted, --text-subtle
+ *   --border, --hairline, --accent, --accent-soft
+ *   --font-mono, --text-xs (11px), --text-sm (12px)
+ */
+
+/* ── Root ──────────────────────────────────────────────────────────────────── */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--canvas);
+  position: relative;
+}
+
+/* ── Viewport — the scrollable area ────────────────────────────────────────── */
+
+.viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px; /* --text-sm */
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────────── */
+
+.thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  display: flex;
+}
+
+.headerCell {
+  display: flex;
+  align-items: center;
+  padding: 5px 12px;
+  height: 28px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px; /* --text-xs */
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex: 0 0 auto;
+  user-select: none;
+  gap: 6px;
+}
+.headerCell:last-child {
+  border-right: 0;
+}
+
+.headerCellKey {
+  color: var(--text);
+}
+
+.keyBadge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--accent-soft, rgba(168, 85, 247, 0.12));
+  border-radius: 3px; /* --radius-sm */
+  padding: 0 4px;
+  line-height: 16px;
+}
+
+/* ── Body — virtualizer container ───────────────────────────────────────────── */
+
+.body {
+  position: relative;
+}
+
+/* ── Rows ──────────────────────────────────────────────────────────────────── */
+
+.row {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+.row:hover {
+  background: var(--surface-2);
+}
+.row[data-selected="true"] {
+  background: var(--accent-soft, rgba(168, 85, 247, 0.12));
+}
+.row[data-selected="true"]:hover {
+  background: rgba(168, 85, 247, 0.18);
+}
+/* Left edge stripe for selected row (per DESIGN.md "Active row in data table") */
+.row[data-selected="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--accent);
+}
+
+/* ── Cells ─────────────────────────────────────────────────────────────────── */
+
+.cell {
+  padding: 5px 12px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  border-right: 1px solid var(--hairline, rgba(255, 255, 255, 0.04));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
+  color: var(--text);
+  min-width: 0;
+}
+.cell:last-child {
+  border-right: 0;
+}
+
+/* Primitive string/number/bool */
+.cellPrimitive {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
+/* null value */
+.cellNull {
+  color: var(--text-subtle);
+  font-style: italic;
+  font-family: var(--font-mono);
+}
+
+/* true / false pip */
+.boolTrue {
+  color: var(--success, #4ade80);
+  font-family: var(--font-mono);
+}
+.boolFalse {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* Complex-type summary chip — clickable */
+.complexChip {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-radius: 3px; /* --radius-sm */
+  padding: 0 6px;
+  height: 18px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+.complexChip:hover {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* Empty cell (attribute missing from item) */
+.cellEmpty {
+  color: var(--text-subtle);
+  font-size: 11px;
+}
+
+/* "More…" column button */
+.moreBtn {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  cursor: pointer;
+  color: var(--text-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  line-height: 1;
+}
+.moreBtn:hover {
+  color: var(--text-muted);
+  background: var(--surface-2);
+}
+
+/* ── Status rows ────────────────────────────────────────────────────────────── */
+
+.loadingRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  font-size: 11px;
+  color: var(--text-subtle);
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.spinner {
+  display: inline-flex;
+  animation: tabla-spin 1s linear infinite;
+  color: var(--text-subtle);
+}
+
+@keyframes tabla-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ── Empty / idle state ─────────────────────────────────────────────────────── */
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  height: 100%;
+  font-size: 12px;
+  color: var(--text-subtle);
+}

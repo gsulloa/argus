@@ -1,119 +1,13 @@
-/* DynamoDB Table Placeholder Tab — dense, IDE-like, read-only metadata view */
+/* DynamoDB Metadata sub-view — ported from PlaceholderTab */
 
 .root {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background: var(--bg);
-  overflow: hidden;
-  font-size: 12px;
-  font-family: var(--font-sans, inherit);
-}
-
-/* ── Header bar ─────────────────────────────────────────────────── */
-
-.header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-  min-height: 40px;
-}
-
-.tableName {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-.headerBadges {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.badge {
-  font-size: 10.5px;
-  font-weight: 500;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--surface-2);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
-.badgeActive {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 30%, transparent);
-  background: color-mix(in srgb, var(--success) 10%, transparent);
-}
-
-.badgeWarning {
-  color: var(--warning);
-  border-color: color-mix(in srgb, var(--warning) 30%, transparent);
-  background: color-mix(in srgb, var(--warning) 10%, transparent);
-}
-
-.badgeStreams {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 10.5px;
-  font-weight: 500;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  white-space: nowrap;
-}
-
-.refreshBtn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 11px;
-  font-family: inherit;
-  transition: color 80ms, border-color 80ms;
-  flex-shrink: 0;
-}
-
-.refreshBtn:hover {
-  color: var(--text);
-  border-color: var(--text-subtle);
-}
-
-.refreshBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* ── Body scroll area ───────────────────────────────────────────── */
-
-.body {
   flex: 1;
   overflow-y: auto;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  background: var(--canvas);
 }
 
 /* ── Loading / error states ─────────────────────────────────────── */
@@ -162,16 +56,16 @@
 }
 
 .sectionTitle {
-  font-size: 10.5px;
+  font-size: 11px; /* --text-xs; 10.5px was off-scale per DESIGN.md */
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em; /* all-caps label spacing from DESIGN.md */
   color: var(--text-subtle);
   padding-bottom: 4px;
   border-bottom: 1px solid var(--border);
 }
 
-/* ── Meta grid (2-col label/value) ───────────────────────────────── */
+/* ── Meta grid ─────────────────────────────────────────────────── */
 
 .metaGrid {
   display: grid;
@@ -193,14 +87,34 @@
   font-family: var(--font-mono);
 }
 
-.metaValueMono {
-  font-family: var(--font-mono);
-  font-size: 11px;
+/* ── Refresh button ────────────────────────────────────────────── */
+
+.refreshBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px; /* --radius-sm */
+  background: transparent;
   color: var(--text-muted);
-  word-break: break-all;
+  cursor: pointer;
+  font-size: 11px; /* --text-xs */
+  font-family: inherit;
+  transition: color 80ms ease-out, border-color 80ms ease-out;
 }
 
-/* ARN with copy button */
+.refreshBtn:hover {
+  color: var(--text);
+  border-color: var(--text-subtle);
+}
+
+.refreshBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ARN row with copy */
 .arnRow {
   display: flex;
   align-items: flex-start;
@@ -237,6 +151,33 @@
   background: var(--surface-2);
 }
 
+/* ── Badge variants ─────────────────────────────────────────────── */
+
+.badge {
+  font-size: 11px; /* --text-xs; 10.5px is off the design scale */
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+.badgeActive {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+
+.badgeWarning {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 30%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
 /* ── Key schema table ────────────────────────────────────────────── */
 
 .keyTable {
@@ -248,7 +189,7 @@
 .keyTable th {
   text-align: left;
   padding: 3px 8px;
-  font-size: 10.5px;
+  font-size: 11px; /* --text-xs; 10.5px is off the design scale */
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -288,7 +229,7 @@
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 5px;
-  background: var(--bg-elevated, var(--surface));
+  background: var(--elevated);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -308,7 +249,7 @@
 }
 
 .indexMetaItem {
-  font-size: 10.5px;
+  font-size: 11px; /* --text-xs; 10.5px is off the design scale */
   color: var(--text-subtle);
 }
 
@@ -316,25 +257,6 @@
   color: var(--text-muted);
   font-family: var(--font-mono);
 }
-
-.indexKeySchema {
-  font-size: 10.5px;
-  color: var(--text-subtle);
-  font-family: var(--font-mono);
-}
-
-/* ── Future-items notice ─────────────────────────────────────────── */
-
-.comingSoon {
-  padding: 10px 12px;
-  border: 1px dashed var(--border);
-  border-radius: 5px;
-  font-size: 11px;
-  color: var(--text-subtle);
-  text-align: center;
-}
-
-/* ── Empty index list ────────────────────────────────────────────── */
 
 .emptyIndexList {
   font-size: 11px;

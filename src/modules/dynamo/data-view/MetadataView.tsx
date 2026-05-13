@@ -1,65 +1,21 @@
 /**
- * DynamoDB Table Placeholder Tab — Task group 9.
+ * MetadataView — standalone sub-view rendering a DynamoDB TableDescription.
  *
- * Read-only, dense metadata view for a single DynamoDB table.
- * Self-sufficient: if describe is null on mount, fetches it independently
- * (does NOT subscribe to CacheProvider — the cache may be gone).
+ * Ported from PlaceholderTab.tsx (src/modules/dynamo/tables/PlaceholderTab.tsx)
+ * so the placeholder can be retired in Phase 9 without coupling.
  *
- * Tab kind:   "dynamo-table-placeholder"
- * Stable id:  `dynamotbl:<connectionId>:<tableName>`
- * Payload:    DynamoTablePlaceholderPayload
+ * Does NOT import from PlaceholderTab — self-contained.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { Copy, Loader2, RefreshCw, Zap } from "lucide-react";
-import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
-import type { Tab } from "@/platform/shell/tabs/types";
-import { dynamoTablesApi } from "./api";
-import type { GsiInfo, KeySchemaElement, LsiInfo, TableDescription } from "./types";
-import styles from "./PlaceholderTab.module.css";
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-export const DYNAMO_TABLE_PLACEHOLDER_KIND = "dynamo-table-placeholder";
-
-// ---------------------------------------------------------------------------
-// Payload type
-// ---------------------------------------------------------------------------
-
-export interface DynamoTablePlaceholderPayload {
-  connectionId: string;
-  connectionName: string;
-  tableName: string;
-  describe: TableDescription | null;
-}
-
-// ---------------------------------------------------------------------------
-// Type guard
-// ---------------------------------------------------------------------------
-
-function isPayload(v: unknown): v is DynamoTablePlaceholderPayload {
-  if (!v || typeof v !== "object") return false;
-  const o = v as Record<string, unknown>;
-  return (
-    typeof o.connectionId === "string" &&
-    typeof o.connectionName === "string" &&
-    typeof o.tableName === "string" &&
-    (o.describe === null || typeof o.describe === "object")
-  );
-}
+import { useCallback, useState } from "react";
+import { Copy, Loader2, RefreshCw } from "lucide-react";
+import { dynamoTablesApi } from "@/modules/dynamo/tables/api";
+import type { GsiInfo, KeySchemaElement, LsiInfo, TableDescription } from "@/modules/dynamo/tables/types";
+import styles from "./MetadataView.module.css";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function humanizeBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
 
 function formatDate(iso: string | undefined): string {
   if (!iso) return "—";
@@ -68,6 +24,13 @@ function formatDate(iso: string | undefined): string {
   } catch {
     return iso;
   }
+}
+
+function humanizeBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function keySchemaLine(
@@ -84,7 +47,7 @@ function keySchemaLine(
 }
 
 // ---------------------------------------------------------------------------
-// CopyButton — small icon button that copies text to clipboard
+// CopyButton
 // ---------------------------------------------------------------------------
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -184,10 +147,10 @@ function LsiCard({
 }
 
 // ---------------------------------------------------------------------------
-// MetadataView — rendered once describe is available
+// MetadataContents — rendered once describe is available
 // ---------------------------------------------------------------------------
 
-function MetadataView({ describe: desc }: { describe: TableDescription }) {
+function MetadataContents({ describe: desc }: { describe: TableDescription }) {
   const billingLabel =
     desc.billing_mode === "PAY_PER_REQUEST" ? "on-demand" : "provisioned";
   const hasStreams =
@@ -202,7 +165,7 @@ function MetadataView({ describe: desc }: { describe: TableDescription }) {
 
   return (
     <>
-      {/* Identity section */}
+      {/* Identity */}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>Identity</div>
         <div className={styles.metaGrid}>
@@ -276,6 +239,27 @@ function MetadataView({ describe: desc }: { describe: TableDescription }) {
         </table>
       </div>
 
+      {/* Attribute definitions */}
+      <div className={styles.section}>
+        <div className={styles.sectionTitle}>Attribute Definitions</div>
+        <table className={styles.keyTable}>
+          <thead>
+            <tr>
+              <th>Attribute</th>
+              <th>Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            {desc.attribute_definitions.map((def) => (
+              <tr key={def.attribute_name}>
+                <td>{def.attribute_name}</td>
+                <td>{def.attribute_type}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
       {/* Global secondary indexes */}
       <div className={styles.section}>
         <div className={styles.sectionTitle}>
@@ -315,20 +299,12 @@ function MetadataView({ describe: desc }: { describe: TableDescription }) {
           </div>
         )}
       </div>
-
-      {/* Items view coming later */}
-      <div className={styles.section}>
-        <div className={styles.sectionTitle}>Items</div>
-        <div className={styles.comingSoon}>
-          Items view coming in V2 #11 — scan and query support will appear here.
-        </div>
-      </div>
     </>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Describe state (local — not backed by CacheProvider)
+// Describe state
 // ---------------------------------------------------------------------------
 
 type DescribeState =
@@ -337,33 +313,50 @@ type DescribeState =
   | { status: "error"; message: string };
 
 // ---------------------------------------------------------------------------
-// PlaceholderTabRoot — the registered tab renderer
+// MetadataView — public component
 // ---------------------------------------------------------------------------
 
-function PlaceholderTabRoot({ tab }: { tab: Tab; active: boolean }) {
-  if (!isPayload(tab.payload)) {
-    return <div className={styles.root}>Invalid tab payload.</div>;
-  }
-  return <PlaceholderTabContent payload={tab.payload} />;
+export interface MetadataViewProps {
+  connectionId: string;
+  tableName: string;
+  /**
+   * Initial describe value from the tab payload. Pass null if not yet loaded;
+   * the component will fetch it on mount.
+   */
+  initialDescribe: TableDescription | null;
+  /**
+   * Controlled: if the parent has already fetched describe (e.g., the tab
+   * mount did the fetch), pass it here and it will be used directly. If both
+   * `initialDescribe` and `describe` are null, the component fetches on mount.
+   *
+   * The "Refresh metadata" button always re-fetches from the backend, and
+   * after a successful refresh, calls `onDescribeUpdated` so the parent can
+   * keep its own state in sync.
+   */
+  describe?: TableDescription | null;
+  onDescribeUpdated?: (next: TableDescription) => void;
 }
 
-function PlaceholderTabContent({ payload }: { payload: DynamoTablePlaceholderPayload }) {
-  const { connectionId, connectionName, tableName } = payload;
-
+export function MetadataView({
+  connectionId,
+  tableName,
+  initialDescribe,
+  describe: controlledDescribe,
+  onDescribeUpdated,
+}: MetadataViewProps) {
   const [state, setState] = useState<DescribeState>(() => {
-    if (payload.describe) {
-      return { status: "ready", value: payload.describe };
-    }
+    const initial = controlledDescribe ?? initialDescribe;
+    if (initial) return { status: "ready", value: initial };
     return { status: "loading" };
   });
 
-  // Fetch on mount if describe was null, or whenever we need to refresh.
   const doFetch = useCallback(() => {
     setState({ status: "loading" });
     dynamoTablesApi
       .describeTable({ connectionId, tableName, origin: "user" })
       .then((value) => {
         setState({ status: "ready", value });
+        onDescribeUpdated?.(value);
       })
       .catch((e: unknown) => {
         const msg =
@@ -372,54 +365,31 @@ function PlaceholderTabContent({ payload }: { payload: DynamoTablePlaceholderPay
             : "Describe failed";
         setState({ status: "error", message: msg });
       });
-  }, [connectionId, tableName]);
+  }, [connectionId, tableName, onDescribeUpdated]);
 
-  // Initial fetch only if describe was not provided.
-  useEffect(() => {
-    if (payload.describe === null) {
+  // Fetch on mount if no describe available at all.
+  const [hasFetched, setHasFetched] = useState(false);
+  if (!hasFetched) {
+    setHasFetched(true);
+    const initial = controlledDescribe ?? initialDescribe;
+    if (!initial) {
+      // Kick off fetch (safe to call in render body only once via the guard).
       doFetch();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }
+
+  // If parent pushes a new describe value, adopt it.
+  const effectiveDescribe =
+    state.status === "ready"
+      ? state.value
+      : (controlledDescribe ?? null);
 
   const isLoading = state.status === "loading";
-  const describe = state.status === "ready" ? state.value : null;
-
-  // Header badges — show what we know regardless of describe state
-  const billingLabel =
-    describe?.billing_mode === "PAY_PER_REQUEST" ? "on-demand" : "provisioned";
-  const hasStreams =
-    describe?.stream_specification != null &&
-    describe.stream_specification.stream_enabled;
 
   return (
     <div className={styles.root}>
-      {/* Header */}
-      <div className={styles.header}>
-        <h1 className={styles.tableName}>{tableName}</h1>
-
-        <div className={styles.headerBadges}>
-          {describe && (
-            <>
-              <span className={styles.badge}>{billingLabel}</span>
-              {hasStreams && (
-                <span className={styles.badgeStreams}>
-                  <Zap size={10} />
-                  streams
-                </span>
-              )}
-              {describe.table_status !== "ACTIVE" && (
-                <span className={`${styles.badge} ${styles.badgeWarning}`}>
-                  {describe.table_status}
-                </span>
-              )}
-            </>
-          )}
-          <span className={styles.badge} title={`Connection: ${connectionName}`}>
-            {connectionName}
-          </span>
-        </div>
-
+      {/* Refresh button row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, paddingBottom: 4 }}>
         <button
           type="button"
           className={styles.refreshBtn}
@@ -433,32 +403,23 @@ function PlaceholderTabContent({ payload }: { payload: DynamoTablePlaceholderPay
         </button>
       </div>
 
-      {/* Body */}
-      <div className={styles.body}>
-        {state.status === "loading" && (
-          <div className={styles.loadingState}>
-            <Loader2 size={13} className={styles.spinner} />
-            Loading table metadata…
-          </div>
-        )}
+      {state.status === "loading" && (
+        <div className={styles.loadingState}>
+          <Loader2 size={13} className={styles.spinner} />
+          Loading table metadata…
+        </div>
+      )}
 
-        {state.status === "error" && (
-          <div className={styles.errorState}>
-            <span>Failed to load metadata: {state.message}</span>
-            <button type="button" className={styles.errorRetryBtn} onClick={doFetch}>
-              Retry
-            </button>
-          </div>
-        )}
+      {state.status === "error" && (
+        <div className={styles.errorState}>
+          <span>Failed to load metadata: {state.message}</span>
+          <button type="button" className={styles.errorRetryBtn} onClick={doFetch}>
+            Retry
+          </button>
+        </div>
+      )}
 
-        {state.status === "ready" && <MetadataView describe={state.value} />}
-      </div>
+      {effectiveDescribe && <MetadataContents describe={effectiveDescribe} />}
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Side-effect: register this tab kind with TabRegistry at module import time.
-// ---------------------------------------------------------------------------
-
-TabRegistry.register(DYNAMO_TABLE_PLACEHOLDER_KIND, PlaceholderTabRoot);

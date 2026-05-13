@@ -1,0 +1,91 @@
+/* DynamoDB Data View Tab */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--canvas);
+  overflow: hidden;
+  font-size: 12px;
+  font-family: var(--font-sans, inherit);
+}
+
+/* ── Body ─────────────────────────────────────────────────────────── */
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Main area (query builder + results) ─────────────────────────── */
+
+.mainArea {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ── Inspector dock ──────────────────────────────────────────────── */
+
+.inspectorDock {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+}
+
+/* ── Resize handle ───────────────────────────────────────────────── */
+
+.handle {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border);
+  user-select: none;
+  transition: background 80ms;
+}
+
+.handle:hover,
+.handle:active {
+  background: var(--accent);
+  opacity: 0.4;
+}
+
+/* ── Invalid payload ─────────────────────────────────────────────── */
+
+.invalid {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+/* ── Loading describe ────────────────────────────────────────────── */
+
+.loadingDescribe {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

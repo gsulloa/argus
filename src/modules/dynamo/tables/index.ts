@@ -34,12 +34,9 @@ export type {
 // Sidebar subtree
 export { DynamoConnectionSubtree } from "./DynamoConnectionSubtree";
 
-// Tab kind
-export {
-  DYNAMO_TABLE_PLACEHOLDER_KIND,
-  type DynamoTablePlaceholderPayload,
-} from "./PlaceholderTab";
-export { openPlaceholderTab } from "./openPlaceholderTab";
+// Tab kind (dynamo-table-placeholder retired; activation now uses dynamo-data-view)
+export { openTableTab } from "./openTableTab";
+export { migratePlaceholderTabs, DYNAMO_TABLE_PLACEHOLDER_KIND } from "./migrateTabKinds";
 
 // Palette commands
 export { useDynamoTablesPaletteCommands } from "./usePaletteCommands";

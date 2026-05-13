@@ -1,0 +1,464 @@
+/* QueryBuilder — DSL-less structured query builder for DynamoDB data view */
+
+.root {
+  border-bottom: 1px solid var(--border);
+  background: var(--canvas);
+  flex-shrink: 0;
+  font-size: 12px;
+  font-family: var(--font-sans, inherit);
+}
+
+/* ── Top row: mode selector + index dropdown ─────────────────────── */
+
+.topRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+/* ── Mode segmented control ──────────────────────────────────────── */
+
+.modeGroup {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.modeBtn {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 80ms, color 80ms;
+  border-right: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+
+.modeBtn:last-child {
+  border-right: none;
+}
+
+.modeBtn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.modeBtnActive {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ── Labels ──────────────────────────────────────────────────────── */
+
+.label {
+  font-size: 11px;
+  color: var(--text-subtle);
+  flex-shrink: 0;
+  white-space: nowrap;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* ── Select / dropdown ───────────────────────────────────────────── */
+
+.select {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  background: var(--canvas);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 80ms;
+  min-width: 120px;
+  max-width: 280px;
+}
+
+.select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+}
+
+/* ── Key pickers section ─────────────────────────────────────────── */
+
+.keySection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.keyRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.keyLabel {
+  font-size: 11px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 70px;
+}
+
+/* ── Type badge (static, schema-dictated) ────────────────────────── */
+
+.typeBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  font-weight: 500;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border-radius: 3px;
+  flex-shrink: 0;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border-strong);
+}
+
+/* ── Text input ──────────────────────────────────────────────────── */
+
+.textInput {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--font-sans, inherit);
+  background: var(--canvas);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  outline: none;
+  transition: border-color 80ms, box-shadow 80ms;
+  min-width: 120px;
+}
+
+.textInput:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+}
+
+.textInput.inputError {
+  border-color: var(--danger);
+}
+
+.textInput.inputError:focus {
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.18); /* 3px per DESIGN.md focus ring spec */
+}
+
+/* ── Sort key operator selector ──────────────────────────────────── */
+
+.skOpSelect {
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  background: var(--canvas);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 80ms;
+}
+
+.skOpSelect:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+}
+
+/* ── Inline validation hint ──────────────────────────────────────── */
+
+.hint {
+  font-size: 11px;
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── Filters section ─────────────────────────────────────────────── */
+
+.filtersSection {
+  padding: 4px 10px 6px;
+}
+
+.filterRows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── Filter row ──────────────────────────────────────────────────── */
+
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.filterAttrInput {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--font-sans, inherit);
+  background: var(--canvas);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  outline: none;
+  transition: border-color 80ms, box-shadow 80ms;
+  min-width: 90px;
+  width: 100px;
+}
+
+.filterAttrInput:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+}
+
+.filterOpSelect {
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  background: var(--canvas);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 80ms;
+  min-width: 90px;
+}
+
+.filterOpSelect:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+}
+
+.filterTypeSelect {
+  padding: 3px 6px;
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  background: var(--canvas);
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 80ms;
+  width: 54px;
+}
+
+.filterTypeSelect:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow); /* 3px per DESIGN.md focus ring spec */
+}
+
+.removeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  background: transparent;
+  color: var(--text-subtle);
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 80ms, color 80ms;
+}
+
+.removeBtn:hover {
+  background: var(--surface-2);
+  color: var(--danger);
+}
+
+/* ── Bool toggle ─────────────────────────────────────────────────── */
+
+.boolToggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.boolToggleTrack {
+  width: 28px;
+  height: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px; /* --radius-sm; 999px is reserved for status pills per DESIGN.md */
+  position: relative;
+  transition: background 80ms, border-color 80ms;
+  flex-shrink: 0;
+}
+
+.boolToggleTrackOn {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.boolToggleThumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-subtle);
+  transition: transform 80ms, background 80ms;
+}
+
+.boolToggleThumbOn {
+  transform: translateX(14px);
+  background: var(--accent);
+}
+
+.boolToggleLabel {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-muted);
+  user-select: none;
+}
+
+/* ── Null switch ─────────────────────────────────────────────────── */
+
+.nullSwitch {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.nullSwitchLabel {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-subtle);
+  user-select: none;
+}
+
+/* ── Add filter button ───────────────────────────────────────────── */
+
+.addFilterBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 80ms, color 80ms, border-color 80ms;
+}
+
+.addFilterBtn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--text-subtle);
+  border-style: solid;
+}
+
+/* ── Preview disclosure ──────────────────────────────────────────── */
+
+.previewSection {
+  border-top: 1px solid var(--border);
+}
+
+.previewToggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  background: transparent;
+  color: var(--text-subtle);
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 80ms, color 80ms;
+}
+
+.previewToggle:hover {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+.previewCaret {
+  font-size: 9px;
+  transition: transform 120ms;
+  flex-shrink: 0;
+}
+
+.previewCaretOpen {
+  transform: rotate(90deg);
+}
+
+.previewBody {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--elevated);
+  border-top: 1px solid var(--border);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.previewLabel {
+  font-size: 10px;
+  color: var(--text-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  margin-bottom: 2px;
+}
+
+.previewCode {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 5px 8px;
+  margin: 0;
+}
+
+.previewError {
+  font-size: 11px;
+  color: var(--danger);
+}
+
+/* ── Between connector ───────────────────────────────────────────── */
+
+.betweenAnd {
+  font-size: 11px;
+  color: var(--text-subtle);
+  flex-shrink: 0;
+}

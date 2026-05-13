@@ -31,6 +31,7 @@ pub enum ActivityKind {
     TableStructure,
     ListTables,
     DescribeTable,
+    ScanTable,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
