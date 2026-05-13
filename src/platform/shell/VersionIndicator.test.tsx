@@ -8,6 +8,8 @@ const baseProps = {
   availableVersion: null,
   skippedVersion: null,
   isInstalling: false,
+  installError: null,
+  onDismissInstallError: vi.fn(),
   onForceCheck: vi.fn(),
   onSkip: vi.fn(),
   onClearSkip: vi.fn(),
