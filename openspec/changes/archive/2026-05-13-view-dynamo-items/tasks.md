@@ -130,7 +130,7 @@
 
 ## 18. End-to-end validation
 
-- [ ] 18.1 With DynamoDB Local or a sandbox AWS account, manually run the golden path: open a Dynamo connection, click a table, run a scan, load more, switch to JSON, select an item, switch to Query mode against a GSI, run, count items, change page size, change consistent-read, hit ⌘R / ⌘⇧R.
-- [ ] 18.2 Verify the read-only flag: a read-only Dynamo connection still browses items normally (no UI gating beyond the existing `RO` badge).
-- [ ] 18.3 Simulate an `ExpiredToken` mid-scan in access-keys mode with a session token and confirm the existing re-prompt + auto-resume contract still holds end to end.
+- [x] 18.1 With DynamoDB Local or a sandbox AWS account, manually run the golden path: open a Dynamo connection, click a table, run a scan, load more, switch to JSON, select an item, switch to Query mode against a GSI, run, count items, change page size, change consistent-read, hit ⌘R / ⌘⇧R.
+- [x] 18.2 Verify the read-only flag: a read-only Dynamo connection still browses items normally (no UI gating beyond the existing `RO` badge).
+- [x] 18.3 Simulate an `ExpiredToken` mid-scan in access-keys mode with a session token and confirm the existing re-prompt + auto-resume contract still holds end to end.
 - [x] 18.4 Run `openspec validate view-dynamo-items --strict` and resolve any issues before opening the PR.
