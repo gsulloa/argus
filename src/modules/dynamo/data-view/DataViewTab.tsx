@@ -847,6 +847,8 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
                 items={items}
                 describe={describe}
                 indexName={builder.indexName}
+                connectionId={connectionId}
+                tableName={tableName}
                 selectedRowIndices={selectedRowIndices}
                 primarySelectedRowIndex={primarySelectedRowIndex}
                 onSelect={handleSelectRow}

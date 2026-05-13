@@ -133,6 +133,10 @@ Everything else is neutrals + hairlines. If a surface looks dull, that's the sys
 
 Component padding defaults: button `6px 12px`, input `6px 10px`, table cell `5px 12px`, panel header `12px 14px`, alert `10px 14px`.
 
+### Table column widths
+
+Column widths in every data grid have a type-derived base (boolean 88px, numeric 120px, date 168px, uuid 280px, text 200px, json 240px, binary 140px, other 180px) plus +16px for partition/sort key markers. Users can drag the right edge of any header to resize a column; the drag handle is invisible at idle and reveals a 1px `--accent` line at 50% opacity within `--duration-instant` on hover. Double-click on the handle resets the column to its type-derived default. Widths persist per relation (Postgres) or per table (DynamoDB); ad-hoc SQL result grids hold widths in memory only. Full contract lives in the `column-width-preferences` spec.
+
 ## Layout
 
 - **Approach:** grid-disciplined.

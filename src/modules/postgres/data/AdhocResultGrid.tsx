@@ -7,11 +7,12 @@ import {
   type CellValue,
   type DataColumn,
 } from "./types";
+import { useColumnWidths } from "@/platform/table/columnWidths";
+import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import styles from "./DataGrid.module.css";
 
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
-const COLUMN_WIDTH = 180;
 
 export interface AdhocResultGridProps {
   columns: DataColumn[];
@@ -31,8 +32,46 @@ export interface AdhocResultGridProps {
  * results and shares the same DOM and styling as the editable table viewer's
  * grid (no separate virtualization implementation). Intentionally has zero
  * sort/filter/edit affordances — it is purely presentational.
+ *
+ * Column widths are in-memory only (storageKey: null) and reset automatically
+ * when the columns shape changes (via the `key` on the inner component).
  */
 export function AdhocResultGrid({
+  columns,
+  rows,
+  selectedRowIndex,
+  onSelectRow,
+  emptyState,
+  style,
+}: AdhocResultGridProps) {
+  // Compute a signature of column names so that when the shape changes (a
+  // different query shape), the inner component remounts and all in-memory
+  // widths reset to their type-derived defaults.
+  const columnsSignature = useMemo(
+    () => columns.map((c) => c.name).join("|"),
+    [columns],
+  );
+
+  return (
+    <AdhocResultGridInner
+      key={columnsSignature}
+      columns={columns}
+      rows={rows}
+      selectedRowIndex={selectedRowIndex}
+      onSelectRow={onSelectRow}
+      emptyState={emptyState}
+      style={style}
+    />
+  );
+}
+
+/**
+ * Inner component — owns the in-memory column-widths state via
+ * `useColumnWidths`. Keyed on `columnsSignature` by the outer component so
+ * that a different column shape causes a full remount (and therefore a clean
+ * widths record).
+ */
+function AdhocResultGridInner({
   columns,
   rows,
   selectedRowIndex,
@@ -61,7 +100,23 @@ export function AdhocResultGrid({
     if (viewportRef.current) viewportRef.current.scrollTop = 0;
   }, [shapeKey]);
 
-  const totalWidth = Math.max(columns.length * COLUMN_WIDTH, 1);
+  // Map columns to ColumnSpec for the hook
+  const mapped = useMemo(
+    () =>
+      columns.map((c) => ({
+        name: c.name,
+        category: categorize(c.data_type),
+        isKey: false as const, // ad-hoc results don't have PK semantics
+      })),
+    [columns],
+  );
+
+  const { widthFor, totalWidth, setWidth, resetWidth } = useColumnWidths({
+    storageKey: null, // in-memory only — never persist ad-hoc widths
+    columns: mapped,
+  });
+
+  const effectiveTotalWidth = Math.max(totalWidth, 1);
 
   if (rows.length === 0 && emptyState) {
     // Empty state: the header keeps its column-derived width (so it can
@@ -71,18 +126,23 @@ export function AdhocResultGrid({
     return (
       <div className={styles.root} style={style}>
         <div className={styles.viewport}>
-          <div className={styles.thead} style={{ width: totalWidth }}>
+          <div className={styles.thead} style={{ width: effectiveTotalWidth }}>
             <div className={styles.headerRow} style={{ height: HEADER_HEIGHT }}>
               {columns.map((col) => (
                 <div
                   key={col.name}
                   className={styles.headerCell}
-                  style={{ width: COLUMN_WIDTH, cursor: "default" }}
+                  style={{ width: widthFor(col.name), cursor: "default", position: "relative" }}
                   role="columnheader"
                   title={`${col.name} : ${col.data_type}`}
                 >
                   <span className={styles.colName}>{col.name}</span>
                   <span className={styles.colType}>{col.data_type}</span>
+                  <ResizeHandle
+                    currentWidth={widthFor(col.name)}
+                    onChange={(px) => setWidth(col.name, px)}
+                    onReset={() => resetWidth(col.name)}
+                  />
                 </div>
               ))}
             </div>
@@ -98,18 +158,23 @@ export function AdhocResultGrid({
   return (
     <div className={styles.root} style={style}>
       <div className={styles.viewport} ref={viewportRef}>
-        <div className={styles.thead} style={{ width: totalWidth }}>
+        <div className={styles.thead} style={{ width: effectiveTotalWidth }}>
           <div className={styles.headerRow} style={{ height: HEADER_HEIGHT }}>
             {columns.map((col) => (
               <div
                 key={col.name}
                 className={styles.headerCell}
-                style={{ width: COLUMN_WIDTH, cursor: "default" }}
+                style={{ width: widthFor(col.name), cursor: "default", position: "relative" }}
                 role="columnheader"
                 title={`${col.name} : ${col.data_type}`}
               >
                 <span className={styles.colName}>{col.name}</span>
                 <span className={styles.colType}>{col.data_type}</span>
+                <ResizeHandle
+                  currentWidth={widthFor(col.name)}
+                  onChange={(px) => setWidth(col.name, px)}
+                  onReset={() => resetWidth(col.name)}
+                />
               </div>
             ))}
           </div>
@@ -118,7 +183,7 @@ export function AdhocResultGrid({
           className={styles.body}
           style={{
             height: virtualizer.getTotalSize(),
-            width: totalWidth,
+            width: effectiveTotalWidth,
             position: "relative",
           }}
         >
@@ -147,7 +212,7 @@ export function AdhocResultGrid({
                     <div
                       key={col.name}
                       className={styles.cell}
-                      style={{ width: COLUMN_WIDTH }}
+                      style={{ width: widthFor(col.name) }}
                     >
                       <span className={styles.cellValue}>
                         <CellContent value={value} column={col} />

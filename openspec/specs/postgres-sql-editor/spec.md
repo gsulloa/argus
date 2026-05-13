@@ -332,7 +332,7 @@ When neither schemas, relations, nor columns are loaded for the current connecti
 Each `postgres-query` tab SHALL render a result panel below the editor. The panel MUST:
 
 - Render a hint state when no run has occurred yet in this tab. The hint MUST advertise both run and autocomplete shortcuts so the user discovers them on first use; the recommended copy is `Press ⌘↩ to run · Tab to autocomplete`.
-- Render a virtualized read-only data grid (the `<AdhocResultGrid />` provided by `postgres-data-grid`) for `kind: "rows"` results, displaying the `columns` and `rows` from the response. The grid MUST support row selection that drives the shell's right inspector (when the inspector is expanded).
+- Render a virtualized read-only data grid (the `<AdhocResultGrid />` provided by `postgres-data-grid`) for `kind: "rows"` results, displaying the `columns` and `rows` from the response. The grid MUST support row selection that drives the shell's right inspector (when the inspector is expanded). Column widths inside the grid MUST default to the type-derived base widths defined by `column-width-preferences` and MUST be user-resizable; resizing MUST NOT persist to disk across runs or sessions, but MUST persist within the same `<AdhocResultGrid />` instance for as long as the columns prop shape is unchanged.
 - Render a compact summary line for `kind: "affected"` results: `<command_tag> · <affected_rows> rows affected · <query_ms> ms`. Example: `INSERT 0 3 · 3 rows affected · 12 ms`.
 - Display a banner above the grid `Result truncated at 10,000 rows — add a LIMIT clause to refine.` whenever the response has `truncated: true`.
 
@@ -360,6 +360,12 @@ The panel's height MUST be resizable via a drag handle on its top edge (between 
 
 - **WHEN** a SELECT returns 10,000 rows with `truncated: true`
 - **THEN** a banner reads `Result truncated at 10,000 rows — add a LIMIT clause to refine.` above the grid
+
+#### Scenario: Adhoc grid column widths reset when columns prop changes
+
+- **WHEN** the user runs `SELECT id, email FROM users`, resizes `email` to 320px, then runs `SELECT id, email, status FROM users` in the same tab
+- **THEN** the new result re-renders the grid with `id`, `email`, and `status` at their type-derived base widths
+- **AND** the previous 320px override for `email` is discarded
 
 ### Requirement: Error block with SQLSTATE and position
 

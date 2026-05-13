@@ -113,6 +113,8 @@ function baseProps(overrides?: Partial<React.ComponentProps<typeof TabView>>) {
     items: [] as AttributeMap[],
     describe: makeDescribe("pk"),
     indexName: null,
+    connectionId: "test-conn",
+    tableName: "test-table",
     selectedRowIndices: new Set<number>(),
     primarySelectedRowIndex: null,
     onSelect: vi.fn(),

@@ -184,7 +184,11 @@ The Dynamo module SHALL register a center-area tab kind `dynamo-data-view` whose
 
 ### Requirement: Tabla and JSON view modes
 
-The data view SHALL render results in one of two view modes — `Tabla` or `JSON` — toggleable from the toolbar. The active mode MUST persist per table under the setting key `dynamoView:<connectionId>:<tableName>`. Default mode is `Tabla`. Tabla mode MUST render items in a virtualized TanStack-Table-based grid with inferred columns. The column order MUST be: the partition key first, the sort key second (if the table or selected index has one, taken from `describe.key_schema` of the relevant index), followed by up to ten additional attributes ordered by frequency of appearance in the currently loaded sample (ties broken alphabetically), followed by a fixed final column labeled "More…". Cells whose AttributeValue tag is one of `L`, `M`, `B`, `SS`, `NS`, `BS` MUST render a fixed summary (`[N items]` / `{K keys}` / `<binary NB>`) instead of inline contents, and clicking such a cell MUST select the row and focus the inspector on that attribute and display a visible "Edit item (JSON)" affordance hint. The "More…" column MUST be clickable per row to open the inspector showing the full item. The column order MUST be stable across page loads: a column once rendered MUST NOT change position; new attributes whose frequency exceeds the current Nth column's frequency MAY append on the right immediately before the "More…" column. Tabla cells whose AttributeValue tag is one of `S`, `N`, `BOOL`, `NULL` AND whose column is NOT a `KeySchema` attribute of the active index MUST become editable on double-click when the connection's `params.read_only` is `false`; the inline-edit affordance MUST follow the contract defined in the `dynamo-data-edit` capability. PK / SK cells of existing rows and all cells on read-only connections MUST refuse double-click. JSON mode MUST render each item as one read-only CodeMirror block with `language-json` and `JSON.stringify(item, null, 2)`. JSON mode MUST be virtualized; CodeMirror instances MUST be mounted lazily on first scroll into view and unmounted with a 5-row look-behind / look-ahead window, except that the inspector-selected item's editor MUST remain mounted while selected.
+The data view SHALL render results in one of two view modes — `Tabla` or `JSON` — toggleable from the toolbar. The active mode MUST persist per table under the setting key `dynamoView:<connectionId>:<tableName>`. Default mode is `Tabla`. Tabla mode MUST render items in a virtualized TanStack-Table-based grid with inferred columns. The column order MUST be: the partition key first, the sort key second (if the table or selected index has one, taken from `describe.key_schema` of the relevant index), followed by up to ten additional attributes ordered by frequency of appearance in the currently loaded sample (ties broken alphabetically), followed by a fixed final column labeled "More…".
+
+Each non-`More…` column's rendered width MUST be the effective width computed by the `column-width-preferences` capability: the user override if present, otherwise the type-derived base width using the column's inferred AttributeValue category (`BOOL/NULL → boolean`, `N → numeric`, `S → text` or `uuid` if the partition/sort key sample matches the UUID pattern in ≥80% of rows, `B → binary`, complex types `L|M|SS|NS|BS → json`). Partition-key and sort-key columns MUST include the extra 16px badge padding. The `More…` column MUST remain at a fixed 40px width and MUST be flagged `nonResizable` (no handle). The sticky-header and row-container widths MUST equal the sum of all effective column widths plus the 40px `More…` column. Overrides MUST be persisted under `dynamoColumnWidths:<connectionId>:<tableName>` via `useSetting`.
+
+Cells whose AttributeValue tag is one of `L`, `M`, `B`, `SS`, `NS`, `BS` MUST render a fixed summary (`[N items]` / `{K keys}` / `<binary NB>`) instead of inline contents, and clicking such a cell MUST select the row and focus the inspector on that attribute and display a visible "Edit item (JSON)" affordance hint. The "More…" column MUST be clickable per row to open the inspector showing the full item. The column order MUST be stable across page loads: a column once rendered MUST NOT change position; new attributes whose frequency exceeds the current Nth column's frequency MAY append on the right immediately before the "More…" column. Tabla cells whose AttributeValue tag is one of `S`, `N`, `BOOL`, `NULL` AND whose column is NOT a `KeySchema` attribute of the active index MUST become editable on double-click when the connection's `params.read_only` is `false`; the inline-edit affordance MUST follow the contract defined in the `dynamo-data-edit` capability. PK / SK cells of existing rows and all cells on read-only connections MUST refuse double-click. JSON mode MUST render each item as one read-only CodeMirror block with `language-json` and `JSON.stringify(item, null, 2)`. JSON mode MUST be virtualized; CodeMirror instances MUST be mounted lazily on first scroll into view and unmounted with a 5-row look-behind / look-ahead window, except that the inspector-selected item's editor MUST remain mounted while selected.
 
 #### Scenario: Toggle persists per table
 
@@ -235,6 +239,24 @@ The data view SHALL render results in one of two view modes — `Tabla` or `JSON
 
 - **WHEN** the user double-clicks any cell on a connection with `params.read_only: true`
 - **THEN** no inline editor opens
+
+#### Scenario: Tabla columns render at type-derived defaults
+
+- **WHEN** the user opens the Tabla view for the first time on a table with columns `pk (S, partition key, UUID-shaped)`, `sk (N, sort key)`, `payload (M)`, `is_active (BOOL)` and no override record exists
+- **THEN** the columns render at widths `[296, 136, 240, 88, 40]` respectively (uuid 280 + 16 key badge; numeric 120 + 16 key badge; json 240; boolean 88; `More…` fixed 40)
+
+#### Scenario: Tabla column resize persists per table
+
+- **WHEN** the user drags the `payload` header handle to set its width to 360px on `connectionA.OrdersTable`
+- **THEN** the record `dynamoColumnWidths:A:OrdersTable` is updated to include `{ payload: 360 }` and persisted via `useSetting`
+- **AND** the next time the user opens that table, `payload` renders at 360px
+- **AND** opening `connectionA.UsersTable` is unaffected
+
+#### Scenario: More… column is not resizable
+
+- **WHEN** the user hovers the right edge of the `More…` header
+- **THEN** no resize hit area is exposed and no accent line appears
+- **AND** the `More…` column width remains 40px regardless of any other column resizes
 
 ### Requirement: Inspector panel
 

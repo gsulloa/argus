@@ -1,0 +1,42 @@
+/**
+ * ResizeHandle — 6px hit area absolutely positioned over the right edge of a
+ * header cell.
+ *
+ * NOTE: The parent header cell must have `position: relative` for this
+ * absolute positioning to work. Setting that is the responsibility of each
+ * consuming grid's *.module.css (DataGrid, AdhocResultGrid, TabView).
+ */
+
+.handle {
+  position: absolute;
+  top: 0;
+  right: -3px; /* 3px inside cell + 3px outside = 6px total hit area */
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+
+/* Inner 1px accent line */
+.handle::after {
+  content: "";
+  display: block;
+  width: 1px;
+  height: 100%;
+  background-color: var(--accent);
+  opacity: 0;
+  transition: opacity var(--duration-instant);
+}
+
+/* Reveal on hover */
+.handle:hover::after {
+  opacity: 0.5;
+}
+
+/* Reveal during active drag via data-dragging attribute */
+.handle[data-dragging="true"]::after {
+  opacity: 0.5;
+}

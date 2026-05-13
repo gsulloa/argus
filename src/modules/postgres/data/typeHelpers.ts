@@ -18,19 +18,29 @@ export type ColumnCategory =
 
 export function categorize(dataType: string): ColumnCategory {
   const t = dataType.toLowerCase();
-  if (t === "boolean") return "boolean";
+  // boolean — also accept the short alias "bool"
+  if (t === "boolean" || t === "bool") return "boolean";
   if (t === "bytea") return "binary";
   if (t === "uuid") return "uuid";
   if (t === "json" || t === "jsonb") return "json";
   if (
+    // standard SQL names
     t === "smallint" ||
     t === "integer" ||
+    t === "int" ||
     t === "bigint" ||
     t === "real" ||
     t === "double precision" ||
     t === "smallserial" ||
     t === "serial" ||
     t === "bigserial" ||
+    // internal / catalog aliases
+    t === "int2" ||
+    t === "int4" ||
+    t === "int8" ||
+    t === "float4" ||
+    t === "float8" ||
+    // parameterized forms: numeric(p,s), decimal(p,s)
     t.startsWith("numeric") ||
     t.startsWith("decimal")
   ) {
@@ -38,11 +48,16 @@ export function categorize(dataType: string): ColumnCategory {
   }
   if (
     t === "date" ||
+    t === "interval" ||
+    t === "timetz" ||
+    t === "timestamptz" ||
+    // startsWith covers:
+    //   "timestamp", "timestamp with time zone", "timestamp without time zone"
+    //   "time", "time with time zone", "time without time zone"
     t.startsWith("timestamp") ||
     t.startsWith("time without") ||
     t.startsWith("time with") ||
-    t === "time" ||
-    t === "interval"
+    t === "time"
   ) {
     return "date";
   }
@@ -50,6 +65,9 @@ export function categorize(dataType: string): ColumnCategory {
     t === "text" ||
     t.startsWith("character varying") ||
     t.startsWith("varchar") ||
+    // bare "char" as well as "character(n)" and "character"
+    t === "char" ||
+    t.startsWith("char(") ||
     t.startsWith("character(") ||
     t === "character" ||
     t === "name" ||

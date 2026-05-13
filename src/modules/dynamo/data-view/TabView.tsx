@@ -33,6 +33,12 @@ import type { TableDescription } from "@/modules/dynamo/tables/types";
 import { MORE_COLUMN_ID, useInferredColumns } from "./useInferredColumns";
 import type { DynamoItemsStatus } from "./useDynamoItems";
 import { InlineCellEditor } from "./edit/InlineCellEditor";
+import {
+  useColumnWidths,
+  type ColumnCategory,
+  type ColumnSpec,
+} from "@/platform/table/columnWidths";
+import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import styles from "./TabView.module.css";
 
 // ---------------------------------------------------------------------------
@@ -41,7 +47,6 @@ import styles from "./TabView.module.css";
 
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
-const COLUMN_WIDTH = 180;
 const MORE_COLUMN_WIDTH = 40;
 
 // ---------------------------------------------------------------------------
@@ -64,6 +69,10 @@ export interface TabViewProps {
   items: AttributeMap[];
   describe: TableDescription | null;
   indexName: string | null; // null = primary index
+  /** Connection identifier — used to scope column-width persistence. */
+  connectionId: string;
+  /** Table name — used to scope column-width persistence. */
+  tableName: string;
   /** Multi-row selection set. */
   selectedRowIndices: Set<number>;
   /** Primary selected row (most recently clicked). Used for inspector. */
@@ -320,6 +329,8 @@ export function TabView({
   items,
   describe,
   indexName,
+  connectionId,
+  tableName,
   selectedRowIndices,
   primarySelectedRowIndex: _primarySelectedRowIndex,
   onSelect,
@@ -336,6 +347,31 @@ export function TabView({
 }: TabViewProps) {
   // ── Inferred columns ─────────────────────────────────────────────────────
   const inferredCols = useInferredColumns(items, describe, indexName);
+
+  // ── Column width management ───────────────────────────────────────────────
+  const columnSpecs = useMemo<ColumnSpec[]>(
+    () => [
+      ...inferredCols
+        .filter((c) => c.id !== MORE_COLUMN_ID)
+        .map((c) => ({
+          name: c.id,
+          category: c.category as ColumnCategory,
+          isKey: c.isKey,
+        })),
+      {
+        name: MORE_COLUMN_ID,
+        category: "other" as ColumnCategory,
+        nonResizable: true,
+        fixedWidth: MORE_COLUMN_WIDTH,
+      },
+    ],
+    [inferredCols],
+  );
+
+  const { widthFor, totalWidth, setWidth, resetWidth } = useColumnWidths({
+    storageKey: `dynamoColumnWidths:${connectionId}:${tableName}`,
+    columns: columnSpecs,
+  });
 
   // ── Key columns (PK + SK names for the active index) ─────────────────────
   // Used to prevent double-click editing on key columns (task 6.1).
@@ -363,7 +399,7 @@ export function TabView({
           return {
             id: MORE_COLUMN_ID,
             header: "…",
-            size: MORE_COLUMN_WIDTH,
+            size: widthFor(MORE_COLUMN_ID),
             cell: (info) => {
               const rowIndex = info.row.index;
               return (
@@ -386,7 +422,7 @@ export function TabView({
         return {
           id: col.id,
           header: col.id,
-          size: COLUMN_WIDTH,
+          size: widthFor(col.id),
           accessorFn: (row: AttributeMap) => row[col.id],
           cell: (info) => {
             const val = info.getValue() as AttributeValue | undefined;
@@ -416,7 +452,7 @@ export function TabView({
         };
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inferredCols, onSelect, editingCell, savingCell, keyColumns, isReadOnly, onStartEdit, onCommitEdit, onCancelEdit],
+    [inferredCols, widthFor, onSelect, editingCell, savingCell, keyColumns, isReadOnly, onStartEdit, onCommitEdit, onCancelEdit],
   );
 
   // ── TanStack Table instance ───────────────────────────────────────────────
@@ -480,16 +516,6 @@ export function TabView({
     return () => observer.disconnect();
   }, [hasMore, autoScrollDisabled, status, onLoadMore]);
 
-  // ── Total grid width ──────────────────────────────────────────────────────
-  const totalWidth = useMemo(
-    () =>
-      inferredCols.reduce((sum, col) => {
-        if (col.id === MORE_COLUMN_ID) return sum + MORE_COLUMN_WIDTH;
-        return sum + COLUMN_WIDTH;
-      }, 0),
-    [inferredCols],
-  );
-
   // ── Empty / idle state ────────────────────────────────────────────────────
   if (items.length === 0 && status !== "loading") {
     const msg =
@@ -518,7 +544,7 @@ export function TabView({
                 const col = inferredCols.find((c) => c.id === header.id);
                 const isKey = col?.isKey ?? false;
                 const isMore = header.id === MORE_COLUMN_ID;
-                const w = isMore ? MORE_COLUMN_WIDTH : COLUMN_WIDTH;
+                const w = widthFor(header.id);
                 return (
                   <div
                     key={header.id}
@@ -539,6 +565,11 @@ export function TabView({
                               : "SK"}
                           </span>
                         )}
+                        <ResizeHandle
+                          currentWidth={w}
+                          onChange={(px) => setWidth(header.id, px)}
+                          onReset={() => resetWidth(header.id)}
+                        />
                       </>
                     )}
                   </div>
@@ -585,7 +616,7 @@ export function TabView({
               >
                 {row.getVisibleCells().map((cell) => {
                   const isMore = cell.column.id === MORE_COLUMN_ID;
-                  const w = isMore ? MORE_COLUMN_WIDTH : COLUMN_WIDTH;
+                  const w = widthFor(cell.column.id);
                   return (
                     <div
                       key={cell.id}
