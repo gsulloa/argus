@@ -37,6 +37,8 @@ function makeBuffer(): UseEditBufferResult {
     commitSuccess: vi.fn(),
     toEditOps: () => [],
     toRowKeys: () => [],
+    bulkSetCellEdit: vi.fn(),
+    bulkDeleteToggle: vi.fn(),
   };
 }
 
@@ -69,7 +71,7 @@ function buildProps(overrides: Partial<DataGridProps> = {}): DataGridProps {
     status: "ready",
     nextError: null,
     reachedEnd: true,
-    selectedRowIndex: null,
+    selection: { anchor: null, active: null },
     isReadOnly: true,
     pkColumns: null, // no PK → isKey: false for all columns
     enumValuesByColumn: {},
@@ -77,10 +79,11 @@ function buildProps(overrides: Partial<DataGridProps> = {}): DataGridProps {
     connectionId: "test-conn",
     schema: "public",
     relation: "users",
-    onSelectRow: vi.fn(),
+    onSelectionChange: vi.fn(),
     onSortChange: vi.fn(),
     onLoadNextPage: vi.fn(),
     onRetryNextPage: vi.fn(),
+    bulkEditActive: false,
     ...overrides,
   };
 }
