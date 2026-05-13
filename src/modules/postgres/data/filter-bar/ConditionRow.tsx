@@ -4,6 +4,7 @@ import { OperatorPicker } from "./OperatorPicker";
 import { ValueInput } from "./ValueInput";
 import { operatorsForColumn } from "./operatorRules";
 import { coerceValueForOperator } from "./treeMutations";
+import { RowApplyButton } from "../../../shared/filter-bar";
 import type { ColumnRef, Condition, DataColumn, Operator } from "../types";
 import styles from "./FilterBar.module.css";
 
@@ -12,6 +13,10 @@ interface Props {
   columns: DataColumn[];
   onChange(next: Condition): void;
   onRemove(): void;
+  /** Called when the user clicks the per-row Apply button. */
+  onApplyOnly?: () => void;
+  /** When true, marks the column picker as the keyboard focus target (⌘F). */
+  isFocusTarget?: boolean;
 }
 
 function namedColumnMeta(
@@ -25,7 +30,7 @@ function namedColumnMeta(
     : { dataType: null, isNullable: true };
 }
 
-export function ConditionRow({ condition, columns, onChange, onRemove }: Props) {
+export function ConditionRow({ condition, columns, onChange, onRemove, onApplyOnly, isFocusTarget }: Props) {
   const meta = namedColumnMeta(condition.column, columns);
   const ops = operatorsForColumn(condition.column, meta.dataType, meta.isNullable);
 
@@ -53,11 +58,19 @@ export function ConditionRow({ condition, columns, onChange, onRemove }: Props) 
 
   return (
     <span className={styles.row}>
-      <ColumnPicker
-        value={condition.column}
-        columns={columns}
-        onChange={onColumnChange}
-      />
+      {/* data-filter-focus-target on the column picker's container span.
+          The ColumnPicker's trigger button will be focused via the container's
+          data attribute and the query in FilterBar.focus(). */}
+      <span
+        data-filter-focus-target={isFocusTarget ? "true" : undefined}
+        style={{ display: "contents" }}
+      >
+        <ColumnPicker
+          value={condition.column}
+          columns={columns}
+          onChange={onColumnChange}
+        />
+      </span>
       {condition.column.kind === "any_column" && (
         <span
           className={styles.warnIcon}
@@ -75,6 +88,13 @@ export function ConditionRow({ condition, columns, onChange, onRemove }: Props) 
         value={condition.value}
         onChange={(v) => onChange({ ...condition, value: v })}
       />
+      {onApplyOnly && (
+        <RowApplyButton
+          onClick={onApplyOnly}
+          aria-label="Apply only this row"
+          title="Apply only this row (replaces active filter)"
+        />
+      )}
       <button
         type="button"
         className={styles.removeBtn}

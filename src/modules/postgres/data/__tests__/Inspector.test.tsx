@@ -35,8 +35,10 @@ function makeBuffer(setCellEdit = vi.fn()): UseEditBufferResult {
     isCellDirty: vi.fn().mockReturnValue(false),
     isRowDeleted: vi.fn().mockReturnValue(false),
     setCellEdit,
+    bulkSetCellEdit: vi.fn(),
     markRowDelete: vi.fn(),
     markRowUndelete: vi.fn(),
+    bulkDeleteToggle: vi.fn(),
     addInsertRow: vi.fn(),
     removeInsertRow: vi.fn(),
     undo: vi.fn(),
@@ -47,13 +49,26 @@ function makeBuffer(setCellEdit = vi.fn()): UseEditBufferResult {
   };
 }
 
+// Helper: build a single-row selectedRows array (single-row inspector mode).
+function makeSelectedRows(row: (string | number | null)[], rowKey = "row-1") {
+  return [
+    {
+      rowKey,
+      row: row as import("../types").CellValue[],
+      pk: { id: row[0] } as Record<string, import("../types").EditValue>,
+      source: "server" as const,
+      isDeleted: false,
+    },
+  ];
+}
+
 // Renders with id=1 as PK so metadata is editable (not a PK column).
 function renderWithJsonb(jsonbValue: string | null, buffer = makeBuffer()) {
   return render(
     <Inspector
       columns={[idCol, jsonbCol]}
-      row={[1, jsonbValue]}
-      rowKey="row-1"
+      selectedRows={makeSelectedRows([1, jsonbValue])}
+      bulkEditAvailable={true}
       isReadOnly={false}
       pkColumns={["id"]}
       enumValuesByColumn={{}}
@@ -66,8 +81,8 @@ function renderWithText(textValue: string | null, buffer = makeBuffer()) {
   return render(
     <Inspector
       columns={[idCol, textCol]}
-      row={[1, textValue]}
-      rowKey="row-1"
+      selectedRows={makeSelectedRows([1, textValue])}
+      bulkEditAvailable={true}
       isReadOnly={false}
       pkColumns={["id"]}
       enumValuesByColumn={{}}
@@ -159,5 +174,22 @@ describe("Inspector - jsonb column", () => {
     expect(errorEl).toBeTruthy();
     fireEvent.change(ta, { target: { value: '{"x":1}' } });
     expect(screen.queryByText(/JSON at position|Unexpected/i)).toBeNull();
+  });
+});
+
+describe("Inspector - empty state", () => {
+  it("shows select a row message when no rows are selected", () => {
+    render(
+      <Inspector
+        columns={[idCol, jsonbCol]}
+        selectedRows={[]}
+        bulkEditAvailable={true}
+        isReadOnly={false}
+        pkColumns={["id"]}
+        enumValuesByColumn={{}}
+        buffer={makeBuffer()}
+      />,
+    );
+    expect(screen.getByText(/Select a row to inspect/i)).toBeInTheDocument();
   });
 });

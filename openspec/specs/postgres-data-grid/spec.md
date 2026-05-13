@@ -245,9 +245,79 @@ Switching subtabs MUST NOT trigger a `postgres_query_table`, `postgres_count_tab
 - **THEN** the active subtab does NOT change
 - **AND** the keystroke is handled by the focused editor (or ignored)
 
+### Requirement: Drag-to-select row range
+
+The data grid SHALL support multi-row selection via vertical mouse drag inside the body region. The viewer MUST track selection as a pair `{ anchor: number | null, active: number | null }` where `anchor` is the row index where the drag started and `active` is the row index currently (or most recently) under the cursor. The set of selected indices MUST be derived as the inclusive range `[min(anchor, active), max(anchor, active)]`. When `anchor === null`, no rows are selected.
+
+Mouse interaction MUST follow these rules:
+
+- **Mouse-down on a row** sets `anchor = active = rowIndex` but does NOT yet visually commit a multi-row selection; the drag intent is unresolved until the cursor has moved at least 4 pixels (vertically OR horizontally) from the mouse-down position.
+- **Mouse-move while in drag-pending state**: if the cursor has moved < 4px, the gesture is still a click; if it has moved ≥ 4px, the gesture transitions to drag-active and `active` updates on every subsequent mousemove to the row index under the cursor (computed from `scrollTop` and `clientY`, NOT from DOM presence — virtualized rows that are not mounted are still selectable).
+- **Mouse-move near the body's top or bottom edge** (within 20px) while drag-active MUST trigger auto-scroll of the grid viewport in that direction, so the user can extend the selection past the visible viewport. Auto-scroll velocity MUST be proportional to how close the cursor is to the edge.
+- **Mouse-up while drag-active** finalizes the selection at `[anchor, active]` and exits drag mode. The selection remains until cleared.
+- **Mouse-up while drag-pending** (cursor never crossed the threshold) is treated as a click: if the clicked row was already selected as a single row, deselect (`anchor = active = null`); otherwise select that single row (`anchor = active = rowIndex`).
+- **Mouse-up outside the grid**: the same finalization MUST apply (the grid listens for `mouseup` on `document` while drag is active so the gesture can complete even if the cursor leaves).
+
+Selected rows MUST render with the same `data-selected="true"` attribute and `--accent-soft` background already used for single-row selection. No new design tokens are introduced. The selection MUST survive vertical scroll and tail pagination. The selection MUST be cleared when the user changes sort, filter, or page size (consistent with the existing buffer reset behavior on those events). The selection MUST be cleared when the user presses `Escape` outside of an active inline editor.
+
+When the user clicks the same row a second time without dragging, the row is deselected. When the user clicks a different row without dragging, the previous selection is replaced by the new single-row selection (no Cmd/Shift extend in this capability).
+
+#### Scenario: Click without drag selects a single row
+
+- **WHEN** the user mouse-downs on row 5 and mouse-ups within 4px without moving
+- **THEN** the selection is `{ anchor: 5, active: 5 }`
+- **AND** only row 5 has `data-selected="true"`
+
+#### Scenario: Drag from row 5 to row 8 selects rows 5..8
+
+- **WHEN** the user mouse-downs on row 5, drags vertically down through rows 6 and 7, and mouse-ups on row 8
+- **THEN** the selection is `{ anchor: 5, active: 8 }`
+- **AND** rows 5, 6, 7, 8 all render with `data-selected="true"`
+
+#### Scenario: Drag past the visible viewport triggers auto-scroll
+
+- **WHEN** the user starts a drag at row 5 (visible) and moves the cursor to within 20px of the body's bottom edge
+- **THEN** the grid's vertical scroll position advances downward continuously while the cursor stays in the edge zone
+- **AND** `active` continues to update to the row index under the cursor as new rows scroll into view
+- **AND** the auto-scroll stops when the cursor moves out of the edge zone or when the user releases the mouse
+
+#### Scenario: Selection survives virtualization (drag into unmounted rows)
+
+- **WHEN** the user drags from row 5 into row 9500 of a 10000-row buffer (rows 50–9499 are never DOM-mounted because of virtualization)
+- **THEN** the selection is `{ anchor: 5, active: 9500 }`
+- **AND** when the user later scrolls to any row in `[5, 9500]`, that row renders selected
+
+#### Scenario: Drag below 4px threshold remains a click
+
+- **WHEN** the user mouse-downs on row 5 and mouse-ups after moving the cursor only 2 pixels
+- **THEN** the gesture is treated as a single click
+- **AND** the selection is `{ anchor: 5, active: 5 }` (single row)
+
+#### Scenario: Mouse-up outside the grid still finalizes the selection
+
+- **WHEN** the user starts a drag on row 5, moves the cursor outside the grid (over the inspector panel or browser chrome) past the 4px threshold, and releases the mouse there
+- **THEN** the selection is finalized at the last `active` value computed while the cursor was over the grid
+- **AND** no drag state remains active
+
+#### Scenario: Sort change clears the selection
+
+- **WHEN** the user has rows 5..10 selected and changes the sort
+- **THEN** the buffer is reset (existing behavior) and the selection becomes `{ anchor: null, active: null }`
+
+#### Scenario: Escape clears the selection outside of an editor
+
+- **WHEN** the user has rows 5..10 selected and no inline editor is active
+- **AND** presses Escape
+- **THEN** the selection becomes `{ anchor: null, active: null }`
+
+#### Scenario: Click a different row replaces the selection
+
+- **WHEN** the user has rows 5..10 selected and single-clicks row 20 without dragging
+- **THEN** the selection becomes `{ anchor: 20, active: 20 }`
+
 ### Requirement: Virtualized data grid
 
-The viewer tab SHALL render the rows in a virtualized grid powered by `@tanstack/react-table` for column / row modeling and `@tanstack/react-virtual` for vertical row virtualization. The grid MUST keep DOM row count proportional to the visible viewport (not to the dataset size) so that loading 10k+ rows is smooth. The grid MUST display column names in `Geist Mono` (the codebase token), tabular numerals for numeric and date columns, and a single hairline divider between rows (per `DESIGN.md`). The active row MUST be highlighted with the `--accent-soft` background. Cell padding MUST be the compact density specified in `DESIGN.md` (`5px 12px`). Long values MUST be truncated with an ellipsis at the cell boundary; full content is shown via the inspector panel.
+The viewer tab SHALL render the rows in a virtualized grid powered by `@tanstack/react-table` for column / row modeling and `@tanstack/react-virtual` for vertical row virtualization. The grid MUST keep DOM row count proportional to the visible viewport (not to the dataset size) so that loading 10k+ rows is smooth. The grid MUST display column names in `Geist Mono` (the codebase token), tabular numerals for numeric and date columns, and a single hairline divider between rows (per `DESIGN.md`). Rows belonging to the active selection range (see "Drag-to-select row range") MUST be highlighted with the `--accent-soft` background. Cell padding MUST be the compact density specified in `DESIGN.md` (`5px 12px`). Long values MUST be truncated with an ellipsis at the cell boundary; full content is shown via the inspector panel.
 
 Each column's rendered width MUST be the effective width computed by the `column-width-preferences` capability: the user override if present, otherwise the type-derived base width returned by `baseWidthFor(categorize(column.data_type))`. Every column header MUST expose the resize hit area defined by `column-width-preferences`. The sticky-header and row-container widths MUST equal the sum of all effective column widths. Overrides MUST be persisted under `pgColumnWidths:<connectionId>:<schema>:<relation>`.
 
@@ -259,17 +329,17 @@ When the connection is writable AND the relation has a PK, the grid MUST also re
 - **THEN** the grid renders no more than `viewport_height / row_height + overscan` row DOM nodes at any time
 - **AND** scrolling does not block the main thread for visibly long stalls
 
-#### Scenario: Active row uses the accent-soft stripe
+#### Scenario: Selected rows use the accent-soft stripe
 
-- **WHEN** the user clicks a row to select it
-- **THEN** that row's background uses the `--accent-soft` token from `DESIGN.md`
-- **AND** the inspector panel updates to that row
+- **WHEN** the user selects rows 5..10
+- **THEN** each of rows 5, 6, 7, 8, 9, 10 has its background using the `--accent-soft` token from `DESIGN.md`
+- **AND** the inspector panel updates to the `active` row of the selection
 
 #### Scenario: Dirty cell has a distinct background
 
 - **WHEN** the user edits a cell so that it is now in the buffer's `update` set
 - **THEN** that cell renders with the dirty-state background
-- **AND** the dirty-state background is visually distinct from the active-row `--accent-soft` highlight (so an active row with one dirty cell shows both states)
+- **AND** the dirty-state background is visually distinct from the selection `--accent-soft` highlight (so a selected row with one dirty cell shows both states)
 
 #### Scenario: Row marked for delete is rendered struck through
 
@@ -393,6 +463,8 @@ The viewer SHALL display a bottom bar with: a row counter `Showing <N> rows · P
 
 When the viewer is in editable mode, the bottom bar MUST also render: an "Add row" button (hidden on views/materialized views), a "Save" button enabled only when the buffer has dirty entries (showing `Save (<N>)` where N is the count of pending operations), and an unsaved-changes indicator. When the connection is read-only, the bottom bar MUST instead render a "Read-only connection — edits disabled" banner replacing the "Add row" / "Save" controls. When the relation has no PK on a writable connection, the bottom bar MUST render a "No primary key — existing rows are not editable" banner alongside the "Add row" button.
 
+When the selection range contains 2 or more rows, the bottom bar MUST render a selection chip to the left of the dirty-count indicator showing `<N> rows selected` followed by a `Clear` button. The chip MUST use `--accent-soft` as background and `--accent` as text color (tokens from `DESIGN.md`). The `Clear` button MUST reset the selection to `{ anchor: null, active: null }` without modifying the edit buffer. The chip MUST NOT be rendered when the selection contains 0 or 1 row (zero-noise rule).
+
 #### Scenario: Default bar shows partial info
 
 - **WHEN** the user has 400 rows buffered across two pages and has not clicked `Count rows`
@@ -424,6 +496,25 @@ When the viewer is in editable mode, the bottom bar MUST also render: an "Add ro
 - **WHEN** the user is viewing a table without a PK on a writable connection
 - **THEN** the bar shows the "Add row" button (insert is allowed)
 - **AND** also shows a banner reading "No primary key — existing rows are not editable"
+
+#### Scenario: Selection chip appears when 2+ rows are selected
+
+- **WHEN** the user has selected rows 5..12 by dragging
+- **THEN** the bottom bar renders a chip `8 rows selected · Clear` to the left of the dirty-count indicator
+- **AND** the chip uses `--accent-soft` background and `--accent` text color
+
+#### Scenario: Selection chip is hidden for single-row selection
+
+- **WHEN** the user has selected exactly one row
+- **THEN** the bottom bar does NOT render the selection chip
+
+#### Scenario: Clear button clears selection without touching the buffer
+
+- **WHEN** the user has rows 5..12 selected and 3 dirty cells in the buffer
+- **AND** clicks the chip's `Clear` button
+- **THEN** the selection becomes `{ anchor: null, active: null }`
+- **AND** the 3 dirty cells remain in the buffer
+- **AND** the chip disappears (selection count is 0)
 
 ### Requirement: Read-only execution path
 
@@ -543,6 +634,8 @@ The bar MUST always be visible while a `postgres-table-data` tab is mounted; it 
 
 The bar MUST contain, in order: a Mode toggle (Structured / Raw SQL), the body for the active mode (the conditions UI for Structured, the WHERE editor for Raw), and an action row with `Reset`, `Apply`, and `Open in SQL Editor`. The `Apply` button MUST be the rightmost primary control.
 
+While the table tab is focused and active AND the keyboard focus is not inside a CodeMirror editor surface (the SQL editor, the Raw WHERE editor, or any future CodeMirror surface), pressing `⌘F` (macOS) / `Ctrl+F` (other) MUST bring keyboard focus into the filter bar's body. The handler MUST resolve the focus target in this order: (a) if the bar is collapsed, expand it first; (b) if the body is in Structured mode and has at least one root child, focus the first row's column picker; (c) if the body is in Structured mode and has no rows, focus the `+ AND row` add button; (d) if the body is in Raw mode, focus the Raw WHERE editor textarea. The handler MUST call `preventDefault()` to suppress any platform/webview default search behavior. The handler MUST NOT fire on other tabs (it is scoped to the active table tab). The handler MUST NOT fire when the active subtab is `Structure` or `Raw` of the viewer tab (those subtabs do not host the filter bar).
+
 #### Scenario: Bar is the only filter surface
 
 - **WHEN** the user opens a `postgres-table-data` tab
@@ -560,9 +653,47 @@ The bar MUST contain, in order: a Mode toggle (Structured / Raw SQL), the body f
 - **WHEN** the bar has applied filters and the user toggles the bar collapsed, then expanded
 - **THEN** all applied and draft filters are preserved exactly
 
+#### Scenario: Cmd+F expands a collapsed bar and focuses the first row
+
+- **WHEN** the user has collapsed the bar with one root condition already present and the table tab is focused (focus is somewhere in the grid)
+- **AND** the user presses `⌘F` (macOS) or `Ctrl+F` (other)
+- **THEN** the bar expands
+- **AND** keyboard focus moves to the first row's column picker
+- **AND** no browser/webview "find in page" UI appears
+
+#### Scenario: Cmd+F focuses the empty-state add button
+
+- **WHEN** the user has an expanded bar with no rows (empty Structured body) and presses `⌘F` from anywhere outside the bar
+- **THEN** keyboard focus moves to the `+ AND row` button in the body's empty state
+
+#### Scenario: Cmd+F focuses the Raw WHERE editor when in Raw mode
+
+- **WHEN** the bar is in Raw mode and the user presses `⌘F` from outside the bar
+- **THEN** keyboard focus moves to the Raw WHERE editor textarea
+
+#### Scenario: Cmd+F does not fire from inside a CodeMirror editor
+
+- **WHEN** the user has keyboard focus inside the Raw WHERE editor or any other CodeMirror surface and presses `⌘F`
+- **THEN** the tab-level handler does NOT preventDefault
+- **AND** CodeMirror's built-in search panel opens
+
+#### Scenario: Cmd+F is scoped to the active tab
+
+- **WHEN** the user has two `postgres-table-data` tabs open, the active tab is Tab A, and Tab B is mounted but not active
+- **AND** the user presses `⌘F`
+- **THEN** only Tab A's filter bar receives focus; Tab B's filter bar is unaffected
+
+#### Scenario: Cmd+F does not fire on the Structure or Raw subtab
+
+- **WHEN** the user is on the Structure or Raw subtab of a `postgres-table-data` tab and presses `⌘F`
+- **THEN** the filter bar (which is not visible) does NOT receive focus
+- **AND** the active subtab does not change
+
 ### Requirement: Filter draft and applied state
 
 `TableViewerTab` SHALL maintain two filter values for each tab: `draft` and `applied`. Only `applied` MUST be passed to `postgres_query_table` and `postgres_count_table`. Edits to the filter bar MUST update `draft` only. The bar MUST display a dirty indicator (a small `●` adjacent to the `Apply` button) whenever `draft` differs from `applied`. The bar MUST bind `Cmd+Enter` (macOS) / `Ctrl+Enter` (other) to "Apply" and `Esc` to "Discard draft" while focused. Pressing `Apply` MUST set `applied = draft`. Pressing `Reset` MUST set `draft` to the empty filter model AND set `applied` to the empty filter model in one update (clearing both at once). Discarding draft MUST set `draft = applied` (no fetch). Mode toggling rules are described under "Raw WHERE mode".
+
+In addition to the all-or-nothing Apply, each root child of the Structured body MUST render a per-row Apply affordance (a small `▶` icon-button at the row's right edge, `aria-label="Apply only this row"`, tooltip `"Apply only this row (replaces active filter)"`). Activating it MUST set `applied` to a `FilterModel` whose tree contains exactly that one child (preserving the child's full structure — if the child is an OR group, the whole group is applied as the only root child). The per-row Apply MUST NOT modify `draft`. After a per-row Apply, the dirty indicator MUST reflect that `draft` no longer equals `applied` (assuming the draft has more than one row). The compiled WHERE for a single-child applied tree MUST behave identically to a full Apply on a draft that has only that one row.
 
 #### Scenario: Editing a row updates draft only
 
@@ -591,21 +722,52 @@ The bar MUST contain, in order: a Mode toggle (Structured / Raw SQL), the body f
 - **THEN** both `draft` and `applied` become empty
 - **AND** `postgres.queryTable` is invoked with no `filter_tree` and no `raw_where`
 
+#### Scenario: Per-row Apply replaces the active filter with that single row
+
+- **WHEN** the user has three rows in `draft` and clicks the per-row Apply button on the second row (a condition `status = "ok"`)
+- **THEN** `applied` becomes a tree whose only child is `{ kind: "condition", column: { kind: "named", name: "status" }, op: "=", value: "ok" }`
+- **AND** `draft` is unchanged (still has all three rows)
+- **AND** the dirty indicator shows that `draft ≠ applied`
+- **AND** `postgres.queryTable` is invoked with the single-condition `filter_tree`
+
+#### Scenario: Per-row Apply on an OR-group row applies the whole group
+
+- **WHEN** `draft` contains one condition row and one OR group of two conditions, and the user clicks the per-row Apply button on the OR group row
+- **THEN** `applied` becomes a tree whose only child is that OR group (with both inner conditions)
+- **AND** the compiled WHERE is `(p_or1 OR p_or2)`
+
+#### Scenario: Per-row Apply preserves the root combinator field
+
+- **WHEN** `draft.tree.combinator === "OR"` and the user clicks per-row Apply on any row
+- **THEN** `applied.tree.combinator === "OR"` is preserved on the single-child tree (no-op semantically, but the field round-trips)
+
 ### Requirement: AND root with OR groups
 
-The Structured filter model SHALL be a tree with an implicit `AND` root. Children of the root are either condition leaves or OR groups. An OR group MUST contain at least one condition leaf and MUST NOT contain another group (one level of nesting maximum). Removing the last condition from an OR group MUST collapse the group node out of the tree. The bar MUST expose two add affordances: `+ AND row` (adds a condition leaf as a sibling of root children) and `+ OR group` (adds an OR group with one empty condition row inside).
+The Structured filter model SHALL be a tree with an explicit root combinator (`combinator: "AND" | "OR"`, defaulting to `"AND"` when absent). Children of the root are either condition leaves or OR groups. An OR group MUST contain at least one condition leaf and MUST NOT contain another group (one level of nesting maximum). Removing the last condition from an OR group MUST collapse the group node out of the tree. The bar MUST expose two add affordances: `+ AND row` (adds a condition leaf as a sibling of root children) and `+ OR group` (adds an OR group with one empty condition row inside). The names of the add buttons refer to ROW TYPES (single condition vs. OR-group), not to the root combinator — they are stable regardless of `combinator`.
 
-The compiled `WHERE` body MUST place each OR group in parentheses. An empty tree (no children) MUST result in no `WHERE` clause being emitted.
+The bar MUST expose a segmented `AND | OR` toggle adjacent to the add buttons that switches the root `combinator` between the two values. The toggle MUST be hidden when the tree has zero children (no semantic effect). When `combinator === "OR"`, the inline inter-row connector pills (between root children) MUST read `"OR"` instead of `"AND"`. Toggling the combinator MUST update `draft.tree.combinator` only (it does NOT auto-apply); the user must press `Apply` for the new combinator to take effect.
+
+The compiled `WHERE` body MUST join root children with `" AND "` or `" OR "` based on `tree.combinator`. Each OR group MUST always be wrapped in parentheses regardless of the root combinator. An empty tree (no children) MUST result in no `WHERE` clause being emitted. The Rust `FilterTree` struct MUST tolerate the absence of the `combinator` field on the wire (`#[serde(default)]` → `RootCombinator::And`).
 
 #### Scenario: Flat AND children compile to ANDed predicates
 
-- **WHEN** the tree has three sibling condition leaves at root
+- **WHEN** the tree has three sibling condition leaves at root and `combinator` is `"AND"` (or absent)
 - **THEN** the compiled WHERE is `<p1> AND <p2> AND <p3>` with no parens
+
+#### Scenario: Flat OR children compile to ORed predicates
+
+- **WHEN** the tree has three sibling condition leaves at root and `combinator` is `"OR"`
+- **THEN** the compiled WHERE is `<p1> OR <p2> OR <p3>` with no parens
 
 #### Scenario: OR group compiles to a parenthesized OR
 
-- **WHEN** the tree has one root condition and one OR group of two conditions
+- **WHEN** the tree has one root condition and one OR group of two conditions and `combinator` is `"AND"`
 - **THEN** the compiled WHERE is `<p_root> AND (<p_or1> OR <p_or2>)`
+
+#### Scenario: OR-root with OR group nests but compiles correctly
+
+- **WHEN** the tree has one root condition and one OR group of two conditions and `combinator` is `"OR"`
+- **THEN** the compiled WHERE is `<p_root> OR (<p_or1> OR <p_or2>)`
 
 #### Scenario: OR group with one condition still parenthesizes
 
@@ -627,6 +789,28 @@ The compiled `WHERE` body MUST place each OR group in parentheses. An empty tree
 
 - **WHEN** the user has no conditions and no OR groups
 - **THEN** the issued SQL has no `WHERE` clause
+
+#### Scenario: Root combinator toggle is hidden when tree is empty
+
+- **WHEN** the tree has zero children
+- **THEN** the `AND | OR` toggle is NOT rendered in the body
+
+#### Scenario: Toggling root combinator marks draft dirty
+
+- **WHEN** `draft.tree.combinator === "AND"`, `applied.tree.combinator === "AND"`, and the user clicks the `OR` segment of the toggle
+- **THEN** `draft.tree.combinator === "OR"`
+- **AND** the dirty indicator appears
+- **AND** no fetch is triggered until the user presses `Apply`
+
+#### Scenario: Connector pills re-read when combinator flips
+
+- **WHEN** the tree has three root condition leaves and `combinator` is flipped from `"AND"` to `"OR"`
+- **THEN** the two inter-row connector pills displayed between rows read `"OR"` instead of `"AND"`
+
+#### Scenario: Missing combinator on the wire defaults to AND
+
+- **WHEN** the Rust backend receives a `filter_tree` payload that has no `combinator` field
+- **THEN** the SQL compiler treats it as `RootCombinator::And` and emits `AND`-joined root predicates
 
 ### Requirement: Any column search
 
@@ -758,7 +942,7 @@ The new tab MUST be created via the existing `postgres-query` tab payload (`{ co
 
 ### Requirement: Per-table filter persistence
 
-The frontend SHALL persist the filter bar's `draft` and `applied` `FilterModel` per `(connectionId, schema, relation)` tuple under the settings key `pgTableFilter:<connectionId>:<schema>:<relation>`. The persisted record MUST contain both halves of the bar's state (`{ draft, applied }`) as a single coherent JSON object, so a partial-write (one half stale, the other fresh) is impossible.
+The frontend SHALL persist the filter bar's `draft` and `applied` `FilterModel` per `(connectionId, schema, relation)` tuple under the settings key `pgTableFilter:<connectionId>:<schema>:<relation>`. The persisted record MUST contain both halves of the bar's state (`{ draft, applied }`) as a single coherent JSON object, so a partial-write (one half stale, the other fresh) is impossible. The persisted record MUST include the root `combinator` field for each tree; when reading a persisted record written before this change (no `combinator` field present), the loader MUST coerce it to `"AND"`.
 
 The persisted filter MUST survive: switching to a different tab and back, closing the table tab and reopening it, switching to a different connection and back, and restarting the app. The persisted filter MUST NOT be cleared by any of those events.
 
@@ -822,6 +1006,19 @@ The setting MUST be scoped per connection — two connections inspecting the sam
 - **AND** the user opens that table
 - **THEN** the data grid surfaces an `AppError::Postgres` (e.g. `42703 undefined_column`) through the existing error UX
 - **AND** the persisted filter is unchanged (the user can choose to `Reset` or to fix the predicate)
+
+#### Scenario: Persisted record without combinator field is loaded as AND
+
+- **WHEN** the user opens a table whose persisted filter record was written before this change (no `combinator` field on the tree)
+- **THEN** the loader coerces both `draft.tree.combinator` and `applied.tree.combinator` to `"AND"`
+- **AND** the filter bar renders the tree with the `AND` toggle selected
+- **AND** the compiled WHERE matches the pre-change behavior
+
+#### Scenario: Combinator round-trips through persistence
+
+- **WHEN** the user toggles the root combinator to `"OR"` and applies, then quits and re-launches Argus
+- **THEN** the persisted record contains `combinator: "OR"` on both `draft.tree` and `applied.tree`
+- **AND** reopening the table restores the toggle in the `OR` position
 
 ### Requirement: Per-table sort persistence
 

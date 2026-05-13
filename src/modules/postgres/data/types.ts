@@ -77,6 +77,7 @@ export type FilterNode =
 
 export interface FilterTree {
   children: FilterNode[];
+  combinator?: "AND" | "OR";
 }
 
 export type FilterMode = "structured" | "raw";
@@ -94,7 +95,7 @@ export interface FilterModel {
   raw: string;
 }
 
-export const EMPTY_FILTER_TREE: FilterTree = { children: [] };
+export const EMPTY_FILTER_TREE: FilterTree = { children: [], combinator: "AND" };
 
 export const EMPTY_FILTER_MODEL: FilterModel = {
   mode: "structured",
@@ -215,6 +216,18 @@ export type ApplyEditsOutcome =
     };
 
 // --------------------------------------------------------------------------
+// FilterTree helpers
+// --------------------------------------------------------------------------
+
+/**
+ * Returns the root combinator for the tree, treating `undefined` as `"AND"`
+ * for backward compatibility with persisted trees that pre-date this field.
+ */
+export function getRootCombinator(tree: FilterTree): "AND" | "OR" {
+  return tree.combinator ?? "AND";
+}
+
+// --------------------------------------------------------------------------
 // FilterModel helpers
 // --------------------------------------------------------------------------
 
@@ -257,6 +270,7 @@ export function filterModelEquals(a: FilterModel, b: FilterModel): boolean {
 }
 
 export function filterTreeEquals(a: FilterTree, b: FilterTree): boolean {
+  if (getRootCombinator(a) !== getRootCombinator(b)) return false;
   if (a.children.length !== b.children.length) return false;
   for (let i = 0; i < a.children.length; i++) {
     if (!filterNodeEquals(a.children[i]!, b.children[i]!)) return false;

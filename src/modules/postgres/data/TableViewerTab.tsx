@@ -30,11 +30,14 @@ import {
 } from "../structure/SubtabHeader";
 import { useTableStructureCache } from "../structure/useTableStructureCache";
 import {
+  getRootCombinator,
   modelToPayload,
   type CellValue,
   type EditValue,
+  type FilterModel,
   type RelationKind,
 } from "./types";
+import type { FilterBarHandle } from "../../shared/filter-bar";
 import styles from "./TableViewerTab.module.css";
 
 export const POSTGRES_TABLE_DATA_KIND = "postgres-table-data";
@@ -113,7 +116,10 @@ export function TableViewer({
     setOrderBy,
   } = useTableOrderBy(connectionId, schema, relation);
   const [rawError, setRawError] = useState<string | null>(null);
-  const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  const [selection, setSelection] = useState<{ anchor: number | null; active: number | null }>({
+    anchor: null,
+    active: null,
+  });
   const [activeSubtab, setActiveSubtab] = useState<Subtab>("data");
   const structureCache = useTableStructureCache(connectionId, schema, relation);
 
@@ -190,9 +196,9 @@ export function TableViewer({
     return out;
   }, [data.rows, data.columns, buffer.rows, insertRowKeys, pkColumns]);
 
-  // Reset row selection whenever the buffer rebuilds.
+  // Reset row selection whenever sort/filter/pageSize/relation changes.
   useEffect(() => {
-    setSelectedRow(null);
+    setSelection({ anchor: null, active: null });
   }, [pageSize, orderBy, applied, connectionId, schema, relation]);
 
   // Surface postgres errors from the data hook back into the bar when they
@@ -256,16 +262,59 @@ export function TableViewer({
     [inspectorWidth, max, min, setWidth],
   );
 
-  const selectedRowData = useMemo(() => {
-    if (selectedRow === null) return null;
-    const r = unifiedRows[selectedRow];
-    return r ? r.cells : null;
-  }, [selectedRow, unifiedRows]);
+  // Derive the array of selected rows (raw selection range, pre-filter).
+  const selectedRows = useMemo(() => {
+    if (selection.anchor === null) return [];
+    const lo = Math.min(selection.anchor, selection.active ?? selection.anchor);
+    const hi = Math.max(selection.anchor, selection.active ?? selection.anchor);
+    const out: Array<{
+      rowKey: string;
+      row: CellValue[];
+      pk: Record<string, EditValue>;
+      source: "insert" | "server";
+      isDeleted: boolean;
+    }> = [];
+    for (let i = lo; i <= hi; i++) {
+      const r = unifiedRows[i];
+      if (!r) continue;
+      const pk: Record<string, EditValue> = {};
+      if (pkColumns && r.source === "server") {
+        for (const col of pkColumns) {
+          const idx = data.columns.findIndex((c) => c.name === col);
+          if (idx >= 0) pk[col] = (r.cells[idx] ?? null) as EditValue;
+        }
+      }
+      out.push({
+        rowKey: r.rowKey,
+        row: r.cells,
+        pk,
+        source: r.source,
+        isDeleted: r.rowKey ? buffer.isRowDeleted(r.rowKey) : false,
+      });
+    }
+    return out;
+  }, [selection, unifiedRows, pkColumns, data.columns, buffer]);
 
-  const selectedRowKey = useMemo(() => {
-    if (selectedRow === null) return null;
-    return unifiedRows[selectedRow]?.rowKey ?? null;
-  }, [selectedRow, unifiedRows]);
+  // Count of eligible rows for bulk-edit (server, not deleted, has rowKey).
+  const eligibleCount = useMemo(
+    () =>
+      selectedRows.filter(
+        (r) => r.source === "server" && !r.isDeleted && r.rowKey,
+      ).length,
+    [selectedRows],
+  );
+
+  // Bulk-edit is active when >= 2 eligible server rows are selected and relation has a PK.
+  const bulkEditActive = eligibleCount >= 2 && pkColumns !== null;
+
+  // Whether bulk editing is structurally possible (writable + has PK).
+  const bulkEditAvailable = !isReadOnly && pkColumns !== null;
+
+  // Derived selection count for the BottomBar chip.
+  const selectedCount =
+    selection.anchor === null
+      ? 0
+      : Math.abs((selection.active ?? selection.anchor) - selection.anchor) + 1;
 
   // `idle` covers the brief window between mount and the first-page fetch
   // firing — including the case where we've deferred the fetch via
@@ -344,6 +393,8 @@ export function TableViewer({
   // Keyboard shortcuts at the tab root. Only attach when this tab is active
   // so multiple mounted tabs don't double-fire window-level shortcuts.
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // Ref to the FilterBar imperative handle for ⌘F keyboard shortcut.
+  const filterBarRef = useRef<FilterBarHandle>(null);
   useEffect(() => {
     if (!active) return;
     function onKey(e: KeyboardEvent) {
@@ -390,22 +441,46 @@ export function TableViewer({
           }
         }
       }
+      // ⌘F / Ctrl+F → focus the filter bar (Data subtab only).
+      // Skip when focus is inside a CodeMirror surface so its built-in ⌘F
+      // search panel keeps working.
+      if ((e.metaKey || e.ctrlKey) && e.key === "f" && !e.shiftKey && !e.altKey) {
+        const focused = document.activeElement as HTMLElement | null;
+        if (focused?.closest(".cm-editor")) return;
+        if (activeSubtab !== "data") return;
+        e.preventDefault();
+        filterBarRef.current?.focus();
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, onSave, buffer]);
+  }, [active, onSave, buffer, activeSubtab]);
 
   function onAddRow() {
     if (isReadOnly) return;
     if (relationKind !== "table") return; // Views/mat-views: no insert.
     buffer.addInsertRow({});
     // Select the newly inserted row (it appears first).
-    setSelectedRow(0);
+    setSelection({ anchor: 0, active: 0 });
   }
 
   const onApplyFilters = useCallback(() => {
     setRawError(null);
     setApplied(draft);
+  }, [draft, setApplied]);
+
+  const onApplyOnlyRow = useCallback((index: number) => {
+    const child = draft.tree.children[index];
+    if (!child) return;
+    setRawError(null);
+    const single: FilterModel = {
+      ...draft,
+      tree: {
+        children: [child],
+        combinator: getRootCombinator(draft.tree),
+      },
+    };
+    setApplied(single);
   }, [draft, setApplied]);
 
   const onResetFilters = useCallback(() => {
@@ -484,6 +559,7 @@ export function TableViewer({
           </div>
         )}
         <FilterBar
+          ref={filterBarRef}
           draft={draft}
           applied={applied}
           columns={data.columns}
@@ -492,6 +568,7 @@ export function TableViewer({
           onApply={onApplyFilters}
           onReset={onResetFilters}
           onOpenInSqlEditor={onOpenInSqlEditor}
+          onApplyOnlyRow={onApplyOnlyRow}
         />
         <div className={styles.body}>
           <div className={styles.gridArea}>
@@ -513,7 +590,8 @@ export function TableViewer({
                 status={data.status}
                 nextError={data.error}
                 reachedEnd={data.reachedEnd}
-                selectedRowIndex={selectedRow}
+                selection={selection}
+                bulkEditActive={bulkEditActive}
                 isReadOnly={isReadOnly}
                 pkColumns={pkColumns}
                 enumValuesByColumn={enumValuesByColumn}
@@ -521,7 +599,7 @@ export function TableViewer({
                 connectionId={connectionId}
                 schema={schema}
                 relation={relation}
-                onSelectRow={setSelectedRow}
+                onSelectionChange={setSelection}
                 onSortChange={setOrderBy}
                 onLoadNextPage={data.loadNextPage}
                 onRetryNextPage={data.retryNextPage}
@@ -540,8 +618,8 @@ export function TableViewer({
           >
             <Inspector
               columns={data.columns}
-              row={selectedRowData}
-              rowKey={selectedRowKey}
+              selectedRows={selectedRows}
+              bulkEditAvailable={bulkEditAvailable}
               isReadOnly={isReadOnly}
               pkColumns={pkColumns}
               enumValuesByColumn={enumValuesByColumn}
@@ -569,11 +647,13 @@ export function TableViewer({
             buffer.dirtyCounts.inserts +
             buffer.dirtyCounts.deletes
           }
+          selectedCount={selectedCount}
           onPageSizeChange={setPageSize}
           onCountRows={onCountRows}
           onClearFilters={onClearFiltersFromBottomBar}
           onAddRow={onAddRow}
           onSave={onSave}
+          onClearSelection={() => setSelection({ anchor: null, active: null })}
         />
       </div>
       {activeSubtab === "structure" && (

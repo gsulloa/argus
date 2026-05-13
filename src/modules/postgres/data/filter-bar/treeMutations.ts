@@ -6,6 +6,7 @@ import type {
   FilterValue,
   Operator,
 } from "../types";
+import { getRootCombinator } from "../types";
 
 /** Empty Condition leaf with sensible defaults. */
 export function emptyCondition(column?: ColumnRef): Condition {
@@ -17,7 +18,7 @@ export function emptyCondition(column?: ColumnRef): Condition {
 }
 
 export function emptyTree(): FilterTree {
-  return { children: [] };
+  return { children: [], combinator: "AND" };
 }
 
 export function addRootCondition(
@@ -29,6 +30,7 @@ export function addRootCondition(
       ...tree.children,
       { kind: "condition", ...cond },
     ],
+    combinator: getRootCombinator(tree),
   };
 }
 
@@ -44,6 +46,7 @@ export function addRootOrGroup(
         children: [{ kind: "condition", ...seed }],
       },
     ],
+    combinator: getRootCombinator(tree),
   };
 }
 
@@ -54,11 +57,11 @@ export function setRootChild(
 ): FilterTree {
   const children = tree.children.slice();
   children[index] = next;
-  return { children };
+  return { children, combinator: getRootCombinator(tree) };
 }
 
 export function removeRootChild(tree: FilterTree, index: number): FilterTree {
-  return { children: tree.children.filter((_, i) => i !== index) };
+  return { children: tree.children.filter((_, i) => i !== index), combinator: getRootCombinator(tree) };
 }
 
 export function setOrChild(
@@ -73,7 +76,7 @@ export function setOrChild(
   orChildren[childIndex] = next;
   const children = tree.children.slice();
   children[groupIndex] = { ...node, children: orChildren };
-  return { children };
+  return { children, combinator: getRootCombinator(tree) };
 }
 
 /**
@@ -90,12 +93,13 @@ export function removeOrChild(
   if (!node || node.kind !== "or_group") return tree;
   const orChildren = node.children.filter((_, i) => i !== childIndex);
   const children = tree.children.slice();
+  const combinator = getRootCombinator(tree);
   if (orChildren.length === 0) {
     children.splice(groupIndex, 1);
-    return { children };
+    return { children, combinator };
   }
   children[groupIndex] = { ...node, children: orChildren };
-  return { children };
+  return { children, combinator };
 }
 
 export function addOrChildCondition(
@@ -111,7 +115,15 @@ export function addOrChildCondition(
   ];
   const children = tree.children.slice();
   children[groupIndex] = { ...node, children: orChildren };
-  return { children };
+  return { children, combinator: getRootCombinator(tree) };
+}
+
+/** Set the root combinator (AND | OR) on the tree, preserving all children. */
+export function setRootCombinator(
+  tree: FilterTree,
+  combinator: "AND" | "OR",
+): FilterTree {
+  return { ...tree, combinator };
 }
 
 export function updateConditionField<K extends keyof Condition>(

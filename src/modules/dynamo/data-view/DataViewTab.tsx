@@ -58,6 +58,7 @@ import { TabView, type EditingCell, type SelectGesture } from "./TabView";
 import { JsonView } from "./JsonView";
 import { Inspector } from "./Inspector";
 import { dynamoUpdateItem } from "./api";
+import type { FilterBarHandle } from "@/modules/shared/filter-bar";
 import { useToast } from "@/platform/toast";
 import { InsertModal } from "./edit/InsertModal";
 import { DeleteConfirmationModal, type DeleteRow } from "./edit/DeleteConfirmationModal";
@@ -173,6 +174,9 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
   const needsCredentials = connParams?.needs_credentials === true;
   /** Whether the connection is read-only — used to gate all edit affordances. */
   const isReadOnly = connParams?.read_only === true;
+
+  // ── QueryBuilder imperative ref (⌘F shortcut) ────────────────────────────
+  const queryBuilderRef = useRef<FilterBarHandle>(null);
 
   // ── Toast ─────────────────────────────────────────────────────────────────
   const toast = useToast();
@@ -472,6 +476,7 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
     status,
     error,
     run,
+    runWithOverride,
     loadMore,
     triggerAutoLoadMore,
     reset,
@@ -671,6 +676,35 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
       : [],
   );
 
+  // ── ⌘F / Ctrl+F — focus the QueryBuilder ──────────────────────────────────
+  // Mirrors the pattern from the Postgres TableViewerTab's ⌘S/⌘1-3/⌘Z listener.
+  // Gated on `active` so only the focused tab responds. Skips CodeMirror surfaces.
+  useEffect(() => {
+    if (!active) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (!((e.metaKey || e.ctrlKey) && e.key === "f" && !e.shiftKey && !e.altKey)) return;
+      const focused = document.activeElement as HTMLElement | null;
+      if (focused?.closest(".cm-editor")) return;
+      e.preventDefault();
+      queryBuilderRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active]);
+
+  // ── onApplyOnlyFilter — per-row Apply (Option B via runWithOverride) ────────
+  // Receives a transient BuilderState (one filter row) from QueryBuilder and
+  // dispatches it through useDynamoItems.runWithOverride() so the results panel
+  // shows the single-filter result WITHOUT mutating the user's full builder.
+  // QueryBuilder internally marks lastRunStateRef to that transient state so
+  // the dirty pip reflects divergence from the user's full draft.
+  const handleApplyOnlyFilter = useCallback(
+    (transient: BuilderState) => {
+      void runWithOverride(transient, "user");
+    },
+    [runWithOverride],
+  );
+
   // ── Backspace handler — open delete modal (task 9.2) ──────────────────────
   // Guards (all must pass):
   //   - tab is active
@@ -833,10 +867,14 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
             {/* QueryBuilder */}
             {describe && (
               <QueryBuilder
+                ref={queryBuilderRef}
                 builder={builder}
                 describe={describe}
                 onBuilderChange={handleBuilderChange}
                 onValidityChange={handleValidityChange}
+                onRun={handleRun}
+                onReset={handleReset}
+                onApplyOnlyFilter={handleApplyOnlyFilter}
                 disabled={needsCredentials}
               />
             )}

@@ -128,12 +128,33 @@ pub enum FilterNode {
     OrGroup { children: Vec<FilterNode> },
 }
 
-/// Recursive filter payload: an implicit AND root joining condition leaves
-/// and OR groups.
+/// Root combinator for `FilterTree`. Determines whether root children are
+/// joined with AND or OR. The wire value is uppercase (`"AND"` / `"OR"`) to
+/// match the TypeScript enum strings exactly. Defaults to `And` so that
+/// existing payloads without the field are backward-compatible.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RootCombinator {
+    #[serde(rename = "AND")]
+    And,
+    #[serde(rename = "OR")]
+    Or,
+}
+
+impl Default for RootCombinator {
+    fn default() -> Self {
+        RootCombinator::And
+    }
+}
+
+/// Recursive filter payload: a root joining condition leaves and OR groups.
+/// The root combinator defaults to `AND` for backward compatibility with
+/// payloads that omit the field.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FilterTree {
     #[serde(default)]
     pub children: Vec<FilterNode>,
+    #[serde(default)]
+    pub combinator: RootCombinator,
 }
 
 #[derive(Debug, Deserialize)]
@@ -541,7 +562,11 @@ pub(crate) fn compile_filter_tree(
     if parts.is_empty() {
         return Ok(String::new());
     }
-    Ok(parts.join(" AND "))
+    let joiner = match tree.combinator {
+        RootCombinator::And => " AND ",
+        RootCombinator::Or => " OR ",
+    };
+    Ok(parts.join(joiner))
 }
 
 /// Build the WHERE body for either filter_tree (parametrized) or raw_where
@@ -1153,6 +1178,7 @@ mod tests {
     fn compile_filter_tree_single_condition() {
         let tree = FilterTree {
             children: vec![cond("country", Operator::Eq, Some(json!("CL")))],
+            ..Default::default()
         };
         let cols = vec![col("country", "text")];
         let mut params = Vec::new();
@@ -1168,6 +1194,7 @@ mod tests {
                 cond("country", Operator::Eq, Some(json!("CL"))),
                 cond("deleted_at", Operator::IsNull, None),
             ],
+            ..Default::default()
         };
         let cols = vec![
             col("country", "text"),
@@ -1191,6 +1218,7 @@ mod tests {
                     ],
                 },
             ],
+            ..Default::default()
         };
         let cols = vec![col("country", "text"), col("status", "text")];
         let mut params = Vec::new();
@@ -1208,6 +1236,7 @@ mod tests {
             children: vec![FilterNode::OrGroup {
                 children: vec![cond("a", Operator::Eq, Some(json!(1)))],
             }],
+            ..Default::default()
         };
         let cols = vec![col("a", "integer")];
         let mut params = Vec::new();
@@ -1223,6 +1252,7 @@ mod tests {
                     children: vec![cond("a", Operator::Eq, Some(json!(1)))],
                 }],
             }],
+            ..Default::default()
         };
         let cols = vec![col("a", "integer")];
         let mut params = Vec::new();
@@ -1234,6 +1264,7 @@ mod tests {
     fn compile_filter_tree_rejects_empty_in() {
         let tree = FilterTree {
             children: vec![cond("status", Operator::In, Some(json!([])))],
+            ..Default::default()
         };
         let cols = vec![col("status", "text")];
         let mut params = Vec::new();
@@ -1245,11 +1276,82 @@ mod tests {
     fn compile_filter_tree_rejects_missing_between_bounds() {
         let tree = FilterTree {
             children: vec![cond("x", Operator::Between, Some(json!({ "min": 1 })))],
+            ..Default::default()
         };
         let cols = vec![col("x", "integer")];
         let mut params = Vec::new();
         let err = compile_filter_tree(&tree, &cols, &mut params).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    // --- combinator tests ---------------------------------------------------
+
+    #[test]
+    fn compile_filter_tree_or_root_two_simple_conditions() {
+        let tree = FilterTree {
+            children: vec![
+                cond("a", Operator::Eq, Some(json!("x"))),
+                cond("b", Operator::Eq, Some(json!("y"))),
+            ],
+            combinator: RootCombinator::Or,
+        };
+        let cols = vec![col("a", "text"), col("b", "text")];
+        let mut params = Vec::new();
+        let body = compile_filter_tree(&tree, &cols, &mut params).unwrap();
+        assert_eq!(body, "\"a\" = $1 OR \"b\" = $2");
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn compile_filter_tree_or_root_condition_plus_or_group() {
+        let tree = FilterTree {
+            children: vec![
+                cond("a", Operator::Eq, Some(json!("x"))),
+                FilterNode::OrGroup {
+                    children: vec![
+                        cond("b", Operator::Eq, Some(json!("y"))),
+                        cond("c", Operator::Eq, Some(json!("z"))),
+                    ],
+                },
+            ],
+            combinator: RootCombinator::Or,
+        };
+        let cols = vec![col("a", "text"), col("b", "text"), col("c", "text")];
+        let mut params = Vec::new();
+        let body = compile_filter_tree(&tree, &cols, &mut params).unwrap();
+        assert_eq!(body, "\"a\" = $1 OR (\"b\" = $2 OR \"c\" = $3)");
+        assert_eq!(params.len(), 3);
+    }
+
+    #[test]
+    fn compile_filter_tree_missing_combinator_defaults_to_and() {
+        // Deserialize a JSON payload without the combinator field — serde default applies.
+        let payload = r#"{"children":[{"kind":"condition","column":{"kind":"named","name":"x"},"op":"=","value":"v"}]}"#;
+        let tree: FilterTree = serde_json::from_str(payload).unwrap();
+        assert_eq!(tree.combinator, RootCombinator::And);
+        let cols = vec![col("x", "text")];
+        let mut params = Vec::new();
+        let body = compile_filter_tree(&tree, &cols, &mut params).unwrap();
+        assert_eq!(body, "\"x\" = $1");
+    }
+
+    #[test]
+    fn compile_filter_tree_and_root_regression() {
+        // Existing AND-root behavior must be unchanged.
+        let tree = FilterTree {
+            children: vec![
+                cond("country", Operator::Eq, Some(json!("CL"))),
+                cond("deleted_at", Operator::IsNull, None),
+            ],
+            combinator: RootCombinator::And,
+        };
+        let cols = vec![
+            col("country", "text"),
+            col("deleted_at", "timestamp with time zone"),
+        ];
+        let mut params = Vec::new();
+        let body = compile_filter_tree(&tree, &cols, &mut params).unwrap();
+        assert_eq!(body, "\"country\" = $1 AND \"deleted_at\" IS NULL");
     }
 
     #[test]
@@ -1477,6 +1579,7 @@ mod tests {
                 cond("country", Operator::Eq, Some(json!("CL"))),
                 cond("deleted_at", Operator::IsNull, None),
             ],
+            ..Default::default()
         };
         let cols = vec![
             col("country", "text"),
@@ -1519,6 +1622,7 @@ mod tests {
     fn build_select_sql_quotes_identifiers_with_embedded_quote() {
         let tree = FilterTree {
             children: vec![cond("we\"ird", Operator::Eq, Some(json!("v")))],
+            ..Default::default()
         };
         let cols = vec![col("we\"ird", "text")];
         let (sql, _params) =
@@ -1544,6 +1648,7 @@ mod tests {
                 cond("country", Operator::Eq, Some(json!("CL"))),
                 cond("deleted_at", Operator::IsNull, None),
             ],
+            ..Default::default()
         };
         let cols = vec![
             col("country", "text"),
@@ -1597,6 +1702,7 @@ mod tests {
         ];
         let tree = FilterTree {
             children: vec![any_cond(Operator::Contains, Some(json!("argus")))],
+            ..Default::default()
         };
         let mut params = Vec::new();
         let body = compile_filter_tree(&tree, &cols, &mut params).unwrap();
@@ -1612,6 +1718,7 @@ mod tests {
         let cols = vec![col("a", "text")];
         let tree = FilterTree {
             children: vec![any_cond(Operator::Gt, Some(json!(1)))],
+            ..Default::default()
         };
         let mut params = Vec::new();
         let err = compile_filter_tree(&tree, &cols, &mut params).unwrap_err();
@@ -1881,6 +1988,7 @@ mod tests {
     fn compile_filter_tree_rejects_unknown_column() {
         let tree = FilterTree {
             children: vec![cond("does_not_exist", Operator::Eq, Some(json!(1)))],
+            ..Default::default()
         };
         let cols = vec![col("id", "integer")];
         let mut params = Vec::new();
@@ -1901,6 +2009,7 @@ mod tests {
         // parameter 0".
         let tree = FilterTree {
             children: vec![cond("product_id", Operator::Eq, Some(json!(20528)))],
+            ..Default::default()
         };
         let cols = vec![col("product_id", "integer")];
         let mut params = Vec::new();
@@ -1918,6 +2027,7 @@ mod tests {
                 Operator::Between,
                 Some(json!({ "min": "2026-03-01", "max": "2026-03-31" })),
             )],
+            ..Default::default()
         };
         let cols = vec![col("due_date", "date")];
         let mut params = Vec::new();
@@ -1937,6 +2047,7 @@ mod tests {
                 Operator::Contains,
                 Some(json!("argus")),
             )],
+            ..Default::default()
         };
         let cols = vec![col("description", "text")];
         let mut params = Vec::new();
@@ -1949,6 +2060,7 @@ mod tests {
     fn compile_filter_tree_any_column_keeps_text_cast_on_column() {
         let tree = FilterTree {
             children: vec![any_cond(Operator::Contains, Some(json!("x")))],
+            ..Default::default()
         };
         let cols = vec![col("a", "integer"), col("b", "text")];
         let mut params = Vec::new();

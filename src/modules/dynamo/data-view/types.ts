@@ -232,4 +232,13 @@ export interface BuilderState {
     };
   };
   filters: FilterRow[];
+  filterCombinator?: "AND" | "OR";
+}
+
+/**
+ * Returns the active filter combinator for the given BuilderState.
+ * Treats a missing `filterCombinator` field as `"AND"` for backward-compat.
+ */
+export function getFilterCombinator(state: BuilderState): "AND" | "OR" {
+  return state.filterCombinator ?? "AND";
 }

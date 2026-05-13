@@ -1,0 +1,63 @@
+.toggle {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  height: 22px;
+  overflow: visible;
+}
+
+.option {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 500;
+  font-family: var(--font-mono, "Geist Mono", monospace);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--text-muted);
+  border: 0;
+  cursor: pointer;
+  transition:
+    background var(--duration-instant) ease-out,
+    color var(--duration-instant) ease-out;
+}
+
+.optionNotLast {
+  border-right: 1px solid var(--border-strong);
+}
+
+.optionFirst {
+  border-top-left-radius: calc(var(--radius-md) - 1px);
+  border-bottom-left-radius: calc(var(--radius-md) - 1px);
+}
+
+.optionLast {
+  border-top-right-radius: calc(var(--radius-md) - 1px);
+  border-bottom-right-radius: calc(var(--radius-md) - 1px);
+}
+
+.option:hover:not(.optionActive) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.optionActive {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.option:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  position: relative;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .option {
+    transition: none !important;
+  }
+}
