@@ -22,9 +22,21 @@ interface ControllerState {
   mode: FormMode;
 }
 
+interface DynamoFormProviderProps {
+  children: ReactNode;
+  /** Notified once a connection is saved (created or updated). */
+  onSaved?: (saved: Connection) => void;
+  /** Notified after a successful Save & Connect — passes the newly active id. */
+  onConnected?: (id: string) => void;
+}
+
 const DynamoFormContext = createContext<DynamoFormControllerValue | null>(null);
 
-export function DynamoFormProvider({ children }: { children: ReactNode }) {
+export function DynamoFormProvider({
+  children,
+  onSaved,
+  onConnected,
+}: DynamoFormProviderProps) {
   const [state, setState] = useState<ControllerState>({
     open: false,
     mode: { kind: "create" },
@@ -70,6 +82,8 @@ export function DynamoFormProvider({ children }: { children: ReactNode }) {
         open={state.open}
         mode={state.mode}
         onOpenChange={(open) => setState((s) => ({ ...s, open }))}
+        onSaved={onSaved}
+        onConnected={onConnected}
       />
     </DynamoFormContext.Provider>
   );
