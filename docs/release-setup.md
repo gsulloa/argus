@@ -2,7 +2,7 @@
 
 Bootstrap procedure to wire up the Argus release pipeline. Do this **once**. Every step here is something Claude/CI cannot do for you because it lives in external dashboards, your keychain, or 1Password.
 
-After this doc is fully run, every merge to `master` produces a signed, notarized build that auto-installs on the team's macs.
+After this doc is fully run, every merge to `master` produces a signed, notarized macOS build, an unsigned Linux AppImage, and an unsigned Windows MSI, plus a single updater manifest covering all four targets. macOS team members auto-update silently; Linux and Windows users download the AppImage / MSI from the public R2 URLs documented below.
 
 ---
 
@@ -189,6 +189,39 @@ The workflow's first job bumps the version, commits, and tags. By default GH Act
 
 ---
 
+## 6B. Linux runner setup
+
+The CI build job runs the `x86_64-unknown-linux-gnu` matrix entry on `ubuntu-22.04` (pinned, **not** `ubuntu-latest`). Tauri 2 links against the `libwebkit2gtk-4.1` ABI; `ubuntu-22.04` ships that version. `ubuntu-latest` will eventually roll forward to 24.04 and historically WebKitGTK major bumps have broken Tauri builds — so we pin and upgrade deliberately.
+
+Before invoking `tauri build`, the workflow installs these apt packages:
+
+```
+libwebkit2gtk-4.1-dev
+libsoup-3.0-dev
+libayatana-appindicator3-dev
+librsvg2-dev
+build-essential
+curl
+file
+wget
+```
+
+The list is cached via `actions/cache` keyed on a hash of the workflow file so most runs hit the cache. To upgrade the runner image (e.g. to `ubuntu-24.04`), bump the matrix entry and the apt-package list in one PR and verify the AppImage still builds; the cache key invalidates automatically because the workflow file changes.
+
+When running the local script on a Linux host (including WSL), the script's preflight checks for the same package set via `dpkg -l` and prints an `apt-get install …` line with the missing packages.
+
+## 6C. Windows MSI is unsigned (for now)
+
+The Windows build runs on `windows-latest` and produces an unsigned `.msi`. The first iteration **does not** Authenticode-sign the MSI — Authenticode certs cost $200–500/yr and require organization identity-proofing that takes 1–2 weeks. We don't want this change to block on procurement.
+
+What this means for users:
+
+- **First install:** Windows SmartScreen warns "Windows protected your PC". Users must click **More info** → **Run anyway** to proceed. Document this in any Slack post pointing teammates at the MSI.
+- **Subsequent updates:** seamless. The Tauri updater plugin downloads `Argus_<version>_x64.msi.zip` and verifies it against the Ed25519 signature in `latest.json` — Windows does not run a SmartScreen prompt on updater-triggered installs, only on user-initiated ones.
+- The `.msi.zip` updater archive is still Ed25519-signed via the existing `TAURI_UPDATER_PRIVATE_KEY`. Updater integrity is not affected by the missing Authenticode cert.
+
+A follow-up change `add-windows-code-signing` will procure an EV cert and sign the MSI before upload. Until then, the friction is the SmartScreen prompt on first install only.
+
 ## 7. First release
 
 Once 1–6 are done:
@@ -201,6 +234,98 @@ Once 1–6 are done:
 6. Drop the `.dmg` link in Slack. From the next merge onward, everyone with the app open auto-updates silently.
 
 ---
+
+## Local script on Linux and Windows
+
+`scripts/release-local.sh` mirrors the CI workflow on a developer machine. It detects the host OS via `uname -s` and builds only the targets that are natively supported there — cross-compilation is not supported (use CI for that).
+
+| Host                      | Default target(s)                                       | Notes                                          |
+|---------------------------|---------------------------------------------------------|------------------------------------------------|
+| macOS (`Darwin`)          | `aarch64-apple-darwin`, `x86_64-apple-darwin`           | Full sign + notarize flow                      |
+| Linux (`Linux`, WSL too)  | `x86_64-unknown-linux-gnu`                              | Requires the apt packages from §6B            |
+| Windows (Git Bash / MSYS) | `x86_64-pc-windows-msvc`                                | Requires MSVC `link.exe` on PATH               |
+
+The `--target` flag accepts the canonical Rust triple or short aliases (`aarch64`, `x64`, `linux`, `windows`). Asking for a target that isn't valid for the host aborts with a clear error.
+
+Partial builds (only one host's targets) cannot overwrite the live updater manifest or download index. Instead the script writes `latest.partial.json` / `download.partial.json` locally and refuses to upload them unless `--allow-partial-manifest` is passed. Even with that flag they go to `latest.partial.json` / `download.partial.json` keys on R2 — never to `latest.json` / `download.json`.
+
+Prerequisites per host:
+
+- **macOS:** Apple keychain identity (§1), Apple env vars (`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`).
+- **Linux:** the apt packages from §6B plus `node`, `pnpm`, `cargo`, `rustup`, `jq`. The script's preflight checks for them and prints what's missing.
+- **Windows:** Visual Studio Build Tools with the "Desktop development with C++" workload (so `link.exe` is on PATH), plus `node`, `pnpm`, `cargo`, `rustup`, `jq` available under Git Bash / MSYS2.
+
+The Ed25519 updater key (`TAURI_SIGNING_PRIVATE_KEY` + password) is required on **every** host because every release archive is signed.
+
+## download.json — the public download index
+
+Alongside the Tauri updater manifest (`latest.json`), the publish step uploads a second JSON document at a stable, no-cache URL:
+
+```
+${PUBLIC_URL_BASE}/download.json
+```
+
+`download.json` exists for landing pages, README badges, and "Download Argus" buttons — anything that needs the latest installer URL without knowing the current version.
+
+**Schema:**
+
+```json
+{
+  "version": "0.1.16",
+  "pub_date": "2026-05-15T20:00:00Z",
+  "installers": {
+    "darwin-aarch64": { "url": "https://pub-…/Argus_0.1.16_aarch64.dmg",     "filename": "Argus_0.1.16_aarch64.dmg",    "size": 12345678 },
+    "darwin-x86_64":  { "url": "https://pub-…/Argus_0.1.16_x64.dmg",         "filename": "Argus_0.1.16_x64.dmg",        "size": 12345678 },
+    "linux-x86_64":   { "url": "https://pub-…/Argus_0.1.16_x64.AppImage",    "filename": "Argus_0.1.16_x64.AppImage",   "size": 12345678 },
+    "windows-x86_64": { "url": "https://pub-…/Argus_0.1.16_x64.msi",         "filename": "Argus_0.1.16_x64.msi",        "size": 12345678 }
+  }
+}
+```
+
+**Difference vs `latest.json`:**
+
+| File            | Consumer              | Points at                                | Schema owner |
+|-----------------|-----------------------|------------------------------------------|--------------|
+| `latest.json`   | Tauri updater plugin  | Signed updater archives (`.app.tar.gz`, `.AppImage.tar.gz`, `.msi.zip`) with Ed25519 signatures | Tauri |
+| `download.json` | Landing pages, badges | End-user installers (`.dmg`, `.AppImage`, `.msi`) with byte sizes | Us |
+
+`download.json` MUST NOT point at updater archives or `.sig` files; the generator refuses any filename ending in `.app.tar.gz`, `.AppImage.tar.gz`, `.msi.zip`, or `.sig`.
+
+**Stability guarantee:** the path `${PUBLIC_URL_BASE}/download.json` is part of the public surface and will not move or rename. Future schema changes are additive only (e.g. adding optional `sha256`); a breaking change would ship as `download-v2.json` alongside.
+
+**Copy-pasteable "Download Argus" snippet** for a landing page that routes by OS:
+
+```html
+<a id="download-argus" href="#" rel="noopener">Download Argus</a>
+<script>
+  (async () => {
+    const a = document.getElementById("download-argus");
+    try {
+      const res = await fetch("${PUBLIC_URL_BASE}/download.json", { cache: "no-store" });
+      const doc = await res.json();
+      const ua = navigator.userAgent;
+      const platform = navigator.platform ?? "";
+      let key = "linux-x86_64";
+      if (/Mac/i.test(platform)) {
+        // No reliable arm64-vs-intel signal in the browser; default to arm64
+        // because all Macs sold since 2020 are Apple Silicon.
+        key = "darwin-aarch64";
+      } else if (/Win/i.test(platform)) {
+        key = "windows-x86_64";
+      }
+      const entry = doc.installers[key];
+      if (!entry) return;
+      a.href = entry.url;
+      a.textContent = `Download Argus v${doc.version} (${Math.round(entry.size / 1024 / 1024)} MB)`;
+    } catch (e) {
+      // Fall back to the R2 root — user picks manually.
+      a.href = "${PUBLIC_URL_BASE}/";
+    }
+  })();
+</script>
+```
+
+Replace `${PUBLIC_URL_BASE}` with your actual R2 public URL (the one stored as `R2_PUBLIC_URL`).
 
 ## Rotation
 
