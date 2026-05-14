@@ -107,39 +107,43 @@ describe("Inspector - jsonb column", () => {
     expect(input.getAttribute("autocorrect")).toBeNull();
   });
 
-  it("calls onChange with canonical JSON on valid blur", () => {
+  it("commits raw JSON text to buffer on every change (no canonicalization)", () => {
     const setCellEdit = vi.fn();
     const buffer = makeBuffer(setCellEdit);
     renderWithJsonb(null, buffer);
     const ta = screen.getByRole("textbox");
     fireEvent.change(ta, { target: { value: '{ "foo": "bar"  }' } });
-    fireEvent.blur(ta);
-    expect(setCellEdit).toHaveBeenCalledWith(
-      expect.objectContaining({ value: '{"foo":"bar"}' }),
+    expect(setCellEdit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ value: '{ "foo": "bar"  }' }),
     );
+    fireEvent.blur(ta);
+    // Blur does NOT re-dispatch a canonical value; raw text remains in the buffer.
+    expect(setCellEdit).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps editor open with error message when JSON is invalid", () => {
+  it("commits invalid JSON raw text and surfaces inline error on blur", () => {
     const setCellEdit = vi.fn();
     const buffer = makeBuffer(setCellEdit);
     renderWithJsonb(null, buffer);
     const ta = screen.getByRole("textbox");
     fireEvent.change(ta, { target: { value: '{ "foo": "bar"' } });
+    expect(setCellEdit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ value: '{ "foo": "bar"' }),
+    );
     fireEvent.blur(ta);
-    expect(setCellEdit).not.toHaveBeenCalled();
     expect(screen.getByText(/JSON at position|Unexpected token|Expected|End of JSON/i)).toBeInTheDocument();
   });
 
-  it("commits empty input as null for jsonb column", () => {
+  it("commits empty input as empty string for jsonb column (raw text passthrough)", () => {
     const setCellEdit = vi.fn();
     const buffer = makeBuffer(setCellEdit);
     renderWithJsonb('{"x":1}', buffer);
     const ta = screen.getByRole("textbox");
     fireEvent.change(ta, { target: { value: "" } });
-    fireEvent.blur(ta);
-    expect(setCellEdit).toHaveBeenCalledWith(
-      expect.objectContaining({ value: null }),
+    expect(setCellEdit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ value: "" }),
     );
+    fireEvent.blur(ta);
     expect(screen.queryByText(/Unexpected token/i)).toBeNull();
     expect(screen.queryByText(/SyntaxError/i)).toBeNull();
   });

@@ -97,6 +97,8 @@
   display: flex;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* When bulk-edit mode is active, prevent the text cursor on cells so the
@@ -134,6 +136,8 @@
   flex: 0 0 auto;
   color: var(--text);
   min-width: 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .cell:last-child {
   border-right: 0;
@@ -242,6 +246,8 @@
 .cellEditing {
   padding: 0;
   background: var(--surface);
+  user-select: text;
+  -webkit-user-select: text;
 }
 .cellEditor {
   width: 100%;
@@ -254,6 +260,8 @@
   padding: 4px 11px;
   font-family: inherit;
   font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .cellEditorMono {
   font-family: var(--font-mono);
