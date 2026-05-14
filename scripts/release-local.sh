@@ -492,8 +492,13 @@ if [ "$DRY_RUN" = "1" ]; then
   c_dim "DRY: would run node scripts/build-manifest.mjs"
   c_dim "DRY: would run node scripts/build-download-manifest.mjs"
 else
+  # env_for_manifest emits one assignment per line; flatten to a single line
+  # so the embedded newlines do not split the eval'd command into pieces
+  # (which would leave `env` printing its environment and `node` running
+  # without VERSION/PUB_DATE/etc).
+
   # Updater manifest
-  UPDATER_ENV="$(env_for_manifest local updater)"
+  UPDATER_ENV="$(env_for_manifest local updater | tr '\n' ' ')"
   eval "env \
     VERSION='$VERSION' \
     PUB_DATE='$PUB_DATE' \
@@ -503,7 +508,7 @@ else
     node scripts/build-manifest.mjs"
 
   # Download manifest
-  DOWNLOAD_ENV="$(env_for_manifest local download)"
+  DOWNLOAD_ENV="$(env_for_manifest local download | tr '\n' ' ')"
   eval "env \
     VERSION='$VERSION' \
     PUB_DATE='$PUB_DATE' \
