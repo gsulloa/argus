@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useSetting } from "@/platform/settings/useSetting";
 import { EMPTY_FILTER_MODEL, type FilterModel } from "./types";
 
@@ -67,8 +67,11 @@ export function useTableFilter(
   );
 
   // Normalize on every read: coerce missing `combinator` to "AND" so that
-  // records persisted before this field existed behave correctly.
-  const value = normalizePersistedFilter(raw);
+  // records persisted before this field existed behave correctly. Memoize on
+  // `raw` so `draft` / `applied` keep stable references across renders —
+  // consumers' useEffects depend on these and would otherwise refire every
+  // render, clearing row selection and refetching counts spuriously.
+  const value = useMemo(() => normalizePersistedFilter(raw), [raw]);
 
   const setDraft = useCallback(
     (next: FilterModel) => {

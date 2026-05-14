@@ -129,8 +129,6 @@ export function DataGrid(props: DataGridProps) {
     anchorIndex: number;
     anchorClientX: number;
     anchorClientY: number;
-    /** Snapshot of selection when mousedown fired — used for toggle-deselect on click. */
-    prevSelection: { anchor: number | null; active: number | null };
   }
   const dragRef = useRef<DragState | null>(null);
   const [dragActive, setDragActive] = useState(false);
@@ -247,18 +245,8 @@ export function DataGrid(props: DataGridProps) {
         const rowIndex = computeActiveIndex(e.clientY);
         onSelectionChange({ anchor: drag.anchorIndex, active: rowIndex });
       } else {
-        // Click (pending, never crossed threshold).
-        const prev = drag.prevSelection;
-        const isSingleRowSelected =
-          prev.anchor !== null &&
-          prev.anchor === prev.active &&
-          prev.anchor === drag.anchorIndex;
-        if (isSingleRowSelected) {
-          // Toggle deselect.
-          onSelectionChange({ anchor: null, active: null });
-        } else {
-          onSelectionChange({ anchor: drag.anchorIndex, active: drag.anchorIndex });
-        }
+        // Click (pending, never crossed threshold) — always force-select the row.
+        onSelectionChange({ anchor: drag.anchorIndex, active: drag.anchorIndex });
       }
 
       // Focus the grid root so Escape / Backspace work immediately after click/drag.
@@ -395,12 +383,13 @@ export function DataGrid(props: DataGridProps) {
                 onMouseDown={(e) => {
                   // Only respond to primary mouse button.
                   if (e.button !== 0) return;
+                  // Prevent the browser from starting a native text-selection drag inside the cell.
+                  e.preventDefault();
                   dragRef.current = {
                     status: "pending",
                     anchorIndex: vi.index,
                     anchorClientX: e.clientX,
                     anchorClientY: e.clientY,
-                    prevSelection: { anchor: selection.anchor, active: selection.active },
                   };
                   dragClientYRef.current = e.clientY;
                   setDragActive(true);

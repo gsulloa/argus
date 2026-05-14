@@ -916,15 +916,14 @@ function InspectorEditableField({
           className={textareaClassName}
           value={text}
           onChange={(e) => {
-            setText(e.target.value);
+            const raw = e.target.value;
+            setText(raw);
             setJsonError(null);
             setJsonWarning(false);
+            onChange(raw);
           }}
           onBlur={() => {
-            if (!isJson) {
-              onChange(text);
-              return;
-            }
+            if (!isJson) return;
             const result = validateJsonInput(text);
             if (!result.ok) {
               setJsonError(result.error);
@@ -933,7 +932,6 @@ function InspectorEditableField({
             }
             setJsonError(null);
             setJsonWarning(hasSmartQuotes(result.canonical));
-            onChange(result.canonical === "" ? null : result.canonical);
           }}
           rows={4}
           {...(isJson
@@ -966,17 +964,18 @@ function InspectorEditableField({
       }`}
       inputMode={isNumeric ? "decimal" : undefined}
       value={text}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={() => {
+      onChange={(e) => {
+        const raw = e.target.value;
+        setText(raw);
         if (isNumeric) {
-          if (text.trim() === "") {
+          if (raw.trim() === "") {
             onChange(null);
           } else {
-            const n = Number(text);
-            onChange(Number.isFinite(n) ? n : text);
+            const n = Number(raw);
+            onChange(Number.isFinite(n) ? n : raw);
           }
         } else {
-          onChange(text);
+          onChange(raw);
         }
       }}
     />
