@@ -14,7 +14,8 @@
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write .",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "changelog": "npx auto-changelog -p && git add CHANGELOG.md && git commit -m \"docs: update changelog\""
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",
