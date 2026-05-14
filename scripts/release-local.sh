@@ -3,21 +3,33 @@
 # you can ship a build without pushing to master.
 #
 # Steps it runs:
-#   1. Preflight: tools, secrets, clean tree, branch sanity.
+#   1. Preflight: tools, secrets, clean tree, branch sanity (host-conditional).
 #   2. Bump patch version (tauri.conf.json / package.json / Cargo.toml).
 #   3. Commit + tag the bump (locally), optionally push.
-#   4. Build, sign, notarize for aarch64 + x86_64 darwin targets.
+#   4. Build, sign (and notarize on macOS) for the host's native targets.
 #   5. Collect + rename artifacts under ./staging/.
-#   6. Build latest.json manifest.
-#   7. Upload binaries (immutable cache) and manifest (no-cache) to R2.
+#   6. Build latest.json (updater manifest) and download.json (public index).
+#   7. Upload binaries (immutable cache) and manifests (no-cache) to R2.
+#
+# Host detection (from uname -s):
+#   Darwin            → macOS host; default targets: aarch64-apple-darwin,
+#                       x86_64-apple-darwin
+#   Linux             → Linux host; default target:  x86_64-unknown-linux-gnu
+#                       (WSL also reports Linux and is treated as a Linux host)
+#   MINGW*/MSYS*/CYGWIN* → Windows host (Git Bash / MSYS2 / Cygwin); default
+#                       target: x86_64-pc-windows-msvc
+# Cross-compilation is NOT supported by this script — use CI for cross-OS builds.
 #
 # Usage:
-#   ./scripts/release-local.sh                  # full release, prompts before push
-#   ./scripts/release-local.sh --no-push        # skip git push of commit+tag
-#   ./scripts/release-local.sh --no-upload      # build only, no R2 upload
-#   ./scripts/release-local.sh --skip-bump      # use current version, no commit
-#   ./scripts/release-local.sh --target aarch64 # build a single target
-#   ./scripts/release-local.sh --dry-run        # print plan, do nothing
+#   ./scripts/release-local.sh                          # full release, prompts before push
+#   ./scripts/release-local.sh --no-push                # skip git push of commit+tag
+#   ./scripts/release-local.sh --no-upload              # build only, no R2 upload
+#   ./scripts/release-local.sh --skip-bump              # use current version, no commit
+#   ./scripts/release-local.sh --target aarch64         # build a single target (must be valid for host)
+#   ./scripts/release-local.sh --target linux           # alias for x86_64-unknown-linux-gnu (Linux host only)
+#   ./scripts/release-local.sh --target windows         # alias for x86_64-pc-windows-msvc (Windows host only)
+#   ./scripts/release-local.sh --allow-partial-manifest # upload latest.partial.json/download.partial.json (separate keys)
+#   ./scripts/release-local.sh --dry-run                # print plan, do nothing
 #
 # Secrets are read from environment or from .env.release at repo root.
 # See .env.release.example for the full list.
@@ -44,35 +56,91 @@ if [[ "${TAURI_SIGNING_PRIVATE_KEY:-}" == "~/"* ]]; then
   TAURI_SIGNING_PRIVATE_KEY="${HOME}/${TAURI_SIGNING_PRIVATE_KEY:2}"
 fi
 
+# ---------- host detection ----------------------------------------------------
+
+host_os() {
+  case "$(uname -s)" in
+    Darwin)                          echo "darwin" ;;
+    Linux)                           echo "linux" ;;
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) echo "windows" ;;
+    *)                               echo "unsupported" ;;
+  esac
+}
+
+HOST_OS="$(host_os)"
+
+valid_targets_for_host() {
+  case "$1" in
+    darwin)  echo "aarch64-apple-darwin x86_64-apple-darwin" ;;
+    linux)   echo "x86_64-unknown-linux-gnu" ;;
+    windows) echo "x86_64-pc-windows-msvc" ;;
+    *)       echo "" ;;
+  esac
+}
+
 # ---------- defaults + flags --------------------------------------------------
 
 SKIP_BUMP=0
 NO_PUSH=0
 NO_UPLOAD=0
 DRY_RUN=0
+ALLOW_PARTIAL=0
 TARGETS_FLAG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --skip-bump)   SKIP_BUMP=1 ;;
-    --no-push)     NO_PUSH=1 ;;
-    --no-upload)   NO_UPLOAD=1 ;;
-    --dry-run)     DRY_RUN=1 ;;
-    --target)      TARGETS_FLAG="$2"; shift ;;
-    --target=*)    TARGETS_FLAG="${1#*=}" ;;
+    --skip-bump)               SKIP_BUMP=1 ;;
+    --no-push)                 NO_PUSH=1 ;;
+    --no-upload)               NO_UPLOAD=1 ;;
+    --dry-run)                 DRY_RUN=1 ;;
+    --allow-partial-manifest)  ALLOW_PARTIAL=1 ;;
+    --target)                  TARGETS_FLAG="$2"; shift ;;
+    --target=*)                TARGETS_FLAG="${1#*=}" ;;
     -h|--help)
-      sed -n '2,24p' "$0"; exit 0 ;;
+      sed -n '2,38p' "$0"; exit 0 ;;
     *)
       echo "Unknown flag: $1" >&2; exit 2 ;;
   esac
   shift
 done
 
+# Resolve the requested target alias to a canonical Rust triple, OR pick host defaults.
+resolve_target_alias() {
+  case "$1" in
+    aarch64|arm64|aarch64-apple-darwin) echo "aarch64-apple-darwin" ;;
+    x64|x86_64|x86_64-apple-darwin)     echo "x86_64-apple-darwin" ;;
+    linux|x86_64-unknown-linux-gnu)     echo "x86_64-unknown-linux-gnu" ;;
+    windows|x86_64-pc-windows-msvc)     echo "x86_64-pc-windows-msvc" ;;
+    *)                                  echo "" ;;
+  esac
+}
+
+case "$HOST_OS" in
+  darwin)  DEFAULT_TARGETS=("aarch64-apple-darwin" "x86_64-apple-darwin") ;;
+  linux)   DEFAULT_TARGETS=("x86_64-unknown-linux-gnu") ;;
+  windows) DEFAULT_TARGETS=("x86_64-pc-windows-msvc") ;;
+  *)
+    echo "Unsupported host OS: $(uname -s). This script supports macOS, Linux, and Windows (Git Bash / MSYS / Cygwin)." >&2
+    exit 1
+    ;;
+esac
+
 case "$TARGETS_FLAG" in
-  ""|"both"|"all") TARGETS=("aarch64-apple-darwin" "x86_64-apple-darwin") ;;
-  "aarch64"|"arm64"|"aarch64-apple-darwin") TARGETS=("aarch64-apple-darwin") ;;
-  "x64"|"x86_64"|"x86_64-apple-darwin")     TARGETS=("x86_64-apple-darwin") ;;
-  *) echo "Unknown --target: $TARGETS_FLAG" >&2; exit 2 ;;
+  ""|"both"|"all") TARGETS=("${DEFAULT_TARGETS[@]}") ;;
+  *)
+    resolved="$(resolve_target_alias "$TARGETS_FLAG")"
+    if [ -z "$resolved" ]; then
+      echo "Unknown --target: $TARGETS_FLAG" >&2; exit 2
+    fi
+    valid=" $(valid_targets_for_host "$HOST_OS") "
+    if [[ "$valid" != *" $resolved "* ]]; then
+      echo "ERROR: target '$resolved' is not buildable on host '$HOST_OS'." >&2
+      echo "Valid targets on this host:$(valid_targets_for_host "$HOST_OS" | tr ' ' '\n' | sed 's/^/  - /')" >&2
+      echo "Cross-compilation is not supported by this script — use the GitHub Actions workflow instead." >&2
+      exit 2
+    fi
+    TARGETS=("$resolved")
+    ;;
 esac
 
 # ---------- helpers -----------------------------------------------------------
@@ -106,34 +174,93 @@ require_env() {
 
 arch_label() {
   case "$1" in
-    aarch64-apple-darwin) echo "aarch64" ;;
-    x86_64-apple-darwin)  echo "x64" ;;
+    aarch64-apple-darwin)      echo "aarch64" ;;
+    x86_64-apple-darwin)       echo "x64" ;;
+    x86_64-unknown-linux-gnu)  echo "x64" ;;
+    x86_64-pc-windows-msvc)    echo "x64" ;;
+    *) die "Unknown target: $1" ;;
+  esac
+}
+
+manifest_key_for_target() {
+  case "$1" in
+    aarch64-apple-darwin)      echo "darwin-aarch64" ;;
+    x86_64-apple-darwin)       echo "darwin-x86_64" ;;
+    x86_64-unknown-linux-gnu)  echo "linux-x86_64" ;;
+    x86_64-pc-windows-msvc)    echo "windows-x86_64" ;;
     *) die "Unknown target: $1" ;;
   esac
 }
 
 # ---------- preflight ---------------------------------------------------------
 
-step "Preflight"
-
-[ "$(uname -s)" = "Darwin" ] || die "This script must run on macOS (codesign + notarize)."
+step "Preflight (host: $HOST_OS)"
 
 require_cmd node
 require_cmd pnpm
 require_cmd cargo
 require_cmd rustup
 require_cmd jq
-require_cmd security
-require_cmd codesign
-require_cmd xcrun
 [ "$NO_UPLOAD" = "1" ] || require_cmd aws
 
-# Required secrets for the build (signing + notarization + updater signer).
-require_env APPLE_ID
-require_env APPLE_PASSWORD
-require_env APPLE_TEAM_ID
+# Updater key is required on every host — every release archive is signed with
+# the Ed25519 updater key.
 require_env TAURI_SIGNING_PRIVATE_KEY
 require_env TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+
+case "$HOST_OS" in
+  darwin)
+    require_cmd security
+    require_cmd codesign
+    require_cmd xcrun
+
+    require_env APPLE_ID
+    require_env APPLE_PASSWORD
+    require_env APPLE_TEAM_ID
+
+    IDENTITY_MATCHES="$(security find-identity -v -p codesigning | grep -c "Developer ID Application" || true)"
+    if [ "$IDENTITY_MATCHES" -eq 0 ]; then
+      die "No 'Developer ID Application' identity found in keychain. Import the .p12 first."
+    fi
+    if [ "$IDENTITY_MATCHES" -gt 1 ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+      c_red "Multiple 'Developer ID Application' identities found in keychain:"
+      security find-identity -v -p codesigning | grep "Developer ID Application" >&2
+      die "Set APPLE_SIGNING_IDENTITY in .env.release to the desired SHA-1 hash to disambiguate."
+    fi
+    ;;
+  linux)
+    LINUX_APT_PACKAGES=(
+      libwebkit2gtk-4.1-dev
+      libsoup-3.0-dev
+      libayatana-appindicator3-dev
+      librsvg2-dev
+      build-essential
+      curl
+      file
+      wget
+    )
+    if command -v dpkg >/dev/null 2>&1; then
+      missing=()
+      for pkg in "${LINUX_APT_PACKAGES[@]}"; do
+        if ! dpkg -l "$pkg" >/dev/null 2>&1; then
+          missing+=("$pkg")
+        fi
+      done
+      if [ "${#missing[@]}" -gt 0 ]; then
+        c_red "Missing Linux build dependencies:"
+        printf '  - %s\n' "${missing[@]}" >&2
+        die "Install with: sudo apt-get update && sudo apt-get install -y ${missing[*]}"
+      fi
+    else
+      c_dim "dpkg not available — skipping apt package check (non-Debian host?). Ensure the equivalent Tauri build deps are installed."
+    fi
+    ;;
+  windows)
+    if ! command -v link.exe >/dev/null 2>&1 && ! command -v link >/dev/null 2>&1; then
+      die "MSVC 'link.exe' not on PATH. Install Visual Studio Build Tools with the 'Desktop development with C++' workload, then run from a Developer Command Prompt or Git Bash launched from one."
+    fi
+    ;;
+esac
 
 # Required secrets for upload.
 if [ "$NO_UPLOAD" = "0" ]; then
@@ -142,17 +269,6 @@ if [ "$NO_UPLOAD" = "0" ]; then
   require_env R2_SECRET_ACCESS_KEY
   require_env R2_BUCKET
   require_env R2_PUBLIC_URL
-fi
-
-# Verify the Developer ID Application identity is in a keychain.
-IDENTITY_MATCHES="$(security find-identity -v -p codesigning | grep -c "Developer ID Application" || true)"
-if [ "$IDENTITY_MATCHES" -eq 0 ]; then
-  die "No 'Developer ID Application' identity found in keychain. Import the .p12 first."
-fi
-if [ "$IDENTITY_MATCHES" -gt 1 ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
-  c_red "Multiple 'Developer ID Application' identities found in keychain:"
-  security find-identity -v -p codesigning | grep "Developer ID Application" >&2
-  die "Set APPLE_SIGNING_IDENTITY in .env.release to the desired SHA-1 hash to disambiguate."
 fi
 
 # Verify rustup targets are installed.
@@ -232,11 +348,6 @@ STAGING="$ROOT/staging"
 run "rm -rf '$STAGING'"
 run "mkdir -p '$STAGING'"
 
-# Resolve TAURI_SIGNING_PRIVATE_KEY: workflow passes raw contents, but locally
-# users often have a file path. tauri-cli accepts either: if the env value is a
-# readable file path it loads the file, otherwise treats it as the key content.
-# Nothing to do here — just pass through.
-
 step "Installing pnpm dependencies"
 run "pnpm install --frozen-lockfile"
 
@@ -244,18 +355,28 @@ for TARGET in "${TARGETS[@]}"; do
   ARCH="$(arch_label "$TARGET")"
   step "Building target: $TARGET ($ARCH)"
 
-  # Tauri picks up these env vars to drive codesign + notarytool + updater signing.
-  # We explicitly unset APPLE_CERTIFICATE{,_PASSWORD} so the keychain identity is used
-  # locally — if they leak in from .env.release, tauri-bundler tries to re-import the
-  # p12 and rejects any APPLE_SIGNING_IDENTITY that doesn't match it byte-for-byte.
-  run "env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD \
-       TAURI_SIGNING_PRIVATE_KEY='$TAURI_SIGNING_PRIVATE_KEY' \
-       TAURI_SIGNING_PRIVATE_KEY_PASSWORD='$TAURI_SIGNING_PRIVATE_KEY_PASSWORD' \
-       APPLE_ID='$APPLE_ID' \
-       APPLE_PASSWORD='$APPLE_PASSWORD' \
-       APPLE_TEAM_ID='$APPLE_TEAM_ID' \
-       APPLE_SIGNING_IDENTITY='${APPLE_SIGNING_IDENTITY:-Developer ID Application}' \
-       pnpm tauri build --target '$TARGET'"
+  case "$HOST_OS" in
+    darwin)
+      # Tauri picks up these env vars to drive codesign + notarytool + updater signing.
+      # We explicitly unset APPLE_CERTIFICATE{,_PASSWORD} so the keychain identity is used
+      # locally — if they leak in from .env.release, tauri-bundler tries to re-import the
+      # p12 and rejects any APPLE_SIGNING_IDENTITY that doesn't match it byte-for-byte.
+      run "env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD \
+           TAURI_SIGNING_PRIVATE_KEY='$TAURI_SIGNING_PRIVATE_KEY' \
+           TAURI_SIGNING_PRIVATE_KEY_PASSWORD='$TAURI_SIGNING_PRIVATE_KEY_PASSWORD' \
+           APPLE_ID='$APPLE_ID' \
+           APPLE_PASSWORD='$APPLE_PASSWORD' \
+           APPLE_TEAM_ID='$APPLE_TEAM_ID' \
+           APPLE_SIGNING_IDENTITY='${APPLE_SIGNING_IDENTITY:-Developer ID Application}' \
+           pnpm tauri build --target '$TARGET'"
+      ;;
+    linux|windows)
+      run "env \
+           TAURI_SIGNING_PRIVATE_KEY='$TAURI_SIGNING_PRIVATE_KEY' \
+           TAURI_SIGNING_PRIVATE_KEY_PASSWORD='$TAURI_SIGNING_PRIVATE_KEY_PASSWORD' \
+           pnpm tauri build --target '$TARGET'"
+      ;;
+  esac
 
   BUNDLE_DIR="src-tauri/target/$TARGET/release/bundle"
   if [ "$DRY_RUN" = "1" ]; then
@@ -263,47 +384,142 @@ for TARGET in "${TARGETS[@]}"; do
     continue
   fi
 
-  DMG="$(ls "$BUNDLE_DIR/dmg/"*.dmg 2>/dev/null | head -1 || true)"
-  TARBALL="$(ls "$BUNDLE_DIR/macos/"*.app.tar.gz 2>/dev/null | head -1 || true)"
-  SIG="${TARBALL}.sig"
-  [ -f "$DMG" ]     || die "DMG not found under $BUNDLE_DIR/dmg/"
-  [ -f "$TARBALL" ] || die "Updater tarball not found under $BUNDLE_DIR/macos/"
-  [ -f "$SIG" ]     || die "Updater signature not found: $SIG"
+  case "$TARGET" in
+    aarch64-apple-darwin|x86_64-apple-darwin)
+      DMG="$(ls "$BUNDLE_DIR/dmg/"*.dmg 2>/dev/null | head -1 || true)"
+      TARBALL="$(ls "$BUNDLE_DIR/macos/"*.app.tar.gz 2>/dev/null | head -1 || true)"
+      SIG="${TARBALL}.sig"
+      [ -f "$DMG" ]     || die "DMG not found under $BUNDLE_DIR/dmg/"
+      [ -f "$TARBALL" ] || die "Updater tarball not found under $BUNDLE_DIR/macos/"
+      [ -f "$SIG" ]     || die "Updater signature not found: $SIG"
 
-  BASE_DMG="Argus_${VERSION}_${ARCH}.dmg"
-  BASE_TARBALL="Argus_${VERSION}_${ARCH}.app.tar.gz"
-  cp "$DMG"     "$STAGING/$BASE_DMG"
-  cp "$TARBALL" "$STAGING/$BASE_TARBALL"
-  cp "$SIG"     "$STAGING/${BASE_TARBALL}.sig"
-  c_green "  Staged: $BASE_DMG, $BASE_TARBALL, ${BASE_TARBALL}.sig"
+      BASE_DMG="Argus_${VERSION}_${ARCH}.dmg"
+      BASE_TARBALL="Argus_${VERSION}_${ARCH}.app.tar.gz"
+      cp "$DMG"     "$STAGING/$BASE_DMG"
+      cp "$TARBALL" "$STAGING/$BASE_TARBALL"
+      cp "$SIG"     "$STAGING/${BASE_TARBALL}.sig"
+      c_green "  Staged: $BASE_DMG, $BASE_TARBALL, ${BASE_TARBALL}.sig"
+      ;;
+    x86_64-unknown-linux-gnu)
+      APPIMAGE="$(ls "$BUNDLE_DIR/appimage/"*.AppImage 2>/dev/null | head -1 || true)"
+      TARBALL="$(ls "$BUNDLE_DIR/appimage/"*.AppImage.tar.gz 2>/dev/null | head -1 || true)"
+      SIG="${TARBALL}.sig"
+      [ -f "$APPIMAGE" ] || die "AppImage not found under $BUNDLE_DIR/appimage/"
+      [ -f "$TARBALL" ]  || die "Updater tarball not found under $BUNDLE_DIR/appimage/"
+      [ -f "$SIG" ]      || die "Updater signature not found: $SIG"
+
+      BASE_APPIMAGE="Argus_${VERSION}_${ARCH}.AppImage"
+      BASE_TARBALL="Argus_${VERSION}_${ARCH}.AppImage.tar.gz"
+      cp "$APPIMAGE" "$STAGING/$BASE_APPIMAGE"
+      cp "$TARBALL"  "$STAGING/$BASE_TARBALL"
+      cp "$SIG"      "$STAGING/${BASE_TARBALL}.sig"
+      c_green "  Staged: $BASE_APPIMAGE, $BASE_TARBALL, ${BASE_TARBALL}.sig"
+      ;;
+    x86_64-pc-windows-msvc)
+      MSI="$(ls "$BUNDLE_DIR/msi/"*.msi 2>/dev/null | head -1 || true)"
+      ZIP="$(ls "$BUNDLE_DIR/msi/"*.msi.zip 2>/dev/null | head -1 || true)"
+      SIG="${ZIP}.sig"
+      [ -f "$MSI" ] || die "MSI not found under $BUNDLE_DIR/msi/"
+      [ -f "$ZIP" ] || die "Updater archive not found under $BUNDLE_DIR/msi/"
+      [ -f "$SIG" ] || die "Updater signature not found: $SIG"
+
+      BASE_MSI="Argus_${VERSION}_${ARCH}.msi"
+      BASE_ZIP="Argus_${VERSION}_${ARCH}.msi.zip"
+      cp "$MSI" "$STAGING/$BASE_MSI"
+      cp "$ZIP" "$STAGING/$BASE_ZIP"
+      cp "$SIG" "$STAGING/${BASE_ZIP}.sig"
+      c_green "  Staged: $BASE_MSI, $BASE_ZIP, ${BASE_ZIP}.sig"
+      ;;
+  esac
 done
 
-# ---------- manifest ----------------------------------------------------------
+# ---------- manifests ---------------------------------------------------------
 
-# Only build the manifest if we have BOTH targets in staging — the workflow
-# always ships both platforms in a single latest.json.
-WANT_MANIFEST=1
-if [ "${#TARGETS[@]}" -ne 2 ]; then
-  WANT_MANIFEST=0
+# Determine which manifest_keys we built so we can pass them down to the
+# generator. The generator emits a partial manifest (latest.partial.json /
+# download.partial.json) automatically when fewer than four platforms are set.
+BUILT_KEYS=()
+for TARGET in "${TARGETS[@]}"; do
+  BUILT_KEYS+=("$(manifest_key_for_target "$TARGET")")
+done
+IS_PARTIAL=0
+if [ "${#BUILT_KEYS[@]}" -lt 4 ]; then
+  IS_PARTIAL=1
 fi
 
-if [ "$WANT_MANIFEST" = "1" ]; then
-  step "Building latest.json manifest"
-  PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  if [ "$DRY_RUN" = "1" ]; then
-    c_dim "DRY: would run node scripts/build-manifest.mjs"
-  else
-    VERSION="$VERSION" \
-    PUB_DATE="$PUB_DATE" \
-    PUBLIC_URL_BASE="$R2_PUBLIC_URL" \
-    ARM64_TARBALL="Argus_${VERSION}_aarch64.app.tar.gz" \
-    ARM64_SIG_PATH="$STAGING/Argus_${VERSION}_aarch64.app.tar.gz.sig" \
-    X64_TARBALL="Argus_${VERSION}_x64.app.tar.gz" \
-    X64_SIG_PATH="$STAGING/Argus_${VERSION}_x64.app.tar.gz.sig" \
-      node scripts/build-manifest.mjs
-  fi
+env_for_manifest() {
+  # Echo the env-var assignments for build-manifest.mjs / build-download-manifest.mjs
+  # based on which platforms were built. Caller composes the rest.
+  local mode="$1"
+  local kind="$2" # "updater" | "download"
+  for key in "${BUILT_KEYS[@]}"; do
+    case "$key:$kind" in
+      darwin-aarch64:updater)
+        echo "DARWIN_AARCH64_TARBALL='Argus_${VERSION}_aarch64.app.tar.gz'"
+        echo "DARWIN_AARCH64_SIG_PATH='$STAGING/Argus_${VERSION}_aarch64.app.tar.gz.sig'"
+        ;;
+      darwin-x86_64:updater)
+        echo "DARWIN_X86_64_TARBALL='Argus_${VERSION}_x64.app.tar.gz'"
+        echo "DARWIN_X86_64_SIG_PATH='$STAGING/Argus_${VERSION}_x64.app.tar.gz.sig'"
+        ;;
+      linux-x86_64:updater)
+        echo "LINUX_X86_64_TARBALL='Argus_${VERSION}_x64.AppImage.tar.gz'"
+        echo "LINUX_X86_64_SIG_PATH='$STAGING/Argus_${VERSION}_x64.AppImage.tar.gz.sig'"
+        ;;
+      windows-x86_64:updater)
+        echo "WINDOWS_X86_64_TARBALL='Argus_${VERSION}_x64.msi.zip'"
+        echo "WINDOWS_X86_64_SIG_PATH='$STAGING/Argus_${VERSION}_x64.msi.zip.sig'"
+        ;;
+      darwin-aarch64:download)
+        echo "DARWIN_AARCH64_INSTALLER='Argus_${VERSION}_aarch64.dmg'"
+        ;;
+      darwin-x86_64:download)
+        echo "DARWIN_X86_64_INSTALLER='Argus_${VERSION}_x64.dmg'"
+        ;;
+      linux-x86_64:download)
+        echo "LINUX_X86_64_INSTALLER='Argus_${VERSION}_x64.AppImage'"
+        ;;
+      windows-x86_64:download)
+        echo "WINDOWS_X86_64_INSTALLER='Argus_${VERSION}_x64.msi'"
+        ;;
+    esac
+  done
+}
+
+step "Building latest.json manifest (mode=local, partial=$IS_PARTIAL)"
+PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+if [ "$DRY_RUN" = "1" ]; then
+  c_dim "DRY: would run node scripts/build-manifest.mjs"
+  c_dim "DRY: would run node scripts/build-download-manifest.mjs"
 else
-  c_dim "Skipping manifest (need both targets; got: ${TARGETS[*]})"
+  # Updater manifest
+  UPDATER_ENV="$(env_for_manifest local updater)"
+  eval "env \
+    VERSION='$VERSION' \
+    PUB_DATE='$PUB_DATE' \
+    PUBLIC_URL_BASE='$R2_PUBLIC_URL' \
+    MANIFEST_MODE=local \
+    $UPDATER_ENV \
+    node scripts/build-manifest.mjs"
+
+  # Download manifest
+  DOWNLOAD_ENV="$(env_for_manifest local download)"
+  eval "env \
+    VERSION='$VERSION' \
+    PUB_DATE='$PUB_DATE' \
+    PUBLIC_URL_BASE='$R2_PUBLIC_URL' \
+    MANIFEST_MODE=local \
+    STAGING_DIR='$STAGING' \
+    $DOWNLOAD_ENV \
+    node scripts/build-download-manifest.mjs"
+fi
+
+# Resolve which manifest files we ended up with.
+LATEST_FILE="latest.json"
+DOWNLOAD_FILE="download.json"
+if [ "$IS_PARTIAL" = "1" ]; then
+  LATEST_FILE="latest.partial.json"
+  DOWNLOAD_FILE="download.partial.json"
 fi
 
 # ---------- upload to R2 ------------------------------------------------------
@@ -320,18 +536,49 @@ else
 
   # Binaries: long cache (1 year), immutable.
   for f in "$STAGING"/*; do
+    [ -f "$f" ] || continue
     key="$(basename "$f")"
     run "aws s3 cp '$f' 's3://${R2_BUCKET}/${key}' \
           --endpoint-url '$ENDPOINT' \
           --cache-control 'public, max-age=31536000, immutable'"
   done
 
-  # Manifest: no-cache, JSON content type.
-  if [ "$WANT_MANIFEST" = "1" ] && [ -f "$ROOT/latest.json" ]; then
-    run "aws s3 cp '$ROOT/latest.json' 's3://${R2_BUCKET}/latest.json' \
-          --endpoint-url '$ENDPOINT' \
-          --cache-control 'no-cache, max-age=0' \
-          --content-type 'application/json'"
+  # Manifests: no-cache, JSON content type.
+  # Full manifests always upload to their canonical key. Partial manifests
+  # only upload when --allow-partial-manifest is passed, AND they go to
+  # *.partial.json keys so they never overwrite the live download.json/latest.json.
+  if [ "$IS_PARTIAL" = "0" ]; then
+    if [ -f "$ROOT/$LATEST_FILE" ]; then
+      run "aws s3 cp '$ROOT/$LATEST_FILE' 's3://${R2_BUCKET}/latest.json' \
+            --endpoint-url '$ENDPOINT' \
+            --cache-control 'no-cache, max-age=0' \
+            --content-type 'application/json'"
+    fi
+    if [ -f "$ROOT/$DOWNLOAD_FILE" ]; then
+      run "aws s3 cp '$ROOT/$DOWNLOAD_FILE' 's3://${R2_BUCKET}/download.json' \
+            --endpoint-url '$ENDPOINT' \
+            --cache-control 'no-cache, max-age=0' \
+            --content-type 'application/json'"
+    fi
+  else
+    if [ "$ALLOW_PARTIAL" = "1" ]; then
+      c_red "Uploading PARTIAL manifests to *.partial.json keys (NOT overwriting live latest.json/download.json)."
+      if [ -f "$ROOT/$LATEST_FILE" ]; then
+        run "aws s3 cp '$ROOT/$LATEST_FILE' 's3://${R2_BUCKET}/latest.partial.json' \
+              --endpoint-url '$ENDPOINT' \
+              --cache-control 'no-cache, max-age=0' \
+              --content-type 'application/json'"
+      fi
+      if [ -f "$ROOT/$DOWNLOAD_FILE" ]; then
+        run "aws s3 cp '$ROOT/$DOWNLOAD_FILE' 's3://${R2_BUCKET}/download.partial.json' \
+              --endpoint-url '$ENDPOINT' \
+              --cache-control 'no-cache, max-age=0' \
+              --content-type 'application/json'"
+      fi
+    else
+      c_dim "Partial manifests detected ($LATEST_FILE, $DOWNLOAD_FILE) — skipping manifest upload."
+      c_dim "Pass --allow-partial-manifest to upload them to *.partial.json keys."
+    fi
   fi
 fi
 
@@ -340,14 +587,24 @@ fi
 c_green ""
 c_green "Release v$VERSION complete."
 echo
+echo "  Host        : $HOST_OS"
 echo "  Staging dir : $STAGING"
 echo "  Targets     : ${TARGETS[*]}"
-if [ "$WANT_MANIFEST" = "1" ]; then
-  echo "  Manifest    : $ROOT/latest.json"
-fi
+echo "  Manifest    : $ROOT/$LATEST_FILE"
+echo "  Download    : $ROOT/$DOWNLOAD_FILE"
 if [ "$NO_UPLOAD" = "0" ]; then
-  echo "  Public URL  : $R2_PUBLIC_URL/latest.json"
-  for f in "$STAGING"/*.dmg; do
-    [ -f "$f" ] && echo "  DMG         : $R2_PUBLIC_URL/$(basename "$f")"
+  if [ "$IS_PARTIAL" = "0" ]; then
+    echo "  Public URL  : $R2_PUBLIC_URL/latest.json"
+    echo "  Download    : $R2_PUBLIC_URL/download.json"
+  elif [ "$ALLOW_PARTIAL" = "1" ]; then
+    echo "  Public URL  : $R2_PUBLIC_URL/latest.partial.json (partial)"
+    echo "  Download    : $R2_PUBLIC_URL/download.partial.json (partial)"
+  fi
+  for f in "$STAGING"/*; do
+    [ -f "$f" ] || continue
+    name="$(basename "$f")"
+    case "$name" in
+      *.dmg|*.AppImage|*.msi) echo "  Installer   : $R2_PUBLIC_URL/$name" ;;
+    esac
   done
 fi

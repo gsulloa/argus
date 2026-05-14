@@ -72,13 +72,20 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             arch: aarch64
+            manifest_key: darwin-aarch64
           - os: macos-13
             target: x86_64-apple-darwin
             arch: x64
+            manifest_key: darwin-x86_64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            arch: linux-x64
+            manifest_key: linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: windows-x64
+            manifest_key: windows-x86_64
     runs-on: ${{ matrix.os }}
-    outputs:
-      arm64-tarball: ${{ steps.collect.outputs.arm64-tarball }}
-      x64-tarball: ${{ steps.collect.outputs.x64-tarball }}
     steps:
       - name: Checkout (post-bump)
         uses: actions/checkout@v4
@@ -110,10 +117,32 @@ jobs:
             src-tauri/target
           key: ${{ matrix.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
 
+      - name: Cache apt packages (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ matrix.os }}-${{ hashFiles('.github/workflows/release.yml') }}
+
+      - name: Install Linux deps
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            build-essential \
+            curl \
+            file \
+            wget
+
       - name: Install pnpm deps
         run: pnpm install --frozen-lockfile
 
       - name: Import Apple cert into keychain
+        if: matrix.os == 'macos-latest' || matrix.os == 'macos-13'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -148,8 +177,9 @@ jobs:
         with:
           args: --target ${{ matrix.target }}
 
-      - name: Collect artifact paths
-        id: collect
+      - name: Collect artifact paths (macOS)
+        if: matrix.os == 'macos-latest' || matrix.os == 'macos-13'
+        shell: bash
         run: |
           BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
           DMG=$(ls "$BUNDLE_DIR/dmg/"*.dmg | head -1)
@@ -158,7 +188,6 @@ jobs:
           test -f "$DMG"
           test -f "$TARBALL"
           test -f "$SIG"
-          # Rename to canonical names so the manifest URLs are predictable.
           VERSION="${{ needs.bump.outputs.version }}"
           BASE_DMG="Argus_${VERSION}_${{ matrix.arch }}.dmg"
           BASE_TARBALL="Argus_${VERSION}_${{ matrix.arch }}.app.tar.gz"
@@ -166,14 +195,44 @@ jobs:
           cp "$DMG" "staging/$BASE_DMG"
           cp "$TARBALL" "staging/$BASE_TARBALL"
           cp "$SIG" "staging/${BASE_TARBALL}.sig"
-          echo "tarball=$BASE_TARBALL" >> "$GITHUB_OUTPUT"
-          echo "dmg=$BASE_DMG" >> "$GITHUB_OUTPUT"
-          echo "sig=${BASE_TARBALL}.sig" >> "$GITHUB_OUTPUT"
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            echo "arm64-tarball=$BASE_TARBALL" >> "$GITHUB_OUTPUT"
-          else
-            echo "x64-tarball=$BASE_TARBALL" >> "$GITHUB_OUTPUT"
-          fi
+
+      - name: Collect artifact paths (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          APPIMAGE=$(ls "$BUNDLE_DIR/appimage/"*.AppImage | head -1)
+          TARBALL=$(ls "$BUNDLE_DIR/appimage/"*.AppImage.tar.gz | head -1)
+          SIG="${TARBALL}.sig"
+          test -f "$APPIMAGE"
+          test -f "$TARBALL"
+          test -f "$SIG"
+          VERSION="${{ needs.bump.outputs.version }}"
+          BASE_APPIMAGE="Argus_${VERSION}_x64.AppImage"
+          BASE_TARBALL="Argus_${VERSION}_x64.AppImage.tar.gz"
+          mkdir -p staging
+          cp "$APPIMAGE" "staging/$BASE_APPIMAGE"
+          cp "$TARBALL" "staging/$BASE_TARBALL"
+          cp "$SIG" "staging/${BASE_TARBALL}.sig"
+
+      - name: Collect artifact paths (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          MSI=$(ls "$BUNDLE_DIR/msi/"*.msi | head -1)
+          ZIP=$(ls "$BUNDLE_DIR/msi/"*.msi.zip | head -1)
+          SIG="${ZIP}.sig"
+          test -f "$MSI"
+          test -f "$ZIP"
+          test -f "$SIG"
+          VERSION="${{ needs.bump.outputs.version }}"
+          BASE_MSI="Argus_${VERSION}_x64.msi"
+          BASE_ZIP="Argus_${VERSION}_x64.msi.zip"
+          mkdir -p staging
+          cp "$MSI" "staging/$BASE_MSI"
+          cp "$ZIP" "staging/$BASE_ZIP"
+          cp "$SIG" "staging/${BASE_ZIP}.sig"
 
       - name: Upload artifact for downstream job
         uses: actions/upload-artifact@v4
@@ -210,16 +269,73 @@ jobs:
           name: bundle-x64
           path: staging/
 
+      - name: Download linux-x64 bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-linux-x64
+          path: staging/
+
+      - name: Download windows-x64 bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-windows-x64
+          path: staging/
+
+      - name: Verify all four bundles present
+        env:
+          VERSION: ${{ needs.bump.outputs.version }}
+        run: |
+          required=(
+            "staging/Argus_${VERSION}_aarch64.dmg"
+            "staging/Argus_${VERSION}_aarch64.app.tar.gz"
+            "staging/Argus_${VERSION}_aarch64.app.tar.gz.sig"
+            "staging/Argus_${VERSION}_x64.dmg"
+            "staging/Argus_${VERSION}_x64.app.tar.gz"
+            "staging/Argus_${VERSION}_x64.app.tar.gz.sig"
+            "staging/Argus_${VERSION}_x64.AppImage"
+            "staging/Argus_${VERSION}_x64.AppImage.tar.gz"
+            "staging/Argus_${VERSION}_x64.AppImage.tar.gz.sig"
+            "staging/Argus_${VERSION}_x64.msi"
+            "staging/Argus_${VERSION}_x64.msi.zip"
+            "staging/Argus_${VERSION}_x64.msi.zip.sig"
+          )
+          missing=0
+          for f in "${required[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "MISSING: $f"
+              missing=1
+            fi
+          done
+          [ "$missing" = "0" ] || { echo "Not all four platform bundles are present; aborting publish."; exit 1; }
+          echo "All four platform bundles present."
+
       - name: Build manifest
         env:
           VERSION: ${{ needs.bump.outputs.version }}
           PUB_DATE: ${{ github.event.head_commit.timestamp }}
           PUBLIC_URL_BASE: ${{ secrets.R2_PUBLIC_URL }}
-          ARM64_TARBALL: Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz
-          ARM64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz.sig
-          X64_TARBALL: Argus_${{ needs.bump.outputs.version }}_x64.app.tar.gz
-          X64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.app.tar.gz.sig
+          MANIFEST_MODE: ci
+          DARWIN_AARCH64_TARBALL: Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz
+          DARWIN_AARCH64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz.sig
+          DARWIN_X86_64_TARBALL: Argus_${{ needs.bump.outputs.version }}_x64.app.tar.gz
+          DARWIN_X86_64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.app.tar.gz.sig
+          LINUX_X86_64_TARBALL: Argus_${{ needs.bump.outputs.version }}_x64.AppImage.tar.gz
+          LINUX_X86_64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.AppImage.tar.gz.sig
+          WINDOWS_X86_64_TARBALL: Argus_${{ needs.bump.outputs.version }}_x64.msi.zip
+          WINDOWS_X86_64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.msi.zip.sig
         run: node scripts/build-manifest.mjs
+
+      - name: Build download.json
+        env:
+          VERSION: ${{ needs.bump.outputs.version }}
+          PUB_DATE: ${{ github.event.head_commit.timestamp }}
+          PUBLIC_URL_BASE: ${{ secrets.R2_PUBLIC_URL }}
+          MANIFEST_MODE: ci
+          DARWIN_AARCH64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_aarch64.dmg
+          DARWIN_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.dmg
+          LINUX_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.AppImage
+          WINDOWS_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.msi
+        run: node scripts/build-download-manifest.mjs
 
       - name: Configure R2 credentials
         run: |
@@ -243,13 +359,17 @@ jobs:
               --cache-control "public, max-age=31536000, immutable"
           done
 
-      - name: Upload manifest (no cache)
+      - name: Upload manifests (no cache)
         env:
           AWS_DEFAULT_REGION: auto
           ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
           BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
           aws s3 cp latest.json "s3://${BUCKET}/latest.json" \
+            --endpoint-url "$ENDPOINT" \
+            --cache-control "no-cache, max-age=0" \
+            --content-type "application/json"
+          aws s3 cp download.json "s3://${BUCKET}/download.json" \
             --endpoint-url "$ENDPOINT" \
             --cache-control "no-cache, max-age=0" \
             --content-type "application/json"
