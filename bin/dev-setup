@@ -1,36 +1,42 @@
 #!/usr/bin/env bash
 # Set up local development environment for Conductor workspaces and git worktrees.
 #
-# - Copies cloud/.envrc from the main worktree (so env vars carry over automatically)
-# - Installs npm dependencies at monorepo root (parent of cloud/), if missing
-# - Sources .envrc so the current shell has all env vars
+# - Copies .envrc from the main worktree (so secrets carry over to new worktrees)
+# - Runs `direnv allow` if direnv is available
 #
-# Usage: bin/dev-setup       # set up
-set -e
+# Usage: bin/dev-setup
+set -u
 
-CLOUD_FOLDER="$(cd "$(dirname "$0")/.." && pwd)"
-REPO_ROOT="$(cd "$CLOUD_FOLDER/.." && pwd)"
+WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
 
-# 1. Copy cloud/.envrc from main worktree (if we're a worktree and don't have one)
-if [ ! -f "$CLOUD_FOLDER/.envrc" ]; then
-  MAIN_WORKTREE="$(git -C "$CLOUD_FOLDER" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
-  MAIN_CLOUD_ENVRC="$MAIN_WORKTREE/cloud/.envrc"
-  if [ -n "$MAIN_WORKTREE" ] && [ "$MAIN_WORKTREE" != "$CLOUD_FOLDER" ] && [ -f "$MAIN_CLOUD_ENVRC" ]; then
-    cp "$MAIN_CLOUD_ENVRC" "$CLOUD_FOLDER/.envrc"
-    echo "✓ Copied cloud/.envrc from main worktree ($MAIN_CLOUD_ENVRC)"
+# Make sure common Homebrew install paths are visible — Conductor's non-interactive
+# shell may not have inherited the user's full PATH.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# 1. Copy .envrc from the main worktree if this worktree doesn't have one yet.
+if [ ! -f "$WORKSPACE/.envrc" ]; then
+  MAIN_WORKTREE="$(git -C "$WORKSPACE" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10); exit}')"
+  MAIN_ENVRC="$MAIN_WORKTREE/.envrc"
+  if [ -n "$MAIN_WORKTREE" ] && [ "$MAIN_WORKTREE" != "$WORKSPACE" ] && [ -f "$MAIN_ENVRC" ]; then
+    cp "$MAIN_ENVRC" "$WORKSPACE/.envrc"
+    echo "✓ Copied .envrc from main worktree ($MAIN_ENVRC)"
   else
-    echo "⚠ No cloud/.envrc found in main worktree and nothing to copy from"
+    echo "⚠ No .envrc found in main worktree — skipping env copy"
   fi
 fi
 
-# 2. Source .envrc
-if [ -f "$CLOUD_FOLDER/.envrc" ]; then
-  source "$CLOUD_FOLDER/.envrc"
-  cd "$CLOUD_FOLDER"
-  direnv allow "$CLOUD_FOLDER"
-  echo "✓ Sourced cloud .envrc"
+# 2. Allow direnv (best-effort — don't fail the whole setup if direnv is missing).
+if [ -f "$WORKSPACE/.envrc" ]; then
+  if command -v direnv >/dev/null 2>&1; then
+    if direnv allow "$WORKSPACE" 2>/dev/null; then
+      echo "✓ direnv allow succeeded"
+    else
+      echo "⚠ direnv allow failed — run it manually if needed"
+    fi
+  else
+    echo "⚠ direnv not installed — install it (brew install direnv) to auto-load env vars"
+  fi
 fi
-
 
 echo ""
 echo "Dev setup complete!"

@@ -1,5 +1,6 @@
 {
   "scripts": {
-    "setup": "bash bin/dev-setup"
+    "setup": "bash bin/dev-setup",
+    "archive": "bash bin/dev-archive"
   }
 }
