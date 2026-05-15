@@ -38,5 +38,35 @@ if [ -f "$WORKSPACE/.envrc" ]; then
   fi
 fi
 
+# 3. Install JS dependencies so `pnpm tauri:dev` doesn't have to.
+if [ -f "$WORKSPACE/package.json" ]; then
+  if command -v pnpm >/dev/null 2>&1; then
+    echo "→ Installing pnpm dependencies..."
+    if (cd "$WORKSPACE" && pnpm install --frozen-lockfile); then
+      echo "✓ pnpm install complete"
+    else
+      echo "⚠ pnpm install failed — run it manually before tauri:dev"
+    fi
+  else
+    echo "⚠ pnpm not installed — install it (npm i -g pnpm) and re-run setup"
+  fi
+fi
+
+# 4. Precompile the Tauri (Rust) side so the first `pnpm tauri:dev` is fast.
+#    `cargo build` warms target/debug with all dependencies and the app crate;
+#    the actual dev run then only re-links what changed.
+if [ -f "$WORKSPACE/src-tauri/Cargo.toml" ]; then
+  if command -v cargo >/dev/null 2>&1; then
+    echo "→ Precompiling Tauri (cargo build, this can take several minutes)..."
+    if (cd "$WORKSPACE/src-tauri" && cargo build); then
+      echo "✓ Tauri precompile complete"
+    else
+      echo "⚠ cargo build failed — first tauri:dev will be slow but should still work"
+    fi
+  else
+    echo "⚠ cargo not installed — install Rust (https://rustup.rs) to precompile Tauri"
+  fi
+fi
+
 echo ""
 echo "Dev setup complete!"
