@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Clean up build artifacts and temporary files before archiving a Conductor workspace.
+#
+# Removes the heavy, regenerable directories (node_modules, Rust target, build output)
+# so the workspace can be archived without dragging gigabytes around.
+#
+# Usage: bin/dev-archive
+set -u
+
+WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Paths relative to $WORKSPACE that should be removed if present.
+TARGETS=(
+  node_modules
+  dist
+  dist-ssr
+  src-tauri/target
+  src-tauri/gen/schemas
+  staging
+  latest.json
+  .env.release
+)
+
+human_size() {
+  if [ -e "$1" ]; then
+    du -sh "$1" 2>/dev/null | awk '{print $1}'
+  else
+    echo "-"
+  fi
+}
+
+removed_any=0
+for rel in "${TARGETS[@]}"; do
+  path="$WORKSPACE/$rel"
+  if [ -e "$path" ]; then
+    size="$(human_size "$path")"
+    rm -rf "$path"
+    echo "✓ Removed $rel ($size)"
+    removed_any=1
+  fi
+done
+
+if [ "$removed_any" -eq 0 ]; then
+  echo "Nothing to clean — workspace is already tidy."
+fi
+
+echo ""
+echo "Archive cleanup complete!"
