@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "argus"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "async-trait",
  "aws-config",

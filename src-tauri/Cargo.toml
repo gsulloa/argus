@@ -1,8 +1,11 @@
 [package]
 name = "argus"
 version = "0.1.17"
-description = "Argus desktop"
-authors = ["Argus contributors"]
+description = "A Tauri 2 desktop app for inspecting and editing data across multiple sources (Postgres, with DynamoDB and CloudWatch coming next)."
+authors = ["Gabriel Ulloa <gabriel.ulloa.e@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/gsulloa/argus"
+homepage = "https://github.com/gsulloa/argus"
 edition = "2021"
 rust-version = "1.77"
 
