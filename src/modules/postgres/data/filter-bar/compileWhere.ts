@@ -1,65 +1,48 @@
 import {
-  getRootCombinator,
+  isCompleteRow,
   trimLeadingWhere,
   type ColumnRef,
   type Condition,
   type DataColumn,
   type FilterModel,
-  type FilterNode,
+  type FilterRow,
   type FilterScalar,
-  type FilterTree,
   type FilterValue,
   type Operator,
   type OrderBy,
 } from "../types";
 
-export type CompileResult =
-  | { mode: "structured"; body: string }
-  | { mode: "raw"; body: string };
+export interface CompileResult {
+  body: string;
+}
 
 /**
- * Compile a `FilterModel` to a SQL WHERE body. Display-only — used by the
- * "Open in SQL Editor" affordance and any in-bar previews. Literals are
- * inlined (single-quoted, with `'` doubled) since the result is meant for
- * a SQL editor, not a parametrized query. The backend has its own
- * parametrized compiler for execution.
+ * Compile a flat `FilterModel` (FilterTree) to a SQL WHERE body.
+ * Display-only — used by the "SQL" footer affordance. Literals are inlined
+ * (single-quoted, with `'` doubled) since the result is meant for a SQL
+ * editor, not a parametrized query. The backend has its own parametrized
+ * compiler for execution.
+ *
+ * Only `enabled && isCompleteRow` rows are included. An empty result → `""`.
+ * Predicates are joined with `" AND "` or `" OR "` per `model.combinator`;
+ * no outer parentheses are added.
  */
 export function compileWhere(
   model: FilterModel,
   columns: DataColumn[] = [],
 ): CompileResult {
-  if (model.mode === "raw") {
-    return { mode: "raw", body: trimLeadingWhere(model.raw) };
-  }
-  return { mode: "structured", body: compileTree(model.tree, columns) };
+  const rows = model.rows.filter((r) => r.enabled && isCompleteRow(r));
+  if (rows.length === 0) return { body: "" };
+  const parts = rows.map((r) => compileRow(r, columns));
+  const sep = model.combinator === "OR" ? " OR " : " AND ";
+  return { body: parts.join(sep) };
 }
 
-function compileTree(tree: FilterTree, columns: DataColumn[]): string {
-  if (tree.children.length === 0) return "";
-  const parts: string[] = [];
-  for (const node of tree.children) {
-    if (node.kind === "condition") {
-      parts.push(compileCondition(node, columns));
-    } else {
-      const inner: string[] = [];
-      for (const c of node.children) {
-        if (c.kind === "condition") {
-          inner.push(compileCondition(c, columns));
-        }
-      }
-      if (inner.length === 0) continue;
-      parts.push(`(${inner.join(" OR ")})`);
-    }
+function compileRow(row: FilterRow, columns: DataColumn[]): string {
+  if (row.column.kind === "any_column") {
+    return compileAnyColumn(row.op, row.value, columns);
   }
-  const combinator = getRootCombinator(tree);
-  return parts.join(combinator === "OR" ? " OR " : " AND ");
-}
-
-function compileCondition(c: Condition, columns: DataColumn[]): string {
-  if (c.column.kind === "any_column") {
-    return compileAnyColumn(c.op, c.value, columns);
-  }
-  return compileNamedPredicate(c.column.name, c.op, c.value, "");
+  return compileNamedPredicate(row.column.name, row.op, row.value, "");
 }
 
 function compileAnyColumn(
@@ -224,8 +207,9 @@ export interface PrefilledSelectArgs {
 }
 
 /**
- * Build the SQL string for "Open in SQL Editor": a `SELECT *` reflecting
+ * Build the SQL string for the "SQL" footer button: a `SELECT *` reflecting
  * the applied filter model, the active sort, and the current page size.
+ * Uses `applied` (not `draft`) — callers must pass the applied model.
  */
 export function compilePrefilledSelect(args: PrefilledSelectArgs): string {
   const { schema, relation, model, columns, orderBy, limit } = args;
@@ -245,4 +229,7 @@ export function compilePrefilledSelect(args: PrefilledSelectArgs): string {
   return lines.join("\n");
 }
 
-export type { ColumnRef, Condition, FilterNode };
+export type { ColumnRef, Condition };
+
+// trimLeadingWhere re-exported for any callers that import it from here
+export { trimLeadingWhere };

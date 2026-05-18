@@ -19,18 +19,6 @@ export type { FilterBarBodyProps } from "./FilterBarBody";
 export { FilterBarActions } from "./FilterBarActions";
 export type { FilterBarActionsProps } from "./FilterBarActions";
 
-export { FilterSegmentedToggle } from "./FilterSegmentedToggle";
-export type { FilterSegmentedToggleProps, SegmentOption } from "./FilterSegmentedToggle";
-
-export { FilterTypeBadge } from "./FilterTypeBadge";
-export type { FilterTypeBadgeProps } from "./FilterTypeBadge";
-
-export { FilterConnector } from "./FilterConnector";
-export type { FilterConnectorProps } from "./FilterConnector";
-
-export { FilterRowAddButton } from "./FilterRowAddButton";
-export type { FilterRowAddButtonProps } from "./FilterRowAddButton";
-
 export { FilterKeyHint } from "./FilterKeyHint";
 export type { FilterKeyHintProps } from "./FilterKeyHint";
 
@@ -43,14 +31,27 @@ export type { SecondaryButtonProps } from "./SecondaryButton";
 export { EmptyBodyRow } from "./EmptyBodyRow";
 export type { EmptyBodyRowProps } from "./EmptyBodyRow";
 
-export { RootCombinatorToggle } from "./RootCombinatorToggle";
-export type { RootCombinatorToggleProps } from "./RootCombinatorToggle";
-
 export { RowApplyButton } from "./RowApplyButton";
 export type { RowApplyButtonProps } from "./RowApplyButton";
 
+// ── Legacy components kept for DynamoDB QueryBuilder compatibility ────────────
+// These are deprecated for the postgres filter bar but still used by QueryBuilder.
+// TODO: migrate QueryBuilder in a follow-up change.
+
+export { FilterConnector } from "./FilterConnector";
+export type { FilterConnectorProps } from "./FilterConnector";
+
+export { FilterTypeBadge } from "./FilterTypeBadge";
+export type { FilterTypeBadgeProps } from "./FilterTypeBadge";
+
+export { FilterRowAddButton } from "./FilterRowAddButton";
+export type { FilterRowAddButtonProps } from "./FilterRowAddButton";
+
+export { RootCombinatorToggle } from "./RootCombinatorToggle";
+export type { RootCombinatorToggleProps } from "./RootCombinatorToggle";
+
 /** Imperative ref API exposed by FilterBar and QueryBuilder. */
 export interface FilterBarHandle {
-  /** Expand if collapsed, then focus the first interactive control. */
+  /** Focus the first interactive control in the bar. */
   focus(): void;
 }

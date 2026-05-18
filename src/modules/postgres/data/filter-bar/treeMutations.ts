@@ -1,137 +1,52 @@
 import type {
-  ColumnRef,
-  Condition,
-  FilterNode,
+  FilterRow,
   FilterTree,
   FilterValue,
   Operator,
 } from "../types";
-import { getRootCombinator } from "../types";
+import { EMPTY_FILTER_ROW } from "../types";
 
-/** Empty Condition leaf with sensible defaults. */
-export function emptyCondition(column?: ColumnRef): Condition {
-  return {
-    column: column ?? { kind: "any_column" },
-    op: "=",
-    value: undefined,
-  };
-}
-
-export function emptyTree(): FilterTree {
-  return { children: [], combinator: "AND" };
-}
-
-export function addRootCondition(
+export function addRow(
   tree: FilterTree,
-  cond: Condition = emptyCondition(),
+  atIndex?: number,
+  row?: FilterRow,
 ): FilterTree {
-  return {
-    children: [
-      ...tree.children,
-      { kind: "condition", ...cond },
-    ],
-    combinator: getRootCombinator(tree),
-  };
-}
-
-export function addRootOrGroup(
-  tree: FilterTree,
-  seed: Condition = emptyCondition(),
-): FilterTree {
-  return {
-    children: [
-      ...tree.children,
-      {
-        kind: "or_group",
-        children: [{ kind: "condition", ...seed }],
-      },
-    ],
-    combinator: getRootCombinator(tree),
-  };
-}
-
-export function setRootChild(
-  tree: FilterTree,
-  index: number,
-  next: FilterNode,
-): FilterTree {
-  const children = tree.children.slice();
-  children[index] = next;
-  return { children, combinator: getRootCombinator(tree) };
-}
-
-export function removeRootChild(tree: FilterTree, index: number): FilterTree {
-  return { children: tree.children.filter((_, i) => i !== index), combinator: getRootCombinator(tree) };
-}
-
-export function setOrChild(
-  tree: FilterTree,
-  groupIndex: number,
-  childIndex: number,
-  next: FilterNode,
-): FilterTree {
-  const node = tree.children[groupIndex];
-  if (!node || node.kind !== "or_group") return tree;
-  const orChildren = node.children.slice();
-  orChildren[childIndex] = next;
-  const children = tree.children.slice();
-  children[groupIndex] = { ...node, children: orChildren };
-  return { children, combinator: getRootCombinator(tree) };
-}
-
-/**
- * Remove a single condition from an OR group. If the group ends up empty
- * the group itself collapses out of the tree (per spec: "removing the last
- * condition from an OR group MUST collapse the group node out of the tree").
- */
-export function removeOrChild(
-  tree: FilterTree,
-  groupIndex: number,
-  childIndex: number,
-): FilterTree {
-  const node = tree.children[groupIndex];
-  if (!node || node.kind !== "or_group") return tree;
-  const orChildren = node.children.filter((_, i) => i !== childIndex);
-  const children = tree.children.slice();
-  const combinator = getRootCombinator(tree);
-  if (orChildren.length === 0) {
-    children.splice(groupIndex, 1);
-    return { children, combinator };
+  const newRow = row ?? EMPTY_FILTER_ROW;
+  const rows = tree.rows.slice();
+  if (atIndex === undefined) {
+    rows.push(newRow);
+  } else {
+    rows.splice(atIndex, 0, newRow);
   }
-  children[groupIndex] = { ...node, children: orChildren };
-  return { children, combinator };
+  return { ...tree, rows };
 }
 
-export function addOrChildCondition(
-  tree: FilterTree,
-  groupIndex: number,
-  cond: Condition = emptyCondition(),
-): FilterTree {
-  const node = tree.children[groupIndex];
-  if (!node || node.kind !== "or_group") return tree;
-  const orChildren = [
-    ...node.children,
-    { kind: "condition" as const, ...cond },
-  ];
-  const children = tree.children.slice();
-  children[groupIndex] = { ...node, children: orChildren };
-  return { children, combinator: getRootCombinator(tree) };
+export function removeRow(tree: FilterTree, index: number): FilterTree {
+  if (tree.rows.length === 1) {
+    return { ...tree, rows: [EMPTY_FILTER_ROW] };
+  }
+  const rows = tree.rows.filter((_, i) => i !== index);
+  return { ...tree, rows };
 }
 
-/** Set the root combinator (AND | OR) on the tree, preserving all children. */
-export function setRootCombinator(
-  tree: FilterTree,
-  combinator: "AND" | "OR",
-): FilterTree {
+export function setRow(tree: FilterTree, index: number, row: FilterRow): FilterTree {
+  const rows = tree.rows.slice();
+  rows[index] = row;
+  return { ...tree, rows };
+}
+
+export function setEnabled(tree: FilterTree, index: number, enabled: boolean): FilterTree {
+  const row = tree.rows[index];
+  if (!row) return tree;
+  return setRow(tree, index, { ...row, enabled });
+}
+
+export function setCombinator(tree: FilterTree, combinator: "AND" | "OR"): FilterTree {
   return { ...tree, combinator };
 }
 
-export function updateConditionField<K extends keyof Condition>(
-  cond: Condition,
-  field: K,
-  value: Condition[K],
-): Condition {
-  return { ...cond, [field]: value };
+export function clearAllRows(tree: FilterTree): FilterTree {
+  return { ...tree, rows: [EMPTY_FILTER_ROW] };
 }
 
 /**

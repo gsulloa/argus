@@ -4,6 +4,7 @@ import {
   EMPTY_FILTER_MODEL,
   type DataColumn,
   type FilterModel,
+  type FilterRow,
 } from "../types";
 
 const cols = (...specs: Array<[string, string]>): DataColumn[] =>
@@ -14,165 +15,170 @@ const cols = (...specs: Array<[string, string]>): DataColumn[] =>
     is_nullable: true,
   }));
 
-const structured = (
-  model: Pick<FilterModel, "tree">,
-): FilterModel => ({
-  mode: "structured",
-  tree: model.tree,
-  raw: "",
-});
+function row(overrides: Partial<FilterRow> = {}): FilterRow {
+  return {
+    enabled: true,
+    column: { kind: "named", name: "col" },
+    op: "=",
+    value: "v",
+    ...overrides,
+  };
+}
+
+function model(rows: FilterRow[], combinator: "AND" | "OR" = "AND"): FilterModel {
+  return { rows, combinator };
+}
 
 describe("compileWhere", () => {
   it("returns empty body for an empty model", () => {
     const r = compileWhere(EMPTY_FILTER_MODEL);
-    expect(r).toEqual({ mode: "structured", body: "" });
+    expect(r).toEqual({ body: "" });
   });
 
-  it("compiles a single named condition with a string literal", () => {
+  it("returns empty body for empty rows array", () => {
+    const r = compileWhere(model([], "OR"));
+    expect(r.body).toBe("");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Single row
+  // ---------------------------------------------------------------------------
+
+  it("single row compiles to a predicate without parens", () => {
     const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "country" },
-              op: "=",
-              value: "CL",
-            },
-          ],
-        },
-      }),
+      model([row({ column: { kind: "named", name: "country" }, op: "=", value: "CL" })]),
     );
     expect(r.body).toBe(`"country" = 'CL'`);
   });
 
-  it("escapes single quotes in string literals", () => {
+  it("single row with Contains", () => {
     const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "name" },
-              op: "=",
-              value: "O'Brien",
-            },
-          ],
-        },
-      }),
-    );
-    expect(r.body).toBe(`"name" = 'O''Brien'`);
-  });
-
-  it("ANDs multiple root conditions and parenthesizes OR groups", () => {
-    const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "country" },
-              op: "=",
-              value: "CL",
-            },
-            {
-              kind: "or_group",
-              children: [
-                {
-                  kind: "condition",
-                  column: { kind: "named", name: "status" },
-                  op: "=",
-                  value: "active",
-                },
-                {
-                  kind: "condition",
-                  column: { kind: "named", name: "status" },
-                  op: "=",
-                  value: "pending",
-                },
-              ],
-            },
-          ],
-        },
-      }),
-    );
-    expect(r.body).toBe(
-      `"country" = 'CL' AND ("status" = 'active' OR "status" = 'pending')`,
-    );
-  });
-
-  it("compiles BETWEEN with inlined min/max", () => {
-    const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "created_at" },
-              op: "BETWEEN",
-              value: { min: "2026-01-01", max: "2026-04-30" },
-            },
-          ],
-        },
-      }),
-    );
-    expect(r.body).toBe(
-      `"created_at" BETWEEN '2026-01-01' AND '2026-04-30'`,
-    );
-  });
-
-  it("compiles In list with multiple literals", () => {
-    const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "status" },
-              op: "In",
-              value: ["a", "b", "c"],
-            },
-          ],
-        },
-      }),
-    );
-    expect(r.body).toBe(`"status" IN ('a', 'b', 'c')`);
-  });
-
-  it("compiles Contains with ILIKE concat", () => {
-    const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "name" },
-              op: "Contains",
-              value: "ana",
-            },
-          ],
-        },
-      }),
+      model([row({ column: { kind: "named", name: "name" }, op: "Contains", value: "ana" })]),
     );
     expect(r.body).toBe(`"name" ILIKE '%' || 'ana' || '%'`);
   });
 
-  it("compiles IS NULL without a value", () => {
+  it("single row with IS NULL — no value needed", () => {
     const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "deleted_at" },
-              op: "IS NULL",
-            },
-          ],
-        },
-      }),
+      model([row({ column: { kind: "named", name: "deleted_at" }, op: "IS NULL", value: undefined })]),
     );
     expect(r.body).toBe(`"deleted_at" IS NULL`);
   });
+
+  it("single row with BETWEEN inlines min/max", () => {
+    const r = compileWhere(
+      model([
+        row({
+          column: { kind: "named", name: "created_at" },
+          op: "BETWEEN",
+          value: { min: "2026-01-01", max: "2026-04-30" },
+        }),
+      ]),
+    );
+    expect(r.body).toBe(`"created_at" BETWEEN '2026-01-01' AND '2026-04-30'`);
+  });
+
+  it("single row with In list", () => {
+    const r = compileWhere(
+      model([row({ column: { kind: "named", name: "status" }, op: "In", value: ["a", "b", "c"] })]),
+    );
+    expect(r.body).toBe(`"status" IN ('a', 'b', 'c')`);
+  });
+
+  it("escapes single quotes in string literals", () => {
+    const r = compileWhere(
+      model([row({ column: { kind: "named", name: "name" }, op: "=", value: "O'Brien" })]),
+    );
+    expect(r.body).toBe(`"name" = 'O''Brien'`);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Flat AND — three rows, no outer parens
+  // ---------------------------------------------------------------------------
+
+  it("flat AND with three rows: p1 AND p2 AND p3 (no outer parens)", () => {
+    const r = compileWhere(
+      model(
+        [
+          row({ column: { kind: "named", name: "a" }, op: "=", value: "1" }),
+          row({ column: { kind: "named", name: "b" }, op: "=", value: "2" }),
+          row({ column: { kind: "named", name: "c" }, op: "=", value: "3" }),
+        ],
+        "AND",
+      ),
+    );
+    expect(r.body).toBe(`"a" = '1' AND "b" = '2' AND "c" = '3'`);
+  });
+
+  it("AND-root regression: status=active AND deleted_at IS NULL", () => {
+    const r = compileWhere(
+      model(
+        [
+          row({ column: { kind: "named", name: "status" }, op: "=", value: "active" }),
+          row({ column: { kind: "named", name: "deleted_at" }, op: "IS NULL", value: undefined }),
+        ],
+        "AND",
+      ),
+    );
+    expect(r.body).toBe(`"status" = 'active' AND "deleted_at" IS NULL`);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Flat OR — three rows, no outer parens
+  // ---------------------------------------------------------------------------
+
+  it("flat OR with three rows: p1 OR p2 OR p3 (no outer parens)", () => {
+    const r = compileWhere(
+      model(
+        [
+          row({ column: { kind: "named", name: "country" }, op: "=", value: "CL" }),
+          row({ column: { kind: "named", name: "country" }, op: "=", value: "AR" }),
+          row({ column: { kind: "named", name: "country" }, op: "=", value: "BR" }),
+        ],
+        "OR",
+      ),
+    );
+    expect(r.body).toBe(`"country" = 'CL' OR "country" = 'AR' OR "country" = 'BR'`);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Mixed enabled — only enabled+complete rows appear
+  // ---------------------------------------------------------------------------
+
+  it("disabled rows are excluded", () => {
+    const r = compileWhere(
+      model([
+        row({ column: { kind: "named", name: "a" }, op: "=", value: "1", enabled: true }),
+        row({ column: { kind: "named", name: "b" }, op: "=", value: "2", enabled: false }),
+        row({ column: { kind: "named", name: "c" }, op: "=", value: "3", enabled: true }),
+      ]),
+    );
+    expect(r.body).toBe(`"a" = '1' AND "c" = '3'`);
+  });
+
+  it("incomplete rows (empty value) are excluded", () => {
+    const r = compileWhere(
+      model([
+        row({ column: { kind: "named", name: "a" }, op: "=", value: "1" }),
+        row({ column: { kind: "named", name: "b" }, op: "=", value: "" }),
+      ]),
+    );
+    expect(r.body).toBe(`"a" = '1'`);
+  });
+
+  it("all rows disabled → empty body", () => {
+    const r = compileWhere(
+      model([
+        row({ enabled: false }),
+        row({ enabled: false }),
+      ]),
+    );
+    expect(r.body).toBe("");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Any-column expansion
+  // ---------------------------------------------------------------------------
 
   it("expands Any-column across text-castable columns and skips bytea", () => {
     const columns = cols(
@@ -181,18 +187,9 @@ describe("compileWhere", () => {
       ["notes", "text"],
     );
     const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "any_column" },
-              op: "Contains",
-              value: "argus",
-            },
-          ],
-        },
-      }),
+      model([
+        row({ column: { kind: "any_column" }, op: "Contains", value: "argus" }),
+      ]),
       columns,
     );
     expect(r.body).toBe(
@@ -202,135 +199,18 @@ describe("compileWhere", () => {
 
   it("returns (FALSE) when Any-column has no castable columns", () => {
     const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "any_column" },
-              op: "=",
-              value: "x",
-            },
-          ],
-        },
-      }),
+      model([row({ column: { kind: "any_column" }, op: "=", value: "x" })]),
       cols(["a", "bytea"], ["b", "bytea"]),
     );
     expect(r.body).toBe(`(FALSE)`);
   });
 
-  it("ORs flat root conditions when combinator is OR", () => {
+  it("any_column IS NULL on no-castable-cols → (FALSE)", () => {
     const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "country" },
-              op: "=",
-              value: "CL",
-            },
-            {
-              kind: "condition",
-              column: { kind: "named", name: "country" },
-              op: "=",
-              value: "AR",
-            },
-            {
-              kind: "condition",
-              column: { kind: "named", name: "country" },
-              op: "=",
-              value: "BR",
-            },
-          ],
-          combinator: "OR",
-        },
-      }),
+      model([row({ column: { kind: "any_column" }, op: "IS NULL", value: undefined })]),
+      cols(["a", "bytea"]),
     );
-    expect(r.body).toBe(`"country" = 'CL' OR "country" = 'AR' OR "country" = 'BR'`);
-  });
-
-  it("OR-root with OR-group child: root uses OR, group still parenthesized", () => {
-    const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "a" },
-              op: "=",
-              value: "x",
-            },
-            {
-              kind: "or_group",
-              children: [
-                {
-                  kind: "condition",
-                  column: { kind: "named", name: "b" },
-                  op: "=",
-                  value: "y",
-                },
-                {
-                  kind: "condition",
-                  column: { kind: "named", name: "c" },
-                  op: "=",
-                  value: "z",
-                },
-              ],
-            },
-          ],
-          combinator: "OR",
-        },
-      }),
-    );
-    expect(r.body).toBe(`"a" = 'x' OR ("b" = 'y' OR "c" = 'z')`);
-  });
-
-  it("empty tree emits no WHERE regardless of combinator", () => {
-    const r = compileWhere(
-      structured({
-        tree: { children: [], combinator: "OR" },
-      }),
-    );
-    expect(r.body).toBe("");
-  });
-
-  it("AND-root regression: multiple conditions join with AND", () => {
-    const r = compileWhere(
-      structured({
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "status" },
-              op: "=",
-              value: "active",
-            },
-            {
-              kind: "condition",
-              column: { kind: "named", name: "deleted_at" },
-              op: "IS NULL",
-            },
-          ],
-          combinator: "AND",
-        },
-      }),
-    );
-    expect(r.body).toBe(`"status" = 'active' AND "deleted_at" IS NULL`);
-  });
-
-  it("passes through raw mode verbatim and trims a leading WHERE", () => {
-    const r = compileWhere({
-      mode: "raw",
-      tree: { children: [] },
-      raw: "WHERE created_at > now()",
-    });
-    expect(r).toEqual({ mode: "raw", body: "created_at > now()" });
-  });
-
-  it("returns empty body for raw mode when input is just whitespace", () => {
-    const r = compileWhere({ mode: "raw", tree: { children: [] }, raw: "   " });
-    expect(r.body).toBe("");
+    expect(r.body).toBe(`(FALSE)`);
   });
 });
 
@@ -351,45 +231,23 @@ describe("compilePrefilledSelect", () => {
     expect(sql).toBe(`SELECT * FROM "public"."users"\nLIMIT 200`);
   });
 
-  it("includes WHERE for structured filters", () => {
-    const model: FilterModel = {
-      mode: "structured",
-      tree: {
-        children: [
-          {
-            kind: "condition",
-            column: { kind: "named", name: "country" },
-            op: "=",
-            value: "CL",
-          },
-        ],
-      },
-      raw: "",
-    };
-    const sql = compilePrefilledSelect({ ...baseArgs, model });
+  it("includes WHERE for applied filters", () => {
+    const m = model([
+      row({ column: { kind: "named", name: "country" }, op: "=", value: "CL" }),
+    ]);
+    const sql = compilePrefilledSelect({ ...baseArgs, model: m });
     expect(sql).toBe(
       `SELECT * FROM "public"."users"\nWHERE "country" = 'CL'\nLIMIT 200`,
     );
   });
 
   it("includes WHERE and ORDER BY", () => {
-    const model: FilterModel = {
-      mode: "structured",
-      tree: {
-        children: [
-          {
-            kind: "condition",
-            column: { kind: "named", name: "country" },
-            op: "=",
-            value: "CL",
-          },
-        ],
-      },
-      raw: "",
-    };
+    const m = model([
+      row({ column: { kind: "named", name: "country" }, op: "=", value: "CL" }),
+    ]);
     const sql = compilePrefilledSelect({
       ...baseArgs,
-      model,
+      model: m,
       orderBy: [{ column: "created_at", direction: "desc" }],
     });
     expect(sql).toBe(
@@ -397,15 +255,39 @@ describe("compilePrefilledSelect", () => {
     );
   });
 
-  it("emits raw_where verbatim", () => {
-    const model: FilterModel = {
-      mode: "raw",
-      tree: { children: [] },
-      raw: "created_at > now() - interval '7 days'",
-    };
-    const sql = compilePrefilledSelect({ ...baseArgs, model });
+  it("emits no WHERE when all rows are disabled", () => {
+    const m = model([row({ enabled: false })]);
+    const sql = compilePrefilledSelect({ ...baseArgs, model: m });
+    expect(sql).toBe(`SELECT * FROM "public"."users"\nLIMIT 200`);
+  });
+
+  it("flat AND: WHERE p1 AND p2 AND p3", () => {
+    const m = model(
+      [
+        row({ column: { kind: "named", name: "a" }, op: "=", value: "1" }),
+        row({ column: { kind: "named", name: "b" }, op: "=", value: "2" }),
+        row({ column: { kind: "named", name: "c" }, op: "=", value: "3" }),
+      ],
+      "AND",
+    );
+    const sql = compilePrefilledSelect({ ...baseArgs, model: m });
     expect(sql).toBe(
-      `SELECT * FROM "public"."users"\nWHERE created_at > now() - interval '7 days'\nLIMIT 200`,
+      `SELECT * FROM "public"."users"\nWHERE "a" = '1' AND "b" = '2' AND "c" = '3'\nLIMIT 200`,
+    );
+  });
+
+  it("flat OR: WHERE p1 OR p2 OR p3", () => {
+    const m = model(
+      [
+        row({ column: { kind: "named", name: "x" }, op: "=", value: "1" }),
+        row({ column: { kind: "named", name: "x" }, op: "=", value: "2" }),
+        row({ column: { kind: "named", name: "x" }, op: "=", value: "3" }),
+      ],
+      "OR",
+    );
+    const sql = compilePrefilledSelect({ ...baseArgs, model: m });
+    expect(sql).toBe(
+      `SELECT * FROM "public"."users"\nWHERE "x" = '1' OR "x" = '2' OR "x" = '3'\nLIMIT 200`,
     );
   });
 });

@@ -17,6 +17,8 @@ import { compilePrefilledSelect } from "./filter-bar/compileWhere";
 import { Inspector } from "./Inspector";
 import { useEditBuffer, buildRowKey } from "./useEditBuffer";
 import { useInspectorWidth } from "./useInspectorWidth";
+import { useFilterBarVisible } from "./useFilterBarVisible";
+import { useFilterRootCombinator } from "./useFilterRootCombinator";
 import { usePageSize } from "./usePageSize";
 import { useTableData } from "./useTableData";
 import { useTableFilter } from "./useTableFilter";
@@ -30,11 +32,10 @@ import {
 } from "../structure/SubtabHeader";
 import { useTableStructureCache } from "../structure/useTableStructureCache";
 import {
-  getRootCombinator,
+  isCompleteRow,
   modelToPayload,
   type CellValue,
   type EditValue,
-  type FilterModel,
   type RelationKind,
 } from "./types";
 import type { FilterBarHandle } from "../../shared/filter-bar";
@@ -110,12 +111,26 @@ export function TableViewer({
     setApplied,
     reset: resetFilter,
   } = useTableFilter(connectionId, schema, relation);
+
+  // Persisted filter-bar visibility (hidden by default, per D1).
+  const [filterBarVisible, setFilterBarVisible] = useFilterBarVisible(
+    connectionId,
+    schema,
+    relation,
+  );
+
+  // Persisted root combinator (AND / OR, default AND, per D5).
+  const [filterRootCombinator, setFilterRootCombinator] = useFilterRootCombinator(
+    connectionId,
+    schema,
+    relation,
+  );
+
   const {
     orderBy,
     isLoaded: orderByLoaded,
     setOrderBy,
   } = useTableOrderBy(connectionId, schema, relation);
-  const [rawError, setRawError] = useState<string | null>(null);
   const [selection, setSelection] = useState<{ anchor: number | null; active: number | null }>({
     anchor: null,
     active: null,
@@ -132,6 +147,29 @@ export function TableViewer({
 
   const { getActive } = useActiveConnections();
   const isReadOnly = getActive(connectionId)?.read_only ?? false;
+
+  // Seed draft.combinator from the persisted value once the filter is loaded.
+  // This ensures the bar opens with the last-used combinator even if the
+  // draft was persisted before the combinator setting existed.
+  useEffect(() => {
+    if (!filterLoaded) return;
+    // Only seed if the draft combinator differs from persisted, to avoid
+    // spurious writes when they already agree.
+    if (draft.combinator !== filterRootCombinator) {
+      setDraft({ ...draft, combinator: filterRootCombinator });
+    }
+    // Run only on initial load (filterLoaded transition) and relation change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterLoaded, connectionId, schema, relation]);
+
+  // When draft.combinator changes (e.g. via Apply All chevron menu), persist it.
+  useEffect(() => {
+    if (!filterLoaded) return;
+    if (draft.combinator !== filterRootCombinator) {
+      setFilterRootCombinator(draft.combinator);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.combinator, filterLoaded]);
 
   // PK + enum metadata (one fetch per (conn, schema, relation)).
   const pkLookup = useTablePrimaryKey(connectionId, schema, relation);
@@ -200,20 +238,6 @@ export function TableViewer({
   useEffect(() => {
     setSelection({ anchor: null, active: null });
   }, [pageSize, orderBy, applied, connectionId, schema, relation]);
-
-  // Surface postgres errors from the data hook back into the bar when they
-  // came from a raw applied set — the user expects the error inline near the
-  // editor (not a global toast).
-  useEffect(() => {
-    if (data.status !== "error") {
-      // Clear inline raw error once a fetch succeeds (or moves out of error).
-      if (data.status === "ready") setRawError(null);
-      return;
-    }
-    if (applied.mode === "raw" && data.error?.kind === "Postgres") {
-      setRawError(data.error.postgres?.message ?? data.error.message);
-    }
-  }, [data.status, data.error, applied.mode]);
 
   // Count rows: lazy, on demand. Invalidates whenever filters change.
   const [totalRows, setTotalRows] = useState<number | null>(null);
@@ -323,8 +347,7 @@ export function TableViewer({
     data.status === "idle" ||
     data.status === "loading-first" ||
     data.status === "loading-first-retrying";
-  const showFirstError =
-    data.status === "error" && rawError === null;
+  const showFirstError = data.status === "error";
 
   // Save flow: apply directly (no preview modal). Errors land on a
   // dismissable banner above the grid.
@@ -441,20 +464,38 @@ export function TableViewer({
           }
         }
       }
-      // ⌘F / Ctrl+F → focus the filter bar (Data subtab only).
-      // Skip when focus is inside a CodeMirror surface so its built-in ⌘F
-      // search panel keeps working.
+      // ⌘F / Ctrl+F → D2 state machine (Data subtab only).
+      // hidden + focus outside → show + focus first row.
+      // visible + focus outside → focus first row.
+      // visible + focus inside → hide (preserve draft).
+      // Skip when focus is inside a CodeMirror surface so its ⌘F search opens.
       if ((e.metaKey || e.ctrlKey) && e.key === "f" && !e.shiftKey && !e.altKey) {
         const focused = document.activeElement as HTMLElement | null;
         if (focused?.closest(".cm-editor")) return;
         if (activeSubtab !== "data") return;
         e.preventDefault();
-        filterBarRef.current?.focus();
+        // Detect focus-inside-bar by checking if the active element is inside
+        // the element with data-filter-bar-root (the FilterBar's root wrapper).
+        const barRootEl = root.querySelector("[data-filter-bar-root]") as HTMLElement | null;
+        const focusInsideBar = barRootEl
+          ? barRootEl.contains(document.activeElement)
+          : false;
+        if (!filterBarVisible) {
+          // hidden → show + focus
+          setFilterBarVisible(true);
+          requestAnimationFrame(() => filterBarRef.current?.focus());
+        } else if (focusInsideBar) {
+          // visible + focused inside → hide
+          setFilterBarVisible(false);
+        } else {
+          // visible + focus outside → focus first row
+          filterBarRef.current?.focus();
+        }
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, onSave, buffer, activeSubtab]);
+  }, [active, onSave, buffer, activeSubtab, filterBarVisible, setFilterBarVisible]);
 
   function onAddRow() {
     if (isReadOnly) return;
@@ -465,26 +506,18 @@ export function TableViewer({
   }
 
   const onApplyFilters = useCallback(() => {
-    setRawError(null);
-    setApplied(draft);
+    // Apply All: only enabled+complete rows.
+    const enabledRows = draft.rows.filter((r) => r.enabled && isCompleteRow(r));
+    setApplied({ rows: enabledRows, combinator: draft.combinator });
   }, [draft, setApplied]);
 
   const onApplyOnlyRow = useCallback((index: number) => {
-    const child = draft.tree.children[index];
-    if (!child) return;
-    setRawError(null);
-    const single: FilterModel = {
-      ...draft,
-      tree: {
-        children: [child],
-        combinator: getRootCombinator(draft.tree),
-      },
-    };
-    setApplied(single);
+    const row = draft.rows[index];
+    if (!row) return;
+    setApplied({ rows: [row], combinator: draft.combinator });
   }, [draft, setApplied]);
 
   const onResetFilters = useCallback(() => {
-    setRawError(null);
     resetFilter();
   }, [resetFilter]);
 
@@ -514,16 +547,17 @@ export function TableViewer({
     connectionName,
   ]);
 
-  const filterCount = useMemo(() => {
-    if (applied.mode === "raw") {
-      return applied.raw.trim().length > 0 ? 1 : 0;
-    }
-    return applied.tree.children.length;
-  }, [applied]);
+  // Number of applied filter rows (used by BottomBar filter badge).
+  const filterCount = useMemo(() => applied.rows.length, [applied]);
 
   return (
     <div className={styles.root} ref={rootRef} tabIndex={-1}>
-      <SubtabHeader active={activeSubtab} onChange={setActiveSubtab} />
+      <SubtabHeader
+        active={activeSubtab}
+        onChange={setActiveSubtab}
+        filterBarVisible={filterBarVisible}
+        onFilterToggle={() => setFilterBarVisible(!filterBarVisible)}
+      />
       {/* Data subtab: kept mounted so scroll/buffer/grid state survive subtab
           switches; visually hidden when inactive. Structure / Raw mount on
           first activation and unmount when switched away from (their state
@@ -558,18 +592,19 @@ export function TableViewer({
             </button>
           </div>
         )}
-        <FilterBar
-          ref={filterBarRef}
-          draft={draft}
-          applied={applied}
-          columns={data.columns}
-          rawError={rawError}
-          onDraftChange={setDraft}
-          onApply={onApplyFilters}
-          onReset={onResetFilters}
-          onOpenInSqlEditor={onOpenInSqlEditor}
-          onApplyOnlyRow={onApplyOnlyRow}
-        />
+        {filterBarVisible && (
+          <FilterBar
+            ref={filterBarRef}
+            draft={draft}
+            applied={applied}
+            columns={data.columns}
+            onDraftChange={setDraft}
+            onApplyAll={onApplyFilters}
+            onApplyOnlyRow={onApplyOnlyRow}
+            onSqlClick={onOpenInSqlEditor}
+            onClose={() => setFilterBarVisible(false)}
+          />
+        )}
         <div className={styles.body}>
           <div className={styles.gridArea}>
             {isFirstLoad ? (

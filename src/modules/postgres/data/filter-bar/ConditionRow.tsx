@@ -1,22 +1,29 @@
-import { AlertTriangle, X } from "lucide-react";
+import { Minus, Plus } from "lucide-react";
 import { ColumnPicker } from "./ColumnPicker";
 import { OperatorPicker } from "./OperatorPicker";
 import { ValueInput } from "./ValueInput";
 import { operatorsForColumn } from "./operatorRules";
 import { coerceValueForOperator } from "./treeMutations";
 import { RowApplyButton } from "../../../shared/filter-bar";
-import type { ColumnRef, Condition, DataColumn, Operator } from "../types";
+import type { ColumnRef, DataColumn, FilterRow, Operator } from "../types";
 import styles from "./FilterBar.module.css";
 
-interface Props {
-  condition: Condition;
+export interface ConditionRowProps {
+  row: FilterRow;
+  index: number;
+  totalRows: number;
+  /** True when the row's (column, op, value) triple exists in applied.rows. */
+  isApplied: boolean;
   columns: DataColumn[];
-  onChange(next: Condition): void;
-  onRemove(): void;
-  /** Called when the user clicks the per-row Apply button. */
-  onApplyOnly?: () => void;
-  /** When true, marks the column picker as the keyboard focus target (⌘F). */
+  /** First row gets data-filter-focus-target='true'. */
   isFocusTarget?: boolean;
+  onChange(next: FilterRow): void;
+  onSetEnabled(next: boolean): void;
+  onApplyOnly(): void;
+  /** + button: insert a new empty row below this index. */
+  onInsertBelow(): void;
+  /** − button: remove this row (or clear if last). */
+  onRemove(): void;
 }
 
 function namedColumnMeta(
@@ -30,9 +37,20 @@ function namedColumnMeta(
     : { dataType: null, isNullable: true };
 }
 
-export function ConditionRow({ condition, columns, onChange, onRemove, onApplyOnly, isFocusTarget }: Props) {
-  const meta = namedColumnMeta(condition.column, columns);
-  const ops = operatorsForColumn(condition.column, meta.dataType, meta.isNullable);
+export function ConditionRow({
+  row,
+  index,
+  isApplied,
+  columns,
+  isFocusTarget,
+  onChange,
+  onSetEnabled,
+  onApplyOnly,
+  onInsertBelow,
+  onRemove,
+}: ConditionRowProps) {
+  const meta = namedColumnMeta(row.column, columns);
+  const ops = operatorsForColumn(row.column, meta.dataType, meta.isNullable);
 
   function onColumnChange(next: ColumnRef) {
     const nextOps = operatorsForColumn(
@@ -44,65 +62,95 @@ export function ConditionRow({ condition, columns, onChange, onRemove, onApplyOn
         ? columns.find((c) => c.name === next.name)?.is_nullable ?? true
         : true,
     );
-    // Keep the operator if it's still valid; otherwise fall back to the
-    // first option (typically "=").
-    const nextOp: Operator = nextOps.includes(condition.op) ? condition.op : nextOps[0]!;
-    const nextValue = coerceValueForOperator(condition.value, nextOp);
-    onChange({ column: next, op: nextOp, value: nextValue });
+    const nextOp: Operator = nextOps.includes(row.op) ? row.op : nextOps[0]!;
+    const nextValue = coerceValueForOperator(row.value, nextOp);
+    onChange({ ...row, column: next, op: nextOp, value: nextValue });
   }
 
   function onOpChange(next: Operator) {
-    const nextValue = coerceValueForOperator(condition.value, next);
-    onChange({ ...condition, op: next, value: nextValue });
+    const nextValue = coerceValueForOperator(row.value, next);
+    onChange({ ...row, op: next, value: nextValue });
   }
 
   return (
-    <span className={styles.row}>
-      {/* data-filter-focus-target on the column picker's container span.
-          The ColumnPicker's trigger button will be focused via the container's
-          data attribute and the query in FilterBar.focus(). */}
+    <div
+      className={[styles.conditionRow, !row.enabled ? styles.conditionRowDisabled : ""].filter(Boolean).join(" ")}
+      data-filter-row-index={index}
+    >
+      {/* Checkbox: gates inclusion in Apply All */}
+      <input
+        type="checkbox"
+        className={styles.rowCheckbox}
+        checked={row.enabled}
+        aria-label="Include in Apply All"
+        data-filter-control="checkbox"
+        onChange={(e) => onSetEnabled(e.target.checked)}
+      />
+
+      {/* Column picker */}
       <span
         data-filter-focus-target={isFocusTarget ? "true" : undefined}
         style={{ display: "contents" }}
       >
-        <ColumnPicker
-          value={condition.column}
+        <span data-filter-control="column" style={{ display: "contents" }}>
+          <ColumnPicker
+            value={row.column}
+            columns={columns}
+            onChange={onColumnChange}
+          />
+        </span>
+      </span>
+
+      {/* Operator picker */}
+      <span data-filter-control="op" style={{ display: "contents" }}>
+        <OperatorPicker value={row.op} options={ops} onChange={onOpChange} />
+      </span>
+
+      {/* Value input wrapper — green tint when applied */}
+      <span
+        className={[styles.valueInputWrapper, isApplied ? styles.appliedTint : ""].filter(Boolean).join(" ")}
+        data-filter-control="value"
+      >
+        <ValueInput
+          column={row.column}
           columns={columns}
-          onChange={onColumnChange}
+          op={row.op}
+          value={row.value}
+          onChange={(v) => onChange({ ...row, value: v })}
         />
       </span>
-      {condition.column.kind === "any_column" && (
-        <span
-          className={styles.warnIcon}
-          title="Searches every text-castable column — slow on large tables."
-          aria-label="Any column performance warning"
-        >
-          <AlertTriangle size={12} />
-        </span>
-      )}
-      <OperatorPicker value={condition.op} options={ops} onChange={onOpChange} />
-      <ValueInput
-        column={condition.column}
-        columns={columns}
-        op={condition.op}
-        value={condition.value}
-        onChange={(v) => onChange({ ...condition, value: v })}
+
+      {/* Spacer pushes action buttons to the right */}
+      <span className={styles.conditionRowSpacer} />
+
+      {/* Per-row Apply / Applied button */}
+      <RowApplyButton
+        onClick={onApplyOnly}
+        applied={isApplied}
+        data-filter-control="apply"
       />
-      {onApplyOnly && (
-        <RowApplyButton
-          onClick={onApplyOnly}
-          aria-label="Apply only this row"
-          title="Apply only this row (replaces active filter)"
-        />
-      )}
+
+      {/* − remove button */}
       <button
         type="button"
-        className={styles.removeBtn}
-        aria-label="Remove condition"
+        className={styles.iconBtn}
+        aria-label="Remove row"
+        data-filter-control="remove"
         onClick={onRemove}
       >
-        <X size={11} />
+        <Minus size={11} />
       </button>
-    </span>
+
+      {/* + insert below button */}
+      <button
+        type="button"
+        className={styles.iconBtn}
+        aria-label="Insert row below"
+        data-filter-control="insert"
+        onClick={onInsertBelow}
+      >
+        <Plus size={11} />
+      </button>
+    </div>
   );
 }

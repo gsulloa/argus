@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useSetting } from "@/platform/settings/useSetting";
 import { EMPTY_FILTER_MODEL, type FilterModel } from "./types";
+import { migrateLegacyFilterModel } from "./filter-bar/migrateLegacyFilterModel";
 
 export interface PersistedFilter {
   draft: FilterModel;
@@ -13,25 +14,22 @@ const DEFAULT: PersistedFilter = {
 }
 
 /**
- * Normalize a `PersistedFilter` read from storage. Coerces a missing
- * `combinator` field on each tree to `"AND"` for backward compatibility
- * with records written before this field existed.
+ * Normalize a `PersistedFilter` read from storage. Pipes each half through
+ * `migrateLegacyFilterModel` to handle legacy shapes (mode/tree/raw,
+ * or_group children) gracefully — they reset to EMPTY_FILTER_MODEL.
  *
  * Exported for unit testing only; prefer `useTableFilter` in production code.
  */
-export function normalizePersistedFilter(value: PersistedFilter): PersistedFilter {
-  const normTree = (model: FilterModel): FilterModel => ({
-    ...model,
-    tree: {
-      ...model.tree,
-      combinator: model.tree.combinator ?? "AND",
-    },
-  });
+export function normalizePersistedFilter(raw: unknown): PersistedFilter {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return DEFAULT;
+  }
+  const obj = raw as Record<string, unknown>;
   return {
-    draft: normTree(value.draft),
-    applied: normTree(value.applied),
+    draft: migrateLegacyFilterModel(obj["draft"]),
+    applied: migrateLegacyFilterModel(obj["applied"]),
   };
-};
+}
 
 function settingsKey(connectionId: string, schema: string, relation: string): string {
   return `pgTableFilter:${connectionId}:${schema}:${relation}`;
@@ -61,28 +59,36 @@ export function useTableFilter(
   schema: string,
   relation: string,
 ): UseTableFilterResult {
-  const [raw, set, isLoaded] = useSetting<PersistedFilter>(
+  // Use `unknown` generic so the raw value from disk flows through migration
+  // without a premature cast. At runtime the JSON may be a legacy shape.
+  const [raw, set, isLoaded] = useSetting<unknown>(
     settingsKey(connectionId, schema, relation),
     DEFAULT,
   );
 
-  // Normalize on every read: coerce missing `combinator` to "AND" so that
-  // records persisted before this field existed behave correctly. Memoize on
-  // `raw` so `draft` / `applied` keep stable references across renders —
-  // consumers' useEffects depend on these and would otherwise refire every
-  // render, clearing row selection and refetching counts spuriously.
+  // Normalize on every read — migrates legacy shapes (mode/tree/raw) to empty
+  // and coerces any missing fields. Memoize on `raw` so `draft` / `applied`
+  // keep stable references across renders — consumers' useEffects depend on
+  // these and would otherwise refire every render, clearing row selection and
+  // refetching counts spuriously.
   const value = useMemo(() => normalizePersistedFilter(raw), [raw]);
 
   const setDraft = useCallback(
     (next: FilterModel) => {
-      set((prev) => ({ ...prev, draft: next }));
+      set((prev: unknown) => {
+        const p = normalizePersistedFilter(prev);
+        return { ...p, draft: next };
+      });
     },
     [set],
   );
 
   const setApplied = useCallback(
     (next: FilterModel) => {
-      set((prev) => ({ ...prev, applied: next }));
+      set((prev: unknown) => {
+        const p = normalizePersistedFilter(prev);
+        return { ...p, applied: next };
+      });
     },
     [set],
   );

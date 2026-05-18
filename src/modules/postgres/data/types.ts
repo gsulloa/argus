@@ -66,53 +66,60 @@ export interface Condition {
 }
 
 /**
- * One node of the filter tree. Internally tagged with `kind`. The wire
- * shape mirrors the Rust `FilterNode` enum — `or_group` carries
- * `FilterNode[]` so the JSON shape is uniform; the backend rejects nested
- * `or_group` at validation time and the UI doesn't allow it.
+ * A single row in the flat filter list. `enabled` gates inclusion in Apply All
+ * but does NOT affect per-row Apply.
  */
-export type FilterNode =
-  | ({ kind: "condition" } & Condition)
-  | { kind: "or_group"; children: FilterNode[] };
-
-export interface FilterTree {
-  children: FilterNode[];
-  combinator?: "AND" | "OR";
+export interface FilterRow {
+  enabled: boolean;
+  column: ColumnRef;
+  op: Operator;
+  value?: FilterValue;
 }
-
-export type FilterMode = "structured" | "raw";
 
 /**
- * UI-level filter state. Carries both modes simultaneously so the user can
- * toggle between Structured and Raw without losing draft state. When
- * dispatching to the backend, exactly one of `filter_tree` / `raw_where`
- * is emitted based on `mode` (and `raw` is sent only if non-empty after
- * trimming a leading `WHERE`).
+ * Flat filter tree — a list of condition rows joined by one root combinator.
+ * Nesting (or_group) is not expressible in this model; the backend still
+ * accepts or_group for backward-compat but the frontend never emits it.
  */
-export interface FilterModel {
-  mode: FilterMode;
-  tree: FilterTree;
-  raw: string;
+export interface FilterTree {
+  rows: FilterRow[];
+  combinator: "AND" | "OR";
 }
 
-export const EMPTY_FILTER_TREE: FilterTree = { children: [], combinator: "AND" };
+export type FilterModel = FilterTree;
 
-export const EMPTY_FILTER_MODEL: FilterModel = {
-  mode: "structured",
-  tree: EMPTY_FILTER_TREE,
-  raw: "",
+/**
+ * Wire-level condition node — mirrors the Rust `FilterNode::Condition` variant.
+ * Used only for serializing the payload in `modelToPayload`.
+ */
+export interface WireCondition {
+  kind: "condition";
+  column: ColumnRef;
+  op: Operator;
+  value?: FilterValue;
+}
+
+export const EMPTY_FILTER_ROW: FilterRow = {
+  enabled: true,
+  column: { kind: "any_column" },
+  op: "Contains",
+  value: "",
 };
+
+export const EMPTY_FILTER_TREE: FilterTree = { rows: [], combinator: "AND" };
+
+export const EMPTY_FILTER_MODEL: FilterModel = EMPTY_FILTER_TREE;
 
 export interface QueryTableOptions {
   limit: number;
   offset: number;
   order_by?: OrderBy[];
-  filter_tree?: FilterTree;
+  filter_tree?: { children: WireCondition[]; combinator: "AND" | "OR" };
   raw_where?: string;
 }
 
 export interface CountTableOptions {
-  filter_tree?: FilterTree;
+  filter_tree?: { children: WireCondition[]; combinator: "AND" | "OR" };
   raw_where?: string;
 }
 
@@ -146,7 +153,7 @@ export interface QueryTableResult {
     limit: number;
     offset: number;
     order_by: OrderBy[];
-    filter_tree: FilterTree | null;
+    filter_tree: { children: WireCondition[]; combinator: "AND" | "OR" } | null;
     raw_where: string | null;
   };
   query_ms: number;
@@ -220,39 +227,96 @@ export type ApplyEditsOutcome =
 // --------------------------------------------------------------------------
 
 /**
- * Returns the root combinator for the tree, treating `undefined` as `"AND"`
- * for backward compatibility with persisted trees that pre-date this field.
- */
-export function getRootCombinator(tree: FilterTree): "AND" | "OR" {
-  return tree.combinator ?? "AND";
-}
-
-// --------------------------------------------------------------------------
-// FilterModel helpers
-// --------------------------------------------------------------------------
-
-/**
  * Project a UI-level `FilterModel` to the wire payload accepted by
- * `postgres_query_table` / `postgres_count_table`. Exactly one of
- * `filter_tree` / `raw_where` is emitted (both undefined means "no WHERE").
+ * `postgres_query_table` / `postgres_count_table`. Emits `filter_tree` with
+ * `children` as condition nodes (backend wire shape). `enabled` is a
+ * client-only flag and is NOT sent on the wire.
  */
 export function modelToPayload(model: FilterModel): {
-  filter_tree?: FilterTree;
-  raw_where?: string;
+  filter_tree?: { children: WireCondition[]; combinator: "AND" | "OR" };
 } {
-  if (model.mode === "raw") {
-    const trimmed = trimLeadingWhere(model.raw);
-    if (trimmed.length === 0) return {};
-    return { raw_where: trimmed };
-  }
-  if (model.tree.children.length === 0) return {};
-  return { filter_tree: model.tree };
+  const enabled = model.rows.filter((r) => r.enabled && isCompleteRow(r));
+  if (enabled.length === 0) return {};
+  return {
+    filter_tree: {
+      children: enabled.map((r) => ({
+        kind: "condition",
+        column: r.column,
+        op: r.op,
+        value: r.value,
+      })),
+      combinator: model.combinator,
+    },
+  };
 }
+
+/**
+ * A row is "complete" when it has enough data to emit a valid predicate.
+ * IS NULL / IS NOT NULL only need a column; In/NotIn need a non-empty array;
+ * BETWEEN needs {min, max} both non-empty; everything else needs a non-empty
+ * scalar value. Column is always required.
+ */
+export function isCompleteRow(row: FilterRow): boolean {
+  const { column, op, value } = row;
+  if (!column) return false;
+  if (column.kind === "named" && !column.name) return false;
+
+  if (op === "IS NULL" || op === "IS NOT NULL") return true;
+
+  if (op === "In" || op === "NotIn") {
+    if (!Array.isArray(value) || value.length === 0) return false;
+    return value.every((v) => v !== "" && v !== null && v !== undefined);
+  }
+
+  if (op === "BETWEEN") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    return (
+      value.min !== "" &&
+      value.min !== null &&
+      value.min !== undefined &&
+      value.max !== "" &&
+      value.max !== null &&
+      value.max !== undefined
+    );
+  }
+
+  if (value === "" || value === null || value === undefined) return false;
+  return true;
+}
+
+/**
+ * Structural equality for two filter rows, IGNORING the `enabled` flag.
+ * Used for per-row "Applied" badge detection.
+ */
+export function filterRowEquals(a: FilterRow, b: FilterRow): boolean {
+  if (a.op !== b.op) return false;
+  if (!columnRefEquals(a.column, b.column)) return false;
+  return filterValueEquals(a.value, b.value);
+}
+
+/**
+ * Structural equality for two filter rows INCLUDING the `enabled` flag.
+ * Used by the dirty indicator.
+ */
+export function filterRowEqualsWithEnabled(a: FilterRow, b: FilterRow): boolean {
+  if (a.enabled !== b.enabled) return false;
+  return filterRowEquals(a, b);
+}
+
+export function filterTreeEquals(a: FilterTree, b: FilterTree): boolean {
+  if (a.combinator !== b.combinator) return false;
+  if (a.rows.length !== b.rows.length) return false;
+  for (let i = 0; i < a.rows.length; i++) {
+    if (!filterRowEqualsWithEnabled(a.rows[i]!, b.rows[i]!)) return false;
+  }
+  return true;
+}
+
+export const filterModelEquals = filterTreeEquals;
 
 /**
  * Strip a single leading `WHERE ` (case-insensitive) from a raw body, plus
- * surrounding whitespace. Mirrors the backend's tolerant trimming so the
- * user can keep or drop the keyword without surprises.
+ * surrounding whitespace. Used by `compilePrefilledSelect` / `compileWhere`.
  */
 export function trimLeadingWhere(raw: string): string {
   const trimmed = raw.trim();
@@ -260,43 +324,6 @@ export function trimLeadingWhere(raw: string): string {
   const m = trimmed.match(/^where\s+/i);
   if (m) return trimmed.slice(m[0].length).trim();
   return trimmed;
-}
-
-/** Structural equality for FilterModel — used by the dirty indicator. */
-export function filterModelEquals(a: FilterModel, b: FilterModel): boolean {
-  if (a.mode !== b.mode) return false;
-  if (a.raw !== b.raw) return false;
-  return filterTreeEquals(a.tree, b.tree);
-}
-
-export function filterTreeEquals(a: FilterTree, b: FilterTree): boolean {
-  if (getRootCombinator(a) !== getRootCombinator(b)) return false;
-  if (a.children.length !== b.children.length) return false;
-  for (let i = 0; i < a.children.length; i++) {
-    if (!filterNodeEquals(a.children[i]!, b.children[i]!)) return false;
-  }
-  return true;
-}
-
-function filterNodeEquals(a: FilterNode, b: FilterNode): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.kind === "condition" && b.kind === "condition") {
-    return conditionEquals(a, b);
-  }
-  if (a.kind === "or_group" && b.kind === "or_group") {
-    if (a.children.length !== b.children.length) return false;
-    for (let i = 0; i < a.children.length; i++) {
-      if (!filterNodeEquals(a.children[i]!, b.children[i]!)) return false;
-    }
-    return true;
-  }
-  return false;
-}
-
-function conditionEquals(a: Condition, b: Condition): boolean {
-  if (a.op !== b.op) return false;
-  if (!columnRefEquals(a.column, b.column)) return false;
-  return filterValueEquals(a.value, b.value);
 }
 
 function columnRefEquals(a: ColumnRef, b: ColumnRef): boolean {

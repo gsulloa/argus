@@ -1,10 +1,11 @@
-import { act, createRef } from "react";
+import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+// waitFor is used in the "No filters enabled" transient status test
 import { FilterBar } from "./FilterBar";
 import {
   EMPTY_FILTER_MODEL,
-  modelToPayload,
+  EMPTY_FILTER_ROW,
   type DataColumn,
   type FilterModel,
 } from "../types";
@@ -21,602 +22,429 @@ function makeProps(overrides: Partial<React.ComponentProps<typeof FilterBar>> = 
     draft: EMPTY_FILTER_MODEL,
     applied: EMPTY_FILTER_MODEL,
     columns: cols,
-    rawError: null,
     onDraftChange: vi.fn(),
-    onApply: vi.fn(),
-    onReset: vi.fn(),
-    onOpenInSqlEditor: vi.fn(),
+    onApplyAll: vi.fn(),
+    onApplyOnlyRow: vi.fn(),
+    onSqlClick: vi.fn(),
+    onClose: vi.fn(),
     ...overrides,
   };
 }
 
-describe("FilterBar", () => {
-  it("hides the dirty dot when draft equals applied and shows it when they differ", () => {
-    const sameModel = EMPTY_FILTER_MODEL;
-    const { rerender, container } = render(
-      <FilterBar {...makeProps({ draft: sameModel, applied: sameModel })} />,
-    );
-    expect(container.querySelector('[aria-label="Apply"]')).toBeInTheDocument();
-    expect(container.querySelector('[aria-label="Apply (unsaved changes)"]')).toBeNull();
-
-    const dirty: FilterModel = {
-      mode: "structured",
-      tree: {
-        children: [
-          {
-            kind: "condition",
-            column: { kind: "named", name: "country" },
-            op: "=",
-            value: "CL",
-          },
-        ],
-      },
-      raw: "",
-    };
-    rerender(
-      <FilterBar {...makeProps({ draft: dirty, applied: EMPTY_FILTER_MODEL })} />,
-    );
-    expect(
-      container.querySelector('[aria-label="Apply (unsaved changes)"]'),
-    ).toBeInTheDocument();
-  });
-
-  it("calls onApply when the Apply button is clicked", () => {
-    const onApply = vi.fn();
-    render(<FilterBar {...makeProps({ onApply })} />);
-    fireEvent.click(screen.getByRole("button", { name: /^Apply/ }));
-    expect(onApply).toHaveBeenCalledTimes(1);
-  });
-
-  it("calls onApply on Cmd+Enter inside the bar", () => {
-    const onApply = vi.fn();
-    const { container } = render(<FilterBar {...makeProps({ onApply })} />);
-    const apply = screen.getByRole("button", { name: /^Apply/ });
-    apply.focus();
-    const root = container.firstChild as HTMLElement;
-    fireEvent.keyDown(root, { key: "Enter", metaKey: true });
-    expect(onApply).toHaveBeenCalledTimes(1);
-  });
-
-  it("discards draft to applied on Esc when dirty", () => {
-    const onDraftChange = vi.fn();
-    const dirty: FilterModel = {
-      mode: "structured",
-      tree: {
-        children: [
-          {
-            kind: "condition",
-            column: { kind: "named", name: "country" },
-            op: "=",
-            value: "CL",
-          },
-        ],
-      },
-      raw: "",
-    };
-    const { container } = render(
-      <FilterBar
-        {...makeProps({
-          draft: dirty,
-          applied: EMPTY_FILTER_MODEL,
-          onDraftChange,
-        })}
-      />,
-    );
-    const apply = screen.getByRole("button", { name: /^Apply/ });
-    apply.focus();
-    fireEvent.keyDown(container.firstChild as HTMLElement, { key: "Escape" });
-    expect(onDraftChange).toHaveBeenCalledWith(EMPTY_FILTER_MODEL);
-  });
-
-  it("calls onReset when Reset is clicked", () => {
-    const onReset = vi.fn();
-    render(<FilterBar {...makeProps({ onReset })} />);
-    fireEvent.click(screen.getByRole("button", { name: /^Reset$/ }));
-    expect(onReset).toHaveBeenCalledTimes(1);
-  });
-
-  it("calls onOpenInSqlEditor when the corresponding button is clicked", () => {
-    const onOpenInSqlEditor = vi.fn();
-    render(<FilterBar {...makeProps({ onOpenInSqlEditor })} />);
-    fireEvent.click(screen.getByRole("button", { name: /Open in SQL Editor/ }));
-    expect(onOpenInSqlEditor).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("FilterBar — structured mode", () => {
-  it("adds a root AND row when '+ AND row' is clicked", () => {
-    const onDraftChange = vi.fn();
-    render(<FilterBar {...makeProps({ onDraftChange })} />);
-    fireEvent.click(screen.getByRole("button", { name: /AND row/ }));
-    expect(onDraftChange).toHaveBeenCalled();
-    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
-    expect(next.tree.children).toHaveLength(1);
-    expect(next.tree.children[0]).toMatchObject({
-      kind: "condition",
-      column: { kind: "any_column" },
-      op: "=",
-    });
-  });
-
-  it("adds an OR group with one seed condition when '+ OR group' is clicked", () => {
-    const onDraftChange = vi.fn();
-    render(<FilterBar {...makeProps({ onDraftChange })} />);
-    fireEvent.click(screen.getByRole("button", { name: /OR group/ }));
-    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
-    expect(next.tree.children).toHaveLength(1);
-    expect(next.tree.children[0]).toMatchObject({
-      kind: "or_group",
-      children: [{ kind: "condition" }],
-    });
-  });
-
-  it("does not expose a way to nest groups inside groups", () => {
-    const draft: FilterModel = {
-      mode: "structured",
-      tree: {
-        children: [
-          {
-            kind: "or_group",
-            children: [
-              {
-                kind: "condition",
-                column: { kind: "named", name: "country" },
-                op: "=",
-                value: "CL",
-              },
-            ],
-          },
-        ],
-      },
-      raw: "",
-    };
-    render(<FilterBar {...makeProps({ draft })} />);
-    // The only "OR" affordance inside the group is "+ OR row" (adds a leaf),
-    // not a group-nesting button.
-    const orRowButtons = screen.queryAllByRole("button", { name: /Add OR row/ });
-    expect(orRowButtons).toHaveLength(1);
-    // The root-level `+ OR group` is the *only* button that can introduce a
-    // group; the OR group itself exposes only `+ OR row` (leaf) and a
-    // remove-group ×.
-    const addGroupButtons = screen.queryAllByRole("button", {
-      name: /^OR group$/i,
-    });
-    expect(addGroupButtons.filter((b) => b.textContent?.includes("OR group"))).toHaveLength(1);
-  });
-
-  it("collapses an OR group when its last condition is removed", () => {
-    const onDraftChange = vi.fn();
-    const draft: FilterModel = {
-      mode: "structured",
-      tree: {
-        children: [
-          {
-            kind: "or_group",
-            children: [
-              {
-                kind: "condition",
-                column: { kind: "named", name: "country" },
-                op: "=",
-                value: "CL",
-              },
-            ],
-          },
-        ],
-      },
-      raw: "",
-    };
-    render(
-      <FilterBar
-        {...makeProps({ draft, applied: EMPTY_FILTER_MODEL, onDraftChange })}
-      />,
-    );
-    // Two remove buttons exist for the group: condition row × and group ×.
-    // Click the condition's remove (lower) to drain the group.
-    const removeBtns = screen.getAllByRole("button", { name: /Remove condition/ });
-    fireEvent.click(removeBtns[0]!);
-    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
-    expect(next.tree.children).toHaveLength(0);
-  });
-
-  it("renders the Any-column performance warning", () => {
-    const draft: FilterModel = {
-      mode: "structured",
-      tree: {
-        children: [
-          {
-            kind: "condition",
-            column: { kind: "any_column" },
-            op: "Contains",
-            value: "x",
-          },
-        ],
-      },
-      raw: "",
-    };
-    render(<FilterBar {...makeProps({ draft })} />);
-    expect(
-      screen.getByLabelText("Any column performance warning"),
-    ).toBeInTheDocument();
-  });
-});
-
-describe("FilterBar — Raw → Structured confirm", () => {
-  it("shows confirm dialog and Cancel keeps the raw body", () => {
-    const onDraftChange = vi.fn();
-    const draft: FilterModel = {
-      mode: "raw",
-      tree: { children: [] },
-      raw: "created_at > now()",
-    };
-    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
-    fireEvent.click(screen.getByRole("tab", { name: "Structured" }));
-    const dialog = screen.getByRole("alertdialog");
-    expect(within(dialog).getByText(/Switch to structured\?/)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(onDraftChange).not.toHaveBeenCalled();
-  });
-
-  it("on Switch, resets both the structured tree and the raw body", () => {
-    const onDraftChange = vi.fn();
-    const draft: FilterModel = {
-      mode: "raw",
-      tree: {
-        children: [
-          {
-            kind: "condition",
-            column: { kind: "named", name: "id" },
-            op: "=",
-            value: 1,
-          },
-        ],
-      },
-      raw: "created_at > now()",
-    };
-    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
-    fireEvent.click(screen.getByRole("tab", { name: "Structured" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
-    expect(onDraftChange).toHaveBeenCalledWith({
-      mode: "structured",
-      tree: { children: [], combinator: "AND" },
-      raw: "",
-    });
-  });
-});
-
-describe("modelToPayload — wire shape", () => {
-  it("emits empty object for the empty model", () => {
-    expect(modelToPayload(EMPTY_FILTER_MODEL)).toEqual({});
-  });
-
-  it("emits filter_tree for structured drafts", () => {
-    const model: FilterModel = {
-      mode: "structured",
-      tree: {
-        children: [
-          {
-            kind: "condition",
-            column: { kind: "named", name: "country" },
-            op: "=",
-            value: "CL",
-          },
-        ],
-      },
-      raw: "",
-    };
-    expect(modelToPayload(model)).toEqual({
-      filter_tree: {
-        children: [
-          {
-            kind: "condition",
-            column: { kind: "named", name: "country" },
-            op: "=",
-            value: "CL",
-          },
-        ],
-      },
-    });
-  });
-
-  it("emits raw_where with leading WHERE trimmed", () => {
-    const model: FilterModel = {
-      mode: "raw",
-      tree: { children: [] },
-      raw: "WHERE created_at > now()",
-    };
-    expect(modelToPayload(model)).toEqual({
-      raw_where: "created_at > now()",
-    });
-  });
-
-  it("emits empty object when raw is whitespace-only", () => {
-    const model: FilterModel = {
-      mode: "raw",
-      tree: { children: [] },
-      raw: "   ",
-    };
-    expect(modelToPayload(model)).toEqual({});
-  });
-
-  it("serializes an OR group node uniformly under the same kind union", () => {
-    const model: FilterModel = {
-      mode: "structured",
-      tree: {
-        children: [
-          {
-            kind: "or_group",
-            children: [
-              {
-                kind: "condition",
-                column: { kind: "any_column" },
-                op: "Contains",
-                value: "x",
-              },
-            ],
-          },
-        ],
-      },
-      raw: "",
-    };
-    expect(JSON.parse(JSON.stringify(modelToPayload(model)))).toEqual({
-      filter_tree: {
-        children: [
-          {
-            kind: "or_group",
-            children: [
-              {
-                kind: "condition",
-                column: { kind: "any_column" },
-                op: "Contains",
-                value: "x",
-              },
-            ],
-          },
-        ],
-      },
-    });
-  });
-});
-
-// ─── Section 5.7 — new tests ──────────────────────────────────────────────────
-
-describe("FilterBar — root combinator toggle", () => {
-  const draftWithRow: FilterModel = {
-    mode: "structured",
-    tree: {
-      combinator: "AND",
-      children: [
-        {
-          kind: "condition",
-          column: { kind: "named", name: "country" },
-          op: "=",
-          value: "CL",
-        },
-        {
-          kind: "condition",
-          column: { kind: "named", name: "status" },
-          op: "=",
-          value: "ok",
-        },
-      ],
-    },
-    raw: "",
+function modelWithRows(count: number): FilterModel {
+  return {
+    rows: Array.from({ length: count }, () => ({ ...EMPTY_FILTER_ROW })),
+    combinator: "AND",
   };
+}
 
-  it("is hidden when the tree has no children", () => {
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — rendering", () => {
+  it("renders one default row when draft has zero rows (EMPTY_FILTER_MODEL)", () => {
     render(<FilterBar {...makeProps()} />);
-    // The root combinator toggle should not be rendered for an empty tree.
-    expect(screen.queryByRole("radiogroup", { name: /Root combinator/i })).toBeNull();
+    // At least one condition row must be rendered (defensive fallback).
+    expect(screen.getAllByRole("checkbox", { name: /Include in Apply All/i })).toHaveLength(1);
   });
 
-  it("is visible when there is at least one row", () => {
-    const draft: FilterModel = {
-      mode: "structured",
-      tree: {
-        combinator: "AND",
-        children: [
-          {
-            kind: "condition",
-            column: { kind: "named", name: "country" },
-            op: "=",
-            value: "CL",
-          },
-        ],
-      },
-      raw: "",
-    };
+  it("renders N rows for N draft rows", () => {
+    const draft = modelWithRows(3);
     render(<FilterBar {...makeProps({ draft })} />);
-    expect(screen.getByRole("radiogroup", { name: /Root combinator/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("checkbox", { name: /Include in Apply All/i })).toHaveLength(3);
   });
+});
 
-  it("toggling combinator calls onDraftChange with updated tree combinator", () => {
+// ---------------------------------------------------------------------------
+// Checkbox
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — checkbox", () => {
+  it("toggling calls onDraftChange with updated enabled flag", () => {
     const onDraftChange = vi.fn();
-    render(<FilterBar {...makeProps({ draft: draftWithRow, onDraftChange })} />);
-
-    // The "OR" radio button should be unchecked initially.
-    const orRadio = screen.getByRole("radio", { name: "OR" });
-    expect(orRadio).toHaveAttribute("aria-checked", "false");
-
-    fireEvent.click(orRadio);
-
+    const draft: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "any_column" }, op: "Contains", value: "x" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    const checkbox = screen.getByRole("checkbox", { name: /Include in Apply All/i });
+    fireEvent.click(checkbox);
     expect(onDraftChange).toHaveBeenCalledTimes(1);
     const next = onDraftChange.mock.calls[0]![0] as FilterModel;
-    expect(next.tree.combinator).toBe("OR");
-    // Children must be preserved.
-    expect(next.tree.children).toHaveLength(2);
-  });
-
-  it("inter-row connector pills reflect the active combinator", () => {
-    const onDraftChange = vi.fn();
-    render(<FilterBar {...makeProps({ draft: draftWithRow, onDraftChange })} />);
-
-    // Two rows → one FilterConnector pill showing "AND".
-    // getAllByText captures all instances; at least one must be the connector pill.
-    expect(screen.getAllByText("AND").length).toBeGreaterThan(0);
-    // No OR connector pills should be present (OR only appears inside an OR group
-    // in Structured mode with AND combinator; here we have flat AND rows).
-    // The RootCombinatorToggle renders an "OR" radio button too, so we check
-    // that no FilterConnector (span) shows "OR" text.
-    const orConnectors = screen
-      .queryAllByText("OR")
-      .filter((el) => el.tagName === "SPAN" && el.getAttribute("role") !== "radio");
-    expect(orConnectors).toHaveLength(0);
-  });
-
-  it("connector pills read OR after toggling to OR", () => {
-    const orDraft: FilterModel = {
-      ...draftWithRow,
-      tree: { ...draftWithRow.tree, combinator: "OR" },
-    };
-    render(<FilterBar {...makeProps({ draft: orDraft })} />);
-    // The inter-row connector should now show OR.
-    expect(screen.getAllByText("OR").length).toBeGreaterThan(0);
+    expect(next.rows[0]!.enabled).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-row Apply button
+// ---------------------------------------------------------------------------
 
 describe("FilterBar — per-row Apply button", () => {
-  const conditionRow: FilterModel = {
-    mode: "structured",
-    tree: {
-      combinator: "AND",
-      children: [
-        {
-          kind: "condition",
-          column: { kind: "named", name: "country" },
-          op: "=",
-          value: "CL",
-        },
-        {
-          kind: "condition",
-          column: { kind: "named", name: "status" },
-          op: "=",
-          value: "ok",
-        },
-      ],
-    },
-    raw: "",
-  };
-
-  const orGroupRow: FilterModel = {
-    mode: "structured",
-    tree: {
-      combinator: "AND",
-      children: [
-        {
-          kind: "condition",
-          column: { kind: "named", name: "country" },
-          op: "=",
-          value: "CL",
-        },
-        {
-          kind: "or_group",
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "status" },
-              op: "=",
-              value: "ok",
-            },
-          ],
-        },
-      ],
-    },
-    raw: "",
-  };
-
-  it("calls onApplyOnlyRow with the correct index for a condition row", () => {
+  it("clicking calls onApplyOnlyRow with the row index", () => {
     const onApplyOnlyRow = vi.fn();
-    render(
-      <FilterBar {...makeProps({ draft: conditionRow, onApplyOnlyRow })} />,
-    );
-    const applyOnlyBtns = screen.getAllByRole("button", {
-      name: "Apply only this row",
-    });
-    // Two condition rows → two apply-only buttons.
-    expect(applyOnlyBtns).toHaveLength(2);
-
-    // Click the second row's button → index 1.
-    fireEvent.click(applyOnlyBtns[1]!);
+    const draft = modelWithRows(2);
+    render(<FilterBar {...makeProps({ draft, onApplyOnlyRow })} />);
+    const applyBtns = screen.getAllByRole("button", { name: /Apply only this row|Applied — click to re-apply/i });
+    expect(applyBtns).toHaveLength(2);
+    fireEvent.click(applyBtns[1]!);
     expect(onApplyOnlyRow).toHaveBeenCalledWith(1);
   });
 
-  it("calls onApplyOnlyRow with the correct index for an OR group row", () => {
-    const onApplyOnlyRow = vi.fn();
-    render(
-      <FilterBar {...makeProps({ draft: orGroupRow, onApplyOnlyRow })} />,
-    );
-    // The OR group header has "Apply only this OR group" button.
-    const groupApplyBtn = screen.getByRole("button", {
-      name: "Apply only this OR group",
-    });
-    fireEvent.click(groupApplyBtn);
-    // The OR group is at root index 1.
-    expect(onApplyOnlyRow).toHaveBeenCalledWith(1);
+  it("button reads 'Applied' (green) when row is structurally equal to an applied row", () => {
+    const sharedRow = { enabled: true, column: { kind: "named" as const, name: "country" }, op: "=" as const, value: "CL" };
+    const draft: FilterModel = { rows: [sharedRow], combinator: "AND" };
+    const applied: FilterModel = { rows: [sharedRow], combinator: "AND" };
+    render(<FilterBar {...makeProps({ draft, applied })} />);
+    expect(screen.getByRole("button", { name: /Applied/i })).toBeInTheDocument();
   });
 
-  it("does not render apply-only buttons when onApplyOnlyRow is not provided", () => {
-    render(<FilterBar {...makeProps({ draft: conditionRow })} />);
-    expect(
-      screen.queryByRole("button", { name: /Apply only this/ }),
-    ).toBeNull();
+  it("button label flips back to Apply when an applied row is edited", () => {
+    const sharedRow = { enabled: true, column: { kind: "named" as const, name: "country" }, op: "=" as const, value: "CL" };
+    const applied: FilterModel = { rows: [sharedRow], combinator: "AND" };
+    // Draft has the same row.
+    const { rerender } = render(
+      <FilterBar {...makeProps({ draft: { rows: [sharedRow], combinator: "AND" }, applied })} />,
+    );
+    expect(screen.getByRole("button", { name: /Applied/i })).toBeInTheDocument();
+
+    // Draft changes — value edited.
+    const dirtyDraft: FilterModel = {
+      rows: [{ ...sharedRow, value: "US" }],
+      combinator: "AND",
+    };
+    rerender(<FilterBar {...makeProps({ draft: dirtyDraft, applied })} />);
+    // No longer Applied (structural equality broken).
+    expect(screen.queryByRole("button", { name: /Applied — click/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /Apply only this row/i })).toBeInTheDocument();
   });
 });
 
-describe("FilterBar — forwardRef focus() API", () => {
-  it("when collapsed, expands and focuses the empty-state add button", () => {
-    const ref = createRef<FilterBarHandle>();
-    render(<FilterBar ref={ref} {...makeProps()} />);
+// ---------------------------------------------------------------------------
+// Row insert and remove buttons
+// ---------------------------------------------------------------------------
 
-    // Collapse the bar.
-    fireEvent.click(screen.getByRole("button", { name: "Collapse filter bar" }));
-    expect(screen.queryByText("No filters yet")).toBeNull();
-
-    // Call focus() inside act() so React processes the setCollapsed(false)
-    // state update and re-renders before we assert.
-    act(() => {
-      ref.current?.focus();
-    });
-
-    // After focus(), the bar should be expanded.
-    expect(screen.getByText("No filters yet")).toBeInTheDocument();
-  });
-
-  it("when expanded with rows, the column picker is marked as focus target", () => {
+describe("FilterBar — + and − buttons", () => {
+  it("+ button calls onDraftChange inserting a new row below", () => {
+    const onDraftChange = vi.fn();
     const draft: FilterModel = {
-      mode: "structured",
-      tree: {
-        combinator: "AND",
-        children: [
-          {
-            kind: "condition",
-            column: { kind: "named", name: "country" },
-            op: "=",
-            value: "CL",
-          },
-        ],
-      },
-      raw: "",
+      rows: [{ enabled: true, column: { kind: "any_column" }, op: "Contains", value: "a" }],
+      combinator: "AND",
     };
-    const ref = createRef<FilterBarHandle>();
-    const { container } = render(<FilterBar ref={ref} {...makeProps({ draft })} />);
-
-    // The first row should have data-filter-focus-target="true" on the column
-    // picker's wrapper.
-    const focusTarget = container.querySelector("[data-filter-focus-target='true']");
-    expect(focusTarget).toBeInTheDocument();
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    fireEvent.click(screen.getByRole("button", { name: /Insert row below/i }));
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows).toHaveLength(2);
   });
 
-  it("empty state add button is wrapped by the focus-target container", () => {
-    const ref = createRef<FilterBarHandle>();
-    const { container } = render(<FilterBar ref={ref} {...makeProps()} />);
+  it("− button calls onDraftChange removing the row", () => {
+    const onDraftChange = vi.fn();
+    const draft = modelWithRows(2);
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    const removeBtns = screen.getAllByRole("button", { name: /Remove row/i });
+    fireEvent.click(removeBtns[0]!);
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows).toHaveLength(1);
+  });
 
-    // The empty state wraps the first + AND row button in a container.
-    const focusContainer = container.querySelector(
-      "[data-filter-focus-target-container='true']",
+  it("− button on last row clears to defaults instead of removing", () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [{ enabled: false, column: { kind: "named", name: "id" }, op: "=", value: "42" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    fireEvent.click(screen.getByRole("button", { name: /Remove row/i }));
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    // Still has one row.
+    expect(next.rows).toHaveLength(1);
+    // Row is cleared to defaults.
+    expect(next.rows[0]).toMatchObject({
+      enabled: true,
+      column: { kind: "any_column" },
+      op: "Contains",
+      value: "",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Apply All button
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — Apply All button", () => {
+  it("clicking Apply All calls onApplyAll", () => {
+    const onApplyAll = vi.fn();
+    render(<FilterBar {...makeProps({ onApplyAll })} />);
+    // Find the primary button by exact text content to avoid matching the chevron.
+    const allBtns = screen.getAllByRole("button");
+    const applyAllPrimary = allBtns.find((b) => b.textContent?.trim() === "Apply All" || b.textContent?.trim() === "Apply All (OR)");
+    expect(applyAllPrimary).toBeTruthy();
+    fireEvent.click(applyAllPrimary!);
+    expect(onApplyAll).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Footer: SQL, Export, Unset
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — footer buttons", () => {
+  it("SQL button calls onSqlClick", () => {
+    const onSqlClick = vi.fn();
+    render(<FilterBar {...makeProps({ onSqlClick })} />);
+    fireEvent.click(screen.getByRole("button", { name: /SQL/i }));
+    expect(onSqlClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("Export button is disabled and does not call any callback on click", () => {
+    const onApplyAll = vi.fn();
+    render(<FilterBar {...makeProps({ onApplyAll })} />);
+    const exportBtn = screen.getByRole("button", { name: /Export/i });
+    expect(exportBtn).toBeDisabled();
+    fireEvent.click(exportBtn);
+    expect(onApplyAll).not.toHaveBeenCalled();
+  });
+
+  it("Unset button calls onDraftChange with rows cleared to single empty row, combinator preserved", () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [
+        { enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
+        { enabled: true, column: { kind: "named", name: "country" }, op: "=", value: "CL" },
+      ],
+      combinator: "OR",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    fireEvent.click(screen.getByRole("button", { name: /Unset/i }));
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows).toHaveLength(1);
+    expect(next.rows[0]).toMatchObject({ enabled: true, column: { kind: "any_column" } });
+    expect(next.combinator).toBe("OR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dirty pip
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — dirty indicator", () => {
+  it("dirty pip absent when draft equals applied", () => {
+    render(<FilterBar {...makeProps()} />);
+    expect(screen.queryByTitle(/Unsaved changes/i)).toBeNull();
+  });
+
+  it("dirty pip present when draft differs from applied", () => {
+    const draft: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "named", name: "country" }, op: "=", value: "CL" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, applied: EMPTY_FILTER_MODEL })} />);
+    expect(screen.getByTitle(/Unsaved changes/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Apply All chevron menu
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — Apply All chevron menu", () => {
+  it("chevron button is present and has role=button with accessible label", () => {
+    render(<FilterBar {...makeProps()} />);
+    const chevron = screen.getByRole("button", { name: /Apply All options/i });
+    expect(chevron).toBeInTheDocument();
+    expect(chevron).toHaveAttribute("aria-haspopup", "menu");
+  });
+
+  it("Apply All label shows '(OR)' suffix when draft.combinator is OR", () => {
+    const draft: FilterModel = { rows: [], combinator: "OR" };
+    render(<FilterBar {...makeProps({ draft })} />);
+    const allBtns = screen.getAllByRole("button");
+    const applyAllPrimary = allBtns.find((b) => b.textContent?.includes("Apply All"));
+    expect(applyAllPrimary?.textContent?.trim()).toContain("OR");
+  });
+
+  it("⇧⌘↵ sets combinator to OR and calls onApplyAll", () => {
+    const onDraftChange = vi.fn();
+    const onApplyAll = vi.fn();
+    const draft: FilterModel = { rows: [], combinator: "AND" };
+    const { container } = render(<FilterBar {...makeProps({ draft, onDraftChange, onApplyAll })} />);
+    const anyFocusable = container.querySelector("[data-filter-bar-root] button") as HTMLElement;
+    anyFocusable?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter", metaKey: true, shiftKey: true });
+    expect(onDraftChange).toHaveBeenCalled();
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.combinator).toBe("OR");
+    expect(onApplyAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("⌘↵ sets combinator to AND and calls onApplyAll", () => {
+    const onDraftChange = vi.fn();
+    const onApplyAll = vi.fn();
+    const draft: FilterModel = { rows: [], combinator: "OR" };
+    const { container } = render(<FilterBar {...makeProps({ draft, onDraftChange, onApplyAll })} />);
+    const anyFocusable = container.querySelector("[data-filter-bar-root] button") as HTMLElement;
+    anyFocusable?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter", metaKey: true, shiftKey: false });
+    expect(onDraftChange).toHaveBeenCalled();
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.combinator).toBe("AND");
+    expect(onApplyAll).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts (⌘I, ⌘⇧I, ⌘↑, ⌘↓, ⌘←, ⌘↵, ⇧⌘↵)
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — keyboard shortcuts", () => {
+  it("⌘I inserts a row below the focused row", () => {
+    const onDraftChange = vi.fn();
+    const draft = modelWithRows(1);
+    const { container } = render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    const checkbox = container.querySelector("[data-filter-row-index='0'] input[type='checkbox']") as HTMLElement;
+    checkbox?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "i", metaKey: true, shiftKey: false });
+    expect(onDraftChange).toHaveBeenCalled();
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows).toHaveLength(2);
+  });
+
+  it("⌘⇧I removes the focused row", () => {
+    const onDraftChange = vi.fn();
+    const draft = modelWithRows(2);
+    const { container } = render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    const checkbox = container.querySelector("[data-filter-row-index='1'] input[type='checkbox']") as HTMLElement;
+    checkbox?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "i", metaKey: true, shiftKey: true });
+    expect(onDraftChange).toHaveBeenCalled();
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows).toHaveLength(1);
+  });
+
+  it("⌘⇧I on single row clears it to defaults", () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "99" }],
+      combinator: "AND",
+    };
+    const { container } = render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    const checkbox = container.querySelector("[data-filter-row-index='0'] input[type='checkbox']") as HTMLElement;
+    checkbox?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "i", metaKey: true, shiftKey: true });
+    expect(onDraftChange).toHaveBeenCalled();
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows).toHaveLength(1);
+    expect(next.rows[0]).toMatchObject({ enabled: true, column: { kind: "any_column" } });
+  });
+
+  it("⌘↑ moves focus to same control on the row above", () => {
+    const draft = modelWithRows(2);
+    const { container } = render(<FilterBar {...makeProps({ draft })} />);
+    const checkbox1 = container.querySelector("[data-filter-row-index='1'] input[type='checkbox']") as HTMLElement;
+    checkbox1?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "ArrowUp", metaKey: true });
+    // Focus should move up — active element is somewhere in row 0.
+    const row0 = container.querySelector("[data-filter-row-index='0']") as HTMLElement;
+    expect(row0?.contains(document.activeElement)).toBe(true);
+  });
+
+  it("⌘↓ moves focus to same control on the row below", () => {
+    const draft = modelWithRows(2);
+    const { container } = render(<FilterBar {...makeProps({ draft })} />);
+    const checkbox0 = container.querySelector("[data-filter-row-index='0'] input[type='checkbox']") as HTMLElement;
+    checkbox0?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "ArrowDown", metaKey: true });
+    const row1 = container.querySelector("[data-filter-row-index='1']") as HTMLElement;
+    expect(row1?.contains(document.activeElement)).toBe(true);
+  });
+
+  it("⌘↵ calls onApplyAll and sets combinator to AND", () => {
+    const onApplyAll = vi.fn();
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = { rows: [], combinator: "OR" };
+    const { container } = render(<FilterBar {...makeProps({ draft, onApplyAll, onDraftChange })} />);
+    const anyFocusable = container.querySelector("[data-filter-bar-root] button") as HTMLElement;
+    anyFocusable?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter", metaKey: true, shiftKey: false });
+    expect(onApplyAll).toHaveBeenCalled();
+    expect(onDraftChange).toHaveBeenCalled();
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.combinator).toBe("AND");
+  });
+
+  it("⇧⌘↵ calls onApplyAll and sets combinator to OR", () => {
+    const onApplyAll = vi.fn();
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = { rows: [], combinator: "AND" };
+    const { container } = render(<FilterBar {...makeProps({ draft, onApplyAll, onDraftChange })} />);
+    const anyFocusable = container.querySelector("[data-filter-bar-root] button") as HTMLElement;
+    anyFocusable?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter", metaKey: true, shiftKey: true });
+    expect(onApplyAll).toHaveBeenCalled();
+    expect(onDraftChange).toHaveBeenCalled();
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.combinator).toBe("OR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Imperative focus handle
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — forwardRef focus() handle", () => {
+  it("focus() focuses the first row's value input when it exists", () => {
+    const ref = createRef<FilterBarHandle>();
+    const draft: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "any_column" }, op: "Contains", value: "" }],
+      combinator: "AND",
+    };
+    const { container } = render(<FilterBar ref={ref} {...makeProps({ draft })} />);
+    ref.current?.focus();
+    const valueInput = container.querySelector(
+      "[data-filter-row-index='0'] [data-filter-control='value'] input",
+    ) as HTMLElement | null;
+    if (valueInput) {
+      expect(document.activeElement).toBe(valueInput);
+    } else {
+      // Fallback to column picker button — also acceptable.
+      const colBtn = container.querySelector(
+        "[data-filter-row-index='0'] [data-filter-control='column'] button",
+      ) as HTMLElement | null;
+      expect(document.activeElement).toBe(colBtn);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// No filters enabled transient status
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — Apply All with no enabled rows", () => {
+  it("shows 'No filters enabled' transient status when all rows are unchecked", async () => {
+    const draft: FilterModel = {
+      rows: [{ enabled: false, column: { kind: "any_column" }, op: "Contains", value: "x" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft })} />);
+    const allBtns = screen.getAllByRole("button");
+    const applyAllPrimary = allBtns.find((b) => b.textContent?.trim() === "Apply All" || b.textContent?.trim() === "Apply All (OR)");
+    fireEvent.click(applyAllPrimary!);
+    await waitFor(() =>
+      expect(screen.getByText(/No filters enabled/i)).toBeInTheDocument(),
     );
-    expect(focusContainer).toBeInTheDocument();
-    // The container should contain a button.
-    const btn = focusContainer?.querySelector("button");
-    expect(btn).toBeInTheDocument();
   });
 });

@@ -1,230 +1,237 @@
 import { describe, it, expect } from "vitest";
 import {
-  emptyTree,
-  addRootCondition,
-  addRootOrGroup,
-  removeRootChild,
-  setRootChild,
-  addOrChildCondition,
-  setOrChild,
-  removeOrChild,
-  setRootCombinator,
-  emptyCondition,
+  addRow,
+  removeRow,
+  setRow,
+  setEnabled,
+  setCombinator,
+  clearAllRows,
+  coerceValueForOperator,
 } from "./treeMutations";
-import { getRootCombinator } from "../types";
-import type { FilterTree } from "../types";
+import { EMPTY_FILTER_ROW } from "../types";
+import type { FilterRow, FilterTree } from "../types";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function treeWithCombinator(combinator: "AND" | "OR"): FilterTree {
+function row(overrides: Partial<FilterRow> = {}): FilterRow {
   return {
-    children: [
-      { kind: "condition", column: { kind: "named", name: "a" }, op: "=", value: "1" },
-    ],
-    combinator,
+    enabled: true,
+    column: { kind: "named", name: "a" },
+    op: "=",
+    value: "1",
+    ...overrides,
   };
 }
 
-function treeWithOrGroup(combinator: "AND" | "OR" = "AND"): FilterTree {
-  return {
-    children: [
-      {
-        kind: "or_group",
-        children: [
-          { kind: "condition", column: { kind: "named", name: "b" }, op: "=", value: "2" },
-          { kind: "condition", column: { kind: "named", name: "c" }, op: "=", value: "3" },
-        ],
-      },
-    ],
-    combinator,
-  };
+function treeOf(...rows: FilterRow[]): FilterTree {
+  return { rows, combinator: "AND" };
 }
 
 // ---------------------------------------------------------------------------
-// emptyTree
+// addRow
 // ---------------------------------------------------------------------------
 
-describe("emptyTree", () => {
-  it("returns an empty tree with combinator AND", () => {
-    const t = emptyTree();
-    expect(t.children).toHaveLength(0);
-    expect(t.combinator).toBe("AND");
+describe("addRow", () => {
+  it("appends a default empty row when no args given", () => {
+    const t = treeOf(row());
+    const next = addRow(t);
+    expect(next.rows).toHaveLength(2);
+    expect(next.rows[1]).toEqual(EMPTY_FILTER_ROW);
+  });
+
+  it("inserts at the specified index", () => {
+    const r0 = row({ value: "0" });
+    const r1 = row({ value: "1" });
+    const t = treeOf(r0, r1);
+    const newRow = row({ value: "inserted" });
+    const next = addRow(t, 1, newRow);
+    expect(next.rows).toHaveLength(3);
+    expect(next.rows[0]).toEqual(r0);
+    expect(next.rows[1]).toEqual(newRow);
+    expect(next.rows[2]).toEqual(r1);
+  });
+
+  it("inserts at index 0 (prepend)", () => {
+    const t = treeOf(row({ value: "existing" }));
+    const prepended = row({ value: "first" });
+    const next = addRow(t, 0, prepended);
+    expect(next.rows[0]).toEqual(prepended);
+    expect(next.rows).toHaveLength(2);
+  });
+
+  it("appends when atIndex equals rows.length", () => {
+    const t = treeOf(row());
+    const appended = row({ value: "last" });
+    const next = addRow(t, t.rows.length, appended);
+    expect(next.rows[next.rows.length - 1]).toEqual(appended);
+  });
+
+  it("preserves combinator", () => {
+    const t: FilterTree = { rows: [row()], combinator: "OR" };
+    expect(addRow(t).combinator).toBe("OR");
   });
 });
 
 // ---------------------------------------------------------------------------
-// setRootCombinator
+// removeRow
 // ---------------------------------------------------------------------------
 
-describe("setRootCombinator", () => {
-  it("sets combinator to OR", () => {
-    const t = emptyTree();
-    const next = setRootCombinator(t, "OR");
-    expect(next.combinator).toBe("OR");
+describe("removeRow", () => {
+  it("removes a row by index", () => {
+    const r0 = row({ value: "0" });
+    const r1 = row({ value: "1" });
+    const t = treeOf(r0, r1);
+    const next = removeRow(t, 0);
+    expect(next.rows).toHaveLength(1);
+    expect(next.rows[0]).toEqual(r1);
   });
 
-  it("sets combinator to AND", () => {
-    const t = treeWithCombinator("OR");
-    const next = setRootCombinator(t, "AND");
-    expect(next.combinator).toBe("AND");
+  it("clears to EMPTY_FILTER_ROW when removing the last row", () => {
+    const t = treeOf(row({ value: "only" }));
+    const next = removeRow(t, 0);
+    expect(next.rows).toHaveLength(1);
+    expect(next.rows[0]).toEqual(EMPTY_FILTER_ROW);
   });
 
-  it("preserves all children", () => {
-    const t = treeWithCombinator("AND");
-    const next = setRootCombinator(t, "OR");
-    expect(next.children).toEqual(t.children);
-  });
-
-  it("round-trips: AND → OR → AND", () => {
-    const t = emptyTree();
-    const or = setRootCombinator(t, "OR");
-    const and = setRootCombinator(or, "AND");
-    expect(and.combinator).toBe("AND");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// getRootCombinator — coerces undefined to AND
-// ---------------------------------------------------------------------------
-
-describe("getRootCombinator", () => {
-  it("returns AND when combinator is explicitly AND", () => {
-    expect(getRootCombinator({ children: [], combinator: "AND" })).toBe("AND");
-  });
-
-  it("returns OR when combinator is explicitly OR", () => {
-    expect(getRootCombinator({ children: [], combinator: "OR" })).toBe("OR");
-  });
-
-  it("returns AND when combinator is absent (backward-compat)", () => {
-    // Cast to bypass the optional-but-now-present type
-    const t = { children: [] } as FilterTree;
-    expect(getRootCombinator(t)).toBe("AND");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// addRootCondition — preserves combinator
-// ---------------------------------------------------------------------------
-
-describe("addRootCondition", () => {
-  it("preserves AND combinator", () => {
-    const t = treeWithCombinator("AND");
-    const next = addRootCondition(t);
-    expect(next.combinator).toBe("AND");
-    expect(next.children).toHaveLength(2);
-  });
-
-  it("preserves OR combinator", () => {
-    const t = treeWithCombinator("OR");
-    const next = addRootCondition(t);
-    expect(next.combinator).toBe("OR");
-  });
-
-  it("defaults missing combinator to AND on the result", () => {
-    const t: FilterTree = { children: [] };
-    const next = addRootCondition(t);
-    expect(next.combinator).toBe("AND");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// addRootOrGroup — preserves combinator
-// ---------------------------------------------------------------------------
-
-describe("addRootOrGroup", () => {
-  it("preserves OR combinator", () => {
-    const t = treeWithCombinator("OR");
-    const next = addRootOrGroup(t);
-    expect(next.combinator).toBe("OR");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// removeRootChild — preserves combinator
-// ---------------------------------------------------------------------------
-
-describe("removeRootChild", () => {
   it("preserves combinator after removal", () => {
-    const t = treeWithCombinator("OR");
-    const next = removeRootChild(t, 0);
-    expect(next.combinator).toBe("OR");
-    expect(next.children).toHaveLength(0);
+    const t: FilterTree = { rows: [row(), row()], combinator: "OR" };
+    expect(removeRow(t, 0).combinator).toBe("OR");
   });
 });
 
 // ---------------------------------------------------------------------------
-// setRootChild — preserves combinator
+// setRow
 // ---------------------------------------------------------------------------
 
-describe("setRootChild", () => {
-  it("preserves combinator after setting a child", () => {
-    const t = treeWithCombinator("OR");
-    const node = { kind: "condition" as const, column: { kind: "named" as const, name: "x" }, op: "=" as const, value: "y" };
-    const next = setRootChild(t, 0, node);
-    expect(next.combinator).toBe("OR");
+describe("setRow", () => {
+  it("replaces the row at the given index", () => {
+    const t = treeOf(row({ value: "old" }));
+    const replacement = row({ value: "new" });
+    const next = setRow(t, 0, replacement);
+    expect(next.rows[0]).toEqual(replacement);
+  });
+
+  it("does not mutate other rows", () => {
+    const r0 = row({ value: "0" });
+    const r1 = row({ value: "1" });
+    const t = treeOf(r0, r1);
+    const next = setRow(t, 0, row({ value: "replaced" }));
+    expect(next.rows[1]).toEqual(r1);
   });
 });
 
 // ---------------------------------------------------------------------------
-// addOrChildCondition — preserves combinator
+// setEnabled
 // ---------------------------------------------------------------------------
 
-describe("addOrChildCondition", () => {
-  it("preserves OR combinator when adding a child to an or_group", () => {
-    const t = treeWithOrGroup("OR");
-    const next = addOrChildCondition(t, 0, emptyCondition());
-    expect(next.combinator).toBe("OR");
-    const group = next.children[0];
-    expect(group?.kind).toBe("or_group");
-    if (group?.kind === "or_group") {
-      expect(group.children).toHaveLength(3);
-    }
+describe("setEnabled", () => {
+  it("sets enabled to false on an enabled row", () => {
+    const t = treeOf(row({ enabled: true }));
+    const next = setEnabled(t, 0, false);
+    expect(next.rows[0]?.enabled).toBe(false);
+  });
+
+  it("sets enabled to true on a disabled row", () => {
+    const t = treeOf(row({ enabled: false }));
+    const next = setEnabled(t, 0, true);
+    expect(next.rows[0]?.enabled).toBe(true);
+  });
+
+  it("returns the same tree reference when index is out of bounds", () => {
+    const t = treeOf(row());
+    expect(setEnabled(t, 99, false)).toBe(t);
   });
 });
 
 // ---------------------------------------------------------------------------
-// setOrChild — preserves combinator
+// setCombinator
 // ---------------------------------------------------------------------------
 
-describe("setOrChild", () => {
-  it("preserves combinator when setting a child inside an or_group", () => {
-    const t = treeWithOrGroup("OR");
-    const node = { kind: "condition" as const, column: { kind: "named" as const, name: "z" }, op: "=" as const, value: "0" };
-    const next = setOrChild(t, 0, 0, node);
-    expect(next.combinator).toBe("OR");
+describe("setCombinator", () => {
+  it("changes combinator to OR", () => {
+    const t = treeOf(row());
+    expect(setCombinator(t, "OR").combinator).toBe("OR");
+  });
+
+  it("changes combinator to AND", () => {
+    const t: FilterTree = { rows: [row()], combinator: "OR" };
+    expect(setCombinator(t, "AND").combinator).toBe("AND");
+  });
+
+  it("preserves rows", () => {
+    const t = treeOf(row({ value: "x" }));
+    expect(setCombinator(t, "OR").rows).toEqual(t.rows);
   });
 });
 
 // ---------------------------------------------------------------------------
-// removeOrChild — preserves combinator; collapses empty group
+// clearAllRows
 // ---------------------------------------------------------------------------
 
-describe("removeOrChild", () => {
-  it("preserves OR combinator when removing a child (group has remaining children)", () => {
-    const t = treeWithOrGroup("OR");
-    const next = removeOrChild(t, 0, 0);
-    expect(next.combinator).toBe("OR");
-    const group = next.children[0];
-    expect(group?.kind).toBe("or_group");
+describe("clearAllRows", () => {
+  it("resets rows to a single EMPTY_FILTER_ROW", () => {
+    const t = treeOf(row({ value: "a" }), row({ value: "b" }));
+    const next = clearAllRows(t);
+    expect(next.rows).toHaveLength(1);
+    expect(next.rows[0]).toEqual(EMPTY_FILTER_ROW);
   });
 
-  it("preserves OR combinator when group collapses to empty", () => {
-    const t: FilterTree = {
-      children: [
-        {
-          kind: "or_group",
-          children: [
-            { kind: "condition", column: { kind: "named", name: "a" }, op: "=", value: "1" },
-          ],
-        },
-      ],
-      combinator: "OR",
-    };
-    const next = removeOrChild(t, 0, 0);
-    expect(next.combinator).toBe("OR");
-    expect(next.children).toHaveLength(0);
+  it("preserves combinator", () => {
+    const t: FilterTree = { rows: [row(), row()], combinator: "OR" };
+    expect(clearAllRows(t).combinator).toBe("OR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// coerceValueForOperator
+// ---------------------------------------------------------------------------
+
+describe("coerceValueForOperator", () => {
+  it("returns undefined for IS NULL", () => {
+    expect(coerceValueForOperator("foo", "IS NULL")).toBeUndefined();
+  });
+
+  it("returns undefined for IS NOT NULL", () => {
+    expect(coerceValueForOperator("foo", "IS NOT NULL")).toBeUndefined();
+  });
+
+  it("returns {min:'',max:''} for BETWEEN when prev is a scalar", () => {
+    expect(coerceValueForOperator("x", "BETWEEN")).toEqual({ min: "", max: "" });
+  });
+
+  it("preserves existing {min,max} for BETWEEN", () => {
+    const v = { min: "a", max: "b" };
+    expect(coerceValueForOperator(v, "BETWEEN")).toEqual(v);
+  });
+
+  it("returns [] for In when prev is a scalar", () => {
+    expect(coerceValueForOperator("x", "In")).toEqual([]);
+  });
+
+  it("preserves existing array for In", () => {
+    const v = ["a", "b"];
+    expect(coerceValueForOperator(v, "In")).toEqual(v);
+  });
+
+  it("returns [] for NotIn when prev is undefined", () => {
+    expect(coerceValueForOperator(undefined, "NotIn")).toEqual([]);
+  });
+
+  it("coerces array to first element for binary op", () => {
+    expect(coerceValueForOperator(["a", "b"], "=")).toBe("a");
+  });
+
+  it("coerces {min,max} object to '' for binary op", () => {
+    expect(coerceValueForOperator({ min: "a", max: "b" }, "=")).toBe("");
+  });
+
+  it("returns '' for undefined on binary op", () => {
+    expect(coerceValueForOperator(undefined, "=")).toBe("");
+  });
+
+  it("preserves scalar value for binary op", () => {
+    expect(coerceValueForOperator("hello", "ILIKE")).toBe("hello");
   });
 });

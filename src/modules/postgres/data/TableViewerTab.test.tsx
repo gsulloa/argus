@@ -1,4 +1,3 @@
-import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -66,7 +65,9 @@ function makeResult(rowCount: number, filterTreePresent = false): QueryTableResu
       limit: 200,
       offset: 0,
       order_by: [],
-      filter_tree: filterTreePresent ? { children: [] } : null,
+      filter_tree: filterTreePresent
+        ? { children: [], combinator: "AND" }
+        : null,
       raw_where: null,
     },
     query_ms: 7,
@@ -96,7 +97,30 @@ function renderViewer(
   );
 }
 
-describe("TableViewerTab — filter persistence (jsdom, memory-cache lane)", () => {
+// Helper: open the filter bar by clicking the toggle button in SubtabHeader.
+function openFilterBar() {
+  const filterToggle = screen.getByRole("button", { name: /Toggle filter bar/i });
+  fireEvent.click(filterToggle);
+}
+
+// Helper: check for "Apply All" primary button (exact label, not the chevron).
+function queryApplyAllPrimary() {
+  // Use getAllByRole to handle multiple and pick by exact text content.
+  const btns = screen.queryAllByRole("button");
+  return btns.find((b) => b.textContent?.trim() === "Apply All") ?? null;
+}
+
+let toggleCounter = 0;
+function uniqueToggleViewer() {
+  toggleCounter++;
+  return renderViewer({
+    connectionId: `conn-toggle-${toggleCounter}`,
+    schema: "public",
+    relation: `table-toggle-${toggleCounter}`,
+  });
+}
+
+describe("TableViewerTab — filter bar toggle (jsdom, memory-cache lane)", () => {
   beforeEach(() => {
     queryTableMock.mockReset();
     tablePrimaryKeyMock.mockReset();
@@ -105,155 +129,162 @@ describe("TableViewerTab — filter persistence (jsdom, memory-cache lane)", () 
     getSettingMock.mockResolvedValue(null);
     setSettingMock.mockResolvedValue(undefined);
     queryTableMock.mockResolvedValue(makeResult(1));
-    // jsdom default: not a Tauri runtime — useSetting goes synchronous.
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   });
 
-  it("4.3 / 4.6: applied + draft survive unmount→remount on the same (conn,schema,relation)", async () => {
-    const args = {
-      connectionId: "conn-43",
-      schema: "public",
-      relation: "users-43",
-    } as const;
-    const { unmount } = renderViewer(args);
-
-    // Build a structured filter via the bar UI: + AND row → leaves a
-    // condition with default op `=` and any-column.
-    fireEvent.click(screen.getByRole("button", { name: /AND row/ }));
-
-    // Pick a real column (so the predicate isn't any-column) by selecting
-    // "country" in the column picker. The bar surfaces a select with column
-    // names — fall back to typing into the value to mark draft dirty.
-    const valueInputs = await screen.findAllByPlaceholderText(/value/i);
-    fireEvent.change(valueInputs[0]!, { target: { value: "CL" } });
-
-    // Apply commits draft → applied. When draft is dirty the button label is
-    // "Apply (unsaved changes)"; we use the exact label to avoid ambiguity
-    // with the per-row "Apply only this row" button added in Wave 2.
-    fireEvent.click(screen.getByRole("button", { name: "Apply (unsaved changes)" }));
-
-    // Sanity: the bar should show the filter row.
-    expect(valueInputs[0]).toHaveValue("CL");
-
-    unmount();
-    // Remount with the same key.
-    renderViewer(args);
-
-    // The persisted draft is restored — the value input shows the same value.
-    const restored = await screen.findAllByPlaceholderText(/value/i);
-    expect(restored[0]).toHaveValue("CL");
-
-    // applied is restored too: the Apply button is in its non-dirty state
-    // (which is true iff draft equals applied).
-    expect(
-      screen.getByRole("button", { name: "Apply" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Apply \(unsaved changes\)/ }),
-    ).toBeNull();
+  it("filter bar is hidden by default; toggle button shows it", () => {
+    uniqueToggleViewer();
+    // Bar should not be visible initially — Apply All button not rendered.
+    expect(queryApplyAllPrimary()).toBeNull();
+    // Click the toggle button.
+    openFilterBar();
+    // Now the bar is visible — Apply All button is rendered.
+    expect(queryApplyAllPrimary()).toBeInTheDocument();
   });
 
-  it("3.1-strict: same as 3.1 but under React.StrictMode (mirrors the live app)", async () => {
+  it("Filter toggle button has aria-pressed=false when bar is hidden", () => {
+    uniqueToggleViewer();
+    const btn = screen.getByRole("button", { name: /Toggle filter bar/i });
+    expect(btn).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("Filter toggle button has aria-pressed=true when bar is visible", () => {
+    uniqueToggleViewer();
+    openFilterBar();
+    const btn = screen.getByRole("button", { name: /Toggle filter bar/i });
+    expect(btn).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("toggle hides bar when clicked again", () => {
+    uniqueToggleViewer();
+    openFilterBar();
+    expect(queryApplyAllPrimary()).toBeInTheDocument();
+    openFilterBar();
+    expect(queryApplyAllPrimary()).toBeNull();
+  });
+
+  it("filter bar not shown on Structure subtab", () => {
+    uniqueToggleViewer();
+    // Switch to Structure subtab.
+    fireEvent.click(screen.getByRole("tab", { name: /Structure/i }));
+    // Toggle button should not appear on structure subtab.
+    expect(screen.queryByRole("button", { name: /Toggle filter bar/i })).toBeNull();
+  });
+});
+
+let stateCounter = 0;
+function uniqueStateViewer() {
+  stateCounter++;
+  return renderViewer({
+    connectionId: `conn-state-${stateCounter}`,
+    schema: "public",
+    relation: `table-state-${stateCounter}`,
+  });
+}
+
+describe("TableViewerTab — filter state (jsdom, memory-cache lane)", () => {
+  beforeEach(() => {
+    queryTableMock.mockReset();
+    tablePrimaryKeyMock.mockReset();
+    getSettingMock.mockReset();
+    setSettingMock.mockReset();
+    getSettingMock.mockResolvedValue(null);
+    setSettingMock.mockResolvedValue(undefined);
+    queryTableMock.mockResolvedValue(makeResult(1));
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+
+  it("filter bar shows one default row when first opened", () => {
+    uniqueStateViewer();
+    openFilterBar();
+    // The default row should be present — checkbox + condition row.
+    const checkboxes = screen.getAllByRole("checkbox", { name: /Include in Apply All/i });
+    expect(checkboxes.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("editing the value input makes the dirty indicator appear", () => {
+    uniqueStateViewer();
+    openFilterBar();
+    // Find the value input by aria-label.
+    const valueInput = screen.getByRole("textbox", { name: /Value/i });
+    fireEvent.change(valueInput, { target: { value: "CL" } });
+    // The dirty pip should be visible when draft !== applied.
+    expect(screen.getByTitle(/Unsaved changes/i)).toBeInTheDocument();
+  });
+
+  it("Apply All commits draft to applied and clears dirty indicator", () => {
+    uniqueStateViewer();
+    openFilterBar();
+    const valueInput = screen.getByRole("textbox", { name: /Value/i });
+    fireEvent.change(valueInput, { target: { value: "CL" } });
+    // Click the primary Apply All button (not the chevron).
+    const allBtns = screen.getAllByRole("button");
+    const applyAllPrimary = allBtns.find((b) => b.textContent?.trim() === "Apply All" || b.textContent?.trim() === "Apply All (OR)")!;
+    fireEvent.click(applyAllPrimary);
+    // Dirty pip should be gone once draft equals applied.
+    expect(screen.queryByTitle(/Unsaved changes/i)).toBeNull();
+  });
+
+  it("Unset resets value input to empty and clears draft rows", () => {
+    uniqueStateViewer();
+    openFilterBar();
+    const valueInput = screen.getByRole("textbox", { name: /Value/i });
+    fireEvent.change(valueInput, { target: { value: "hello" } });
+    // Click Unset.
+    fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
+    // Value should be cleared.
+    expect(screen.getByRole("textbox", { name: /Value/i })).toHaveValue("");
+  });
+
+  it("switching connectionId between mounts shows the empty model", () => {
+    stateCounter++;
+    const baseArgs = { schema: "public", relation: `table-iso-${stateCounter}` };
+    const { unmount } = renderViewer({ ...baseArgs, connectionId: `conn-iso-A-${stateCounter}` });
+
+    openFilterBar();
+    const valueInput = screen.getByRole("textbox", { name: /Value/i });
+    fireEvent.change(valueInput, { target: { value: "CL" } });
+    const applyAllPrimary = screen.getAllByRole("button").find((b) => b.textContent?.trim() === "Apply All" || b.textContent?.trim() === "Apply All (OR)")!;
+    fireEvent.click(applyAllPrimary);
+
+    unmount();
+    renderViewer({ ...baseArgs, connectionId: `conn-iso-B-${stateCounter}` });
+
+    // Bar is hidden by default after new mount — toggle to check emptiness.
+    openFilterBar();
+    expect(screen.getByRole("textbox", { name: /Value/i })).toHaveValue("");
+  });
+
+  it("3.1: re-rendering with a different relation does not bleed filter state", () => {
+    stateCounter++;
     const baseProps = {
       tabId: "tab-1",
-      connectionId: "conn-3-1-strict",
+      connectionId: `conn-bleed-tab-${stateCounter}`,
       connectionName: "Test",
       schema: "public",
       relationKind: "table" as const,
     };
     const { rerender } = render(
-      <React.StrictMode>
-        <TabsProvider>
-          <TableViewer {...baseProps} relation="rel-A-strict" />
-        </TabsProvider>
-      </React.StrictMode>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: /AND row/ }));
-    const valueInputsA = await screen.findAllByPlaceholderText(/value/i);
-    fireEvent.change(valueInputsA[0]!, { target: { value: "CL" } });
-    fireEvent.click(screen.getByRole("button", { name: "Apply (unsaved changes)" }));
-
-    rerender(
-      <React.StrictMode>
-        <TabsProvider>
-          <TableViewer {...baseProps} relation="rel-B-strict" />
-        </TabsProvider>
-      </React.StrictMode>,
-    );
-    expect(screen.queryByPlaceholderText(/value/i)).toBeNull();
-    expect(screen.getByText(/No filters yet/i)).toBeInTheDocument();
-
-    rerender(
-      <React.StrictMode>
-        <TabsProvider>
-          <TableViewer {...baseProps} relation="rel-A-strict" />
-        </TabsProvider>
-      </React.StrictMode>,
-    );
-    const restored = await screen.findAllByPlaceholderText(/value/i);
-    expect(restored[0]).toHaveValue("CL");
-  });
-
-  it("3.1: re-rendering the SAME instance with a different relation does not bleed filter state", async () => {
-    // Drives the bug we're fixing: TabContent reuses the TableViewerTab
-    // instance when switching between two postgres-table-data tabs of
-    // different relations. The bar must reflect the new relation's
-    // persisted state on first paint, not the previous relation's.
-    const baseProps = {
-      tabId: "tab-1",
-      connectionId: "conn-3-1",
-      connectionName: "Test",
-      schema: "public",
-      relationKind: "table" as const,
-    };
-    const { rerender } = render(
       <TabsProvider>
-        <TableViewer {...baseProps} relation="rel-A-3-1" />
+        <TableViewer {...baseProps} relation={`rel-A-bleed-${stateCounter}`} />
       </TabsProvider>,
     );
 
-    // Apply a filter on relation A.
-    fireEvent.click(screen.getByRole("button", { name: /AND row/ }));
-    const valueInputsA = await screen.findAllByPlaceholderText(/value/i);
-    fireEvent.change(valueInputsA[0]!, { target: { value: "CL" } });
-    fireEvent.click(screen.getByRole("button", { name: "Apply (unsaved changes)" }));
+    openFilterBar();
+    const valueInput = screen.getByRole("textbox", { name: /Value/i });
+    fireEvent.change(valueInput, { target: { value: "CL" } });
+    const applyAllPrimary = screen.getAllByRole("button").find((b) => b.textContent?.trim() === "Apply All" || b.textContent?.trim() === "Apply All (OR)")!;
+    fireEvent.click(applyAllPrimary);
 
-    // Now switch the SAME instance to relation B (no unmount — TabsContent
-    // reuse pattern). Bar must be empty.
     rerender(
       <TabsProvider>
-        <TableViewer {...baseProps} relation="rel-B-3-1" />
+        <TableViewer {...baseProps} relation={`rel-B-bleed-${stateCounter}`} />
       </TabsProvider>,
     );
-    expect(screen.queryByPlaceholderText(/value/i)).toBeNull();
-    expect(screen.getByText(/No filters yet/i)).toBeInTheDocument();
 
-    // Switch back to relation A → cached filter resurrects.
-    rerender(
-      <TabsProvider>
-        <TableViewer {...baseProps} relation="rel-A-3-1" />
-      </TabsProvider>,
-    );
-    const restored = await screen.findAllByPlaceholderText(/value/i);
-    expect(restored[0]).toHaveValue("CL");
-  });
-
-  it("4.4: switching connectionId between mounts shows the empty model", async () => {
-    const baseArgs = { schema: "public", relation: "users-44" };
-    const { unmount } = renderViewer({ ...baseArgs, connectionId: "conn-A" });
-
-    fireEvent.click(screen.getByRole("button", { name: /AND row/ }));
-    const valueInputs = await screen.findAllByPlaceholderText(/value/i);
-    fireEvent.change(valueInputs[0]!, { target: { value: "CL" } });
-    fireEvent.click(screen.getByRole("button", { name: "Apply (unsaved changes)" }));
-
-    unmount();
-    renderViewer({ ...baseArgs, connectionId: "conn-B" });
-
-    // The bar should be empty (no value inputs) for the new connection.
-    expect(screen.queryByPlaceholderText(/value/i)).toBeNull();
-    expect(screen.getByText(/No filters yet/i)).toBeInTheDocument();
+    // Bar resets to hidden on relation change — toggle to confirm empty.
+    openFilterBar();
+    expect(screen.getByRole("textbox", { name: /Value/i })).toHaveValue("");
   });
 });
 
@@ -273,39 +304,33 @@ describe("TableViewerTab — first-mount fetch gating (Tauri lane)", () => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   });
 
-  it("4.5: defers queryTable until persisted filter has loaded, then fires once with filter_tree", async () => {
-    const persisted = {
+  it("4.5: defers queryTable until persisted filter has loaded, then fires once", async () => {
+    // Persisted filter in the new flat-row model — filter_tree should be emitted.
+    const persistedNewShape = {
       draft: {
-        mode: "structured",
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "country" },
-              op: "=",
-              value: "CL",
-            },
-          ],
-        },
-        raw: "",
+        rows: [
+          {
+            enabled: true,
+            column: { kind: "named", name: "country" },
+            op: "=",
+            value: "CL",
+          },
+        ],
+        combinator: "AND",
       },
       applied: {
-        mode: "structured",
-        tree: {
-          children: [
-            {
-              kind: "condition",
-              column: { kind: "named", name: "country" },
-              op: "=",
-              value: "CL",
-            },
-          ],
-        },
-        raw: "",
+        rows: [
+          {
+            enabled: true,
+            column: { kind: "named", name: "country" },
+            op: "=",
+            value: "CL",
+          },
+        ],
+        combinator: "AND",
       },
     };
 
-    // Hold the filter read open so the first render sees `isLoaded === false`.
     let resolveFilter: ((v: string | null) => void) | undefined;
     const filterReadPromise = new Promise<string | null>((resolve) => {
       resolveFilter = resolve;
@@ -313,7 +338,6 @@ describe("TableViewerTab — first-mount fetch gating (Tauri lane)", () => {
 
     getSettingMock.mockImplementation((key: string) => {
       if (key.startsWith("pgTableFilter:")) return filterReadPromise;
-      // Other keys (orderBy, page size, inspector width, …) settle synchronously.
       return Promise.resolve(null);
     });
 
@@ -323,14 +347,76 @@ describe("TableViewerTab — first-mount fetch gating (Tauri lane)", () => {
       relation: "users-45",
     });
 
-    // Before the persisted filter resolves, no queryTable call should fire —
-    // the data hook is gated on filterLoaded && orderByLoaded.
+    // Before the persisted filter resolves, no queryTable call should fire.
     expect(queryTableMock).not.toHaveBeenCalled();
 
-    // Resolve the disk read with the persisted filter.
+    // Resolve the disk read with the persisted new-shape filter.
     await act(async () => {
-      resolveFilter!(JSON.stringify(persisted));
-      // Let microtasks flush so React commits the loaded state.
+      resolveFilter!(JSON.stringify(persistedNewShape));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(queryTableMock).toHaveBeenCalledTimes(1);
+    });
+
+    const args = queryTableMock.mock.calls[0]!;
+    const options = args[3] as { filter_tree?: { children: unknown[]; combinator: string } };
+    // The applied model has one enabled+complete row → filter_tree should be present.
+    expect(options.filter_tree).toBeDefined();
+    expect(options.filter_tree?.combinator).toBe("AND");
+    expect(options.filter_tree?.children).toHaveLength(1);
+    expect(options.filter_tree?.children[0]).toMatchObject({
+      kind: "condition",
+      column: { kind: "named", name: "country" },
+      op: "=",
+      value: "CL",
+    });
+  });
+
+  it("4.5b: defers queryTable until loaded; legacy persisted filter migrates to empty (no filter_tree)", async () => {
+    const legacyPersistedFilter = {
+      draft: {
+        mode: "structured",
+        tree: {
+          children: [
+            { kind: "condition", column: { kind: "named", name: "country" }, op: "=", value: "CL" },
+          ],
+        },
+        raw: "",
+      },
+      applied: {
+        mode: "structured",
+        tree: {
+          children: [
+            { kind: "condition", column: { kind: "named", name: "country" }, op: "=", value: "CL" },
+          ],
+        },
+        raw: "",
+      },
+    };
+
+    let resolveFilter: ((v: string | null) => void) | undefined;
+    const filterReadPromise = new Promise<string | null>((resolve) => {
+      resolveFilter = resolve;
+    });
+
+    getSettingMock.mockImplementation((key: string) => {
+      if (key.startsWith("pgTableFilter:")) return filterReadPromise;
+      return Promise.resolve(null);
+    });
+
+    renderViewer({
+      connectionId: "conn-45b",
+      schema: "public",
+      relation: "users-45b",
+    });
+
+    expect(queryTableMock).not.toHaveBeenCalled();
+
+    // Resolve with the legacy shape — should migrate to EMPTY_FILTER_MODEL.
+    await act(async () => {
+      resolveFilter!(JSON.stringify(legacyPersistedFilter));
       await Promise.resolve();
     });
 
@@ -340,6 +426,7 @@ describe("TableViewerTab — first-mount fetch gating (Tauri lane)", () => {
 
     const args = queryTableMock.mock.calls[0]!;
     const options = args[3] as { filter_tree?: unknown };
-    expect(options.filter_tree).toBeDefined();
+    // Legacy filter migrated to empty → no filter_tree in payload.
+    expect(options.filter_tree).toBeUndefined();
   });
 });

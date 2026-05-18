@@ -1,13 +1,15 @@
 .applyBtn {
   background: transparent;
   border: 1px solid var(--border-strong);
-  color: var(--text-subtle);
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 11px;
-  padding: 2px 4px;
+  font-family: var(--font-stack, inherit);
+  padding: 2px 8px;
   border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
   transition:
     background var(--duration-instant) ease,
     color var(--duration-instant) ease,
@@ -29,6 +31,19 @@
 .applyBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Applied state — green badge */
+.applyBtn.applied {
+  color: var(--success);
+  border-color: var(--success);
+  background: transparent;
+}
+
+.applyBtn.applied:hover:not(:disabled) {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: var(--success);
 }
 
 @media (prefers-reduced-motion: reduce) {

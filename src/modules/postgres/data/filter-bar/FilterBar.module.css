@@ -1,199 +1,317 @@
-/* FilterBar.module.css — Postgres-specific layout only.
-   Shell, header, body, actions, primary/secondary buttons, key-hint chips
-   and empty-body row are all owned by src/modules/shared/filter-bar/. */
+/* FilterBar.module.css — Postgres filter bar layout.
+   Design tokens from DESIGN.md. Compact density, 13px base (--text-md). */
 
-/* Outermost wrapper: carries the rootRef and onKeyDown handler so the test's
-   container.firstChild points to an element that has the keyboard shortcuts.
-   display:contents removes the layout box so FilterBarShell is the visual root. */
+/* Outermost wrapper carries rootRef and onKeyDown. display:contents removes
+   its layout box so FilterBarShell is the visual root. */
 .root {
   display: contents;
 }
 
-/* ── Mode toggle ─────────────────────────────────────────────────────────────
-   Kept as role="tablist"/role="tab" for test compatibility.
-   TODO: Migrate to FilterSegmentedToggle (role="radiogroup"/role="radio") once
-   tests are updated to query role="radio" instead of role="tab". */
-.modeToggle {
-  display: inline-flex;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  overflow: visible;
-  height: 24px;
+/* ── Condition rows ──────────────────────────────────────────────────────────*/
+
+.conditionRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  min-height: 32px;
 }
-.modeBtn {
+
+.conditionRow:not(:last-child) {
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* Disabled row: slightly muted */
+.conditionRowDisabled {
+  opacity: 0.55;
+}
+
+/* Push action buttons to right */
+.conditionRowSpacer {
+  flex: 1 1 0;
+}
+
+/* ── Checkbox ────────────────────────────────────────────────────────────────*/
+
+.rowCheckbox {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* ── Value input wrapper (applied tint when row is applied) ─────────────────*/
+
+.valueInputWrapper {
+  display: contents;
+}
+
+.appliedTint input,
+.appliedTint select {
+  background: var(--success-soft) !important;
+  border-color: var(--success) !important;
+}
+
+/* ── Icon buttons (+ and −) ─────────────────────────────────────────────────*/
+
+.iconBtn {
   background: transparent;
   border: 0;
-  border-right: 1px solid var(--border-strong);
-  padding: 3px 10px;
-  font-size: 11px;
-  font-weight: 500;
-  font-family: var(--font-stack);
-  letter-spacing: 0;
-  color: var(--text-muted);
+  color: var(--text-subtle);
   cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
   transition: background var(--duration-instant) ease, color var(--duration-instant) ease;
+  flex: 0 0 auto;
 }
-.modeBtn:last-child {
-  border-right: 0;
-}
-.modeBtn[data-active="true"] {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.modeBtn:hover:not([data-active="true"]) {
+
+.iconBtn:hover {
   background: var(--surface-2);
   color: var(--text);
 }
-.modeBtn:focus-visible {
+
+.iconBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────────*/
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 8px;
+  min-height: 28px;
+  border-top: 1px solid var(--border);
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.footerLeft {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.footerRight {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* Footer action buttons (Export, SQL) */
+.footerBtn {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: var(--font-stack, inherit);
+  padding: 2px 8px;
+  border-radius: var(--radius-md);
+  transition: background var(--duration-instant) ease, color var(--duration-instant) ease;
+}
+
+.footerBtn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.footerBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.footerBtn:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-glow);
   border-color: var(--accent);
+}
+
+/* Shortcut hints strip */
+.footerHints {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.hintItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+}
+
+/* Unset button */
+.unsetBtn {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: var(--font-stack, inherit);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-instant) ease, color var(--duration-instant) ease;
+}
+
+.unsetBtn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.unsetBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--accent);
+}
+
+/* Dirty pip */
+.dirtyPip {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 6px;
+}
+
+/* Transient "no filters enabled" status */
+.transientStatus {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── Apply All composed button ───────────────────────────────────────────────*/
+
+.applyAllComposed {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.applyAllPrimary {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: var(--font-stack, inherit);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--duration-instant) ease;
+}
+
+.applyAllPrimary:hover {
+  background: var(--accent-hover);
+}
+
+.applyAllPrimary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
   position: relative;
   z-index: 1;
 }
 
-/* ── Collapse toggle ─────────────────────────────────────────────────────────*/
-.collapseBtn {
-  margin-left: auto;
-  background: transparent;
+/* Vertical divider between primary area and chevron */
+.applyAllComposed > .applyAllPrimary + button {
+  border-left: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.applyAllChevron {
+  background: var(--accent);
+  color: #fff;
   border: 0;
-  color: var(--text-subtle);
+  padding: 3px 5px;
   cursor: pointer;
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  transition: color var(--duration-instant) ease, background var(--duration-instant) ease;
-}
-.collapseBtn:hover {
-  color: var(--text);
-  background: var(--surface-2);
-}
-.collapseBtn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--accent-glow);
-  border-color: var(--accent);
-}
-
-/* ── Structured body row stack ───────────────────────────────────────────────*/
-.structuredBody {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-}
-
-/* Individual row: connector + condition/group */
-.row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  flex-wrap: wrap;
-}
-
-/* Add-row affordances below the row list.
-   align-items: center keeps the RootCombinatorToggle vertically aligned with
-   the + AND row / + OR group add buttons. */
-.addRow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-}
-
-/* OR-group-internal add button. Uses a raw <button> (instead of FilterRowAddButton)
-   so we can attach aria-label="Add OR row" for test compatibility. */
-.addBtn {
-  background: transparent;
-  border: 1px dashed var(--border-strong);
-  color: var(--text-muted);
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  font-family: inherit;
-  transition: color var(--duration-instant) ease, border-color var(--duration-instant) ease, background var(--duration-instant) ease;
-}
-.addBtn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--surface-2);
-}
-.addBtn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--accent-glow);
-  border-color: var(--accent);
-}
-
-/* ── OR-group container ──────────────────────────────────────────────────────
-   Dashed border + 4% accent tint background. */
-.orGroup {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2xs);
-  padding: var(--space-xs);
-  border: 1px dashed var(--border-strong);
-  background: rgba(168, 85, 247, 0.04);
-  border-radius: var(--radius-md);
-}
-
-.orGroupHeader {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  font-family: var(--font-mono, "Geist Mono", monospace);
-}
-
-.orGroupRow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-}
-
-.orConnector {
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--accent);
-  font-family: var(--font-mono, "Geist Mono", monospace);
-  width: 28px;
-  text-align: center;
-}
-
-/* ── Remove button (condition row, OR group) ─────────────────────────────────*/
-.removeBtn {
-  background: transparent;
-  border: 0;
-  color: var(--text-subtle);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-  transition: background var(--duration-instant) ease, color var(--duration-instant) ease;
-}
-.removeBtn:hover {
-  background: var(--surface-2);
-  color: var(--danger);
-}
-.removeBtn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--accent-glow);
-  border-color: var(--accent);
-}
-
-/* ── Performance warning icon ────────────────────────────────────────────────*/
-.warnIcon {
   display: inline-flex;
   align-items: center;
-  color: var(--warning);
+  transition: background var(--duration-instant) ease;
+}
+
+.applyAllChevron:hover {
+  background: var(--accent-hover);
+}
+
+.applyAllChevron:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Apply All dropdown menu ─────────────────────────────────────────────────*/
+
+.applyAllMenu {
+  min-width: 320px;
+  background: var(--elevated, var(--surface));
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  z-index: 9999;
+}
+
+.applyAllMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--font-stack, inherit);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+}
+
+.applyAllMenuItem[data-highlighted] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.menuItemCheck {
+  width: 14px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--success);
+  flex: 0 0 14px;
+}
+
+.menuItemHint {
+  margin-left: auto;
+  font-size: 11px;
+  font-family: var(--font-mono, "Geist Mono", monospace);
+  color: var(--text-subtle);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 4px;
 }
 
 /* ── Column picker ───────────────────────────────────────────────────────────*/
+
 .columnPicker {
   position: relative;
   flex: 0 0 auto;
 }
+
 .columnTrigger {
   font-family: var(--font-mono, "Geist Mono", monospace);
   font-size: 11px;
@@ -210,18 +328,22 @@
   gap: 4px;
   transition: background var(--duration-instant) ease, border-color var(--duration-instant) ease;
 }
+
 .columnTrigger[data-any="true"] {
   color: var(--accent);
 }
+
 .columnTrigger:hover {
   background: var(--surface-2);
   border-color: var(--accent);
 }
+
 .columnTrigger:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-glow);
   border-color: var(--accent);
 }
+
 .columnPopover {
   position: absolute;
   top: calc(100% + 4px);
@@ -238,6 +360,7 @@
   display: flex;
   flex-direction: column;
 }
+
 .columnSearch {
   font-family: var(--font-mono, "Geist Mono", monospace);
   font-size: 11px;
@@ -248,11 +371,13 @@
   border-radius: var(--radius-sm);
   margin-bottom: 4px;
 }
+
 .columnSearch:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-glow);
   border-color: var(--accent);
 }
+
 .columnOption {
   display: flex;
   justify-content: space-between;
@@ -269,11 +394,13 @@
   width: 100%;
   transition: background var(--duration-instant) ease, color var(--duration-instant) ease;
 }
+
 .columnOption:hover,
 .columnOption[data-active="true"] {
   background: var(--surface-2);
   color: var(--accent);
 }
+
 .columnOptionType {
   color: var(--text-subtle);
   font-size: 10px;
@@ -281,6 +408,7 @@
 }
 
 /* ── Operator select ─────────────────────────────────────────────────────────*/
+
 .opSelect {
   font-family: var(--font-mono, "Geist Mono", monospace);
   font-size: 11px;
@@ -291,6 +419,7 @@
   border-radius: var(--radius-md);
   transition: border-color var(--duration-instant) ease;
 }
+
 .opSelect:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-glow);
@@ -298,6 +427,7 @@
 }
 
 /* ── Value inputs ────────────────────────────────────────────────────────────*/
+
 .valueInput {
   font-size: 11px;
   padding: 2px 6px;
@@ -310,6 +440,7 @@
   flex: 1 1 120px;
   transition: border-color var(--duration-instant) ease;
 }
+
 .valueInput:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-glow);
@@ -321,15 +452,18 @@
   align-items: center;
   gap: 4px;
 }
+
 .betweenInput {
   width: 110px;
 }
+
 .betweenSep {
   font-size: 10px;
   color: var(--text-subtle);
 }
 
 /* ── Chip input (In / NotIn operators) ───────────────────────────────────────*/
+
 .chips {
   display: inline-flex;
   flex-wrap: wrap;
@@ -342,6 +476,7 @@
   min-width: 160px;
   flex: 1 1 160px;
 }
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -353,6 +488,7 @@
   color: var(--accent);
   font-family: var(--font-mono, "Geist Mono", monospace);
 }
+
 .chipRemove {
   background: transparent;
   border: 0;
@@ -361,6 +497,7 @@
   font-size: 11px;
   padding: 0;
 }
+
 .chipInput {
   flex: 1;
   border: 0;
@@ -373,40 +510,18 @@
   font-family: inherit;
 }
 
-/* ── Raw WHERE editor ────────────────────────────────────────────────────────*/
-.rawEditor {
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--elevated, var(--surface));
-  padding: 4px;
-  font-size: 12px;
-  font-family: var(--font-mono, "Geist Mono", monospace);
-  min-height: 60px;
-  max-height: 180px;
-  overflow: auto;
-}
-
-/* Raw parse error banner */
-.rawError {
-  font-size: 11px;
-  padding: 4px 8px;
-  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-  color: var(--danger);
-  border-radius: var(--radius-sm);
-  white-space: pre-wrap;
-}
-
 /* ── Reduced-motion overrides ────────────────────────────────────────────────*/
+
 @media (prefers-reduced-motion: reduce) {
-  .modeBtn,
-  .collapseBtn,
-  .addBtn,
-  .removeBtn,
   .columnTrigger,
   .columnOption,
   .opSelect,
-  .valueInput {
+  .valueInput,
+  .iconBtn,
+  .footerBtn,
+  .unsetBtn,
+  .applyAllPrimary,
+  .applyAllChevron {
     transition: none;
   }
 }
