@@ -8,6 +8,34 @@
   flex: 0 0 auto;
 }
 
+.filterToggle {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0 8px;
+  margin-left: auto;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm, 4px);
+  transition: color 0.1s;
+}
+
+.filterToggle:hover {
+  color: var(--text);
+}
+
+.filterToggle[data-active="true"] {
+  color: var(--accent);
+}
+
+.filterToggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .tab {
   appearance: none;
   background: transparent;

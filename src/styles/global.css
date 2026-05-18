@@ -58,6 +58,7 @@
   --danger: #dc2626;
   --warning: #d97706;
   --success: #16a34a;
+  --success-soft: rgba(22, 163, 74, 0.12);
   --info: #2563EB;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
@@ -99,6 +100,7 @@
   --danger: #f87171;
   --warning: #fbbf24;
   --success: #34d399;
+  --success-soft: rgba(74, 222, 128, 0.12);
   --info: #60A5FA;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);

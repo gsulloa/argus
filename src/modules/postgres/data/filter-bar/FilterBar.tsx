@@ -1,420 +1,496 @@
-import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, Plus } from "lucide-react";
-import { ConditionRow } from "./ConditionRow";
-import { ConfirmDialog } from "./ConfirmDialog";
-import { OrGroup } from "./OrGroup";
-import { RawWhereEditor } from "./RawWhereEditor";
-import { compileWhere } from "./compileWhere";
 import {
-  addOrChildCondition,
-  addRootCondition,
-  addRootOrGroup,
-  emptyCondition,
-  emptyTree,
-  removeOrChild,
-  removeRootChild,
-  setOrChild,
-  setRootChild,
-  setRootCombinator,
+  forwardRef,
+  useCallback,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { ChevronDown, Check } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { ConditionRow } from "./ConditionRow";
+import {
+  addRow,
+  removeRow,
+  setRow,
+  setEnabled,
+  setCombinator,
+  clearAllRows,
 } from "./treeMutations";
 import {
   filterModelEquals,
-  getRootCombinator,
-  type Condition,
+  filterRowEquals,
+  isCompleteRow,
   type DataColumn,
-  type FilterMode,
   type FilterModel,
-  type FilterTree,
+  type FilterRow,
+  EMPTY_FILTER_ROW,
 } from "../types";
 import {
   FilterBarShell,
-  FilterBarHeader,
   FilterBarBody,
-  FilterBarActions,
-  FilterConnector,
-  FilterRowAddButton,
   FilterKeyHint,
-  PrimaryButton,
-  SecondaryButton,
-  EmptyBodyRow,
-  RootCombinatorToggle,
   type FilterBarHandle,
 } from "../../../shared/filter-bar";
 import styles from "./FilterBar.module.css";
+
+// ─── FilterBarProps ───────────────────────────────────────────────────────────
 
 export interface FilterBarProps {
   draft: FilterModel;
   applied: FilterModel;
   columns: DataColumn[];
-  /** Inline error to surface near the Raw editor (e.g. AppError::Postgres). */
-  rawError: string | null;
   onDraftChange(next: FilterModel): void;
-  onApply(): void;
-  onReset(): void;
-  onOpenInSqlEditor(): void;
-  /** Called when the user clicks the per-row Apply button on a root child. */
-  onApplyOnlyRow?: (index: number) => void;
+  /** Apply All — commits enabled+complete rows joined by draft.combinator. */
+  onApplyAll(): void;
+  /** Per-row Apply — replaces applied with [thisRow], preserving combinator. */
+  onApplyOnlyRow(index: number): void;
+  /** Opens the SQL editor with the compiled applied WHERE. */
+  onSqlClick(): void;
+  /** Hide the bar. */
+  onClose(): void;
 }
 
-export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(function FilterBar(
-  {
-    draft,
-    applied,
-    columns,
-    rawError,
-    onDraftChange,
-    onApply,
-    onReset,
-    onOpenInSqlEditor,
-    onApplyOnlyRow,
-  },
-  ref,
-) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [showConfirmRawToStructured, setShowConfirmRawToStructured] =
-    useState(false);
-  // rootRef attaches to the outermost DOM element so keyboard-shortcut
-  // handlers can scope containment checks to the entire filter bar.
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  // bodyRef allows focus() to query first focus target within the body.
-  const bodyRef = useRef<HTMLDivElement | null>(null);
+// ─── buildAppliedSet ─────────────────────────────────────────────────────────
 
-  const isDirty = useMemo(
-    () => !filterModelEquals(draft, applied),
-    [draft, applied],
-  );
+/**
+ * Returns a Set of draft row indices whose (column, op, value) triple matches
+ * any row in `applied.rows` (ignoring `enabled`).
+ */
+function buildAppliedSet(
+  draftRows: FilterRow[],
+  appliedRows: FilterRow[],
+): Set<number> {
+  const s = new Set<number>();
+  for (let i = 0; i < draftRows.length; i++) {
+    const dr = draftRows[i]!;
+    for (const ar of appliedRows) {
+      if (filterRowEquals(dr, ar)) {
+        s.add(i);
+        break;
+      }
+    }
+  }
+  return s;
+}
 
-  const updateTree = useCallback(
-    (next: FilterTree) => {
-      onDraftChange({ ...draft, tree: next });
+// ─── FilterBar ───────────────────────────────────────────────────────────────
+
+export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
+  function FilterBar(
+    {
+      draft,
+      applied,
+      columns,
+      onDraftChange,
+      onApplyAll,
+      onApplyOnlyRow,
+      onSqlClick,
+      onClose,
     },
-    [draft, onDraftChange],
-  );
-
-  function setMode(nextMode: FilterMode) {
-    if (nextMode === draft.mode) return;
-    if (nextMode === "raw") {
-      // Structured → Raw: seed editor with compiled WHERE body.
-      const compiled = compileWhere(draft, columns);
-      onDraftChange({ ...draft, mode: "raw", raw: compiled.body });
-      return;
-    }
-    // Raw → Structured.
-    const hasRaw = draft.raw.trim().length > 0;
-    if (hasRaw) {
-      setShowConfirmRawToStructured(true);
-      return;
-    }
-    // No raw body to lose — just flip.
-    onDraftChange({ ...draft, mode: "structured", raw: "" });
-  }
-
-  function confirmRawToStructured() {
-    onDraftChange({ mode: "structured", tree: emptyTree(), raw: "" });
-    setShowConfirmRawToStructured(false);
-  }
-
-  // Scoped keyboard shortcuts: Cmd+Enter applies; Esc discards draft.
-  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    const root = rootRef.current;
-    if (!root) return;
-    if (!root.contains(document.activeElement)) return;
-    const isApply =
-      (e.metaKey || e.ctrlKey) && e.key === "Enter" && !e.shiftKey;
-    if (isApply) {
-      e.preventDefault();
-      onApply();
-      return;
-    }
-    if (e.key === "Escape" && isDirty) {
-      e.preventDefault();
-      onDraftChange(applied);
-    }
-  }
-
-  // Imperative focus() method exposed via ref.
-  // Resolves focus target in order per Decision 2.
-  useImperativeHandle(
     ref,
-    () => ({
-      focus() {
-        function focusFirst() {
-          const body = bodyRef.current;
-          if (!body) return;
-          // Find the element marked as the focus target.
-          const target = body.querySelector<HTMLElement>(
-            "[data-filter-focus-target='true']",
-          );
-          if (target) {
-            // If the target is a CodeMirror container, focus its contenteditable.
-            const cmContent = target.querySelector<HTMLElement>(".cm-content");
-            if (cmContent) {
-              cmContent.focus();
-              return;
-            }
-            // If the target itself is focusable (button, input, etc.), focus it directly.
-            const tag = target.tagName;
-            if (tag === "BUTTON" || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
-              target.focus();
-              return;
-            }
-            // Otherwise, find the first focusable child inside the target.
-            const child = target.querySelector<HTMLElement>(
-              "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]",
-            );
-            child?.focus();
-            return;
-          }
-          // Fallback: first focusable element inside a container marked with the attribute.
-          const container = body.querySelector<HTMLElement>(
-            "[data-filter-focus-target-container='true']",
-          );
-          const child = container?.querySelector<HTMLElement>(
-            "button:not([disabled]), input:not([disabled]), textarea:not([disabled])",
-          );
-          child?.focus();
-        }
+  ) {
+    const rootRef = useRef<HTMLDivElement | null>(null);
 
-        if (collapsed) {
-          setCollapsed(false);
-          // Wait for the state-driven reveal before querying the DOM.
-          requestAnimationFrame(focusFirst);
+    // Transient "no filters enabled" inline status.
+    const [transientStatus, setTransientStatus] = useState<string | null>(null);
+    const transientTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const isDirty = useMemo(
+      () => !filterModelEquals(draft, applied),
+      [draft, applied],
+    );
+
+    // Per-draft-row Applied set.
+    const appliedSet = useMemo(
+      () => buildAppliedSet(draft.rows, applied.rows),
+      [draft.rows, applied.rows],
+    );
+
+    // Ensure at least one row is always rendered.
+    const rows = draft.rows.length > 0 ? draft.rows : [EMPTY_FILTER_ROW];
+
+    // ── Apply All handler with "no filters" feedback ──────────────────────────
+
+    const handleApplyAll = useCallback(() => {
+      const eligible = draft.rows.filter((r) => r.enabled && isCompleteRow(r));
+      if (eligible.length === 0) {
+        if (transientTimerRef.current) clearTimeout(transientTimerRef.current);
+        setTransientStatus("No filters enabled");
+        transientTimerRef.current = setTimeout(() => {
+          setTransientStatus(null);
+        }, 2000);
+      }
+      onApplyAll();
+    }, [draft.rows, onApplyAll]);
+
+    // ── Draft mutation helpers ─────────────────────────────────────────────────
+
+    const handleRowChange = useCallback(
+      (i: number, next: FilterRow) => {
+        onDraftChange({ ...draft, rows: setRow(draft, i, next).rows });
+      },
+      [draft, onDraftChange],
+    );
+
+    const handleSetEnabled = useCallback(
+      (i: number, en: boolean) => {
+        onDraftChange(setEnabled(draft, i, en));
+      },
+      [draft, onDraftChange],
+    );
+
+    const handleInsertBelow = useCallback(
+      (i: number) => {
+        onDraftChange(addRow(draft, i + 1));
+      },
+      [draft, onDraftChange],
+    );
+
+    const handleRemove = useCallback(
+      (i: number) => {
+        onDraftChange(removeRow(draft, i));
+      },
+      [draft, onDraftChange],
+    );
+
+    // ── Unset ─────────────────────────────────────────────────────────────────
+
+    const handleUnset = useCallback(() => {
+      onDraftChange(clearAllRows(draft));
+    }, [draft, onDraftChange]);
+
+    // ── Combinator change (from chevron menu) ─────────────────────────────────
+
+    const handleCombinatorAndApply = useCallback(
+      (combo: "AND" | "OR") => {
+        const next = setCombinator(draft, combo);
+        onDraftChange(next);
+        // Apply with new combinator immediately.
+        const eligible = next.rows.filter((r) => r.enabled && isCompleteRow(r));
+        if (eligible.length === 0) {
+          if (transientTimerRef.current) clearTimeout(transientTimerRef.current);
+          setTransientStatus("No filters enabled");
+          transientTimerRef.current = setTimeout(() => setTransientStatus(null), 2000);
+        }
+        onApplyAll();
+      },
+      [draft, onDraftChange, onApplyAll],
+    );
+
+    // ── Keyboard shortcuts ────────────────────────────────────────────────────
+
+    const onKeyDown = useCallback(
+      (e: React.KeyboardEvent<HTMLDivElement>) => {
+        const root = rootRef.current;
+        if (!root) return;
+        if (!root.contains(document.activeElement)) return;
+
+        // Don't steal keys from CodeMirror.
+        if ((document.activeElement as HTMLElement | null)?.closest(".cm-editor")) return;
+
+        const meta = e.metaKey || e.ctrlKey;
+        if (!meta) return;
+
+        // ⌘F → close (hide) the bar when focused inside it.
+        if (e.key === "f" && !e.shiftKey && !e.altKey) {
+          e.preventDefault();
+          onClose();
           return;
         }
-        focusFirst();
+
+        // ⌘↵ → Apply All with AND.
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          const next = setCombinator(draft, "AND");
+          onDraftChange(next);
+          handleApplyAll();
+          return;
+        }
+
+        // ⇧⌘↵ → Apply All with OR.
+        if (e.key === "Enter" && e.shiftKey) {
+          e.preventDefault();
+          const next = setCombinator(draft, "OR");
+          onDraftChange(next);
+          handleApplyAll();
+          return;
+        }
+
+        // ⌘I → insert row below focused row.
+        if (e.key === "i" && !e.shiftKey) {
+          e.preventDefault();
+          const activeEl = document.activeElement as HTMLElement | null;
+          const rowEl = activeEl?.closest("[data-filter-row-index]") as HTMLElement | null;
+          const idx = rowEl ? parseInt(rowEl.dataset.filterRowIndex ?? "-1", 10) : -1;
+          const insertAt = idx >= 0 ? idx + 1 : draft.rows.length;
+          onDraftChange(addRow(draft, insertAt));
+          requestAnimationFrame(() => {
+            const newRowEl = root.querySelector(
+              `[data-filter-row-index="${insertAt}"] [data-filter-control="column"] button`,
+            ) as HTMLElement | null;
+            newRowEl?.focus();
+          });
+          return;
+        }
+
+        // ⌘⇧I → remove focused row (or clear if last).
+        if (e.key === "i" && e.shiftKey) {
+          e.preventDefault();
+          const activeEl = document.activeElement as HTMLElement | null;
+          const rowEl = activeEl?.closest("[data-filter-row-index]") as HTMLElement | null;
+          const idx = rowEl ? parseInt(rowEl.dataset.filterRowIndex ?? "-1", 10) : -1;
+          const control = (activeEl?.closest("[data-filter-control]") as HTMLElement | null)
+            ?.dataset.filterControl ?? "column";
+          const nextDraft = removeRow(draft, idx >= 0 ? idx : 0);
+          onDraftChange(nextDraft);
+          const focusIdx = Math.max(0, idx - 1);
+          requestAnimationFrame(() => {
+            const targetEl = root.querySelector(
+              `[data-filter-row-index="${focusIdx}"] [data-filter-control="${control}"]`,
+            ) as HTMLElement | null;
+            const focusable = targetEl?.tagName === "SPAN"
+              ? (targetEl.querySelector("button, input, select") as HTMLElement | null)
+              : targetEl;
+            focusable?.focus();
+          });
+          return;
+        }
+
+        // ⌘↑ → move focus to same control on row above.
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          const activeEl = document.activeElement as HTMLElement | null;
+          const rowEl = activeEl?.closest("[data-filter-row-index]") as HTMLElement | null;
+          if (!rowEl) return;
+          const idx = parseInt(rowEl.dataset.filterRowIndex ?? "0", 10);
+          if (idx <= 0) return;
+          const control = (activeEl?.closest("[data-filter-control]") as HTMLElement | null)
+            ?.dataset.filterControl ?? "value";
+          const targetEl = root.querySelector(
+            `[data-filter-row-index="${idx - 1}"] [data-filter-control="${control}"]`,
+          ) as HTMLElement | null;
+          const focusable = targetEl?.tagName === "SPAN"
+            ? (targetEl.querySelector("button, input, select") as HTMLElement | null)
+            : targetEl;
+          focusable?.focus();
+          return;
+        }
+
+        // ⌘↓ → move focus to same control on row below.
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          const activeEl = document.activeElement as HTMLElement | null;
+          const rowEl = activeEl?.closest("[data-filter-row-index]") as HTMLElement | null;
+          if (!rowEl) return;
+          const idx = parseInt(rowEl.dataset.filterRowIndex ?? "0", 10);
+          if (idx >= draft.rows.length - 1) return;
+          const control = (activeEl?.closest("[data-filter-control]") as HTMLElement | null)
+            ?.dataset.filterControl ?? "value";
+          const targetEl = root.querySelector(
+            `[data-filter-row-index="${idx + 1}"] [data-filter-control="${control}"]`,
+          ) as HTMLElement | null;
+          const focusable = targetEl?.tagName === "SPAN"
+            ? (targetEl.querySelector("button, input, select") as HTMLElement | null)
+            : targetEl;
+          focusable?.focus();
+          return;
+        }
+
+        // ⌘← → open column picker on focused row.
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          const activeEl = document.activeElement as HTMLElement | null;
+          const rowEl = activeEl?.closest("[data-filter-row-index]") as HTMLElement | null;
+          if (!rowEl) return;
+          const idx = parseInt(rowEl.dataset.filterRowIndex ?? "0", 10);
+          const colTrigger = root.querySelector(
+            `[data-filter-row-index="${idx}"] [data-filter-control="column"] button`,
+          ) as HTMLElement | null;
+          colTrigger?.click();
+          colTrigger?.focus();
+          return;
+        }
       },
-    }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [collapsed, draft.mode, draft.tree.children.length],
-  );
-
-  // The outer wrapper is a display:contents div that carries the ref and
-  // onKeyDown handler. display:contents removes its layout box so FilterBarShell
-  // remains the visual root — the wrapper is transparent to CSS layout while
-  // still capturing DOM events and providing the rootRef containment check.
-  return (
-    <div ref={rootRef} onKeyDown={onKeyDown} className={styles.root}>
-      <FilterBarShell>
-        <FilterBarHeader>
-          {/*
-           * Mode toggle: kept as role="tablist" / role="tab" to preserve the
-           * existing test contract (getByRole("tab", { name: "Structured" })).
-           * TODO: migrate to FilterSegmentedToggle once tests are updated to
-           * query role="radio" instead of role="tab".
-           */}
-          <div
-            className={styles.modeToggle}
-            role="tablist"
-            aria-label="Filter mode"
-          >
-            <button
-              type="button"
-              role="tab"
-              className={styles.modeBtn}
-              data-active={draft.mode === "structured" ? "true" : "false"}
-              aria-selected={draft.mode === "structured"}
-              onClick={() => setMode("structured")}
-            >
-              Structured
-            </button>
-            <button
-              type="button"
-              role="tab"
-              className={styles.modeBtn}
-              data-active={draft.mode === "raw" ? "true" : "false"}
-              aria-selected={draft.mode === "raw"}
-              onClick={() => setMode("raw")}
-            >
-              Raw SQL
-            </button>
-          </div>
-          <button
-            type="button"
-            className={styles.collapseBtn}
-            aria-label={collapsed ? "Expand filter bar" : "Collapse filter bar"}
-            onClick={() => setCollapsed((v) => !v)}
-          >
-            {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-          </button>
-        </FilterBarHeader>
-        {!collapsed && (
-          <>
-            <FilterBarBody>
-              <div ref={bodyRef} style={{ display: "contents" }}>
-                {draft.mode === "structured" ? (
-                  <StructuredBody
-                    tree={draft.tree}
-                    columns={columns}
-                    onTreeChange={updateTree}
-                    onApplyOnlyRow={onApplyOnlyRow}
-                  />
-                ) : (
-                  <RawBody
-                    value={draft.raw}
-                    rawError={rawError}
-                    onChange={(next) => onDraftChange({ ...draft, raw: next })}
-                  />
-                )}
-              </div>
-            </FilterBarBody>
-            <FilterBarActions
-              left={
-                <>
-                  <SecondaryButton onClick={onOpenInSqlEditor} ariaLabel="Open in SQL Editor">
-                    <ExternalLink size={11} />
-                    <span style={{ marginLeft: 4 }}>Open in SQL Editor</span>
-                  </SecondaryButton>
-                  <SecondaryButton onClick={onReset}>Reset</SecondaryButton>
-                  <FilterKeyHint keys="⎋" />
-                </>
-              }
-              right={
-                <>
-                  <FilterKeyHint keys="⌘↵" />
-                  <PrimaryButton
-                    onClick={onApply}
-                    dirty={isDirty}
-                    ariaLabel={isDirty ? "Apply (unsaved changes)" : "Apply"}
-                  >
-                    Apply
-                  </PrimaryButton>
-                </>
-              }
-            />
-          </>
-        )}
-        {showConfirmRawToStructured && (
-          <ConfirmDialog
-            title="Switch to structured?"
-            message="Your raw WHERE will be discarded."
-            cancelLabel="Cancel"
-            confirmLabel="Switch"
-            destructive
-            onCancel={() => setShowConfirmRawToStructured(false)}
-            onConfirm={confirmRawToStructured}
-          />
-        )}
-      </FilterBarShell>
-    </div>
-  );
-});
-
-interface StructuredBodyProps {
-  tree: FilterTree;
-  columns: DataColumn[];
-  onTreeChange(next: FilterTree): void;
-  onApplyOnlyRow?: (index: number) => void;
-}
-
-function StructuredBody({ tree, columns, onTreeChange, onApplyOnlyRow }: StructuredBodyProps) {
-  if (tree.children.length === 0) {
-    return (
-      <EmptyBodyRow label="No filters yet">
-        {/* data-filter-focus-target-container marks the first add button for
-            keyboard focus routing (⌘F → focus()). */}
-        <span data-filter-focus-target-container="true" style={{ display: "contents" }}>
-          <FilterRowAddButton
-            onClick={() => onTreeChange(addRootCondition(tree, emptyCondition()))}
-          >
-            <Plus size={10} /> AND row
-          </FilterRowAddButton>
-        </span>
-        <FilterRowAddButton
-          onClick={() => onTreeChange(addRootOrGroup(tree, emptyCondition()))}
-        >
-          <Plus size={10} /> OR group
-        </FilterRowAddButton>
-      </EmptyBodyRow>
+      [rootRef, draft, onDraftChange, handleApplyAll, onClose],
     );
-  }
 
-  const rootCombinator = getRootCombinator(tree);
+    // ── Imperative focus handle ───────────────────────────────────────────────
 
-  return (
-    <div className={styles.structuredBody}>
-      {tree.children.map((node, i) => {
-        if (node.kind === "condition") {
-          const cond: Condition = {
-            column: node.column,
-            op: node.op,
-            value: node.value,
-          };
-          return (
-            <div key={i} className={styles.row}>
-              {i > 0 && <FilterConnector label={rootCombinator} />}
+    useImperativeHandle(
+      ref,
+      () => ({
+        focus() {
+          const root = rootRef.current;
+          if (!root) return;
+          // Try first row's value input.
+          const valueInput = root.querySelector(
+            '[data-filter-row-index="0"] [data-filter-control="value"] input',
+          ) as HTMLElement | null;
+          if (valueInput) {
+            valueInput.focus();
+            return;
+          }
+          // Fallback: column picker button.
+          const colBtn = root.querySelector(
+            '[data-filter-row-index="0"] [data-filter-control="column"] button',
+          ) as HTMLElement | null;
+          colBtn?.focus();
+        },
+      }),
+      [],
+    );
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const applyAllLabel =
+      draft.combinator === "OR" ? "Apply All (OR)" : "Apply All";
+
+    return (
+      <div ref={rootRef} onKeyDown={onKeyDown} className={styles.root} data-filter-bar-root="true">
+        <FilterBarShell>
+          <FilterBarBody>
+            {rows.map((row, i) => (
               <ConditionRow
-                condition={cond}
+                key={i}
+                row={row}
+                index={i}
+                totalRows={rows.length}
+                isApplied={appliedSet.has(i)}
                 columns={columns}
                 isFocusTarget={i === 0}
-                onChange={(next) =>
-                  onTreeChange(
-                    setRootChild(tree, i, { kind: "condition", ...next }),
-                  )
-                }
-                onRemove={() => onTreeChange(removeRootChild(tree, i))}
-                onApplyOnly={onApplyOnlyRow ? () => onApplyOnlyRow(i) : undefined}
+                onChange={(next) => handleRowChange(i, next)}
+                onSetEnabled={(en) => handleSetEnabled(i, en)}
+                onApplyOnly={() => onApplyOnlyRow(i)}
+                onInsertBelow={() => handleInsertBelow(i)}
+                onRemove={() => handleRemove(i)}
               />
+            ))}
+          </FilterBarBody>
+
+          {/* Footer */}
+          <footer className={styles.footer}>
+            <div className={styles.footerLeft}>
+              {/* Export placeholder */}
+              <button
+                type="button"
+                className={styles.footerBtn}
+                disabled
+                aria-disabled="true"
+                title="Export coming soon"
+              >
+                Export
+              </button>
+
+              {/* SQL button */}
+              <button
+                type="button"
+                className={styles.footerBtn}
+                onClick={onSqlClick}
+              >
+                SQL
+              </button>
+
+              {/* Shortcut hints */}
+              <span className={styles.footerHints}>
+                <span className={styles.hintItem}>
+                  Show: <FilterKeyHint keys="⌘F" />
+                </span>
+                <span className={styles.hintItem}>
+                  Insert: <FilterKeyHint keys="⌘I" />
+                </span>
+                <span className={styles.hintItem}>
+                  Remove: <FilterKeyHint keys="⌘⇧I" />
+                </span>
+                <span className={styles.hintItem}>
+                  Apply All: <FilterKeyHint keys="⌘↵" />
+                </span>
+                <span className={styles.hintItem}>
+                  Up: <FilterKeyHint keys="⌘↑" />
+                </span>
+                <span className={styles.hintItem}>
+                  Down: <FilterKeyHint keys="⌘↓" />
+                </span>
+                <span className={styles.hintItem}>
+                  Columns: <FilterKeyHint keys="⌘←" />
+                </span>
+              </span>
+
+              {/* Operator: Unset */}
+              <span className={styles.hintItem}>
+                Operator:{" "}
+                <button
+                  type="button"
+                  className={styles.unsetBtn}
+                  onClick={handleUnset}
+                >
+                  Unset
+                </button>
+              </span>
             </div>
-          );
-        }
-        return (
-          <div key={i} className={styles.row}>
-            {i > 0 && <FilterConnector label={rootCombinator} />}
-            <OrGroup
-              group={node}
-              columns={columns}
-              isFocusTarget={i === 0}
-              onUpdateChild={(childIndex, next) =>
-                onTreeChange(
-                  setOrChild(tree, i, childIndex, {
-                    kind: "condition",
-                    ...next,
-                  }),
-                )
-              }
-              onRemoveChild={(childIndex) =>
-                onTreeChange(removeOrChild(tree, i, childIndex))
-              }
-              onAddChild={() =>
-                onTreeChange(addOrChildCondition(tree, i, emptyCondition()))
-              }
-              onRemoveGroup={() => onTreeChange(removeRootChild(tree, i))}
-              onApplyOnly={onApplyOnlyRow ? () => onApplyOnlyRow(i) : undefined}
-            />
-          </div>
-        );
-      })}
-      <div className={styles.addRow}>
-        <RootCombinatorToggle
-          value={rootCombinator}
-          onChange={(c) => onTreeChange(setRootCombinator(tree, c))}
-        />
-        <FilterRowAddButton
-          onClick={() => onTreeChange(addRootCondition(tree, emptyCondition()))}
-        >
-          <Plus size={10} /> AND row
-        </FilterRowAddButton>
-        <FilterRowAddButton
-          onClick={() => onTreeChange(addRootOrGroup(tree, emptyCondition()))}
-        >
-          <Plus size={10} /> OR group
-        </FilterRowAddButton>
+
+            {/* Right side: dirty pip + Apply All composed button */}
+            <div className={styles.footerRight}>
+              {isDirty && <span className={styles.dirtyPip} aria-label="Unsaved changes" title="Unsaved changes" />}
+
+              {/* Transient status */}
+              {transientStatus && (
+                <span className={styles.transientStatus}>{transientStatus}</span>
+              )}
+
+              {/* Apply All composed button */}
+              <div className={styles.applyAllComposed}>
+                <button
+                  type="button"
+                  className={styles.applyAllPrimary}
+                  onClick={handleApplyAll}
+                >
+                  {applyAllLabel}
+                </button>
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger asChild>
+                    <button
+                      type="button"
+                      className={styles.applyAllChevron}
+                      aria-label="Apply All options"
+                    >
+                      <ChevronDown size={10} />
+                    </button>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content
+                      className={styles.applyAllMenu}
+                      align="end"
+                      sideOffset={4}
+                    >
+                      <DropdownMenu.Item
+                        className={styles.applyAllMenuItem}
+                        onSelect={() => handleCombinatorAndApply("AND")}
+                      >
+                        <span className={styles.menuItemCheck}>
+                          {draft.combinator === "AND" && <Check size={11} />}
+                        </span>
+                        <span>Apply All Checked Filters with AND – Default</span>
+                        <kbd className={styles.menuItemHint}>⌘↵</kbd>
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        className={styles.applyAllMenuItem}
+                        onSelect={() => handleCombinatorAndApply("OR")}
+                      >
+                        <span className={styles.menuItemCheck}>
+                          {draft.combinator === "OR" && <Check size={11} />}
+                        </span>
+                        <span>Apply All Checked Filters with OR</span>
+                        <kbd className={styles.menuItemHint}>⇧⌘↵</kbd>
+                      </DropdownMenu.Item>
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Root>
+              </div>
+            </div>
+          </footer>
+        </FilterBarShell>
       </div>
-    </div>
-  );
-}
-
-interface RawBodyProps {
-  value: string;
-  rawError: string | null;
-  onChange(next: string): void;
-}
-
-function RawBody({ value, rawError, onChange }: RawBodyProps) {
-  return (
-    <>
-      <RawWhereEditor value={value} onChange={onChange} />
-      {rawError && <div className={styles.rawError}>{rawError}</div>}
-    </>
-  );
-}
+    );
+  },
+);

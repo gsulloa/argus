@@ -67,6 +67,7 @@ Single family, two faces. No Inter, no SF Pro, no Söhne.
 | `--accent-soft` | `rgba(168,85,247,0.12)` | Active row tint, palette active row tint |
 | `--accent-glow` | `rgba(168,85,247,0.18)` | Soft glow under accent stripes |
 | `--success` | `#4ADE80` | Connected state, paid pill |
+| `--success-soft` | `rgba(74,222,128,0.12)` | Filter row "applied" tint (input background) |
 | `--warning` | `#FBBF24` | Replication lag, pending pill, nullable column flag |
 | `--danger` | `#F87171` | Errors, refunded pill, destructive buttons |
 | `--info` | `#60A5FA` | Read-only notice, shipped pill |
@@ -88,6 +89,7 @@ Light mode is a **redesign**, not an inversion. Surfaces are warm off-white, not
 | `--border-strong` | `#D4D4D0` |
 | `--accent` | `#7C3AED` (shifts darker for AA contrast on white) |
 | `--success` | `#16A34A` |
+| `--success-soft` | `rgba(22,163,74,0.12)` |
 | `--warning` | `#D97706` |
 | `--danger` | `#DC2626` |
 | `--info` | `#2563EB` |

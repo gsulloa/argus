@@ -628,17 +628,28 @@ The data viewer's loading state machine SHALL guarantee that, on a clean mount w
 
 ### Requirement: Filter bar surface
 
-The viewer tab SHALL render a filter bar pinned to the top of the data grid, above the column header row and below any tab title chrome. The filter bar MUST be the only filter surface in the data grid — there MUST NOT be a per-column header funnel or popover. Removing the popover MUST NOT remove the existing column-header sort affordance (sort remains accessible from the column header).
+The viewer tab SHALL conditionally render a filter bar pinned above the column header row and below any tab title chrome. The filter bar MUST be the only filter surface in the data grid — there MUST NOT be a per-column header funnel or popover. Removing the popover MUST NOT remove the existing column-header sort affordance (sort remains accessible from the column header).
 
-The bar MUST always be visible while a `postgres-table-data` tab is mounted; it MUST NOT auto-collapse on scroll. It MAY be collapsed manually by the user via a toggle (chevron) in the bar; the collapsed state MUST NOT discard any draft or applied filters.
+The bar MUST be **hidden by default** when a `postgres-table-data` tab is first opened (no persisted preference). When hidden, the bar MUST NOT reserve vertical space — the column header row MUST sit flush against the upper tab chrome. The user MUST be able to toggle the bar visible via either (a) the `Filter` icon button in the subtab header chrome, or (b) the `⌘F` (macOS) / `Ctrl+F` (other) keyboard shortcut. Visibility MUST be persisted per-table (see "Filter bar visibility persistence"). The previous chevron-collapse control inside the bar's header is REMOVED — there is no "collapse but stay reserving space" intermediate state.
 
-The bar MUST contain, in order: a Mode toggle (Structured / Raw SQL), the body for the active mode (the conditions UI for Structured, the WHERE editor for Raw), and an action row with `Reset`, `Apply`, and `Open in SQL Editor`. The `Apply` button MUST be the rightmost primary control.
+When visible, the bar MUST contain, top to bottom: a vertical stack of filter rows (each row: checkbox, column picker, operator picker, value input, Apply / Applied button, `−`, `+`), and a single-line footer strip (see "Filter bar footer Unset, Export, SQL"). When visible with no persisted rows, the bar MUST render exactly one empty row (the default empty state).
 
-While the table tab is focused and active AND the keyboard focus is not inside a CodeMirror editor surface (the SQL editor, the Raw WHERE editor, or any future CodeMirror surface), pressing `⌘F` (macOS) / `Ctrl+F` (other) MUST bring keyboard focus into the filter bar's body. The handler MUST resolve the focus target in this order: (a) if the bar is collapsed, expand it first; (b) if the body is in Structured mode and has at least one root child, focus the first row's column picker; (c) if the body is in Structured mode and has no rows, focus the `+ AND row` add button; (d) if the body is in Raw mode, focus the Raw WHERE editor textarea. The handler MUST call `preventDefault()` to suppress any platform/webview default search behavior. The handler MUST NOT fire on other tabs (it is scoped to the active table tab). The handler MUST NOT fire when the active subtab is `Structure` or `Raw` of the viewer tab (those subtabs do not host the filter bar).
+The `⌘F` shortcut MUST resolve as follows (the handler MUST call `preventDefault()` unless explicitly noted, and MUST be scoped to the active table tab on the `Data` subtab):
+- If the bar is **hidden**: show the bar AND move focus to the first row's value input.
+- If the bar is **visible** and focus is **outside** the bar: move focus to the first row's value input.
+- If the bar is **visible** and focus is **inside** the bar: hide the bar (preserve `draft` and `applied`).
+
+The handler MUST NOT fire on the `Structure` or `Raw` subtab. The handler MUST NOT fire when focus is inside a CodeMirror editor surface (allowing CodeMirror's built-in search to open).
+
+#### Scenario: Bar is hidden by default
+
+- **WHEN** the user opens a `postgres-table-data` tab for the first time
+- **THEN** the filter bar is not rendered
+- **AND** the column header row sits immediately under the subtab header chrome (no reserved space)
 
 #### Scenario: Bar is the only filter surface
 
-- **WHEN** the user opens a `postgres-table-data` tab
+- **WHEN** the user toggles the bar visible
 - **THEN** the filter bar is rendered above the data grid
 - **AND** there is no funnel icon or filter popover trigger on any column header
 
@@ -648,169 +659,393 @@ While the table tab is focused and active AND the keyboard focus is not inside a
 - **THEN** the existing sort cycle (`asc → desc → none`) fires
 - **AND** no filter popover is shown
 
-#### Scenario: Collapsing the bar preserves state
+#### Scenario: Cmd+F shows a hidden bar and focuses the first row
 
-- **WHEN** the bar has applied filters and the user toggles the bar collapsed, then expanded
-- **THEN** all applied and draft filters are preserved exactly
-
-#### Scenario: Cmd+F expands a collapsed bar and focuses the first row
-
-- **WHEN** the user has collapsed the bar with one root condition already present and the table tab is focused (focus is somewhere in the grid)
-- **AND** the user presses `⌘F` (macOS) or `Ctrl+F` (other)
-- **THEN** the bar expands
-- **AND** keyboard focus moves to the first row's column picker
+- **WHEN** the bar is hidden and the user presses `⌘F` (macOS) / `Ctrl+F` (other) while the Data subtab is active
+- **THEN** the filter bar becomes visible
+- **AND** keyboard focus moves to the first row's value input (or the column picker if the value input is not yet present, per implementation)
 - **AND** no browser/webview "find in page" UI appears
 
-#### Scenario: Cmd+F focuses the empty-state add button
+#### Scenario: Cmd+F focuses an already-visible bar
 
-- **WHEN** the user has an expanded bar with no rows (empty Structured body) and presses `⌘F` from anywhere outside the bar
-- **THEN** keyboard focus moves to the `+ AND row` button in the body's empty state
+- **WHEN** the bar is visible, focus is somewhere in the grid, and the user presses `⌘F`
+- **THEN** keyboard focus moves into the first row of the bar
+- **AND** the bar's visibility is unchanged
 
-#### Scenario: Cmd+F focuses the Raw WHERE editor when in Raw mode
+#### Scenario: Cmd+F hides a focused bar
 
-- **WHEN** the bar is in Raw mode and the user presses `⌘F` from outside the bar
-- **THEN** keyboard focus moves to the Raw WHERE editor textarea
+- **WHEN** the bar is visible, focus is inside one of its inputs, and the user presses `⌘F`
+- **THEN** the bar becomes hidden
+- **AND** `draft` and `applied` are preserved
+- **AND** focus moves to a sensible fallback (the data grid root, or the tab root)
 
 #### Scenario: Cmd+F does not fire from inside a CodeMirror editor
 
-- **WHEN** the user has keyboard focus inside the Raw WHERE editor or any other CodeMirror surface and presses `⌘F`
-- **THEN** the tab-level handler does NOT preventDefault
+- **WHEN** focus is inside any CodeMirror surface and the user presses `⌘F`
+- **THEN** the filter bar handler does NOT fire
 - **AND** CodeMirror's built-in search panel opens
 
-#### Scenario: Cmd+F is scoped to the active tab
+#### Scenario: Cmd+F is scoped to the active tab and Data subtab
 
-- **WHEN** the user has two `postgres-table-data` tabs open, the active tab is Tab A, and Tab B is mounted but not active
-- **AND** the user presses `⌘F`
-- **THEN** only Tab A's filter bar receives focus; Tab B's filter bar is unaffected
-
-#### Scenario: Cmd+F does not fire on the Structure or Raw subtab
-
+- **WHEN** two `postgres-table-data` tabs are open, the active tab is Tab A on its Data subtab, and the user presses `⌘F`
+- **THEN** only Tab A's filter bar visibility / focus changes
 - **WHEN** the user is on the Structure or Raw subtab of a `postgres-table-data` tab and presses `⌘F`
-- **THEN** the filter bar (which is not visible) does NOT receive focus
-- **AND** the active subtab does not change
+- **THEN** the filter bar handler does NOT fire
 
 ### Requirement: Filter draft and applied state
 
-`TableViewerTab` SHALL maintain two filter values for each tab: `draft` and `applied`. Only `applied` MUST be passed to `postgres_query_table` and `postgres_count_table`. Edits to the filter bar MUST update `draft` only. The bar MUST display a dirty indicator (a small `●` adjacent to the `Apply` button) whenever `draft` differs from `applied`. The bar MUST bind `Cmd+Enter` (macOS) / `Ctrl+Enter` (other) to "Apply" and `Esc` to "Discard draft" while focused. Pressing `Apply` MUST set `applied = draft`. Pressing `Reset` MUST set `draft` to the empty filter model AND set `applied` to the empty filter model in one update (clearing both at once). Discarding draft MUST set `draft = applied` (no fetch). Mode toggling rules are described under "Raw WHERE mode".
+`TableViewerTab` SHALL maintain two filter values for each tab: `draft` and `applied`, each of shape `FilterTree = { rows: FilterRow[], combinator: "AND" | "OR" }`. Only `applied` MUST be passed (after wire-shape conversion) to `postgres_query_table` and `postgres_count_table`. Edits to the filter bar (text input, operator changes, column changes, checkbox toggles, row insertions/removals, combinator menu picks) MUST update `draft` only. The bar MUST display a dirty indicator (a small `●` adjacent to the `Apply All` button) whenever `draft` differs from `applied`.
 
-In addition to the all-or-nothing Apply, each root child of the Structured body MUST render a per-row Apply affordance (a small `▶` icon-button at the row's right edge, `aria-label="Apply only this row"`, tooltip `"Apply only this row (replaces active filter)"`). Activating it MUST set `applied` to a `FilterModel` whose tree contains exactly that one child (preserving the child's full structure — if the child is an OR group, the whole group is applied as the only root child). The per-row Apply MUST NOT modify `draft`. After a per-row Apply, the dirty indicator MUST reflect that `draft` no longer equals `applied` (assuming the draft has more than one row). The compiled WHERE for a single-child applied tree MUST behave identically to a full Apply on a draft that has only that one row.
+The `Apply All` button and the `⌘↵` / `⇧⌘↵` shortcuts commit `draft` to `applied`. The per-row `Apply` button commits exactly that single row to `applied` (see "Per-row Apply and Applied visual state"). The `Unset` button resets `draft.rows` but does NOT touch `applied` (see "Filter bar footer Unset, Export, SQL").
+
+The previous `Reset` button and `Esc` discard-draft shortcut are REMOVED. There is no single-keystroke "revert draft to applied" affordance in the new design.
+
+Mode toggling is REMOVED — the bar has no Structured/Raw mode toggle. The filter bar is always in Structured mode. Switching to Raw is only reachable indirectly via `SQL` (footer button) which opens the SQL Editor with a compiled WHERE.
 
 #### Scenario: Editing a row updates draft only
 
-- **WHEN** the user adds a condition row and types into the value input
-- **THEN** the bar dirty indicator becomes visible
+- **WHEN** the user types into a row's value input
+- **THEN** the dirty indicator becomes visible
 - **AND** the data grid does NOT re-fetch
 - **AND** `applied` is unchanged
 
-#### Scenario: Apply commits draft and triggers fetch
+#### Scenario: Apply All commits draft and triggers fetch
 
-- **WHEN** the user has a dirty draft and presses `Apply` (or `Cmd+Enter`)
-- **THEN** `applied` becomes equal to `draft`
-- **AND** the dirty indicator disappears
+- **WHEN** the user has a dirty draft and clicks `Apply All` (or presses `⌘↵`)
+- **THEN** `applied` becomes equal to the enabled-complete subset of `draft.rows` joined by `draft.combinator`
+- **AND** the dirty indicator disappears (because remaining draft rows match applied rows by structural equality)
 - **AND** `postgres.queryTable` is invoked with the new `applied` filters
 
-#### Scenario: Esc discards draft to applied
+#### Scenario: Esc no longer discards draft
 
 - **WHEN** the user has a dirty draft and presses `Esc` while focused inside the bar
-- **THEN** `draft` returns to the value of `applied`
-- **AND** the dirty indicator disappears
+- **THEN** `draft` is unchanged
+- **AND** the dirty indicator remains visible
 - **AND** no fetch is triggered
-
-#### Scenario: Reset clears both draft and applied
-
-- **WHEN** the user has applied filters and presses `Reset`
-- **THEN** both `draft` and `applied` become empty
-- **AND** `postgres.queryTable` is invoked with no `filter_tree` and no `raw_where`
 
 #### Scenario: Per-row Apply replaces the active filter with that single row
 
-- **WHEN** the user has three rows in `draft` and clicks the per-row Apply button on the second row (a condition `status = "ok"`)
-- **THEN** `applied` becomes a tree whose only child is `{ kind: "condition", column: { kind: "named", name: "status" }, op: "=", value: "ok" }`
-- **AND** `draft` is unchanged (still has all three rows)
+- **WHEN** the user has three rows in `draft` and clicks the per-row Apply button on the second row
+- **THEN** `applied.rows === [thatRow]`
+- **AND** `applied.combinator === draft.combinator`
+- **AND** `draft` is unchanged
+
+#### Scenario: There is no Reset button
+
+- **WHEN** the user inspects the filter bar's UI
+- **THEN** there is no `Reset` button anywhere in the bar (footer or otherwise)
+- **AND** the closest equivalent is `Unset` which clears `draft.rows` only (see "Filter bar footer Unset, Export, SQL")
+
+### Requirement: Filter bar visibility persistence
+
+The viewer SHALL persist the filter bar's open/hidden state as a per-table viewer setting. The store key MUST be `filter_bar_visible` and MUST be scoped by `(connection_id, schema, relation)`. The default value MUST be `false` (hidden). Toggling the bar via the UI affordance or the `⌘F` shortcut MUST write the new value to the store synchronously so a subsequent reopen of the same table reflects the user's last choice. Toggling MUST NOT discard the in-memory `draft` filter rows — they MUST be preserved across hide/show within the same tab session. Toggling MUST NOT modify `applied` — a tab with applied filters remains filtered even while the bar is hidden.
+
+The toggle MUST be reachable via:
+- A `Filter` icon button rendered in the table tab's subtab header chrome (right side, aligned with other tab-chrome controls).
+- The `⌘F` (macOS) / `Ctrl+F` (other) keyboard shortcut while the table tab is focused and the active subtab is `Data`, scoped per the rules in the "Filter bar surface" requirement.
+
+#### Scenario: Bar defaults to hidden on first open
+
+- **WHEN** the user opens a `postgres-table-data` tab for a table with no persisted `filter_bar_visible` setting
+- **THEN** the filter bar is not rendered (no vertical space is reserved)
+- **AND** the `Filter` icon button in the subtab header chrome shows the inactive state
+
+#### Scenario: Visibility survives table reopen
+
+- **WHEN** the user opens table `users`, toggles the filter bar visible, then closes the tab
+- **AND** later reopens table `users` on the same connection
+- **THEN** the filter bar is rendered visible on reopen
+
+#### Scenario: Hiding preserves draft and applied state
+
+- **WHEN** the user has a dirty draft (e.g. one new row with value `"foo"`) AND has applied filters from earlier, and toggles the bar hidden
+- **AND** subsequently toggles the bar visible again
+- **THEN** the draft rows are restored exactly as before hiding
+- **AND** `applied` is unchanged throughout
+- **AND** the data grid was never re-fetched purely from the hide/show toggle
+
+#### Scenario: Hiding does NOT clear applied filters
+
+- **WHEN** the user has applied filters that produce a filtered grid and toggles the bar hidden
+- **THEN** the grid remains filtered
+- **AND** the `BottomBar` filter count badge still shows the number of applied filters
+
+### Requirement: Filter row inclusion checkbox
+
+The Structured filter row SHALL render a checkbox at its left edge whose checked state controls whether that row participates in `Apply All`. New rows MUST be created with `enabled = true`. The checkbox state MUST be part of the row's data model (a `enabled: boolean` field on each row) and MUST be persisted in the same model as `column` / `op` / `value`. Toggling the checkbox MUST update `draft` only (no auto-fetch). The checkbox state MUST NOT affect per-row Apply — the per-row Apply button MAY be activated on an unchecked row and MUST behave the same as on a checked row.
+
+The unchecked state MUST be visually distinct (greyed input, no "Applied" green) but the row MUST remain fully editable.
+
+#### Scenario: New row defaults to checked
+
+- **WHEN** the user adds a new filter row via `+` or `⌘I`
+- **THEN** the new row's checkbox is checked (`enabled = true`)
+
+#### Scenario: Unchecked row is excluded from Apply All
+
+- **WHEN** `draft` contains three rows (R1 checked, R2 unchecked, R3 checked) and the user presses `Apply All`
+- **THEN** `applied.rows` contains only R1 and R3
+- **AND** R2's value is unchanged in `draft`
+
+#### Scenario: Per-row Apply ignores checkbox state
+
+- **WHEN** the user clicks the per-row Apply button on an unchecked row R2
+- **THEN** `applied.rows` becomes `[R2]` regardless of R2's `enabled` flag
+
+#### Scenario: Toggling checkbox marks draft dirty but doesn't re-fetch
+
+- **WHEN** `draft === applied` and the user unchecks R1's checkbox
+- **THEN** the dirty indicator appears (draft ≠ applied)
+- **AND** `postgres.queryTable` is NOT invoked
+- **AND** the grid contents are unchanged
+
+### Requirement: Per-row Apply and Applied visual state
+
+Every Structured filter row SHALL render a `Apply` / `Applied` button at its right edge (before the `+` / `−` controls). The button MUST show the label `Apply` (neutral / muted color) when the row is NOT part of `applied`, and `Applied` (green, using the `--success` token) when the row IS part of `applied`. A row is "part of `applied`" iff there exists a row in `applied.rows` whose `(column, op, value)` triple is structurally equal to the draft row's triple, regardless of either row's `enabled` flag.
+
+When a row is in the Applied state:
+- The button label MUST read `Applied`.
+- The row's value input MUST render with the `--success-soft` background tint and a `--success` border.
+- The button MUST remain clickable; clicking it MUST re-apply only that row (idempotent).
+
+Activating the per-row Apply button MUST set `applied` to `{ rows: [thisRow], combinator: draft.combinator }`. The button MUST NOT modify `draft`. After a per-row Apply with more than one draft row, the dirty indicator MUST reflect that `draft.rows.length !== applied.rows.length`.
+
+Editing any of `column`, `op`, `value`, or `enabled` on an Applied row MUST cause structural equality with `applied` to break for that row, and the row's Applied state MUST drop to the neutral `Apply` state on the next render.
+
+#### Scenario: Applied state is per-row and based on structural equality
+
+- **WHEN** `applied.rows = [{ column: "status", op: "=", value: "ok", enabled: true }]`
+- **AND** `draft.rows[0] = { column: "status", op: "=", value: "ok", enabled: true }`
+- **AND** `draft.rows[1] = { column: "id", op: ">", value: "100", enabled: true }`
+- **THEN** `draft.rows[0]` renders with the green Applied badge
+- **AND** `draft.rows[1]` renders with the neutral Apply button
+
+#### Scenario: Editing an applied row drops the Applied badge
+
+- **WHEN** a row is in the Applied state and the user changes its `value` from `"ok"` to `"okay"`
+- **THEN** the row's Applied badge becomes the neutral `Apply` label
+- **AND** the row's input loses the green tint
+
+#### Scenario: Per-row Apply replaces the active filter with that single row
+
+- **WHEN** `draft` contains three rows and the user clicks the per-row Apply button on the second row (`{ column: "status", op: "=", value: "ok" }`)
+- **THEN** `applied.rows === [{ column: "status", op: "=", value: "ok", enabled: ... }]`
+- **AND** `applied.combinator === draft.combinator`
+- **AND** `draft` is unchanged
 - **AND** the dirty indicator shows that `draft ≠ applied`
-- **AND** `postgres.queryTable` is invoked with the single-condition `filter_tree`
+- **AND** `postgres.queryTable` is invoked with the single-row `filter_tree`
 
-#### Scenario: Per-row Apply on an OR-group row applies the whole group
+#### Scenario: Per-row Apply on an Applied row is idempotent
 
-- **WHEN** `draft` contains one condition row and one OR group of two conditions, and the user clicks the per-row Apply button on the OR group row
-- **THEN** `applied` becomes a tree whose only child is that OR group (with both inner conditions)
-- **AND** the compiled WHERE is `(p_or1 OR p_or2)`
+- **WHEN** a row is already in the Applied state and the user clicks its `Applied` button
+- **THEN** `applied.rows` still equals `[thatRow]`
+- **AND** no observable state changes (the fetch is debounced / deduped by the data hook)
 
-#### Scenario: Per-row Apply preserves the root combinator field
+### Requirement: Apply All with persistent root combinator
 
-- **WHEN** `draft.tree.combinator === "OR"` and the user clicks per-row Apply on any row
-- **THEN** `applied.tree.combinator === "OR"` is preserved on the single-child tree (no-op semantically, but the field round-trips)
+The filter bar SHALL render an `Apply All` button at its bottom-right. The button is composed of two affordances: a primary click area labeled `Apply All` and a chevron (`▾`) that opens a menu. The menu MUST contain exactly two items, in order:
 
-### Requirement: AND root with OR groups
+1. `Apply All Checked Filters with AND – Default` with shortcut `⌘↵`
+2. `Apply All Checked Filters with OR` with shortcut `⇧⌘↵`
 
-The Structured filter model SHALL be a tree with an explicit root combinator (`combinator: "AND" | "OR"`, defaulting to `"AND"` when absent). Children of the root are either condition leaves or OR groups. An OR group MUST contain at least one condition leaf and MUST NOT contain another group (one level of nesting maximum). Removing the last condition from an OR group MUST collapse the group node out of the tree. The bar MUST expose two add affordances: `+ AND row` (adds a condition leaf as a sibling of root children) and `+ OR group` (adds an OR group with one empty condition row inside). The names of the add buttons refer to ROW TYPES (single condition vs. OR-group), not to the root combinator — they are stable regardless of `combinator`.
+The active combinator (`draft.combinator`) MUST be reflected in the menu with a `✓` checkmark next to the corresponding item. Activating either menu item MUST first set `draft.combinator` to the corresponding value (`"AND"` or `"OR"`), then immediately perform Apply All.
 
-The bar MUST expose a segmented `AND | OR` toggle adjacent to the add buttons that switches the root `combinator` between the two values. The toggle MUST be hidden when the tree has zero children (no semantic effect). When `combinator === "OR"`, the inline inter-row connector pills (between root children) MUST read `"OR"` instead of `"AND"`. Toggling the combinator MUST update `draft.tree.combinator` only (it does NOT auto-apply); the user must press `Apply` for the new combinator to take effect.
+Activating the primary click area MUST perform Apply All using whatever value `draft.combinator` currently holds. The button label MUST stay `Apply All` regardless of combinator; the active combinator is signaled only via the menu's checkmark (and OPTIONALLY a small text suffix like `(OR)` when `draft.combinator === "OR"` — implementation MAY add this for clarity).
 
-The compiled `WHERE` body MUST join root children with `" AND "` or `" OR "` based on `tree.combinator`. Each OR group MUST always be wrapped in parentheses regardless of the root combinator. An empty tree (no children) MUST result in no `WHERE` clause being emitted. The Rust `FilterTree` struct MUST tolerate the absence of the `combinator` field on the wire (`#[serde(default)]` → `RootCombinator::And`).
+`draft.combinator` MUST persist across Applies (it does NOT reset to `"AND"` after each Apply). The combinator MUST be persisted in per-table viewer settings under `filter_root_combinator` (default `"AND"`), scoped by `(connection_id, schema, relation)`. The persisted value MUST be reloaded when the tab is reopened.
+
+Apply All MUST set `applied` to:
+```
+{
+  rows: draft.rows.filter(r => r.enabled && isComplete(r)),
+  combinator: draft.combinator
+}
+```
+A row is `complete` when `column` is set, `op` is set, AND the operator has a non-empty `value` (where required by the operator — `IS NULL` / `IS NOT NULL` do not require a value).
+
+If the filtered subset is empty, the Apply All MUST send no `filter_tree` (no WHERE clause) and the bar MUST surface an unobtrusive inline status reading `No filters enabled` for ~2 seconds.
+
+#### Scenario: Apply All joins only checked complete rows
+
+- **WHEN** `draft` has rows R1 (checked, complete), R2 (unchecked, complete), R3 (checked, incomplete value), R4 (checked, complete)
+- **AND** `draft.combinator === "AND"`
+- **AND** the user clicks `Apply All`
+- **THEN** `applied.rows === [R1, R4]`
+- **AND** `applied.combinator === "AND"`
+- **AND** the compiled WHERE is `<p_R1> AND <p_R4>`
+
+#### Scenario: Cmd+Enter applies with AND – Default
+
+- **WHEN** focus is inside the filter bar and the user presses `⌘↵` (macOS) / `Ctrl+Enter` (other)
+- **THEN** `draft.combinator` is set to `"AND"`
+- **AND** Apply All is performed
+- **AND** the menu's `Apply All Checked Filters with AND – Default` item shows the `✓` checkmark on next open
+
+#### Scenario: Shift+Cmd+Enter applies with OR
+
+- **WHEN** focus is inside the filter bar and the user presses `⇧⌘↵`
+- **THEN** `draft.combinator` is set to `"OR"`
+- **AND** Apply All is performed
+- **AND** the menu's `Apply All Checked Filters with OR` item shows the `✓` checkmark on next open
+
+#### Scenario: Combinator persists across reopens
+
+- **WHEN** the user picks `OR` via the chevron menu, closes the tab, and reopens the same table later
+- **THEN** the reopened tab loads `filter_root_combinator === "OR"` from per-table settings
+- **AND** the primary `Apply All` button applies with OR by default
+
+#### Scenario: Apply All with no enabled complete rows clears filters with inline status
+
+- **WHEN** all `draft.rows` are unchecked OR incomplete and the user presses `Apply All`
+- **THEN** `applied.rows === []`
+- **AND** `postgres.queryTable` is invoked with no `filter_tree` and no `raw_where`
+- **AND** the bar shows the inline status `No filters enabled` for ~2 seconds, then dismisses it
+
+### Requirement: Filter bar keyboard shortcuts
+
+While the filter bar is visible AND focus is somewhere inside the bar AND focus is NOT inside a CodeMirror surface, the following keyboard shortcuts MUST be active. Each handler MUST call `preventDefault()`. The handlers MUST NOT fire when the bar is hidden.
+
+| Shortcut | Action |
+|---|---|
+| `⌘F` / `Ctrl+F` | Toggle visibility (see "Filter bar surface") |
+| `⌘I` / `Ctrl+I` | Insert a new empty row immediately below the focused row (or at the end if focus is not on a row). New row defaults: `enabled = true`, `column = any_column`, `op = Contains`, `value = ""`. Focus moves to the new row's column picker. |
+| `⌘⇧I` / `Ctrl+Shift+I` | Remove the focused row. If the focused row is the last remaining row, clear its fields to the default empty state instead of removing it. Focus moves to the row above (or stays on the cleared row if it was last). |
+| `⌘↑` / `Ctrl+↑` | Move focus to the same logical control (column / op / value) of the row above the focused row. No wrap at top. |
+| `⌘↓` / `Ctrl+↓` | Move focus to the same logical control of the row below the focused row. No wrap at bottom. |
+| `⌘←` / `Ctrl+←` | Open the column picker dropdown on the focused row. No-op if focus is not on a row. |
+| `⌘↵` / `Ctrl+Enter` | Apply All with AND – Default (see "Apply All with persistent root combinator") |
+| `⇧⌘↵` / `Ctrl+Shift+Enter` | Apply All with OR |
+
+`Esc` MUST NOT have a filter-bar-level handler in the new design (the bar does not bind it). The surrounding tab MAY still bind `Esc` for unrelated affordances.
+
+#### Scenario: Cmd+I inserts a row below the focused row
+
+- **WHEN** `draft.rows` has three rows, focus is in row 1's value input, and the user presses `⌘I`
+- **THEN** `draft.rows.length === 4`
+- **AND** the new row is at index 2 (between former rows 1 and 2)
+- **AND** the new row has `enabled = true`, `column = any_column`, `op = Contains`, `value = ""`
+- **AND** focus moves to the new row's column picker
+
+#### Scenario: Cmd+Shift+I removes the focused row
+
+- **WHEN** `draft.rows` has three rows, focus is in row 1 (zero-indexed), and the user presses `⌘⇧I`
+- **THEN** `draft.rows.length === 2`
+- **AND** the rows formerly at indexes 0 and 2 remain (former row 1 is gone)
+- **AND** focus moves to the new row 0 (the row that was above)
+
+#### Scenario: Cmd+Shift+I on last row clears instead of removing
+
+- **WHEN** `draft.rows` has exactly one row, focus is inside it, and the user presses `⌘⇧I`
+- **THEN** `draft.rows.length === 1`
+- **AND** the surviving row has the default empty state (`enabled = true`, `column = any_column`, `op = Contains`, `value = ""`)
+- **AND** focus stays on that row's column picker (or wherever the default focus target is)
+
+#### Scenario: Cmd+Down navigates to the same control on the next row
+
+- **WHEN** focus is in row 0's value input and the user presses `⌘↓`
+- **THEN** focus moves to row 1's value input
+
+#### Scenario: Cmd+Down at the bottom is a no-op
+
+- **WHEN** focus is in the last row's value input and the user presses `⌘↓`
+- **THEN** focus stays where it is (no wrap)
+
+#### Scenario: Cmd+← opens the column picker of the focused row
+
+- **WHEN** focus is in row 0's value input and the user presses `⌘←`
+- **THEN** row 0's column picker dropdown opens
+- **AND** keyboard focus is in the dropdown's search input
+
+#### Scenario: Shortcuts do not fire when bar is hidden
+
+- **WHEN** the filter bar is hidden and the user presses `⌘I` while focus is in the grid
+- **THEN** the filter bar does NOT appear
+- **AND** no row is inserted
+- **AND** the keystroke is allowed to fall through to any other handler
+
+#### Scenario: Shortcuts do not steal CodeMirror keys
+
+- **WHEN** focus is inside a CodeMirror surface (e.g. SQL editor in another tab area) and the user presses `⌘F`
+- **THEN** the filter bar handler does NOT fire
+- **AND** CodeMirror's built-in search panel opens
+
+### Requirement: Filter bar footer Unset, Export, SQL
+
+The filter bar SHALL render a footer strip with the following controls, in order from left to right:
+
+- `Export` button — disabled / placeholder. `aria-disabled="true"`. Tooltip: `Export coming soon`. Clicking it MUST be a no-op.
+- `SQL` button — opens a new `postgres-query` tab on the same connection with a prefilled SELECT reflecting the current `applied` filter set (same behavior as the prior `Open in SQL Editor` action). The button MUST use `applied`, NOT `draft`.
+- Shortcut hint strip: `Show: ⌘F`, `Insert: ⌘I`, `Remove: ⌘⇧I`, `Apply All: ⌘↵`, `Up: ⌘↑`, `Down: ⌘↓`, `Columns: ⌘←`. Each hint MUST be rendered as a non-interactive label using the existing `FilterKeyHint` component.
+- `Operator: [Unset]` — a button labeled `Unset`. Activating it MUST reset all `draft.rows` to a single empty row (`enabled = true`, `column = any_column`, `op = Contains`, `value = ""`). It MUST NOT modify `applied`. It MUST NOT modify `draft.combinator`. To clear the active filtering, the user must subsequently press `Apply All`.
+- `Apply All ▾` (covered by the "Apply All with persistent root combinator" requirement).
+
+The gear icon (`⚙`) visible in some reference designs MUST NOT be rendered.
+
+#### Scenario: Unset clears draft rows to a single empty row
+
+- **WHEN** `draft.rows` has three populated rows AND `applied` has those same three rows AND the user clicks `Unset`
+- **THEN** `draft.rows.length === 1`
+- **AND** the single remaining row has the default empty state
+- **AND** `draft.combinator` is unchanged
+- **AND** `applied` is unchanged (the grid remains filtered)
+- **AND** the dirty indicator now reflects `draft ≠ applied`
+
+#### Scenario: Unset followed by Apply All clears the active filter
+
+- **WHEN** the user clicks `Unset` then immediately clicks `Apply All`
+- **THEN** `applied.rows === []`
+- **AND** the grid is unfiltered
+
+#### Scenario: SQL button uses applied, not draft
+
+- **WHEN** the user has dirty draft rows (different from `applied`) and clicks `SQL`
+- **THEN** the opened SQL editor tab is prefilled with a SELECT that uses the current `applied` filter set
+- **AND** the unapplied draft does NOT appear in the prefilled SQL
+
+#### Scenario: Export button is disabled
+
+- **WHEN** the user clicks the `Export` button
+- **THEN** nothing happens (no menu, no file write, no error)
+- **AND** the button presents with `aria-disabled="true"`
+
+### Requirement: Flat root combinator
+
+The Structured filter model SHALL be a tree with a flat list of condition rows joined by a single root combinator. The model MUST be:
+```
+interface FilterRow {
+  enabled: boolean;
+  column: ColumnRef;
+  op: Operator;
+  value?: FilterValue;
+}
+interface FilterTree {
+  rows: FilterRow[];
+  combinator: "AND" | "OR";
+}
+```
+Nesting (sub-groups, OR groups) MUST NOT be expressible in the new model. The frontend MUST emit `filter_tree` on the wire as `{ children: [...condition_leaves], combinator }` where each child is a `kind: "condition"` `FilterNode` mirrored from a `FilterRow` (the `enabled` flag is filtering-side only and is NOT emitted on the wire). The wire `combinator` field MUST equal `draft.combinator` at the time of Apply.
+
+The compiled `WHERE` body MUST join enabled-and-complete row predicates with `" AND "` or `" OR "` based on the wire `combinator`. The expression MUST NOT add outer parentheses (a flat list does not need them). An empty `rows` payload (all rows disabled or incomplete) MUST result in no `WHERE` clause being emitted (see "Apply All with persistent root combinator").
 
 #### Scenario: Flat AND children compile to ANDed predicates
 
-- **WHEN** the tree has three sibling condition leaves at root and `combinator` is `"AND"` (or absent)
-- **THEN** the compiled WHERE is `<p1> AND <p2> AND <p3>` with no parens
+- **WHEN** the wire `filter_tree` has three condition children and `combinator === "AND"`
+- **THEN** the compiled WHERE is `<p1> AND <p2> AND <p3>` with no outer parens
 
 #### Scenario: Flat OR children compile to ORed predicates
 
-- **WHEN** the tree has three sibling condition leaves at root and `combinator` is `"OR"`
-- **THEN** the compiled WHERE is `<p1> OR <p2> OR <p3>` with no parens
+- **WHEN** the wire `filter_tree` has three condition children and `combinator === "OR"`
+- **THEN** the compiled WHERE is `<p1> OR <p2> OR <p3>` with no outer parens
 
-#### Scenario: OR group compiles to a parenthesized OR
+#### Scenario: Single row is emitted without redundant parens
 
-- **WHEN** the tree has one root condition and one OR group of two conditions and `combinator` is `"AND"`
-- **THEN** the compiled WHERE is `<p_root> AND (<p_or1> OR <p_or2>)`
+- **WHEN** the wire `filter_tree` has exactly one condition child and `combinator === "AND"`
+- **THEN** the compiled WHERE is `<p1>` (no parens)
 
-#### Scenario: OR-root with OR group nests but compiles correctly
+#### Scenario: Frontend never emits or_group children
 
-- **WHEN** the tree has one root condition and one OR group of two conditions and `combinator` is `"OR"`
-- **THEN** the compiled WHERE is `<p_root> OR (<p_or1> OR <p_or2>)`
-
-#### Scenario: OR group with one condition still parenthesizes
-
-- **WHEN** an OR group contains exactly one condition
-- **THEN** the compiled WHERE wraps it as `(<p>)` (the parens make the boundary explicit; the result is semantically equivalent)
-
-#### Scenario: Empty OR group is collapsed
-
-- **WHEN** the user removes the last condition from an OR group
-- **THEN** the OR group node is removed from the tree
-- **AND** the compiled WHERE no longer contains it
-
-#### Scenario: Cannot nest OR group inside OR group
-
-- **WHEN** the frontend attempts to send a tree with an `or_group` inside another `or_group`
-- **THEN** the backend returns `AppError::Validation` and no SQL is dispatched
-
-#### Scenario: Empty tree emits no WHERE
-
-- **WHEN** the user has no conditions and no OR groups
-- **THEN** the issued SQL has no `WHERE` clause
-
-#### Scenario: Root combinator toggle is hidden when tree is empty
-
-- **WHEN** the tree has zero children
-- **THEN** the `AND | OR` toggle is NOT rendered in the body
-
-#### Scenario: Toggling root combinator marks draft dirty
-
-- **WHEN** `draft.tree.combinator === "AND"`, `applied.tree.combinator === "AND"`, and the user clicks the `OR` segment of the toggle
-- **THEN** `draft.tree.combinator === "OR"`
-- **AND** the dirty indicator appears
-- **AND** no fetch is triggered until the user presses `Apply`
-
-#### Scenario: Connector pills re-read when combinator flips
-
-- **WHEN** the tree has three root condition leaves and `combinator` is flipped from `"AND"` to `"OR"`
-- **THEN** the two inter-row connector pills displayed between rows read `"OR"` instead of `"AND"`
-
-#### Scenario: Missing combinator on the wire defaults to AND
-
-- **WHEN** the Rust backend receives a `filter_tree` payload that has no `combinator` field
-- **THEN** the SQL compiler treats it as `RootCombinator::And` and emits `AND`-joined root predicates
+- **WHEN** the user creates filters via the new bar
+- **THEN** no row in the emitted `filter_tree.children` has `kind === "or_group"`
 
 ### Requirement: Any column search
 
@@ -824,7 +1059,7 @@ The backend MUST expand an `any_column` condition by enumerating every column of
 
 …where the same single bound parameter `$n` is shared across all branches. If the target relation has zero text-castable columns, the condition MUST compile to `FALSE`.
 
-The frontend MUST display a small warning marker (e.g. a `⚠` icon with tooltip) on Any-column rows reading "Searches every text-castable column — slow on large tables."
+The frontend MUST NOT display a performance-warning marker on Any-column rows. The previous `⚠` icon with the tooltip "Searches every text-castable column — slow on large tables." is REMOVED for visual parity with the reference design and to reduce noise. The slow-search caveat moves to documentation.
 
 #### Scenario: Any column with Contains expands across columns
 
@@ -849,49 +1084,10 @@ The frontend MUST display a small warning marker (e.g. a `⚠` icon with tooltip
 - **THEN** the compiled WHERE is `(FALSE)`
 - **AND** the query returns zero rows
 
-#### Scenario: Any-column row shows a performance warning
+#### Scenario: No performance warning is rendered on Any-column rows
 
-- **WHEN** the user adds an Any-column condition row
-- **THEN** the row renders a `⚠` icon with the tooltip "Searches every text-castable column — slow on large tables."
-
-### Requirement: Raw WHERE mode
-
-The filter bar SHALL include a Mode toggle with two options: `Structured` and `Raw SQL`. Switching modes MUST follow these rules:
-
-- **Structured → Raw SQL:** The bar MUST seed the Raw editor with the result of the TS-side `compileWhere(draft)` (the equivalent SQL `WHERE` body for the current Structured draft). No data is lost.
-- **Raw SQL → Structured:** The bar MUST display a confirmation dialog reading "Switch to structured? Your raw WHERE will be discarded." with `Cancel` (default) and `Switch` actions. On `Switch`, the Raw body MUST be cleared and the Structured tree MUST be reset to empty. On `Cancel`, the mode does not change.
-
-The Raw editor MUST be a CodeMirror 6 instance configured with the Postgres SQL dialect for syntax highlighting only. It MUST NOT bind run shortcuts (`Cmd+Enter` is reserved for Apply at the bar level), MUST NOT enable autocomplete, and MUST NOT enforce a leading `WHERE` keyword (a leading `WHERE ` typed by the user MUST be trimmed once before being sent as `raw_where`). An empty Raw body MUST be sent as `raw_where: undefined` (no WHERE clause).
-
-#### Scenario: Switching Structured to Raw seeds the editor
-
-- **WHEN** the Structured draft compiles to `"country" = 'CL' AND ("status" = 'active' OR "status" = 'pending')`
-- **AND** the user toggles to Raw SQL mode
-- **THEN** the Raw editor is seeded with that exact body
-
-#### Scenario: Switching Raw to Structured prompts before discarding
-
-- **WHEN** the user has a non-empty Raw body and toggles to Structured
-- **THEN** a confirm dialog is shown with `Cancel` as the default action
-- **AND** Cancel keeps the mode as Raw and preserves the body
-- **AND** Switch resets the Structured tree to empty AND clears the Raw body
-
-#### Scenario: Empty Raw body sends no raw_where
-
-- **WHEN** the user is in Raw mode with an empty editor and presses Apply
-- **THEN** `postgres.queryTable` is invoked with `raw_where: undefined` and no `filter_tree`
-
-#### Scenario: Leading WHERE keyword is trimmed
-
-- **WHEN** the user types `WHERE created_at > now()` in the Raw editor and presses Apply
-- **THEN** `raw_where` is sent as `"created_at > now()"` (the leading `WHERE ` is stripped once)
-- **AND** the issued SQL has a single `WHERE created_at > now()` clause
-
-#### Scenario: Postgres errors surface from Raw
-
-- **WHEN** the user types a syntactically invalid WHERE (e.g. `created_at >`) and presses Apply
-- **THEN** the command returns `AppError::Postgres` with the syntax error
-- **AND** the bar surfaces the error inline near the Raw editor (not via a global toast)
+- **WHEN** the user picks `Any column` in a filter row's column picker
+- **THEN** no `⚠` icon and no performance-warning tooltip is rendered on the row
 
 ### Requirement: Open in SQL Editor
 

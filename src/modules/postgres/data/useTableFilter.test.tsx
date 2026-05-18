@@ -3,80 +3,103 @@ import { act, renderHook } from "@testing-library/react";
 import { normalizePersistedFilter, useTableFilter } from "./useTableFilter";
 import { EMPTY_FILTER_MODEL, type FilterModel } from "./types";
 
-const filterA: FilterModel = {
-  mode: "structured",
-  tree: {
-    children: [
-      {
-        kind: "condition",
-        column: { kind: "named", name: "country" },
-        op: "=",
-        value: "CL",
-      },
-    ],
-    combinator: "AND",
-  },
-  raw: "",
+// A valid new-shape filter with one condition row.
+const filterNewShape: FilterModel = {
+  rows: [
+    {
+      enabled: true,
+      column: { kind: "named", name: "country" },
+      op: "=",
+      value: "CL",
+    },
+  ],
+  combinator: "AND",
 };
 
-const filterB: FilterModel = {
-  mode: "raw",
-  tree: { children: [], combinator: "AND" },
-  raw: "id > 10",
+// Another valid new-shape filter for independence tests.
+const filterNewShapeB: FilterModel = {
+  rows: [
+    {
+      enabled: false,
+      column: { kind: "named", name: "status" },
+      op: "ILIKE",
+      value: "ok",
+    },
+  ],
+  combinator: "OR",
 };
 
 // ---------------------------------------------------------------------------
-// normalizePersistedFilter — backward-compat coercion
+// normalizePersistedFilter — shape validation and migration
 // ---------------------------------------------------------------------------
 
 describe("normalizePersistedFilter", () => {
-  it("coerces missing combinator to AND on both trees", () => {
-    // Simulate a legacy persisted record without the combinator field.
-    const legacy = {
+  it("passes through a valid new-shape PersistedFilter unchanged", () => {
+    const result = normalizePersistedFilter({
+      draft: filterNewShape,
+      applied: EMPTY_FILTER_MODEL,
+    });
+    expect(result.draft).toEqual(filterNewShape);
+    expect(result.applied).toEqual(EMPTY_FILTER_MODEL);
+  });
+
+  it("returns DEFAULT for null input", () => {
+    const result = normalizePersistedFilter(null);
+    expect(result.draft).toEqual(EMPTY_FILTER_MODEL);
+    expect(result.applied).toEqual(EMPTY_FILTER_MODEL);
+  });
+
+  it("returns DEFAULT for non-object input", () => {
+    expect(normalizePersistedFilter("bad")).toEqual({
+      draft: EMPTY_FILTER_MODEL,
+      applied: EMPTY_FILTER_MODEL,
+    });
+  });
+
+  it("migrates legacy { mode: 'raw', raw: '...' } draft → EMPTY_FILTER_MODEL", () => {
+    const legacyRaw = {
+      draft: { mode: "raw", tree: { children: [] }, raw: "id > 10" },
+      applied: { mode: "raw", tree: { children: [] }, raw: "id > 10" },
+    };
+    const result = normalizePersistedFilter(legacyRaw);
+    expect(result.draft).toEqual(EMPTY_FILTER_MODEL);
+    expect(result.applied).toEqual(EMPTY_FILTER_MODEL);
+  });
+
+  it("migrates legacy tree with or_group child → EMPTY_FILTER_MODEL", () => {
+    const legacyOrGroup = {
       draft: {
-        mode: "structured" as const,
-        tree: { children: [] }, // no combinator field
-        raw: "",
-      },
-      applied: {
-        mode: "structured" as const,
+        mode: "structured",
         tree: {
           children: [
             {
-              kind: "condition" as const,
-              column: { kind: "named" as const, name: "x" },
-              op: "=" as const,
-              value: "1",
+              kind: "or_group",
+              children: [{ kind: "condition", column: { kind: "named", name: "x" }, op: "=", value: "1" }],
             },
           ],
-          // no combinator field
         },
         raw: "",
       },
+      applied: EMPTY_FILTER_MODEL,
     };
-    const normalized = normalizePersistedFilter(legacy);
-    expect(normalized.draft.tree.combinator).toBe("AND");
-    expect(normalized.applied.tree.combinator).toBe("AND");
+    const result = normalizePersistedFilter(legacyOrGroup);
+    expect(result.draft).toEqual(EMPTY_FILTER_MODEL);
   });
 
-  it("preserves an explicitly set combinator", () => {
-    const record = {
-      draft: {
-        mode: "structured" as const,
-        tree: { children: [], combinator: "OR" as const },
-        raw: "",
-      },
-      applied: {
-        mode: "structured" as const,
-        tree: { children: [], combinator: "AND" as const },
-        raw: "",
-      },
+  it("backfills missing combinator to AND on valid new-shape rows", () => {
+    const partial = {
+      draft: { rows: [], /* no combinator */ },
+      applied: { rows: [], /* no combinator */ },
     };
-    const normalized = normalizePersistedFilter(record);
-    expect(normalized.draft.tree.combinator).toBe("OR");
-    expect(normalized.applied.tree.combinator).toBe("AND");
+    const result = normalizePersistedFilter(partial);
+    expect(result.draft.combinator).toBe("AND");
+    expect(result.applied.combinator).toBe("AND");
   });
 });
+
+// ---------------------------------------------------------------------------
+// useTableFilter — hook behaviour
+// ---------------------------------------------------------------------------
 
 describe("useTableFilter", () => {
   it("starts at EMPTY_FILTER_MODEL when nothing is persisted", () => {
@@ -94,74 +117,84 @@ describe("useTableFilter", () => {
     expect(result.current.isLoaded).toBe(true);
   });
 
-  it("persists applied through unmount → remount on the same key", () => {
-    const args = ["conn-1", "public", "users-applied"] as const;
-    const { result, unmount } = renderHook(() => useTableFilter(...args));
-    act(() => result.current.setApplied(filterA));
-    expect(result.current.applied).toEqual(filterA);
-    expect(result.current.draft).toEqual(EMPTY_FILTER_MODEL);
-    unmount();
-    const { result: result2 } = renderHook(() => useTableFilter(...args));
-    expect(result2.current.applied).toEqual(filterA);
-    // Draft is independently persisted; unchanged here.
-    expect(result2.current.draft).toEqual(EMPTY_FILTER_MODEL);
-  });
-
-  it("persists draft independently of applied", () => {
-    const args = ["conn-1", "public", "users-draft"] as const;
-    const { result, unmount } = renderHook(() => useTableFilter(...args));
-    act(() => result.current.setDraft(filterB));
-    expect(result.current.draft).toEqual(filterB);
+  it("setDraft updates draft only; applied unchanged", () => {
+    const { result } = renderHook(() =>
+      useTableFilter("conn-1", "public", "users-setdraft"),
+    );
+    act(() => result.current.setDraft(filterNewShape));
+    expect(result.current.draft).toEqual(filterNewShape);
     expect(result.current.applied).toEqual(EMPTY_FILTER_MODEL);
-    unmount();
-    const { result: result2 } = renderHook(() => useTableFilter(...args));
-    expect(result2.current.draft).toEqual(filterB);
-    expect(result2.current.applied).toEqual(EMPTY_FILTER_MODEL);
   });
 
-  it("reset() returns both halves to the empty model", () => {
-    const args = ["conn-1", "public", "users-reset"] as const;
-    const { result } = renderHook(() => useTableFilter(...args));
-    act(() => result.current.setApplied(filterA));
-    act(() => result.current.setDraft(filterA));
-    expect(result.current.applied).toEqual(filterA);
-    expect(result.current.draft).toEqual(filterA);
+  it("setApplied updates applied only; draft unchanged", () => {
+    const { result } = renderHook(() =>
+      useTableFilter("conn-1", "public", "users-setapplied"),
+    );
+    act(() => result.current.setApplied(filterNewShape));
+    expect(result.current.applied).toEqual(filterNewShape);
+    expect(result.current.draft).toEqual(EMPTY_FILTER_MODEL);
+  });
+
+  it("resetFilter clears both draft and applied to EMPTY_FILTER_MODEL", () => {
+    const { result } = renderHook(() =>
+      useTableFilter("conn-1", "public", "users-reset"),
+    );
+    act(() => result.current.setApplied(filterNewShape));
+    act(() => result.current.setDraft(filterNewShapeB));
+    expect(result.current.applied).toEqual(filterNewShape);
+    expect(result.current.draft).toEqual(filterNewShapeB);
     act(() => result.current.reset());
     expect(result.current.applied).toEqual(EMPTY_FILTER_MODEL);
     expect(result.current.draft).toEqual(EMPTY_FILTER_MODEL);
   });
 
+  it("persisted EMPTY_FILTER_MODEL-shaped value loads cleanly", () => {
+    // useSetting in non-Tauri mode is synchronous; in-memory cache is pre-set.
+    const { result } = renderHook(() =>
+      useTableFilter("conn-1", "public", "users-persist-empty"),
+    );
+    expect(result.current.draft).toEqual(EMPTY_FILTER_MODEL);
+    expect(result.current.applied).toEqual(EMPTY_FILTER_MODEL);
+  });
+
+  it("persisted applied is restored on remount (same key)", () => {
+    const args = ["conn-1", "public", "users-remount"] as const;
+    const { result, unmount } = renderHook(() => useTableFilter(...args));
+    act(() => result.current.setApplied(filterNewShape));
+    expect(result.current.applied).toEqual(filterNewShape);
+    unmount();
+    const { result: result2 } = renderHook(() => useTableFilter(...args));
+    expect(result2.current.applied).toEqual(filterNewShape);
+    expect(result2.current.draft).toEqual(EMPTY_FILTER_MODEL);
+  });
+
   it("scopes per (connectionId, schema, relation)", () => {
     const { result: a } = renderHook(() =>
-      useTableFilter("conn-A", "public", "shared-name"),
+      useTableFilter("conn-scope-A", "public", "shared-name"),
     );
     const { result: b } = renderHook(() =>
-      useTableFilter("conn-B", "public", "shared-name"),
+      useTableFilter("conn-scope-B", "public", "shared-name"),
     );
-    act(() => a.current.setApplied(filterA));
-    expect(a.current.applied).toEqual(filterA);
+    act(() => a.current.setApplied(filterNewShape));
+    expect(a.current.applied).toEqual(filterNewShape);
     expect(b.current.applied).toEqual(EMPTY_FILTER_MODEL);
   });
 
   it("reflects the new relation's persisted state when the SAME instance re-renders with a different relation", () => {
-    // Mirrors the TabContent reuse-across-tabs path: TableViewerTab is the
-    // same React instance, but `relation` flips between renders.
     const { result, rerender } = renderHook(
       ({ relation }: { relation: string }) =>
-        useTableFilter("conn-1", "public", relation),
+        useTableFilter("conn-bleed", "public", relation),
       { initialProps: { relation: "rel-A-bleed" } },
     );
 
-    act(() => result.current.setApplied(filterA));
-    expect(result.current.applied).toEqual(filterA);
+    act(() => result.current.setApplied(filterNewShape));
+    expect(result.current.applied).toEqual(filterNewShape);
 
     rerender({ relation: "rel-B-bleed" });
-    // Relation B has nothing persisted → must NOT show A's filter.
     expect(result.current.applied).toEqual(EMPTY_FILTER_MODEL);
     expect(result.current.draft).toEqual(EMPTY_FILTER_MODEL);
 
     rerender({ relation: "rel-A-bleed" });
-    // Returning to A → cached filter resurrects.
-    expect(result.current.applied).toEqual(filterA);
+    expect(result.current.applied).toEqual(filterNewShape);
   });
 });
