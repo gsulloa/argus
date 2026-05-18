@@ -1,7 +1,7 @@
 {
   "name": "argus",
   "private": false,
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "A Tauri 2 desktop app for inspecting and editing data across multiple sources (Postgres, with DynamoDB and CloudWatch coming next).",
   "license": "MIT",
   "author": "Gabriel Ulloa <gabriel.ulloa.e@gmail.com>",
