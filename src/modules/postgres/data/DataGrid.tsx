@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppError } from "@/platform/errors/AppError";
@@ -6,6 +6,7 @@ import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import { EditableCell, looksLikeBytea } from "./EditableCell";
 import { pixelYToRowIndex } from "./dragRowIndex";
+import { headerFloorWidthFor } from "./headerMeasure";
 import { cycleSort, sortIndexFor } from "./sortHelpers";
 import { categorize } from "./typeHelpers";
 import { isCellEnvelope, type CellValue, type DataColumn, type EditValue, type OrderBy } from "./types";
@@ -21,6 +22,11 @@ export interface UnifiedRow {
   rowKey: string;
   cells: CellValue[];
   source: "insert" | "server";
+}
+
+export interface DataGridHandle {
+  /** Scroll the grid's vertical viewport back to the top (row index 0). */
+  scrollToTop(): void;
 }
 
 export interface DataGridProps {
@@ -52,7 +58,10 @@ export interface DataGridProps {
   onRetryNextPage(): void;
 }
 
-export function DataGrid(props: DataGridProps) {
+export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataGrid(
+  props,
+  ref,
+) {
   const {
     columns,
     rows,
@@ -80,13 +89,19 @@ export function DataGrid(props: DataGridProps) {
   // isKey: true when the column is part of the primary key (PK columns are
   // provided by the parent via `pkColumns`). The +16px KEY_BADGE_PAD widens
   // PK columns to accommodate a future key badge without truncation.
+  // floorWidth: measured header text width + fixed pads, so long column names
+  // don't ellipsis-truncate at type-derived defaults.
   const mappedColumns = useMemo(
     () =>
-      columns.map((c) => ({
-        name: c.name,
-        category: categorize(c.data_type),
-        isKey: pkColumns?.includes(c.name) ?? false,
-      })),
+      columns.map((c) => {
+        const isKey = pkColumns?.includes(c.name) ?? false;
+        return {
+          name: c.name,
+          category: categorize(c.data_type),
+          isKey,
+          floorWidth: headerFloorWidthFor({ name: c.name, isKey }),
+        };
+      }),
     [columns, pkColumns],
   );
 
@@ -104,6 +119,26 @@ export function DataGrid(props: DataGridProps) {
     estimateSize: () => ROW_HEIGHT,
     overscan: 12,
   });
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToTop() {
+        // Prefer the virtualizer so its internal scroll state stays
+        // consistent; always also reset the viewport directly so the scroll
+        // takes effect under jsdom and in cases where the virtualizer hasn't
+        // mounted yet.
+        try {
+          virtualizer.scrollToIndex(0, { align: "start" });
+        } catch {
+          // ignore — fall through to direct scroll
+        }
+        const vp = viewportRef.current;
+        if (vp) vp.scrollTop = 0;
+      },
+    }),
+    [virtualizer],
+  );
 
   // Trigger pagination when we render within `2 * pageSize` rows of the buffer's tail.
   const items = virtualizer.getVirtualItems();
@@ -330,7 +365,6 @@ export function DataGrid(props: DataGridProps) {
                       )}
                     </span>
                   )}
-                  <span className={styles.colType}>{col.data_type}</span>
                   <ResizeHandle
                     currentWidth={widthFor(col.name)}
                     onChange={(px) => setWidth(col.name, px)}
@@ -515,4 +549,4 @@ export function DataGrid(props: DataGridProps) {
       </div>
     </div>
   );
-}
+});

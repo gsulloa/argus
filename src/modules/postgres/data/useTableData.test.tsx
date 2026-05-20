@@ -1,9 +1,9 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { AppError } from "@/platform/errors/AppError";
 import { useTableData } from "./useTableData";
-import { EMPTY_FILTER_MODEL, type QueryTableResult } from "./types";
+import { EMPTY_FILTER_MODEL, type FilterModel, type QueryTableResult } from "./types";
 
 vi.mock("./api", () => ({
   dataApi: {
@@ -106,5 +106,96 @@ describe("useTableData", () => {
     expect(result.current.error).toBeInstanceOf(AppError);
     expect(result.current.error?.message).toBe("relation does not exist");
     expect(result.current.rows).toEqual([]);
+  });
+
+  it("recovers from cold-mount disk-load race where settings resolve in different microtasks", async () => {
+    // Simulate the cold-mount race: mount with default (empty) settings, then
+    // apply filter, orderBy, and pageSize arriving from disk in separate async
+    // microtask cycles (as useSetting does on cold Tauri mounts).
+    queryTableMock.mockResolvedValue(makeResult(5));
+
+    const initialParams = {
+      ...baseParams,
+      applied: EMPTY_FILTER_MODEL,
+      orderBy: [] as ReturnType<typeof baseParams.orderBy.slice>,
+      pageSize: 200,
+    };
+
+    const { result, rerender } = renderHook(
+      (props: Parameters<typeof useTableData>[0]) => useTableData(props),
+      {
+        wrapper: StrictWrapper,
+        initialProps: initialParams,
+      },
+    );
+
+    // Simulate filter arriving from disk in first microtask cycle.
+    const filterFromDisk: FilterModel = EMPTY_FILTER_MODEL;
+    await act(async () => {
+      rerender({ ...initialParams, applied: filterFromDisk });
+    });
+
+    // Simulate orderBy arriving from disk in second microtask cycle.
+    await act(async () => {
+      rerender({ ...initialParams, applied: filterFromDisk, orderBy: [] });
+    });
+
+    // Simulate pageSize arriving from disk in third microtask cycle.
+    await act(async () => {
+      rerender({ ...initialParams, applied: filterFromDisk, orderBy: [], pageSize: 100 });
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("ready");
+    });
+    expect(result.current.rows.length).toBeGreaterThan(0);
+  });
+
+  it("discards stale in-flight response when params change before response arrives", async () => {
+    // Params-A response is delayed; params-B response resolves immediately.
+    // After rerendering with params-B mid-flight (pageSize change triggers reset),
+    // the params-A response must be discarded and only the params-B rows applied.
+    const rowsA = makeResult(3);
+    const rowsB = makeResult(7);
+
+    let resolveA!: (v: QueryTableResult) => void;
+    const pendingA = new Promise<QueryTableResult>((res) => {
+      resolveA = res;
+    });
+
+    queryTableMock
+      .mockReturnValueOnce(pendingA)
+      .mockResolvedValue(rowsB);
+
+    const { result, rerender } = renderHook(
+      (props: Parameters<typeof useTableData>[0]) => useTableData(props),
+      {
+        wrapper: StrictWrapper,
+        initialProps: baseParams,
+      },
+    );
+
+    // Wait until the first fetch is in-flight (loading-first).
+    await waitFor(() => {
+      expect(["loading-first", "loading-first-retrying"]).toContain(result.current.status);
+    });
+
+    // Change pageSize mid-flight — triggers a reset and a new fetch with params-B.
+    await act(async () => {
+      rerender({ ...baseParams, pageSize: 50 });
+    });
+
+    // Wait for params-B's fetch to settle.
+    await waitFor(() => {
+      expect(result.current.status).toBe("ready");
+    });
+
+    // Now resolve params-A's stale response — it must be discarded.
+    await act(async () => {
+      resolveA(rowsA);
+    });
+
+    // Only params-B's rows (7) should be visible, not params-A's (3).
+    expect(result.current.rows).toHaveLength(7);
   });
 });

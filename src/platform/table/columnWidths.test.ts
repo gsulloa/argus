@@ -247,3 +247,57 @@ describe("useColumnWidths — persisted mode", () => {
     expect(result.current.totalWidth).toBe(BASE_WIDTH_BY_CATEGORY.text + 200);
   });
 });
+
+// ---------------------------------------------------------------------------
+// useColumnWidths — floorWidth (header auto-fit floor)
+// ---------------------------------------------------------------------------
+
+describe("useColumnWidths — floorWidth", () => {
+  it("widthFor returns floorWidth when it exceeds the type-derived base", () => {
+    const cols: ColumnSpec[] = [
+      // text base = 200; floor = 320 wins
+      { name: "long_name", category: "text", floorWidth: 320 },
+    ];
+    const { result } = renderHook(() =>
+      useColumnWidths({ storageKey: null, columns: cols }),
+    );
+    expect(result.current.widthFor("long_name")).toBe(320);
+  });
+
+  it("widthFor returns the type-derived base when floorWidth is smaller", () => {
+    const cols: ColumnSpec[] = [
+      // text base = 200; floor = 60 loses
+      { name: "id", category: "text", floorWidth: 60 },
+    ];
+    const { result } = renderHook(() =>
+      useColumnWidths({ storageKey: null, columns: cols }),
+    );
+    expect(result.current.widthFor("id")).toBe(BASE_WIDTH_BY_CATEGORY.text);
+  });
+
+  it("user override still wins over floorWidth", () => {
+    const cols: ColumnSpec[] = [
+      { name: "long_name", category: "text", floorWidth: 320 },
+    ];
+    const { result } = renderHook(() =>
+      useColumnWidths({ storageKey: null, columns: cols }),
+    );
+    act(() => result.current.setWidth("long_name", 96));
+    expect(result.current.widthFor("long_name")).toBe(96);
+  });
+
+  it("fixedWidth wins over floorWidth and overrides", () => {
+    const cols: ColumnSpec[] = [
+      {
+        name: "more",
+        category: "other",
+        fixedWidth: 40,
+        floorWidth: 300,
+      },
+    ];
+    const { result } = renderHook(() =>
+      useColumnWidths({ storageKey: null, columns: cols }),
+    );
+    expect(result.current.widthFor("more")).toBe(40);
+  });
+});

@@ -38,14 +38,6 @@ interface State {
   highestLoadedPage: number;
   /** True when the most recent page came back with fewer than `pageSize` rows. */
   reachedEnd: boolean;
-  /**
-   * Cancellation token for in-flight loaders. Bumped on every reset so that
-   * stale responses can be detected via `stateRef.current.generation !== generation`.
-   * Initial value is 1 (not 0) so the first-mount fetch's closure matches
-   * `stateRef` without depending on the reset effect dispatching first; the
-   * reset effect skips its first run via `isFirstMount` to keep this invariant.
-   */
-  generation: number;
   truncatedColumns: Set<string>;
 }
 
@@ -67,7 +59,6 @@ function initialState(): State {
     queryMs: null,
     highestLoadedPage: 0,
     reachedEnd: false,
-    generation: 1,
     truncatedColumns: new Set(),
   };
 }
@@ -82,7 +73,6 @@ function reducer(state: State, action: Action): State {
         queryMs: null,
         highestLoadedPage: 0,
         reachedEnd: false,
-        generation: state.generation + 1,
         truncatedColumns: new Set(),
       };
     case "first-loading":
@@ -211,13 +201,20 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
   const orderKey = useMemo(() => JSON.stringify(orderBy), [orderBy]);
   const filtersKey = useMemo(() => JSON.stringify(applied), [applied]);
 
+  // Cancellation identity for in-flight fetches. The depsKey is the canonical
+  // identity of "which fetch this is" and is advanced synchronously during
+  // render (mirroring `pageSizeRef`). Comparing the captured key against the
+  // ref after each await detects stale responses without falling out of phase
+  // with the params under React 18 batching.
+  const depsKey = `${connectionId}|${schema}|${relation}|${pageSize}|${orderKey}|${filtersKey}`;
+  const paramsKeyRef = useRef(depsKey);
+  paramsKeyRef.current = depsKey;
+
   // Reset buffer when paging inputs actually change. The fingerprint ref makes
   // this effect idempotent under React 18 StrictMode (which runs effects
   // mount → cleanup → mount on initial render). On first mount the ref is
   // initialized to the current deps, so the effect's first body and its
-  // dev-only replay both compare equal and return without dispatching;
-  // `initialState()` already represents the post-reset shape (`generation: 1`).
-  const depsKey = `${connectionId}|${schema}|${relation}|${pageSize}|${orderKey}|${filtersKey}`;
+  // dev-only replay both compare equal and return without dispatching.
   const lastDepsKeyRef = useRef(depsKey);
   useEffect(() => {
     if (lastDepsKeyRef.current === depsKey) return;
@@ -225,126 +222,124 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
     dispatch({ type: "reset", pageSize });
   }, [depsKey, pageSize]);
 
-  const fetchFirstPage = useCallback(
-    async (generation: number) => {
-      if (!isTauriRuntime()) return;
-      dispatch({ type: "first-loading", isRetry: false });
-      try {
-        const result = await dataApi.queryTable(
-          connectionId,
-          schema,
-          relation,
-          {
-            limit: pageSizeRef.current,
-            offset: 0,
-            order_by: orderByRef.current,
-            ...modelToPayload(appliedRef.current),
-          },
-          "user",
-        );
-        if (stateRef.current.generation !== generation) return;
-        globalSchemaCache.recordColumns(connectionId, schema, relation, result.columns);
-        dispatch({ type: "first-loaded", result, pageSize: pageSizeRef.current });
-      } catch (e) {
-        const err = asAppError(e);
-        if (stateRef.current.generation !== generation) return;
-        if (isPostgresTimeout(err)) {
-          // Auto-retry the first page exactly once.
-          dispatch({ type: "first-loading", isRetry: true });
-          try {
-            const result = await dataApi.queryTable(
-              connectionId,
-              schema,
-              relation,
-              {
-                limit: pageSizeRef.current,
-                offset: 0,
-                order_by: orderByRef.current,
-                ...modelToPayload(appliedRef.current),
-              },
-              "user",
-            );
-            if (stateRef.current.generation !== generation) return;
-            globalSchemaCache.recordColumns(
-              connectionId,
-              schema,
-              relation,
-              result.columns,
-            );
-            dispatch({
-              type: "first-loaded",
-              result,
-              pageSize: pageSizeRef.current,
-            });
-            return;
-          } catch (retryErr) {
-            const rerr = asAppError(retryErr);
-            if (stateRef.current.generation !== generation) return;
-            dispatch({ type: "first-error", error: rerr });
-            return;
-          }
+  const fetchFirstPage = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    const captured = paramsKeyRef.current;
+    dispatch({ type: "first-loading", isRetry: false });
+    try {
+      const result = await dataApi.queryTable(
+        connectionId,
+        schema,
+        relation,
+        {
+          limit: pageSizeRef.current,
+          offset: 0,
+          order_by: orderByRef.current,
+          ...modelToPayload(appliedRef.current),
+        },
+        "user",
+      );
+      if (paramsKeyRef.current !== captured) return;
+      globalSchemaCache.recordColumns(connectionId, schema, relation, result.columns);
+      dispatch({ type: "first-loaded", result, pageSize: pageSizeRef.current });
+    } catch (e) {
+      const err = asAppError(e);
+      if (paramsKeyRef.current !== captured) return;
+      if (isPostgresTimeout(err)) {
+        // Auto-retry the first page exactly once.
+        dispatch({ type: "first-loading", isRetry: true });
+        try {
+          const result = await dataApi.queryTable(
+            connectionId,
+            schema,
+            relation,
+            {
+              limit: pageSizeRef.current,
+              offset: 0,
+              order_by: orderByRef.current,
+              ...modelToPayload(appliedRef.current),
+            },
+            "user",
+          );
+          if (paramsKeyRef.current !== captured) return;
+          globalSchemaCache.recordColumns(
+            connectionId,
+            schema,
+            relation,
+            result.columns,
+          );
+          dispatch({
+            type: "first-loaded",
+            result,
+            pageSize: pageSizeRef.current,
+          });
+          return;
+        } catch (retryErr) {
+          const rerr = asAppError(retryErr);
+          if (paramsKeyRef.current !== captured) return;
+          dispatch({ type: "first-error", error: rerr });
+          return;
         }
-        dispatch({ type: "first-error", error: err });
       }
-    },
-    [connectionId, schema, relation],
-  );
+      dispatch({ type: "first-error", error: err });
+    }
+  }, [connectionId, schema, relation]);
 
   // Trigger the first-page fetch when we transition to idle after a reset.
   // Gated by `enabled` so callers can defer the first fetch (e.g. until
-  // persisted filter/orderBy have loaded from disk).
+  // persisted filter/orderBy have loaded from disk). Re-fires whenever
+  // depsKey changes for an enabled, non-terminal state (the reset action
+  // transitions status back to `idle` so this effect picks up).
   useEffect(() => {
     if (!enabled) return;
     if (state.status.state !== "idle") return;
-    void fetchFirstPage(state.generation);
-  }, [enabled, state.status.state, state.generation, fetchFirstPage]);
+    void fetchFirstPage();
+  }, [enabled, state.status.state, depsKey, fetchFirstPage]);
 
-  const fetchNextPage = useCallback(
-    async (generation: number) => {
-      if (!isTauriRuntime()) return;
-      const cur = stateRef.current;
-      if (cur.reachedEnd) return;
-      const offset = cur.rows.length;
-      dispatch({ type: "next-loading" });
-      try {
-        const result = await dataApi.queryTable(
-          connectionId,
-          schema,
-          relation,
-          {
-            limit: pageSizeRef.current,
-            offset,
-            order_by: orderByRef.current,
-            ...modelToPayload(appliedRef.current),
-          },
-          "user",
-        );
-        if (stateRef.current.generation !== generation) return;
-        dispatch({ type: "next-loaded", result, pageSize: pageSizeRef.current });
-      } catch (e) {
-        if (stateRef.current.generation !== generation) return;
-        dispatch({ type: "next-error", error: asAppError(e) });
-      }
-    },
-    [connectionId, schema, relation],
-  );
+  const fetchNextPage = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    const cur = stateRef.current;
+    if (cur.reachedEnd) return;
+    const offset = cur.rows.length;
+    const captured = paramsKeyRef.current;
+    dispatch({ type: "next-loading" });
+    try {
+      const result = await dataApi.queryTable(
+        connectionId,
+        schema,
+        relation,
+        {
+          limit: pageSizeRef.current,
+          offset,
+          order_by: orderByRef.current,
+          ...modelToPayload(appliedRef.current),
+        },
+        "user",
+      );
+      if (paramsKeyRef.current !== captured) return;
+      dispatch({ type: "next-loaded", result, pageSize: pageSizeRef.current });
+    } catch (e) {
+      if (paramsKeyRef.current !== captured) return;
+      dispatch({ type: "next-error", error: asAppError(e) });
+    }
+  }, [connectionId, schema, relation]);
 
   const loadNextPage = useCallback(() => {
     const s = stateRef.current.status.state;
     // Idempotent under double-fire: only kick off when ready.
     if (s !== "ready") return;
     if (stateRef.current.reachedEnd) return;
-    void fetchNextPage(stateRef.current.generation);
+    void fetchNextPage();
   }, [fetchNextPage]);
 
   const retryNextPage = useCallback(() => {
     if (stateRef.current.status.state !== "next-error") return;
     dispatch({ type: "clear-next-error" });
-    void fetchNextPage(stateRef.current.generation);
+    void fetchNextPage();
   }, [fetchNextPage]);
 
   const retryFirstPage = useCallback(() => {
-    void fetchFirstPage(stateRef.current.generation);
+    void fetchFirstPage();
   }, [fetchFirstPage]);
 
   const error =

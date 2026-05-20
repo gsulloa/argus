@@ -10,7 +10,7 @@ import { useActiveConnections } from "../useActiveConnections";
 import { openQueryTab } from "../sql/openQueryTab";
 import { dataApi } from "./api";
 import { BottomBar } from "./BottomBar";
-import { DataGrid } from "./DataGrid";
+import { DataGrid, type DataGridHandle } from "./DataGrid";
 import { DiscardChangesDialog } from "./DiscardChangesDialog";
 import { FilterBar } from "./filter-bar/FilterBar";
 import { compilePrefilledSelect } from "./filter-bar/compileWhere";
@@ -418,6 +418,9 @@ export function TableViewer({
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Ref to the FilterBar imperative handle for ⌘F keyboard shortcut.
   const filterBarRef = useRef<FilterBarHandle>(null);
+  // Ref to the DataGrid imperative handle — used by `onAddRow` to scroll the
+  // viewport to the top so the newly inserted row at index 0 is visible.
+  const gridRef = useRef<DataGridHandle | null>(null);
   useEffect(() => {
     if (!active) return;
     function onKey(e: KeyboardEvent) {
@@ -503,6 +506,8 @@ export function TableViewer({
     buffer.addInsertRow({});
     // Select the newly inserted row (it appears first).
     setSelection({ anchor: 0, active: 0 });
+    // Scroll the grid back to the top so the insert row is visible.
+    gridRef.current?.scrollToTop();
   }
 
   const onApplyFilters = useCallback(() => {
@@ -618,6 +623,7 @@ export function TableViewer({
               </div>
             ) : (
               <DataGrid
+                ref={gridRef}
                 columns={data.columns}
                 rows={unifiedRows}
                 pageSize={pageSize}
