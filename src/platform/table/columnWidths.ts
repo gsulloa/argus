@@ -83,6 +83,14 @@ export type ColumnSpec = {
   nonResizable?: boolean;
   /** Fixed pixel width — overrides everything, not stored in the record. */
   fixedWidth?: number;
+  /**
+   * Measured header floor (computed externally by the caller — e.g. via an
+   * off-DOM canvas of the column name in the header font). When set, the
+   * default-width branch returns `max(typeBaseWidth, floorWidth)` so long
+   * names don't ellipsis-truncate at type-derived defaults. User overrides
+   * and `fixedWidth` still win.
+   */
+  floorWidth?: number;
 };
 
 /**
@@ -129,7 +137,8 @@ export function useColumnWidths(opts: {
     if (!col) return BASE_WIDTH_BY_CATEGORY.other;
     if (col.fixedWidth !== undefined) return col.fixedWidth;
     if (record[name] !== undefined) return record[name];
-    return baseWidthFor({ category: col.category, isKey: col.isKey });
+    const base = baseWidthFor({ category: col.category, isKey: col.isKey });
+    return Math.max(base, col.floorWidth ?? 0);
   };
 
   // Memoize totalWidth on columns signature + record reference.

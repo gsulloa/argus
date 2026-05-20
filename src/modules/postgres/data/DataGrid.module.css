@@ -83,12 +83,6 @@
   border-radius: 2px;
 }
 
-.colType {
-  color: var(--text-subtle);
-  font-size: 10px;
-  margin-left: 4px;
-}
-
 .body {
   position: relative;
 }
