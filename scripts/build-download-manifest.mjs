@@ -10,9 +10,16 @@
 //   PUBLIC_URL_BASE               e.g. https://pub-9f3a1b7e.r2.dev
 //   MANIFEST_MODE                 ci | local (default ci). In ci, all four
 //                                 installers are required. In local, partial
-//                                 sets are allowed and the output goes to
-//                                 download.partial.json when not all four
-//                                 installers are emitted.
+//                                 sets are allowed and the script merges this
+//                                 build's installers on top of
+//                                 MANIFEST_BASE_FILE (if provided) so the
+//                                 output is always a full download.json —
+//                                 never a .partial.json.
+//   MANIFEST_BASE_FILE            (local mode only) path to an existing
+//                                 download.json to use as the base. Installers
+//                                 produced by this build overwrite the
+//                                 corresponding entries; installers not built
+//                                 this run are carried over from the base file.
 //
 // Per-platform installer-filename env vars (each optional in local mode;
 // all four required in ci mode):
@@ -25,15 +32,15 @@
 // bytes. Updater archives (.app.tar.gz, .AppImage.tar.gz, .msi.zip) and .sig
 // files are rejected — this manifest must only point at end-user installers.
 //
-// Output: writes download.json (or download.partial.json in local mode when
-// partial) to the working directory.
+// Output: always writes download.json to the working directory. In local mode
+// with MANIFEST_BASE_FILE the output is a full manifest (this build's
+// installers spread over the base file's installers).
 //
 // Smoke tests:
 //   - Four-platform CI case: see scripts/__tests__/build-download-manifest.smoke.mjs
 //   - Linux-only local case: see scripts/__tests__/build-download-manifest.smoke.mjs
 
-import { statSync } from "node:fs";
-import { writeFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 function required(name) {
@@ -100,29 +107,61 @@ for (const [platformKey, envName] of PLATFORMS) {
 }
 
 const emittedCount = Object.keys(installers).length;
-const isPartial = emittedCount < PLATFORMS.length;
+const builtKeys = Object.keys(installers);
 
-if (isPartial) {
-  const missing = PLATFORMS.filter(([k]) => !installers[k]).map(([k]) => k);
-  if (mode === "ci") {
+// In local mode, merge this build's installers on top of a base manifest so we
+// can always emit a full download.json — never a .partial.json.
+let baseInstallers = {};
+const baseFile = process.env.MANIFEST_BASE_FILE;
+if (baseFile) {
+  if (mode !== "local") {
+    console.error(
+      `[build-download-manifest] MANIFEST_BASE_FILE is only supported in MANIFEST_MODE=local (got ${mode}).`
+    );
+    process.exit(1);
+  }
+  try {
+    const baseDoc = JSON.parse(readFileSync(baseFile, "utf8"));
+    baseInstallers = baseDoc.installers ?? {};
+    if (baseDoc.version && baseDoc.version !== version) {
+      console.warn(
+        `[build-download-manifest] base manifest version (${baseDoc.version}) differs from this build (${version}). Carried-over installers still point at v${baseDoc.version} files.`
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[build-download-manifest] Cannot read MANIFEST_BASE_FILE (${baseFile}): ${err.code ?? err.message}`
+    );
+    process.exit(1);
+  }
+}
+
+const mergedInstallers = { ...baseInstallers, ...installers };
+const isPartial = Object.keys(mergedInstallers).length < PLATFORMS.length;
+
+if (mode === "ci") {
+  if (isPartial) {
+    const missing = PLATFORMS.filter(([k]) => !mergedInstallers[k]).map(([k]) => k);
     console.error(
       `[build-download-manifest] CI mode requires all 4 installers; missing: ${missing.join(", ")}`
     );
     process.exit(1);
   }
+} else if (isPartial) {
+  const missing = PLATFORMS.filter(([k]) => !mergedInstallers[k]).map(([k]) => k);
   console.warn(
-    `[build-download-manifest] WARNING: partial download manifest — missing: ${missing.join(", ")}`
+    `[build-download-manifest] WARNING: emitting download.json with missing installers: ${missing.join(", ")} (no base file provided or base file lacked these). Provide MANIFEST_BASE_FILE to keep prior entries.`
   );
 }
 
 const doc = {
   version,
   pub_date: pubDate,
-  installers,
+  installers: mergedInstallers,
 };
 
-const outName = isPartial && mode === "local" ? "download.partial.json" : "download.json";
-writeFileSync(outName, JSON.stringify(doc, null, 2) + "\n");
+writeFileSync("download.json", JSON.stringify(doc, null, 2) + "\n");
+const carried = Object.keys(mergedInstallers).filter((k) => !builtKeys.includes(k));
 console.log(
-  `Wrote ${outName} for v${version} (${emittedCount}/${PLATFORMS.length} installers)`
+  `Wrote download.json for v${version} (${emittedCount} built: ${builtKeys.join(", ") || "none"}; ${carried.length} carried: ${carried.join(", ") || "none"})`
 );

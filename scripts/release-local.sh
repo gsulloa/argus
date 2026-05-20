@@ -28,8 +28,13 @@
 #   ./scripts/release-local.sh --target aarch64         # build a single target (must be valid for host)
 #   ./scripts/release-local.sh --target linux           # alias for x86_64-unknown-linux-gnu (Linux host only)
 #   ./scripts/release-local.sh --target windows         # alias for x86_64-pc-windows-msvc (Windows host only)
-#   ./scripts/release-local.sh --allow-partial-manifest # upload latest.partial.json/download.partial.json (separate keys)
 #   ./scripts/release-local.sh --dry-run                # print plan, do nothing
+#
+# Local-host releases always emit a *full* latest.json / download.json: the
+# script downloads the live manifests from R2, spreads them, then overwrites
+# only the platforms this host built. Mac-only releases keep the prior Windows
+# / Linux entries, and vice versa. No .partial.json is ever produced or
+# uploaded.
 #
 # Secrets are read from environment or from .env.release at repo root.
 # See .env.release.example for the full list.
@@ -84,7 +89,6 @@ SKIP_BUMP=0
 NO_PUSH=0
 NO_UPLOAD=0
 DRY_RUN=0
-ALLOW_PARTIAL=0
 TARGETS_FLAG=""
 
 while [ $# -gt 0 ]; do
@@ -93,11 +97,12 @@ while [ $# -gt 0 ]; do
     --no-push)                 NO_PUSH=1 ;;
     --no-upload)               NO_UPLOAD=1 ;;
     --dry-run)                 DRY_RUN=1 ;;
-    --allow-partial-manifest)  ALLOW_PARTIAL=1 ;;
+    --allow-partial-manifest)
+      echo "--allow-partial-manifest is deprecated and ignored (local releases always emit a full manifest by merging with R2)." >&2 ;;
     --target)                  TARGETS_FLAG="$2"; shift ;;
     --target=*)                TARGETS_FLAG="${1#*=}" ;;
     -h|--help)
-      sed -n '2,38p' "$0"; exit 0 ;;
+      sed -n '2,44p' "$0"; exit 0 ;;
     *)
       echo "Unknown flag: $1" >&2; exit 2 ;;
   esac
@@ -436,16 +441,12 @@ done
 # ---------- manifests ---------------------------------------------------------
 
 # Determine which manifest_keys we built so we can pass them down to the
-# generator. The generator emits a partial manifest (latest.partial.json /
-# download.partial.json) automatically when fewer than four platforms are set.
+# generator. The generators merge this build's entries on top of a base
+# manifest fetched from R2 so the output is always full (never .partial.json).
 BUILT_KEYS=()
 for TARGET in "${TARGETS[@]}"; do
   BUILT_KEYS+=("$(manifest_key_for_target "$TARGET")")
 done
-IS_PARTIAL=0
-if [ "${#BUILT_KEYS[@]}" -lt 4 ]; then
-  IS_PARTIAL=1
-fi
 
 env_for_manifest() {
   # Echo the env-var assignments for build-manifest.mjs / build-download-manifest.mjs
@@ -486,7 +487,48 @@ env_for_manifest() {
   done
 }
 
-step "Building latest.json manifest (mode=local, partial=$IS_PARTIAL)"
+step "Fetching base manifests from R2 (so we merge instead of overwriting other platforms)"
+BASE_DIR="$STAGING/.manifest-base"
+LATEST_BASE="$BASE_DIR/latest.json"
+DOWNLOAD_BASE="$BASE_DIR/download.json"
+run "mkdir -p '$BASE_DIR'"
+
+# Configure aws creds early so we can read from R2 even when --no-upload is
+# set later. If R2 credentials are missing (e.g. --no-upload + unset env),
+# we skip the fetch and emit the manifest from scratch.
+HAVE_R2_READ=0
+if [ -n "${R2_ACCOUNT_ID:-}" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ] && [ -n "${R2_BUCKET:-}" ]; then
+  HAVE_R2_READ=1
+  ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+  export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+  export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+  export AWS_DEFAULT_REGION="auto"
+  export AWS_EC2_METADATA_DISABLED="true"
+fi
+
+fetch_base() {
+  local key="$1" out="$2"
+  if [ "$HAVE_R2_READ" = "0" ]; then
+    c_dim "  Skipping fetch of $key (R2 credentials not available)."
+    return 0
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    c_dim "DRY: would fetch s3://${R2_BUCKET}/${key} → $out"
+    return 0
+  fi
+  if aws s3 cp "s3://${R2_BUCKET}/${key}" "$out" \
+        --endpoint-url "$ENDPOINT" >/dev/null 2>&1; then
+    c_green "  Fetched base $key"
+  else
+    c_dim "  No existing $key in R2 (will emit from scratch)."
+    rm -f "$out"
+  fi
+}
+
+fetch_base "latest.json" "$LATEST_BASE"
+fetch_base "download.json" "$DOWNLOAD_BASE"
+
+step "Building latest.json manifest (mode=local)"
 PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 if [ "$DRY_RUN" = "1" ]; then
   c_dim "DRY: would run node scripts/build-manifest.mjs"
@@ -497,6 +539,12 @@ else
   # (which would leave `env` printing its environment and `node` running
   # without VERSION/PUB_DATE/etc).
 
+  # Pass MANIFEST_BASE_FILE only if the file actually exists on disk.
+  LATEST_BASE_ENV=""
+  [ -f "$LATEST_BASE" ] && LATEST_BASE_ENV="MANIFEST_BASE_FILE='$LATEST_BASE'"
+  DOWNLOAD_BASE_ENV=""
+  [ -f "$DOWNLOAD_BASE" ] && DOWNLOAD_BASE_ENV="MANIFEST_BASE_FILE='$DOWNLOAD_BASE'"
+
   # Updater manifest
   UPDATER_ENV="$(env_for_manifest local updater | tr '\n' ' ')"
   eval "env \
@@ -504,6 +552,7 @@ else
     PUB_DATE='$PUB_DATE' \
     PUBLIC_URL_BASE='$R2_PUBLIC_URL' \
     MANIFEST_MODE=local \
+    $LATEST_BASE_ENV \
     $UPDATER_ENV \
     node scripts/build-manifest.mjs"
 
@@ -515,17 +564,13 @@ else
     PUBLIC_URL_BASE='$R2_PUBLIC_URL' \
     MANIFEST_MODE=local \
     STAGING_DIR='$STAGING' \
+    $DOWNLOAD_BASE_ENV \
     $DOWNLOAD_ENV \
     node scripts/build-download-manifest.mjs"
 fi
 
-# Resolve which manifest files we ended up with.
 LATEST_FILE="latest.json"
 DOWNLOAD_FILE="download.json"
-if [ "$IS_PARTIAL" = "1" ]; then
-  LATEST_FILE="latest.partial.json"
-  DOWNLOAD_FILE="download.partial.json"
-fi
 
 # ---------- upload to R2 ------------------------------------------------------
 
@@ -533,13 +578,11 @@ if [ "$NO_UPLOAD" = "1" ]; then
   c_dim "Skipping R2 upload (--no-upload)."
 else
   step "Uploading to R2 (bucket: $R2_BUCKET)"
-  ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-  export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
-  export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-  export AWS_DEFAULT_REGION="auto"
-  export AWS_EC2_METADATA_DISABLED="true"
+  # AWS creds + ENDPOINT were already exported above for the base-manifest
+  # fetch. We require_env'd them in preflight, so they're guaranteed set here.
 
-  # Binaries: long cache (1 year), immutable.
+  # Binaries: long cache (1 year), immutable. Skip the manifest-base cache
+  # subdirectory so we don't try to upload it as an artifact.
   for f in "$STAGING"/*; do
     [ -f "$f" ] || continue
     key="$(basename "$f")"
@@ -548,42 +591,19 @@ else
           --cache-control 'public, max-age=31536000, immutable'"
   done
 
-  # Manifests: no-cache, JSON content type.
-  # Full manifests always upload to their canonical key. Partial manifests
-  # only upload when --allow-partial-manifest is passed, AND they go to
-  # *.partial.json keys so they never overwrite the live download.json/latest.json.
-  if [ "$IS_PARTIAL" = "0" ]; then
-    if [ -f "$ROOT/$LATEST_FILE" ]; then
-      run "aws s3 cp '$ROOT/$LATEST_FILE' 's3://${R2_BUCKET}/latest.json' \
-            --endpoint-url '$ENDPOINT' \
-            --cache-control 'no-cache, max-age=0' \
-            --content-type 'application/json'"
-    fi
-    if [ -f "$ROOT/$DOWNLOAD_FILE" ]; then
-      run "aws s3 cp '$ROOT/$DOWNLOAD_FILE' 's3://${R2_BUCKET}/download.json' \
-            --endpoint-url '$ENDPOINT' \
-            --cache-control 'no-cache, max-age=0' \
-            --content-type 'application/json'"
-    fi
-  else
-    if [ "$ALLOW_PARTIAL" = "1" ]; then
-      c_red "Uploading PARTIAL manifests to *.partial.json keys (NOT overwriting live latest.json/download.json)."
-      if [ -f "$ROOT/$LATEST_FILE" ]; then
-        run "aws s3 cp '$ROOT/$LATEST_FILE' 's3://${R2_BUCKET}/latest.partial.json' \
-              --endpoint-url '$ENDPOINT' \
-              --cache-control 'no-cache, max-age=0' \
-              --content-type 'application/json'"
-      fi
-      if [ -f "$ROOT/$DOWNLOAD_FILE" ]; then
-        run "aws s3 cp '$ROOT/$DOWNLOAD_FILE' 's3://${R2_BUCKET}/download.partial.json' \
-              --endpoint-url '$ENDPOINT' \
-              --cache-control 'no-cache, max-age=0' \
-              --content-type 'application/json'"
-      fi
-    else
-      c_dim "Partial manifests detected ($LATEST_FILE, $DOWNLOAD_FILE) — skipping manifest upload."
-      c_dim "Pass --allow-partial-manifest to upload them to *.partial.json keys."
-    fi
+  # Manifests: no-cache, JSON content type. Always full — the generators
+  # spread the base file fetched from R2 so other platforms keep their entries.
+  if [ -f "$ROOT/$LATEST_FILE" ]; then
+    run "aws s3 cp '$ROOT/$LATEST_FILE' 's3://${R2_BUCKET}/latest.json' \
+          --endpoint-url '$ENDPOINT' \
+          --cache-control 'no-cache, max-age=0' \
+          --content-type 'application/json'"
+  fi
+  if [ -f "$ROOT/$DOWNLOAD_FILE" ]; then
+    run "aws s3 cp '$ROOT/$DOWNLOAD_FILE' 's3://${R2_BUCKET}/download.json' \
+          --endpoint-url '$ENDPOINT' \
+          --cache-control 'no-cache, max-age=0' \
+          --content-type 'application/json'"
   fi
 fi
 
@@ -598,13 +618,8 @@ echo "  Targets     : ${TARGETS[*]}"
 echo "  Manifest    : $ROOT/$LATEST_FILE"
 echo "  Download    : $ROOT/$DOWNLOAD_FILE"
 if [ "$NO_UPLOAD" = "0" ]; then
-  if [ "$IS_PARTIAL" = "0" ]; then
-    echo "  Public URL  : $R2_PUBLIC_URL/latest.json"
-    echo "  Download    : $R2_PUBLIC_URL/download.json"
-  elif [ "$ALLOW_PARTIAL" = "1" ]; then
-    echo "  Public URL  : $R2_PUBLIC_URL/latest.partial.json (partial)"
-    echo "  Download    : $R2_PUBLIC_URL/download.partial.json (partial)"
-  fi
+  echo "  Public URL  : $R2_PUBLIC_URL/latest.json"
+  echo "  Download    : $R2_PUBLIC_URL/download.json"
   for f in "$STAGING"/*; do
     [ -f "$f" ] || continue
     name="$(basename "$f")"

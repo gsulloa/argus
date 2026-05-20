@@ -10,9 +10,15 @@
 //   MANIFEST_MODE                 ci | local (default ci). In ci, all four
 //                                 platforms are required and the script exits
 //                                 non-zero otherwise. In local, partial sets
-//                                 are allowed and the output goes to
-//                                 latest.partial.json when not all four
-//                                 platforms are emitted.
+//                                 are allowed and the script merges this
+//                                 build's platforms on top of MANIFEST_BASE_FILE
+//                                 (if provided) so the output is always a full
+//                                 latest.json — never a .partial.json.
+//   MANIFEST_BASE_FILE            (local mode only) path to an existing
+//                                 latest.json to use as the base. Platforms
+//                                 produced by this build overwrite the
+//                                 corresponding entries; platforms not built
+//                                 this run are carried over from the base file.
 //
 // Per-platform env-var pairs (each pair is optional; both must be set together):
 //   DARWIN_AARCH64_TARBALL  + DARWIN_AARCH64_SIG_PATH
@@ -24,8 +30,9 @@
 //   ARM64_TARBALL / ARM64_SIG_PATH  → DARWIN_AARCH64_*
 //   X64_TARBALL   / X64_SIG_PATH    → DARWIN_X86_64_*
 //
-// Output: writes latest.json (or latest.partial.json in local mode when
-// partial) to the working directory.
+// Output: always writes latest.json to the working directory. In local mode
+// with MANIFEST_BASE_FILE the output is a full manifest (this build's
+// platforms spread over the base file's platforms).
 //
 // Smoke tests:
 //   - Four-platform CI case: see scripts/__tests__/build-manifest.smoke.mjs
@@ -94,18 +101,50 @@ for (const [platformKey, tarballEnv, sigEnv] of PLATFORMS) {
 }
 
 const emittedCount = Object.keys(platforms).length;
-const isPartial = emittedCount < PLATFORMS.length;
+const builtKeys = Object.keys(platforms);
 
-if (isPartial) {
-  const missing = PLATFORMS.filter(([k]) => !platforms[k]).map(([k]) => k);
-  if (mode === "ci") {
+// In local mode, merge this build's platforms on top of a base manifest so we
+// can always emit a full latest.json — never a .partial.json.
+let basePlatforms = {};
+const baseFile = process.env.MANIFEST_BASE_FILE;
+if (baseFile) {
+  if (mode !== "local") {
+    console.error(
+      `[build-manifest] MANIFEST_BASE_FILE is only supported in MANIFEST_MODE=local (got ${mode}).`
+    );
+    process.exit(1);
+  }
+  try {
+    const baseDoc = JSON.parse(readFileSync(baseFile, "utf8"));
+    basePlatforms = baseDoc.platforms ?? {};
+    if (baseDoc.version && baseDoc.version !== version) {
+      console.warn(
+        `[build-manifest] base manifest version (${baseDoc.version}) differs from this build (${version}). Carried-over platforms still point at v${baseDoc.version} artifacts.`
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[build-manifest] Cannot read MANIFEST_BASE_FILE (${baseFile}): ${err.code ?? err.message}`
+    );
+    process.exit(1);
+  }
+}
+
+const mergedPlatforms = { ...basePlatforms, ...platforms };
+const isPartial = Object.keys(mergedPlatforms).length < PLATFORMS.length;
+
+if (mode === "ci") {
+  if (isPartial) {
+    const missing = PLATFORMS.filter(([k]) => !mergedPlatforms[k]).map(([k]) => k);
     console.error(
       `[build-manifest] CI mode requires all 4 platforms; missing: ${missing.join(", ")}`
     );
     process.exit(1);
   }
+} else if (isPartial) {
+  const missing = PLATFORMS.filter(([k]) => !mergedPlatforms[k]).map(([k]) => k);
   console.warn(
-    `[build-manifest] WARNING: partial manifest — missing platforms: ${missing.join(", ")}`
+    `[build-manifest] WARNING: emitting latest.json with missing platforms: ${missing.join(", ")} (no base file provided or base file lacked these). Provide MANIFEST_BASE_FILE to keep prior entries.`
   );
 }
 
@@ -113,11 +152,11 @@ const manifest = {
   version,
   notes,
   pub_date: pubDate,
-  platforms,
+  platforms: mergedPlatforms,
 };
 
-const outName = isPartial && mode === "local" ? "latest.partial.json" : "latest.json";
-writeFileSync(outName, JSON.stringify(manifest, null, 2) + "\n");
+writeFileSync("latest.json", JSON.stringify(manifest, null, 2) + "\n");
+const carried = Object.keys(mergedPlatforms).filter((k) => !builtKeys.includes(k));
 console.log(
-  `Wrote ${outName} for v${version} (${emittedCount}/${PLATFORMS.length} platforms)`
+  `Wrote latest.json for v${version} (${emittedCount} built: ${builtKeys.join(", ") || "none"}; ${carried.length} carried: ${carried.join(", ") || "none"})`
 );
