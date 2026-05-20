@@ -11,6 +11,7 @@ src-tauri/target
 .env.release
 staging/
 latest.json
+*.partial.json
 
 # Editor
 .vscode/*
