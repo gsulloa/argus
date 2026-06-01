@@ -2,7 +2,11 @@ import { Command as Cmdk } from "cmdk";
 import { useEffect, useMemo, useState } from "react";
 import { useTabs } from "@/platform/shell/tabs";
 import { useActiveConnections } from "@/modules/postgres/useActiveConnections";
+import { useActiveMysqlConnections } from "@/modules/mysql/useActiveConnections";
+import { useActiveMssqlConnections } from "@/modules/mssql/useActiveConnections";
 import { openObjectTab } from "@/modules/postgres/schema/openObjectTab";
+import { openMysqlObjectTab } from "@/modules/mysql/schema/openObjectTab";
+import { openMssqlObjectTab } from "@/modules/mssql/schema/openObjectTab";
 import type { RelationKind } from "@/modules/postgres/data/types";
 import { PaletteShell } from "./PaletteShell";
 import { useTablePalette } from "./PaletteContext";
@@ -57,7 +61,10 @@ function TableRow({ entry, valuePrefix = "", onSelect }: RowProps) {
 export function TablePalette() {
   const { open, hide } = useTablePalette();
   const tabs = useTabs();
-  const { items: actives } = useActiveConnections();
+  const { items: pgActives } = useActiveConnections();
+  const { items: myActives } = useActiveMysqlConnections();
+  const { items: msActives } = useActiveMssqlConnections();
+  const actives = useMemo(() => [...pgActives, ...myActives, ...msActives], [pgActives, myActives, msActives]);
   const entries = useTableIndex(open);
   const { recents, push: pushRecent } = useRecentTables();
   const [search, setSearch] = useState("");
@@ -79,13 +86,31 @@ export function TablePalette() {
   function handleSelect(entry: TableEntry) {
     hide();
     pushRecent(entry);
-    openObjectTab(tabs, {
-      connectionId: entry.connectionId,
-      connectionName: entry.connectionName,
-      schema: entry.schema,
-      name: entry.name,
-      kind: KIND_PAYLOAD[entry.kind],
-    });
+    if ((entry.connectionKind ?? "postgres") === "mysql") {
+      openMysqlObjectTab(tabs, {
+        connectionId: entry.connectionId,
+        connectionName: entry.connectionName,
+        schema: entry.schema,
+        name: entry.name,
+        kind: entry.kind === "view" ? "view" : "table",
+      });
+    } else if (entry.connectionKind === "mssql") {
+      openMssqlObjectTab(tabs, {
+        connectionId: entry.connectionId,
+        connectionName: entry.connectionName,
+        schema: entry.schema,
+        name: entry.name,
+        kind: entry.kind === "view" ? "view" : "table",
+      });
+    } else {
+      openObjectTab(tabs, {
+        connectionId: entry.connectionId,
+        connectionName: entry.connectionName,
+        schema: entry.schema,
+        name: entry.name,
+        kind: KIND_PAYLOAD[entry.kind],
+      });
+    }
   }
 
   return (

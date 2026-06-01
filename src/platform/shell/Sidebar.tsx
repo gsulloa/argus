@@ -8,6 +8,8 @@ import { useExpandedGroups } from "@/platform/connection-registry/useExpandedGro
 import { computeMidpointSortOrder } from "@/platform/connection-registry/sortOrder";
 import type { Connection, ConnectionGroup } from "@/platform/connection-registry/types";
 import { postgresApi, useActiveConnections } from "@/modules/postgres";
+import { mysqlApi, useActiveMysqlConnections } from "@/modules/mysql";
+import { mssqlApi, useActiveMssqlConnections } from "@/modules/mssql";
 import { useKindPicker } from "./useKindPicker";
 import { openHistoryTab } from "@/modules/query-history";
 import { useTabs } from "@/platform/shell/tabs";
@@ -227,7 +229,10 @@ function ConnectionsSection() {
     }
   }
 
-  const { items: activeItems } = useActiveConnections();
+  const { items: pgActiveItems } = useActiveConnections();
+  const { items: myActiveItems } = useActiveMysqlConnections();
+  const { items: msActiveItems } = useActiveMssqlConnections();
+  const activeItems = [...pgActiveItems, ...myActiveItems, ...msActiveItems];
   const tabs = useTabs();
   const [confirmAll, setConfirmAll] = useState(false);
 
@@ -250,10 +255,16 @@ function ConnectionsSection() {
   }, [confirmAll, connections.items, activeItems]);
 
   async function handleDisconnectAll() {
-    try {
-      await postgresApi.disconnectAll();
-    } catch (e) {
-      console.error("[argus] disconnect all:", e);
+    // Fan out to Postgres, MySQL, and MS SQL Server disconnect_all
+    const results = await Promise.allSettled([
+      postgresApi.disconnectAll(),
+      mysqlApi.disconnectAll(),
+      mssqlApi.disconnectAll(),
+    ]);
+    for (const r of results) {
+      if (r.status === "rejected") {
+        console.error("[argus] disconnect all:", r.reason);
+      }
     }
   }
 

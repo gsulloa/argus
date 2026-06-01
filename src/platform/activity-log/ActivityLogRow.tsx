@@ -3,17 +3,34 @@ import styles from "./ActivityLogPanel.module.css";
 import type { ActivityLogEntry, ActivityKind, Metric } from "./types";
 
 const KIND_LABEL: Record<ActivityKind, string> = {
+  // Connection lifecycle
   test_connection: "test",
   connect: "connect",
   disconnect: "disconnect",
+  update_credentials: "update credentials",
+  // Schema browser
   list_schemas: "schemas",
   list_relations: "relations",
   list_structure: "structure",
   list_table_extras: "table extras",
+  list_columns_bulk: "columns",
+  // Data grid
   query_table: "query",
   count_table: "count",
   apply_edits: "apply",
+  // SQL editor
+  run_sql: "run sql",
+  run_sql_many: "run sql (batch)",
+  // Structure / DDL
   table_structure: "table structure",
+  table_ddl: "table ddl",
+  // DynamoDB
+  list_tables: "list tables",
+  describe_table: "describe",
+  scan_table: "scan",
+  put_item: "put item",
+  update_item: "update item",
+  delete_item: "delete item",
 };
 
 const SUMMARY_TRUNCATE = 120;

@@ -36,6 +36,10 @@ import {
   CredentialsRefreshedListener,
   useDynamoCommands,
 } from "@/modules/dynamo";
+import { MysqlFormProvider, useMysqlCommands } from "@/modules/mysql";
+import { useMysqlTabLifecycle } from "@/modules/mysql/useMysqlTabLifecycle";
+import { MssqlFormProvider, useMssqlCommands } from "@/modules/mssql";
+import { useMssqlTabLifecycle } from "@/modules/mssql/useMssqlTabLifecycle";
 import { useDataViewLifecycle } from "@/modules/dynamo/data-view/useDataViewLifecycle";
 import { DynamoTablesCacheProvider, useDynamoTablesPaletteCommands } from "@/modules/dynamo/tables";
 import { KindPickerProvider } from "@/platform/shell/useKindPicker";
@@ -53,14 +57,18 @@ export function App() {
                 <ConnectionsProvider>
                   <ActivityLogProvider>
                     <PostgresFormProvider>
-                      <DynamoFormProvider>
-                        <DynamoTablesCacheProvider>
-                          <KindPickerProvider>
-                            <Shell />
-                            <CredentialsRefreshedListener />
-                          </KindPickerProvider>
-                        </DynamoTablesCacheProvider>
-                      </DynamoFormProvider>
+                      <MysqlFormProvider>
+                        <MssqlFormProvider>
+                          <DynamoFormProvider>
+                            <DynamoTablesCacheProvider>
+                              <KindPickerProvider>
+                                <Shell />
+                                <CredentialsRefreshedListener />
+                              </KindPickerProvider>
+                            </DynamoTablesCacheProvider>
+                          </DynamoFormProvider>
+                        </MssqlFormProvider>
+                      </MysqlFormProvider>
                     </PostgresFormProvider>
                   </ActivityLogProvider>
                 </ConnectionsProvider>
@@ -92,6 +100,10 @@ function ShellMain() {
       <ShortcutBindings />
       <DevCommands />
       <PostgresCommands />
+      <MysqlCommands />
+      <MysqlTabLifecycle />
+      <MssqlCommands />
+      <MssqlTabLifecycle />
       <DynamoCommands />
       <DynamoDataViewLifecycle />
       <DynamoTablesPaletteCommands />
@@ -108,6 +120,26 @@ function ShellMain() {
 
 function PostgresCommands() {
   usePostgresCommands();
+  return null;
+}
+
+function MysqlCommands() {
+  useMysqlCommands();
+  return null;
+}
+
+function MysqlTabLifecycle() {
+  useMysqlTabLifecycle();
+  return null;
+}
+
+function MssqlCommands() {
+  useMssqlCommands();
+  return null;
+}
+
+function MssqlTabLifecycle() {
+  useMssqlTabLifecycle();
   return null;
 }
 

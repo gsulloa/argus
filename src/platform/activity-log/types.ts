@@ -1,15 +1,32 @@
 export type ActivityKind =
+  // Connection lifecycle (shared: postgres + mysql + dynamo)
   | "test_connection"
   | "connect"
   | "disconnect"
+  | "update_credentials"
+  // Schema browser (shared: postgres + mysql)
   | "list_schemas"
   | "list_relations"
   | "list_structure"
   | "list_table_extras"
+  | "list_columns_bulk"
+  // Data grid (shared: postgres + mysql)
   | "query_table"
   | "count_table"
   | "apply_edits"
-  | "table_structure";
+  // SQL editor (shared: postgres + mysql)
+  | "run_sql"
+  | "run_sql_many"
+  // Table structure / DDL (shared: postgres + mysql)
+  | "table_structure"
+  | "table_ddl"
+  // DynamoDB-specific
+  | "list_tables"
+  | "describe_table"
+  | "scan_table"
+  | "put_item"
+  | "update_item"
+  | "delete_item";
 
 export type Origin = "auto" | "user";
 export type Status = "ok" | "err";

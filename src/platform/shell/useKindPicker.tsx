@@ -5,6 +5,8 @@ import { useDynamoForm, DynamoIcon } from "@/modules/dynamo";
 import { POSTGRES_KIND } from "@/modules/postgres/types";
 import { DYNAMO_KIND } from "@/modules/dynamo/types";
 import { PostgresIcon } from "@/modules/postgres/icon";
+import { useMysqlForm, MysqlIcon, MYSQL_KIND } from "@/modules/mysql";
+import { useMssqlForm, MssqlIcon, MSSQL_KIND } from "@/modules/mssql";
 
 interface KindPickerControllerValue {
   open: () => void;
@@ -21,6 +23,8 @@ export function KindPickerProvider({
   const [isOpen, setIsOpen] = React.useState(false);
   const pg = usePostgresForm();
   const dy = useDynamoForm();
+  const my = useMysqlForm();
+  const ms = useMssqlForm();
 
   const kinds = React.useMemo<KindCard[]>(
     () => [
@@ -32,6 +36,20 @@ export function KindPickerProvider({
         onPick: () => pg.openCreate(),
       },
       {
+        kind: MYSQL_KIND,
+        label: "MySQL / MariaDB",
+        description: "Connect to a MySQL or MariaDB database",
+        Icon: MysqlIcon,
+        onPick: () => my.openCreate(),
+      },
+      {
+        kind: MSSQL_KIND,
+        label: "Microsoft SQL Server",
+        description: "Connect to SQL Server, Azure SQL Database, or Managed Instance",
+        Icon: MssqlIcon,
+        onPick: () => ms.openCreate(),
+      },
+      {
         kind: DYNAMO_KIND,
         label: "DynamoDB",
         description: "Connect to AWS DynamoDB",
@@ -39,7 +57,7 @@ export function KindPickerProvider({
         onPick: () => dy.openCreate(),
       },
     ],
-    [pg, dy],
+    [pg, my, ms, dy],
   );
 
   const value = React.useMemo<KindPickerControllerValue>(
