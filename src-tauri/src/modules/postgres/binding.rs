@@ -350,9 +350,7 @@ fn bind_scalar(v: &JsonValue, column: &str, kind: &BindKind) -> AppResult<BoundP
         BindKind::Json | BindKind::Jsonb => match v {
             JsonValue::String(s) => {
                 let parsed = serde_json::from_str::<JsonValue>(s).map_err(|e| {
-                    AppError::Validation(format!(
-                        "invalid JSON for column '{column}': {e}"
-                    ))
+                    AppError::Validation(format!("invalid JSON for column '{column}': {e}"))
                 })?;
                 Ok(BoundParam {
                     value: Box::new(parsed),
@@ -610,7 +608,10 @@ mod tests {
             .err()
             .expect("expected Err for invalid JSON string");
         let msg = format!("{err}");
-        assert!(msg.contains("metadata"), "msg should name the column: {msg}");
+        assert!(
+            msg.contains("metadata"),
+            "msg should name the column: {msg}"
+        );
         assert!(
             matches!(err, AppError::Validation(_)),
             "expected Validation error"

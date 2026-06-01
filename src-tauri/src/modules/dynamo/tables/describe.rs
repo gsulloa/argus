@@ -10,9 +10,7 @@ use crate::modules::dynamo::tables::types::{
 // Mapper helpers
 // ---------------------------------------------------------------------------
 
-fn map_key_schema(
-    ks: &[aws_sdk_dynamodb::types::KeySchemaElement],
-) -> Vec<KeySchemaElement> {
+fn map_key_schema(ks: &[aws_sdk_dynamodb::types::KeySchemaElement]) -> Vec<KeySchemaElement> {
     ks.iter()
         .map(|e| KeySchemaElement {
             attribute_name: e.attribute_name().to_string(),
@@ -40,13 +38,8 @@ fn map_table_status(s: &aws_sdk_dynamodb::types::TableStatus) -> TableStatus {
     }
 }
 
-fn map_billing_mode(
-    summary: Option<&aws_sdk_dynamodb::types::BillingModeSummary>,
-) -> BillingMode {
-    match summary
-        .and_then(|s| s.billing_mode())
-        .map(|bm| bm.as_str())
-    {
+fn map_billing_mode(summary: Option<&aws_sdk_dynamodb::types::BillingModeSummary>) -> BillingMode {
+    match summary.and_then(|s| s.billing_mode()).map(|bm| bm.as_str()) {
         Some("PAY_PER_REQUEST") => BillingMode::PayPerRequest,
         _ => BillingMode::Provisioned,
     }
@@ -68,9 +61,7 @@ fn map_attribute_definitions(
         .collect()
 }
 
-fn map_gsi(
-    gsi: &aws_sdk_dynamodb::types::GlobalSecondaryIndexDescription,
-) -> GsiInfo {
+fn map_gsi(gsi: &aws_sdk_dynamodb::types::GlobalSecondaryIndexDescription) -> GsiInfo {
     let projection_type = gsi
         .projection()
         .and_then(|p| p.projection_type())
@@ -82,20 +73,18 @@ fn map_gsi(
         .map(|s| s.as_str().to_string())
         .unwrap_or_default();
 
-    let provisioned_throughput =
-        gsi.provisioned_throughput()
-            .and_then(|pt| {
-                let rcu = pt.read_capacity_units()?;
-                let wcu = pt.write_capacity_units()?;
-                if rcu > 0 || wcu > 0 {
-                    Some(ProvisionedThroughputInfo {
-                        read_capacity_units: rcu,
-                        write_capacity_units: wcu,
-                    })
-                } else {
-                    None
-                }
-            });
+    let provisioned_throughput = gsi.provisioned_throughput().and_then(|pt| {
+        let rcu = pt.read_capacity_units()?;
+        let wcu = pt.write_capacity_units()?;
+        if rcu > 0 || wcu > 0 {
+            Some(ProvisionedThroughputInfo {
+                read_capacity_units: rcu,
+                write_capacity_units: wcu,
+            })
+        } else {
+            None
+        }
+    });
 
     GsiInfo {
         index_name: gsi.index_name().unwrap_or("").to_string(),
@@ -106,9 +95,7 @@ fn map_gsi(
     }
 }
 
-fn map_lsi(
-    lsi: &aws_sdk_dynamodb::types::LocalSecondaryIndexDescription,
-) -> LsiInfo {
+fn map_lsi(lsi: &aws_sdk_dynamodb::types::LocalSecondaryIndexDescription) -> LsiInfo {
     let projection_type = lsi
         .projection()
         .and_then(|p| p.projection_type())
@@ -128,17 +115,13 @@ fn map_stream_spec(
     match spec {
         Some(s) if s.stream_enabled() => Some(StreamSpecificationInfo {
             stream_enabled: true,
-            stream_view_type: s
-                .stream_view_type()
-                .map(|svt| svt.as_str().to_string()),
+            stream_view_type: s.stream_view_type().map(|svt| svt.as_str().to_string()),
         }),
         _ => None,
     }
 }
 
-fn map_creation_date_time(
-    dt: Option<&aws_sdk_dynamodb::primitives::DateTime>,
-) -> Option<String> {
+fn map_creation_date_time(dt: Option<&aws_sdk_dynamodb::primitives::DateTime>) -> Option<String> {
     dt.map(|d| {
         // Format as RFC-3339 / ISO-8601 UTC string.
         let secs = d.secs();
@@ -146,9 +129,7 @@ fn map_creation_date_time(
         // Use time crate to produce a proper ISO-8601 string.
         let ts = time::OffsetDateTime::from_unix_timestamp(secs)
             .ok()
-            .and_then(|t| {
-                t.checked_add(time::Duration::nanoseconds(nanos as i64))
-            });
+            .and_then(|t| t.checked_add(time::Duration::nanoseconds(nanos as i64)));
         match ts {
             Some(t) => t
                 .format(&time::format_description::well_known::Rfc3339)
@@ -163,9 +144,7 @@ fn map_creation_date_time(
 // ---------------------------------------------------------------------------
 
 /// Map the raw AWS `TableDescription` SDK type into our wire envelope.
-pub fn map_table_description(
-    raw: aws_sdk_dynamodb::types::TableDescription,
-) -> TableDescription {
+pub fn map_table_description(raw: aws_sdk_dynamodb::types::TableDescription) -> TableDescription {
     let table_name = raw.table_name().unwrap_or("").to_string();
     let table_arn = raw.table_arn().unwrap_or("").to_string();
     let table_status = raw
@@ -178,16 +157,8 @@ pub fn map_table_description(
     let billing_mode = map_billing_mode(raw.billing_mode_summary());
     let key_schema = map_key_schema(raw.key_schema());
     let attribute_definitions = map_attribute_definitions(raw.attribute_definitions());
-    let global_secondary_indexes = raw
-        .global_secondary_indexes()
-        .iter()
-        .map(map_gsi)
-        .collect();
-    let local_secondary_indexes = raw
-        .local_secondary_indexes()
-        .iter()
-        .map(map_lsi)
-        .collect();
+    let global_secondary_indexes = raw.global_secondary_indexes().iter().map(map_gsi).collect();
+    let local_secondary_indexes = raw.local_secondary_indexes().iter().map(map_lsi).collect();
     let stream_specification = map_stream_spec(raw.stream_specification());
 
     TableDescription {
@@ -253,7 +224,7 @@ pub async fn describe_table(
 mod tests {
     use super::*;
     use aws_sdk_dynamodb::types::{
-        AttributeDefinition, BillingModeSummary, BillingMode as SdkBillingMode,
+        AttributeDefinition, BillingMode as SdkBillingMode, BillingModeSummary,
         GlobalSecondaryIndexDescription, IndexStatus, KeySchemaElement as SdkKeySchemaElement,
         KeyType as SdkKeyType, Projection, ProjectionType, ProvisionedThroughputDescription,
         ScalarAttributeType, StreamSpecification, StreamViewType,
@@ -277,9 +248,7 @@ mod tests {
     }
 
     fn build_billing_summary(mode: SdkBillingMode) -> BillingModeSummary {
-        BillingModeSummary::builder()
-            .billing_mode(mode)
-            .build()
+        BillingModeSummary::builder().billing_mode(mode).build()
     }
 
     fn build_gsi(name: &str, hash_key: &str) -> GlobalSecondaryIndexDescription {

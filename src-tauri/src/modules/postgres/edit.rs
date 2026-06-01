@@ -957,18 +957,17 @@ mod tests {
             changes: map_of(&[("metadata", json!("{\"a\":1}"))]),
         };
         let cols = columns_of(&[("id", "integer"), ("metadata", "jsonb")]);
-        let (sql, params) =
-            build_edit_sql("market", "product_source_info", &op, &cols, &pk_cols(&["id"]))
-                .unwrap();
+        let (sql, params) = build_edit_sql(
+            "market",
+            "product_source_info",
+            &op,
+            &cols,
+            &pk_cols(&["id"]),
+        )
+        .unwrap();
         // Placeholder must be plain (no cast) — jsonb binds natively.
-        assert!(
-            sql.contains("SET \"metadata\" = $1"),
-            "sql: {sql}"
-        );
-        assert!(
-            sql.contains("WHERE \"id\" = $2"),
-            "sql: {sql}"
-        );
+        assert!(sql.contains("SET \"metadata\" = $1"), "sql: {sql}");
+        assert!(sql.contains("WHERE \"id\" = $2"), "sql: {sql}");
         assert!(!sql.contains("$1::"), "no cast for jsonb: {sql}");
         assert_eq!(params.len(), 2);
         // The bound value was verified at the binding level (bind_scalar tests).
@@ -986,9 +985,14 @@ mod tests {
             changes: map_of(&[("metadata", json!("{bad}"))]),
         };
         let cols = columns_of(&[("id", "integer"), ("metadata", "jsonb")]);
-        let err =
-            build_edit_sql("market", "product_source_info", &op, &cols, &pk_cols(&["id"]))
-                .unwrap_err();
+        let err = build_edit_sql(
+            "market",
+            "product_source_info",
+            &op,
+            &cols,
+            &pk_cols(&["id"]),
+        )
+        .unwrap_err();
         match err {
             AppError::Validation(msg) => {
                 assert!(

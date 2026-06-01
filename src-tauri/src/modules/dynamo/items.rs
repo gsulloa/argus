@@ -146,9 +146,9 @@ impl From<AttrValue> for aws_sdk_dynamodb::types::AttributeValue {
             ),
             AttrValue::Ss(ss) => aws_sdk_dynamodb::types::AttributeValue::Ss(ss),
             AttrValue::Ns(ns) => aws_sdk_dynamodb::types::AttributeValue::Ns(ns),
-            AttrValue::B(bytes) => {
-                aws_sdk_dynamodb::types::AttributeValue::B(aws_sdk_dynamodb::primitives::Blob::new(bytes))
-            }
+            AttrValue::B(bytes) => aws_sdk_dynamodb::types::AttributeValue::B(
+                aws_sdk_dynamodb::primitives::Blob::new(bytes),
+            ),
             AttrValue::Bs(blobs) => aws_sdk_dynamodb::types::AttributeValue::Bs(
                 blobs
                     .into_iter()
@@ -298,19 +298,30 @@ pub(crate) fn compact_activity_params(
     scan_index_forward: Option<bool>,
 ) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    map.insert("table_name".into(), serde_json::Value::String(table_name.to_string()));
+    map.insert(
+        "table_name".into(),
+        serde_json::Value::String(table_name.to_string()),
+    );
     if let Some(idx) = index_name {
-        map.insert("index_name".into(), serde_json::Value::String(idx.to_string()));
+        map.insert(
+            "index_name".into(),
+            serde_json::Value::String(idx.to_string()),
+        );
     }
     map.insert("has_filter".into(), serde_json::Value::Bool(has_filter));
-    map.insert("has_key_condition".into(), serde_json::Value::Bool(has_key_condition));
+    map.insert(
+        "has_key_condition".into(),
+        serde_json::Value::Bool(has_key_condition),
+    );
     if let Some(l) = limit {
         map.insert("limit".into(), serde_json::Value::Number(l.into()));
     }
-    map.insert("consistent_read".into(), serde_json::Value::Bool(consistent_read));
+    map.insert(
+        "consistent_read".into(),
+        serde_json::Value::Bool(consistent_read),
+    );
     if let Some(sel) = select {
-        let sel_str = serde_json::to_value(sel)
-            .unwrap_or(serde_json::Value::Null);
+        let sel_str = serde_json::to_value(sel).unwrap_or(serde_json::Value::Null);
         map.insert("select".into(), sel_str);
     }
     if let Some(p) = page {
@@ -332,8 +343,8 @@ pub(crate) async fn handle_aws_err(
     connection_id: &Uuid,
     app_err: AppError,
 ) -> AppError {
-    use rusqlite::OptionalExtension;
     use crate::modules::dynamo::params::DynamoParams;
+    use rusqlite::OptionalExtension;
 
     let params_opt: Option<DynamoParams> = (|| {
         let guard = db.0.lock().ok()?;
@@ -413,10 +424,9 @@ fn update_connection_params(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let guard = db
-        .0
-        .lock()
-        .map_err(|_| AppError::Internal("db lock poisoned".into()))?;
+    let guard =
+        db.0.lock()
+            .map_err(|_| AppError::Internal("db lock poisoned".into()))?;
     guard.execute(
         "UPDATE connections SET params_json = ?1, updated_at = ?2 WHERE id = ?3",
         rusqlite::params![new_params_json, now, id.as_bytes().to_vec()],
@@ -577,14 +587,22 @@ pub async fn scan(
             let items: Vec<HashMap<String, AttrValue>> = resp
                 .items()
                 .iter()
-                .map(|item| item.iter().map(|(k, v)| (k.clone(), AttrValue::from(v.clone()))).collect())
+                .map(|item| {
+                    item.iter()
+                        .map(|(k, v)| (k.clone(), AttrValue::from(v.clone())))
+                        .collect()
+                })
                 .collect();
             let count = resp.count() as u32;
             let scanned_count = resp.scanned_count() as u32;
             let last_evaluated_key = resp
                 .last_evaluated_key()
                 .filter(|m| !m.is_empty())
-                .map(|m| m.iter().map(|(k, v)| (k.clone(), AttrValue::from(v.clone()))).collect());
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| (k.clone(), AttrValue::from(v.clone())))
+                        .collect()
+                });
 
             emit_activity(
                 &app,
@@ -731,14 +749,22 @@ pub async fn query(
             let items: Vec<HashMap<String, AttrValue>> = resp
                 .items()
                 .iter()
-                .map(|item| item.iter().map(|(k, v)| (k.clone(), AttrValue::from(v.clone()))).collect())
+                .map(|item| {
+                    item.iter()
+                        .map(|(k, v)| (k.clone(), AttrValue::from(v.clone())))
+                        .collect()
+                })
                 .collect();
             let count = resp.count() as u32;
             let scanned_count = resp.scanned_count() as u32;
             let last_evaluated_key = resp
                 .last_evaluated_key()
                 .filter(|m| !m.is_empty())
-                .map(|m| m.iter().map(|(k, v)| (k.clone(), AttrValue::from(v.clone()))).collect());
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| (k.clone(), AttrValue::from(v.clone())))
+                        .collect()
+                });
 
             emit_activity(
                 &app,
@@ -799,9 +825,8 @@ pub async fn count_items(
     if matches!(req.mode, CountMode::Query) {
         let kce = req.key_condition_expression.as_deref().unwrap_or("").trim();
         if kce.is_empty() {
-            let e = AppError::Validation(
-                "key_condition_expression is required for mode=query".into(),
-            );
+            let e =
+                AppError::Validation("key_condition_expression is required for mode=query".into());
             let duration_ms = started.elapsed().as_millis() as u64;
             emit_activity(
                 &app,
@@ -876,7 +901,8 @@ pub async fn count_items(
                         match resp.last_evaluated_key().filter(|m| !m.is_empty()) {
                             None => break,
                             Some(m) => {
-                                last_key = Some(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+                                last_key =
+                                    Some(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
                                 continue;
                             }
                         }
@@ -929,7 +955,8 @@ pub async fn count_items(
                         match resp.last_evaluated_key().filter(|m| !m.is_empty()) {
                             None => break,
                             Some(m) => {
-                                last_key = Some(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+                                last_key =
+                                    Some(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
                                 continue;
                             }
                         }
@@ -1088,7 +1115,10 @@ mod tests {
 
     #[test]
     fn l_roundtrips() {
-        let sdk = SdkAttrValue::L(vec![SdkAttrValue::S("x".into()), SdkAttrValue::N("1".into())]);
+        let sdk = SdkAttrValue::L(vec![
+            SdkAttrValue::S("x".into()),
+            SdkAttrValue::N("1".into()),
+        ]);
         let rt = roundtrip_sdk(sdk);
         match rt {
             SdkAttrValue::L(list) => {
@@ -1164,15 +1194,13 @@ mod tests {
             SdkAttrValue::L(outer) => {
                 assert_eq!(outer.len(), 1);
                 match &outer[0] {
-                    SdkAttrValue::M(m) => {
-                        match m.get("inner") {
-                            Some(SdkAttrValue::L(list)) => {
-                                assert_eq!(list.len(), 1);
-                                assert!(matches!(&list[0], SdkAttrValue::S(s) if s == "leaf"));
-                            }
-                            other => panic!("expected inner L, got {other:?}"),
+                    SdkAttrValue::M(m) => match m.get("inner") {
+                        Some(SdkAttrValue::L(list)) => {
+                            assert_eq!(list.len(), 1);
+                            assert!(matches!(&list[0], SdkAttrValue::S(s) if s == "leaf"));
                         }
-                    }
+                        other => panic!("expected inner L, got {other:?}"),
+                    },
                     other => panic!("expected M inside outer L, got {other:?}"),
                 }
             }
@@ -1231,9 +1259,9 @@ mod tests {
     #[test]
     fn b_json_shape_is_base64() {
         let bytes = vec![b'A', b'W', b'S']; // "AWS" → "QVNT" in standard base64... wait
-        // "AWS" in bytes is [65, 87, 83] → base64 is "QVNT" ... let me recalculate:
-        // A=65, W=87, S=83. Group: 010000 010101 011001 010011 → Q, V, N, T → "QVNT"
-        // Actually let me just use a known value and verify the round-trip.
+                                            // "AWS" in bytes is [65, 87, 83] → base64 is "QVNT" ... let me recalculate:
+                                            // A=65, W=87, S=83. Group: 010000 010101 011001 010011 → Q, V, N, T → "QVNT"
+                                            // Actually let me just use a known value and verify the round-trip.
         let v = AttrValue::B(bytes.clone());
         let j = serde_json::to_value(&v).unwrap();
         // Must be {"B": "<base64 string>"}
@@ -1286,7 +1314,10 @@ mod tests {
     fn select_mode_serializes_screaming_snake_case() {
         let cases = [
             (SelectMode::AllAttributes, "ALL_ATTRIBUTES"),
-            (SelectMode::AllProjectedAttributes, "ALL_PROJECTED_ATTRIBUTES"),
+            (
+                SelectMode::AllProjectedAttributes,
+                "ALL_PROJECTED_ATTRIBUTES",
+            ),
             (SelectMode::SpecificAttributes, "SPECIFIC_ATTRIBUTES"),
             (SelectMode::Count, "COUNT"),
         ];
@@ -1298,8 +1329,14 @@ mod tests {
 
     #[test]
     fn count_mode_serializes_lowercase() {
-        assert_eq!(serde_json::to_value(CountMode::Scan).unwrap(), serde_json::json!("scan"));
-        assert_eq!(serde_json::to_value(CountMode::Query).unwrap(), serde_json::json!("query"));
+        assert_eq!(
+            serde_json::to_value(CountMode::Scan).unwrap(),
+            serde_json::json!("scan")
+        );
+        assert_eq!(
+            serde_json::to_value(CountMode::Query).unwrap(),
+            serde_json::json!("query")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1357,7 +1394,8 @@ mod tests {
 
     #[test]
     fn compact_params_omits_none_limit_and_page() {
-        let params = compact_activity_params("t", None, false, false, None, false, None, None, None);
+        let params =
+            compact_activity_params("t", None, false, false, None, false, None, None, None);
         assert!(params.get("limit").is_none());
         assert!(params.get("page").is_none());
     }
@@ -1400,8 +1438,14 @@ mod tests {
     #[test]
     fn origin_from_activity_log_serializes_correctly() {
         // Verify the reused Origin type serializes as documented.
-        assert_eq!(serde_json::to_value(Origin::User).unwrap(), serde_json::json!("user"));
-        assert_eq!(serde_json::to_value(Origin::Auto).unwrap(), serde_json::json!("auto"));
+        assert_eq!(
+            serde_json::to_value(Origin::User).unwrap(),
+            serde_json::json!("user")
+        );
+        assert_eq!(
+            serde_json::to_value(Origin::Auto).unwrap(),
+            serde_json::json!("auto")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1576,7 +1620,10 @@ mod tests {
         assert_eq!(v["kind"], "scan_table");
         assert_eq!(v["status"], "err");
         assert!(v["metric"].is_null());
-        assert!(v["error"]["message"].as_str().unwrap().contains("limit must be"));
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("limit must be"));
     }
 
     #[test]
@@ -1608,9 +1655,8 @@ mod tests {
     #[test]
     fn count_table_err_activity_shape() {
         let id = Uuid::nil();
-        let err = AppError::Validation(
-            "key_condition_expression is required for mode=query".into(),
-        );
+        let err =
+            AppError::Validation("key_condition_expression is required for mode=query".into());
         let entry = ActivityLogEntryBuilder::new(ActivityKind::CountTable, Origin::User, 0)
             .connection(id)
             .err(&err);
@@ -1686,17 +1732,8 @@ mod tests {
 
     #[test]
     fn count_compact_params_no_limit_no_page() {
-        let params = compact_activity_params(
-            "events",
-            None,
-            false,
-            true,
-            None,
-            true,
-            None,
-            None,
-            None,
-        );
+        let params =
+            compact_activity_params("events", None, false, true, None, true, None, None, None);
         assert_eq!(params["consistent_read"], true);
         assert!(params.get("limit").is_none());
         assert!(params.get("page").is_none());

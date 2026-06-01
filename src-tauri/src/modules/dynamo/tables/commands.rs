@@ -20,11 +20,7 @@ const DEFAULT_TABLES_CAP: u32 = 1000;
 // Helper: resolve the effective cap
 // ---------------------------------------------------------------------------
 
-fn resolve_cap(
-    per_call_cap: Option<u32>,
-    db: &State<'_, DbState>,
-    connection_id: &Uuid,
-) -> u32 {
+fn resolve_cap(per_call_cap: Option<u32>, db: &State<'_, DbState>, connection_id: &Uuid) -> u32 {
     // 1. Per-call argument wins.
     if let Some(c) = per_call_cap {
         return c;
@@ -56,8 +52,8 @@ async fn handle_aws_err(
     connection_id: &Uuid,
     app_err: AppError,
 ) -> AppError {
-    use rusqlite::OptionalExtension;
     use crate::modules::dynamo::params::DynamoParams;
+    use rusqlite::OptionalExtension;
 
     let params_opt: Option<DynamoParams> = (|| {
         let guard = db.0.lock().ok()?;
@@ -143,10 +139,9 @@ fn update_connection_params_local(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let guard = db
-        .0
-        .lock()
-        .map_err(|_| AppError::Internal("db lock poisoned".into()))?;
+    let guard =
+        db.0.lock()
+            .map_err(|_| AppError::Internal("db lock poisoned".into()))?;
     guard.execute(
         "UPDATE connections SET params_json = ?1, updated_at = ?2 WHERE id = ?3",
         rusqlite::params![new_params_json, now, id.as_bytes().to_vec()],
