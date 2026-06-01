@@ -1,6 +1,14 @@
 # Argus
 
-A desktop tool for inspecting and editing data across multiple sources. V1 targets Postgres; V2+ adds DynamoDB and CloudWatch. Built on Tauri 2 (Rust backend + React frontend).
+A desktop tool for inspecting and editing data across multiple sources. Built on Tauri 2 (Rust backend + React frontend).
+
+## Supported Sources
+
+- **PostgreSQL** — Full feature set: connection management, schema browser, virtualized data grid with inline editing, SQL editor, table structure viewer.
+- **MySQL / MariaDB** — MySQL ≥ 5.7, MariaDB ≥ 10.5. Supports schema browsing, virtualized data grid with inline editing, SQL editor with multi-statement runs, table structure viewer.
+- **Microsoft SQL Server** — SQL Server 2017+, Azure SQL Database, Azure SQL Managed Instance. Supports schema browsing, virtualized data grid with inline editing, SQL editor with `GO` batch support, table structure viewer. SQL Authentication only in v1.
+- **DynamoDB** — Table browsing and item scanning.
+- **Amazon CloudWatch Logs** — Log group / stream browsing and querying.
 
 ## Prerequisites
 
@@ -53,3 +61,27 @@ argus/
 - **SQLite database**: `<app_data_dir>/argus.db`
 - **Secrets**: OS keychain under service `argus`, account `connection:<id>`
 - **Logs (release)**: rotating files in `<app_log_dir>`
+
+## Running live integration tests
+
+Unit tests run without any live server:
+
+```sh
+cd src-tauri && cargo test --lib
+```
+
+Live integration tests require a reachable server and are opt-in via Cargo features:
+
+```sh
+# PostgreSQL live tests
+PG_TEST_URL="postgresql://user:pass@localhost/testdb" cargo test --features live-pg-tests
+
+# MySQL / MariaDB live tests
+MYSQL_TEST_URL="mysql://user:pass@localhost/testdb" cargo test --features live-mysql-tests
+
+# MS SQL Server live tests (Docker recommended: mcr.microsoft.com/mssql/server:2022-latest)
+# Set MSSQL_TEST_TRUST_CERT=1 when using a self-signed certificate (e.g., local Docker image).
+MSSQL_TEST_URL="mssql://sa:YourPassword@localhost:1433/master" \
+  MSSQL_TEST_TRUST_CERT=1 \
+  cargo test --features live-mssql-tests
+```
