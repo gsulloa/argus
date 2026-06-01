@@ -61,7 +61,11 @@ pub async fn updater_check_and_download(
             let mut pending = state.pending.lock().await;
             *pending = Some(PendingUpdate { update, bytes });
 
-            Ok(Some(UpdateInfo { version, body, date }))
+            Ok(Some(UpdateInfo {
+                version,
+                body,
+                date,
+            }))
         }
     }
 }

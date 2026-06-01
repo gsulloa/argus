@@ -6,6 +6,9 @@ import type { Tab } from "@/platform/shell/tabs/types";
 import { useTabs } from "@/platform/shell/tabs/TabsContext";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { openQueryTab } from "@/modules/postgres";
+import { openMysqlQueryTab, MYSQL_KIND } from "@/modules/mysql";
+import { openMssqlQueryTab } from "@/modules/mssql";
+import { MSSQL_KIND } from "@/modules/mssql/types";
 import {
   historyApi,
   type DistinctConnection,
@@ -220,11 +223,25 @@ function HistoryTab() {
   function handleOpenInEditor(entry: HistoryEntry) {
     const live = liveConnections.find((c) => c.id === entry.connection_id);
     if (!live) return; // disabled in UI
-    openQueryTab(tabs, {
-      initialConnectionId: live.id,
-      initialConnectionName: live.name,
-      initialSql: entry.sql,
-    });
+    if (live.kind === MYSQL_KIND) {
+      openMysqlQueryTab(tabs, {
+        connectionId: live.id,
+        connectionName: live.name,
+        sql: entry.sql,
+      });
+    } else if (live.kind === MSSQL_KIND) {
+      openMssqlQueryTab(tabs, {
+        connectionId: live.id,
+        connectionName: live.name,
+        sql: entry.sql,
+      });
+    } else {
+      openQueryTab(tabs, {
+        initialConnectionId: live.id,
+        initialConnectionName: live.name,
+        initialSql: entry.sql,
+      });
+    }
   }
 
   function handleCopySql(entry: HistoryEntry) {

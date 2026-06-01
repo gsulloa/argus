@@ -1,0 +1,113 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px dashed var(--border);
+  background: var(--bg-sidebar);
+
+  --schema-color-view: #0ea5e9;
+  --schema-color-function: #f59e0b;
+  --schema-color-event: #10b981;
+}
+
+[data-theme="dark"] .root {
+  --schema-color-view: #38bdf8;
+  --schema-color-function: #fbbf24;
+  --schema-color-event: #34d399;
+}
+
+.body {
+  padding: 4px 0;
+}
+
+.status {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+
+.error {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.itemCount {
+  font-size: 10.5px;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  margin-left: 4px;
+}
+
+.match {
+  background: rgba(250, 204, 21, 0.3);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.tableBadge {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.routineBadge {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  color: var(--schema-color-function, var(--text-muted));
+  text-transform: uppercase;
+}
+
+.spinner {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-subtle);
+  animation: mysql-schema-spin 1s linear infinite;
+}
+
+.retryButton {
+  background: transparent;
+  border: 0;
+  padding: 1px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--danger, var(--text-muted));
+  display: inline-flex;
+  align-items: center;
+}
+.retryButton:hover {
+  background: var(--bg-hover);
+}
+
+@keyframes mysql-schema-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.toolbarBtn {
+  background: transparent;
+  border: 0;
+  padding: 0 2px;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.toolbarBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.placeholderText {
+  color: var(--text-subtle);
+  font-style: italic;
+}

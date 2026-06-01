@@ -20,6 +20,29 @@ pub struct PostgresErrorBody {
     pub position: Option<i32>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct MysqlErrorBody {
+    pub code: Option<String>,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MssqlErrorBody {
+    /// Numeric SQL Server error code (e.g. 18456 for auth failure, 547 for
+    /// FK violation). `None` for driver-level errors (DNS, TLS, I/O, timeout).
+    pub code: Option<i32>,
+    pub message: String,
+    /// 1-based line number inside the SQL batch where the error occurred.
+    /// `0` means "not applicable" — we normalise that to `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// Stored procedure or trigger name involved, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub procedure: Option<String>,
+}
+
 #[derive(Debug, Error, Serialize)]
 #[serde(tag = "kind", content = "message")]
 pub enum AppError {
@@ -43,6 +66,12 @@ pub enum AppError {
 
     #[error("aws: {}", .0.message)]
     Aws(AwsErrorBody),
+
+    #[error("mysql: {}", .0.message)]
+    Mysql(MysqlErrorBody),
+
+    #[error("mssql: {}", .0.message)]
+    Mssql(MssqlErrorBody),
 }
 
 impl AppError {
@@ -67,6 +96,52 @@ impl AppError {
             code: Some(code.into()),
             message: message.into(),
             position: None,
+        })
+    }
+
+    pub fn mysql(message: impl Into<String>) -> Self {
+        AppError::Mysql(MysqlErrorBody {
+            code: None,
+            message: message.into(),
+            position: None,
+        })
+    }
+
+    pub fn mysql_with_code(code: impl Into<String>, message: impl Into<String>) -> Self {
+        AppError::Mysql(MysqlErrorBody {
+            code: Some(code.into()),
+            message: message.into(),
+            position: None,
+        })
+    }
+
+    pub fn mysql_with_position(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        position: u32,
+    ) -> Self {
+        AppError::Mysql(MysqlErrorBody {
+            code: Some(code.into()),
+            message: message.into(),
+            position: Some(position),
+        })
+    }
+
+    pub fn mssql(message: impl Into<String>) -> Self {
+        AppError::Mssql(MssqlErrorBody {
+            code: None,
+            message: message.into(),
+            line: None,
+            procedure: None,
+        })
+    }
+
+    pub fn mssql_with_code(code: i32, message: impl Into<String>) -> Self {
+        AppError::Mssql(MssqlErrorBody {
+            code: Some(code),
+            message: message.into(),
+            line: None,
+            procedure: None,
         })
     }
 }

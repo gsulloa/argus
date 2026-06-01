@@ -19,7 +19,7 @@ use crate::modules::activity_log::{
     emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
 };
 use crate::modules::dynamo::client::DynamoClientRegistry;
-use crate::modules::dynamo::items::{sdk_scan_err, handle_aws_err, AttrValue};
+use crate::modules::dynamo::items::{handle_aws_err, sdk_scan_err, AttrValue};
 use crate::platform::DbState;
 
 // ---------------------------------------------------------------------------
@@ -76,17 +76,13 @@ async fn cached_key_schema(
     // HASH key first, then RANGE
     let mut hash_keys: Vec<String> = schema
         .iter()
-        .filter(|k| {
-            k.key_type() == &aws_sdk_dynamodb::types::KeyType::Hash
-        })
+        .filter(|k| k.key_type() == &aws_sdk_dynamodb::types::KeyType::Hash)
         .map(|k| k.attribute_name().to_string())
         .collect();
 
     let range_keys: Vec<String> = schema
         .iter()
-        .filter(|k| {
-            k.key_type() == &aws_sdk_dynamodb::types::KeyType::Range
-        })
+        .filter(|k| k.key_type() == &aws_sdk_dynamodb::types::KeyType::Range)
         .map(|k| k.attribute_name().to_string())
         .collect();
 
@@ -211,14 +207,11 @@ pub async fn put_item(
 
     match result {
         Ok(resp) => {
-            let attributes = resp
-                .attributes()
-                .filter(|m| !m.is_empty())
-                .map(|m| {
-                    m.iter()
-                        .map(|(k, v)| (k.clone(), AttrValue::from(v.clone())))
-                        .collect()
-                });
+            let attributes = resp.attributes().filter(|m| !m.is_empty()).map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), AttrValue::from(v.clone())))
+                    .collect()
+            });
 
             emit_activity(
                 &app,
@@ -307,10 +300,7 @@ fn alloc_name_placeholder(names: &HashMap<String, String>, hint: &mut usize) -> 
 }
 
 /// Allocate a fresh `:v<i>` placeholder that doesn't exist in `values`.
-fn alloc_value_placeholder(
-    values: &HashMap<String, AttrValue>,
-    hint: &mut usize,
-) -> String {
+fn alloc_value_placeholder(values: &HashMap<String, AttrValue>, hint: &mut usize) -> String {
     loop {
         let candidate = format!(":v{}", hint);
         *hint += 1;
@@ -325,10 +315,8 @@ pub fn compile_update_expression(
     caller_names: Option<&HashMap<String, String>>,
     caller_values: Option<&HashMap<String, AttrValue>>,
 ) -> (String, HashMap<String, String>, HashMap<String, AttrValue>) {
-    let mut merged_names: HashMap<String, String> =
-        caller_names.cloned().unwrap_or_default();
-    let mut merged_values: HashMap<String, AttrValue> =
-        caller_values.cloned().unwrap_or_default();
+    let mut merged_names: HashMap<String, String> = caller_names.cloned().unwrap_or_default();
+    let mut merged_values: HashMap<String, AttrValue> = caller_values.cloned().unwrap_or_default();
 
     let mut set_parts: Vec<String> = Vec::new();
     let mut remove_parts: Vec<String> = Vec::new();
@@ -472,21 +460,20 @@ pub async fn update_item(
     }
 
     // Step 2: fetch key schema
-    let key_schema =
-        match cached_key_schema(&registry, &req.connection_id, &req.table_name).await {
-            Ok(ks) => ks,
-            Err(e) => {
-                let duration_ms = started.elapsed().as_millis() as u64;
-                emit_activity(
-                    &app,
-                    ActivityLogEntryBuilder::new(ActivityKind::UpdateItem, origin, duration_ms)
-                        .connection(req.connection_id)
-                        .params(vec![params_json.to_string()])
-                        .err(&e),
-                );
-                return Err(e);
-            }
-        };
+    let key_schema = match cached_key_schema(&registry, &req.connection_id, &req.table_name).await {
+        Ok(ks) => ks,
+        Err(e) => {
+            let duration_ms = started.elapsed().as_millis() as u64;
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::UpdateItem, origin, duration_ms)
+                    .connection(req.connection_id)
+                    .params(vec![params_json.to_string()])
+                    .err(&e),
+            );
+            return Err(e);
+        }
+    };
 
     // Step 3: validate
     if let Err(e) = validate_update_request(&req.key, &req.updates, &key_schema) {
@@ -540,14 +527,11 @@ pub async fn update_item(
 
     match result {
         Ok(resp) => {
-            let attributes = resp
-                .attributes()
-                .filter(|m| !m.is_empty())
-                .map(|m| {
-                    m.iter()
-                        .map(|(k, v)| (k.clone(), AttrValue::from(v.clone())))
-                        .collect()
-                });
+            let attributes = resp.attributes().filter(|m| !m.is_empty()).map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), AttrValue::from(v.clone())))
+                    .collect()
+            });
 
             emit_activity(
                 &app,
@@ -672,21 +656,20 @@ pub async fn delete_item(
     }
 
     // Step 2: fetch key schema
-    let key_schema =
-        match cached_key_schema(&registry, &req.connection_id, &req.table_name).await {
-            Ok(ks) => ks,
-            Err(e) => {
-                let duration_ms = started.elapsed().as_millis() as u64;
-                emit_activity(
-                    &app,
-                    ActivityLogEntryBuilder::new(ActivityKind::DeleteItem, origin, duration_ms)
-                        .connection(req.connection_id)
-                        .params(vec![params_json.to_string()])
-                        .err(&e),
-                );
-                return Err(e);
-            }
-        };
+    let key_schema = match cached_key_schema(&registry, &req.connection_id, &req.table_name).await {
+        Ok(ks) => ks,
+        Err(e) => {
+            let duration_ms = started.elapsed().as_millis() as u64;
+            emit_activity(
+                &app,
+                ActivityLogEntryBuilder::new(ActivityKind::DeleteItem, origin, duration_ms)
+                    .connection(req.connection_id)
+                    .params(vec![params_json.to_string()])
+                    .err(&e),
+            );
+            return Err(e);
+        }
+    };
 
     // Step 3: validate key
     if let Err(e) = validate_delete_key(&req.key, &key_schema) {
@@ -733,14 +716,11 @@ pub async fn delete_item(
 
     match result {
         Ok(resp) => {
-            let attributes = resp
-                .attributes()
-                .filter(|m| !m.is_empty())
-                .map(|m| {
-                    m.iter()
-                        .map(|(k, v)| (k.clone(), AttrValue::from(v.clone())))
-                        .collect()
-                });
+            let attributes = resp.attributes().filter(|m| !m.is_empty()).map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), AttrValue::from(v.clone())))
+                    .collect()
+            });
 
             emit_activity(
                 &app,
@@ -798,8 +778,7 @@ mod tests {
             set,
             remove: vec![],
         };
-        let (expr, names, values) =
-            compile_update_expression(&updates, None, None);
+        let (expr, names, values) = compile_update_expression(&updates, None, None);
 
         // Must start with SET
         assert!(expr.starts_with("SET "), "expr: {expr}");
@@ -820,8 +799,7 @@ mod tests {
             set: HashMap::new(),
             remove: vec!["archived".to_string(), "legacy".to_string()],
         };
-        let (expr, names, values) =
-            compile_update_expression(&updates, None, None);
+        let (expr, names, values) = compile_update_expression(&updates, None, None);
 
         assert!(expr.starts_with("REMOVE "), "expr: {expr}");
         assert!(!expr.contains("SET"), "expr: {expr}");
@@ -840,8 +818,7 @@ mod tests {
             set,
             remove: vec!["archived".to_string()],
         };
-        let (expr, names, values) =
-            compile_update_expression(&updates, None, None);
+        let (expr, names, values) = compile_update_expression(&updates, None, None);
 
         assert!(expr.contains("SET "), "expr: {expr}");
         assert!(expr.contains(" REMOVE "), "expr: {expr}");
@@ -868,15 +845,15 @@ mod tests {
             set,
             remove: vec![],
         };
-        let (expr, names, values) = compile_update_expression(
-            &updates,
-            Some(&caller_names),
-            Some(&caller_values),
-        );
+        let (expr, names, values) =
+            compile_update_expression(&updates, Some(&caller_names), Some(&caller_values));
 
         // The compiler must NOT use #n0 or :v0 for the new attribute
         // (those are reserved by the caller)
-        assert!(!expr.contains("#n0 ="), "must not overwrite caller #n0; expr: {expr}");
+        assert!(
+            !expr.contains("#n0 ="),
+            "must not overwrite caller #n0; expr: {expr}"
+        );
         // The generated SET expression must use #n1 or higher
         assert!(
             expr.contains("#n1") || expr.contains("#n2"),
@@ -914,8 +891,8 @@ mod tests {
             },
             remove: vec![],
         };
-        let err = validate_update_request(&HashMap::new(), &updates, &["pk".to_string()])
-            .unwrap_err();
+        let err =
+            validate_update_request(&HashMap::new(), &updates, &["pk".to_string()]).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
 

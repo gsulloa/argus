@@ -1,6 +1,14 @@
 # Argus
 
-A Tauri 2 desktop app for inspecting and editing data across multiple sources. V1 targets Postgres; V2+ adds DynamoDB and CloudWatch.
+A Tauri 2 desktop app for inspecting and editing data across multiple sources.
+
+## Supported Sources
+
+- **PostgreSQL** — Full feature set: connection management, schema browser, virtualized data grid with inline editing, SQL editor, table structure viewer.
+- **MySQL / MariaDB** — MySQL ≥ 5.7, MariaDB ≥ 10.5. Supports schema browsing, virtualized data grid with inline editing, SQL editor with multi-statement runs, table structure viewer.
+- **Microsoft SQL Server** — SQL Server 2017+, Azure SQL Database, Azure SQL Managed Instance. Supports schema browsing, virtualized data grid with inline editing, SQL editor with `GO` batch support, table structure viewer. SQL Authentication only in v1.
+- **DynamoDB** — Table browsing and item scanning.
+- **Amazon CloudWatch Logs** — Log group / stream browsing and querying.
 
 ## Design System
 

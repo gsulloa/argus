@@ -28,6 +28,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "mysql", "chrono", "bigdecimal", "json", "uuid", "macros"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -50,12 +51,30 @@ aws-config = "1.8.16"
 # Transitive dep, pinned explicitly so we can pattern-match on SdkError variants.
 aws-smithy-runtime-api = "1.12.0"
 base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+# MS SQL Server (tiberius). NOTE: Cargo.lock has two rustls copies: 0.21.12 (sqlx) + 0.23.39 (tiberius + tokio-postgres-rustls). Accepted per design D14/Q1.
+tiberius = { version = "0.12", default-features = false, features = ["rustls", "chrono", "time", "bigdecimal", "sql-browser-tokio", "tds73"] }
+bb8 = "0.8"
+bb8-tiberius = "0.15"
+tokio-util = { version = "0.7", features = ["compat"] }
+# bigdecimal pinned to the version used by tiberius 0.12 (0.3.x) for DECIMAL/MONEY decode+bind.
+bigdecimal = "0.3"
 
 [features]
 # disabled in tests so we can avoid hitting the OS keychain
 keychain = []
 # Live Postgres tests — opt-in, requires a reachable server (PG_TEST_URL env var).
 live-pg-tests = []
+# Live MySQL tests — opt-in, requires a reachable server (MYSQL_TEST_URL env var).
+live-mysql-tests = []
+# Live MS SQL Server tests — opt-in, requires a reachable server.
+#   MSSQL_TEST_URL  — connection string in mssql://, sqlserver://, JDBC, or ADO.NET format.
+#   MSSQL_TEST_TRUST_CERT=1 — skip TLS certificate verification (needed for local Docker images).
+# Example:
+#   MSSQL_TEST_URL=mssql://sa:Password@localhost:1433/master \
+#   MSSQL_TEST_TRUST_CERT=1 \
+#   cargo test --features live-mssql-tests
+live-mssql-tests = []
 
 [dev-dependencies]
 tempfile = "3"

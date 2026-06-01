@@ -165,11 +165,7 @@ mod tests {
                 .push(exclusive_start.map(String::from));
             let mut guard = self.pages.lock().unwrap();
             if guard.is_empty() {
-                return Err(AppError::aws(
-                    "TestError",
-                    "no more pages in mock",
-                    false,
-                ));
+                return Err(AppError::aws("TestError", "no more pages in mock", false));
             }
             Ok(guard.remove(0))
         }
@@ -177,9 +173,7 @@ mod tests {
 
     // Helper to build a list of table name strings.
     fn names(prefix: &str, count: usize) -> Vec<String> {
-        (0..count)
-            .map(|i| format!("{prefix}-{i:03}"))
-            .collect()
+        (0..count).map(|i| format!("{prefix}-{i:03}")).collect()
     }
 
     // -----------------------------------------------------------------------
@@ -261,9 +255,7 @@ mod tests {
     // -----------------------------------------------------------------------
     #[tokio::test]
     async fn resume_from_pagination_token() {
-        let provider = MockPageProvider::new(vec![
-            (names("tbl", 10), None),
-        ]);
+        let provider = MockPageProvider::new(vec![(names("tbl", 10), None)]);
 
         let result = run_pager(&provider, Some("tbl-999"), 1000).await.unwrap();
 

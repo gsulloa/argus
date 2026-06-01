@@ -30,6 +30,25 @@ import {
   type ActiveDynamoConnection,
 } from "@/modules/dynamo";
 import { DynamoConnectionSubtree, useDynamoTableCache } from "@/modules/dynamo/tables";
+import {
+  MYSQL_KIND,
+  MysqlIcon,
+  mysqlApi,
+  useActiveMysqlConnections,
+  useMysqlForm,
+} from "@/modules/mysql";
+import { openMysqlQueryTab } from "@/modules/mysql/openMysqlQueryTab";
+import {
+  MSSQL_KIND,
+  MssqlIcon,
+  mssqlApi,
+  useActiveMssqlConnections,
+  useMssqlForm,
+  MssqlSchemaTree,
+  MssqlSchemaPrimaryActions,
+  MssqlSchemaToolbar,
+} from "@/modules/mssql";
+import { openMssqlQueryTab } from "@/modules/mssql/openMssqlQueryTab";
 import { useTabs } from "@/platform/shell/tabs";
 import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
 import { listDirtySummaries } from "@/platform/shell/tabs/useDirtySummary";
@@ -61,10 +80,14 @@ export function ConnectionRow({
 }) {
   const pgActive = useActiveConnections();
   const dyActive = useActiveDynamoConnections();
+  const myActive = useActiveMysqlConnections();
+  const msActive = useActiveMssqlConnections();
   const { items: allConnections, remove, move } = useConnections();
   const { items: groups } = useConnectionGroups();
   const pgForm = usePostgresForm();
   const dyForm = useDynamoForm();
+  const myForm = useMysqlForm();
+  const msForm = useMssqlForm();
   const handleDynamoError = useDynamoErrorHandler();
   const tabs = useTabs();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -73,12 +96,18 @@ export function ConnectionRow({
 
   const isPostgres = connection.kind === POSTGRES_KIND;
   const isDynamo = connection.kind === DYNAMO_KIND;
+  const isMySQL = connection.kind === MYSQL_KIND;
+  const isMssql = connection.kind === MSSQL_KIND;
 
   const active = isPostgres
     ? pgActive.isActive(connection.id)
     : isDynamo
       ? dyActive.isActive(connection.id)
-      : false;
+      : isMySQL
+        ? myActive.isActive(connection.id)
+        : isMssql
+          ? msActive.isActive(connection.id)
+          : false;
 
   const activeDynamoView = isDynamo ? dyActive.getActive(connection.id) : undefined;
 
@@ -106,10 +135,10 @@ export function ConnectionRow({
 
   const dirtyLabels = useMemo(
     () =>
-      confirmDisconnect && isPostgres
+      confirmDisconnect && (isPostgres || isMySQL || isMssql)
         ? listDirtySummaries(connection.id).map((s) => s.label)
         : [],
-    [confirmDisconnect, isPostgres, connection.id],
+    [confirmDisconnect, isPostgres, isMySQL, isMssql, connection.id],
   );
 
   async function handleRowClick() {
@@ -133,6 +162,24 @@ export function ConnectionRow({
       } finally {
         setIsConnecting(false);
       }
+    } else if (isMySQL) {
+      setIsConnecting(true);
+      try {
+        await mysqlApi.connect(connection.id);
+      } catch (e) {
+        console.error("[argus] mysql connect:", e);
+      } finally {
+        setIsConnecting(false);
+      }
+    } else if (isMssql) {
+      setIsConnecting(true);
+      try {
+        await mssqlApi.connect(connection.id);
+      } catch (e) {
+        console.error("[argus] mssql connect:", e);
+      } finally {
+        setIsConnecting(false);
+      }
     }
     // unknown kind: no-op
   }
@@ -153,6 +200,22 @@ export function ConnectionRow({
     }
   }
 
+  async function handleMysqlDisconnect() {
+    try {
+      await mysqlApi.disconnect(connection.id);
+    } catch (e) {
+      console.error("[argus] mysql disconnect:", e);
+    }
+  }
+
+  async function handleMssqlDisconnect() {
+    try {
+      await mssqlApi.disconnect(connection.id);
+    } catch (e) {
+      console.error("[argus] mssql disconnect:", e);
+    }
+  }
+
   async function handleDelete() {
     try {
       if (active) {
@@ -160,6 +223,10 @@ export function ConnectionRow({
           await postgresApi.disconnect(connection.id);
         } else if (isDynamo) {
           await dynamoApi.disconnect(connection.id);
+        } else if (isMySQL) {
+          await mysqlApi.disconnect(connection.id);
+        } else if (isMssql) {
+          await mssqlApi.disconnect(connection.id);
         }
       }
       await remove(connection.id);
@@ -196,7 +263,7 @@ export function ConnectionRow({
       : "Connect";
 
   // Determine whether the row has any clickable primary action
-  const isClickable = isPostgres || isDynamo;
+  const isClickable = isPostgres || isDynamo || isMySQL || isMssql;
 
   return (
     <>
@@ -230,6 +297,10 @@ export function ConnectionRow({
                   <PostgresIcon size={14} />
                 ) : isDynamo ? (
                   <DynamoIcon size={14} />
+                ) : isMySQL ? (
+                  <MysqlIcon size={14} />
+                ) : isMssql ? (
+                  <MssqlIcon size={14} />
                 ) : (
                   <span className={styles.itemKind}>{connection.kind}</span>
                 )}
@@ -310,6 +381,62 @@ export function ConnectionRow({
                 </span>
               </>
             )}
+            {isMySQL && active && (
+              <>
+                <span className={styles.rowPrimary}>
+                  <button
+                    type="button"
+                    className={styles.toolbarBtn}
+                    title="New SQL query · ⌘↩ runs"
+                    aria-label="New SQL query"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openMysqlQueryTab(tabs, {
+                        connectionId: connection.id,
+                        connectionName: connection.name,
+                        sql: "",
+                      });
+                    }}
+                  >
+                    + Query
+                  </button>
+                </span>
+                <button
+                  type="button"
+                  className={styles.disconnectBtn}
+                  aria-label="Disconnect"
+                  title="Disconnect"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDisconnect(true);
+                  }}
+                >
+                  <Power size={12} strokeWidth={2.5} />
+                </button>
+              </>
+            )}
+            {isMssql && active && (
+              <>
+                <span className={styles.rowPrimary}>
+                  <MssqlSchemaPrimaryActions connectionId={connection.id} />
+                </span>
+                <button
+                  type="button"
+                  className={styles.disconnectBtn}
+                  aria-label="Disconnect"
+                  title="Disconnect"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDisconnect(true);
+                  }}
+                >
+                  <Power size={12} strokeWidth={2.5} />
+                </button>
+                <span className={styles.rowToolbar}>
+                  <MssqlSchemaToolbar connectionId={connection.id} />
+                </span>
+              </>
+            )}
           </div>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
@@ -339,6 +466,52 @@ export function ConnectionRow({
             )}
             {isDynamo && active && (
               <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => setConfirmDisconnect(true)}
+                >
+                  Disconnect
+                </ContextMenu.Item>
+                <ContextMenu.Separator className={styles.contextSeparator} />
+              </>
+            )}
+            {isMySQL && active && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() =>
+                    openMysqlQueryTab(tabs, {
+                      connectionId: connection.id,
+                      connectionName: connection.name,
+                      sql: "",
+                    })
+                  }
+                >
+                  New SQL Query
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => setConfirmDisconnect(true)}
+                >
+                  Disconnect
+                </ContextMenu.Item>
+                <ContextMenu.Separator className={styles.contextSeparator} />
+              </>
+            )}
+            {isMssql && active && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() =>
+                    openMssqlQueryTab(tabs, {
+                      connectionId: connection.id,
+                      connectionName: connection.name,
+                      sql: "",
+                    })
+                  }
+                >
+                  New SQL Query
+                </ContextMenu.Item>
                 <ContextMenu.Item
                   className={styles.contextItem}
                   onSelect={() => setConfirmDisconnect(true)}
@@ -380,7 +553,39 @@ export function ConnectionRow({
                 </ContextMenu.Item>
               </>
             )}
-            {!isPostgres && !isDynamo && (
+            {isMySQL && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => myForm.openEdit(connection)}
+                >
+                  Edit
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => myForm.openDuplicate(connection)}
+                >
+                  Duplicate
+                </ContextMenu.Item>
+              </>
+            )}
+            {isMssql && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => msForm.openEdit(connection)}
+                >
+                  Edit
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => msForm.openDuplicate(connection)}
+                >
+                  Duplicate
+                </ContextMenu.Item>
+              </>
+            )}
+            {!isPostgres && !isDynamo && !isMySQL && !isMssql && (
               <ContextMenu.Item className={styles.contextItem} disabled>
                 {connection.kind}
               </ContextMenu.Item>
@@ -434,6 +639,11 @@ export function ConnectionRow({
           <DynamoConnectionSubtree connectionId={connection.id} connectionName={connection.name} />
         </div>
       )}
+      {isMssql && active && (
+        <div className={styles.subtree}>
+          <MssqlSchemaTree connectionId={connection.id} />
+        </div>
+      )}
 
       <DisconnectConfirmDialog
         open={confirmDisconnect}
@@ -441,7 +651,15 @@ export function ConnectionRow({
         subject={connection.name}
         tabCount={tabCount}
         dirtyLabels={dirtyLabels}
-        onConfirm={isPostgres ? handlePostgresDisconnect : handleDynamoDisconnect}
+        onConfirm={
+          isPostgres
+            ? handlePostgresDisconnect
+            : isMySQL
+              ? handleMysqlDisconnect
+              : isMssql
+                ? handleMssqlDisconnect
+                : handleDynamoDisconnect
+        }
       />
 
       <Dialog.Root open={confirmDelete} onOpenChange={setConfirmDelete}>

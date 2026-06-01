@@ -1,0 +1,156 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.invalid {
+  padding: 16px;
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.readOnlyBanner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--accent-soft, rgba(168, 85, 247, 0.1));
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.editorArea {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.editorToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  height: 28px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex: 0 0 28px;
+}
+
+.connectionPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.toolbarDivider {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.toolbarButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background-color 80ms ease, color 80ms ease, border-color 80ms ease;
+}
+
+.toolbarButton:hover {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.toolbarButton:active {
+  background: var(--bg-elevated, var(--surface));
+}
+
+.toolbarButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.kbd {
+  color: var(--text-subtle);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  margin-left: 2px;
+}
+
+.handle {
+  height: 4px;
+  width: 100%;
+  background: var(--border);
+  border: none;
+  cursor: row-resize;
+  padding: 0;
+  flex: 0 0 4px;
+}
+.handle:hover {
+  background: var(--accent);
+}
+
+.resultArea {
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.resultHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.connectionLabel {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.runSummary {
+  color: var(--text-muted);
+  flex: 1;
+  min-width: 0;
+}
+
+.resultBody {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
