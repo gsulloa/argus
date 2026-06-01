@@ -348,10 +348,7 @@ pub fn folder_move(
 /// Delete a folder and return counts of all recursively deleted rows.
 /// Counts via recursive CTE *before* deleting; cascade handles the actual
 /// removal.
-pub fn folder_delete(
-    conn: &rusqlite::Connection,
-    id: String,
-) -> AppResult<FolderDeleteResponse> {
+pub fn folder_delete(conn: &rusqlite::Connection, id: String) -> AppResult<FolderDeleteResponse> {
     // Verify folder exists.
     let exists: bool = conn
         .query_row(
@@ -394,10 +391,7 @@ pub fn folder_delete(
     )?;
 
     // DELETE — ON DELETE CASCADE propagates through the subtree.
-    conn.execute(
-        "DELETE FROM saved_query_folders WHERE id = ?1",
-        params![id],
-    )?;
+    conn.execute("DELETE FROM saved_query_folders WHERE id = ?1", params![id])?;
 
     Ok(FolderDeleteResponse {
         folders_deleted,
@@ -616,10 +610,7 @@ pub fn move_query(
 }
 
 pub fn delete(conn: &rusqlite::Connection, id: String) -> AppResult<()> {
-    let affected = conn.execute(
-        "DELETE FROM saved_queries WHERE id = ?1",
-        params![id],
-    )?;
+    let affected = conn.execute("DELETE FROM saved_queries WHERE id = ?1", params![id])?;
     if affected == 0 {
         return Err(AppError::NotFound(format!("saved_query {id} not found")));
     }
@@ -647,19 +638,15 @@ pub fn duplicate(conn: &rusqlite::Connection, id: String) -> AppResult<SavedQuer
     // `<original> (copy <n>)` to determine the suffix.
     let siblings: Vec<String> = match &original.folder_id {
         Some(fid) => {
-            let mut stmt = conn.prepare(
-                "SELECT name FROM saved_queries WHERE folder_id = ?1",
-            )?;
+            let mut stmt = conn.prepare("SELECT name FROM saved_queries WHERE folder_id = ?1")?;
             let rows: Result<Vec<String>, _> =
                 stmt.query_map(params![fid], |r| r.get(0))?.collect();
             rows?
         }
         None => {
-            let mut stmt = conn.prepare(
-                "SELECT name FROM saved_queries WHERE folder_id IS NULL",
-            )?;
-            let rows: Result<Vec<String>, _> =
-                stmt.query_map([], |r| r.get(0))?.collect();
+            let mut stmt =
+                conn.prepare("SELECT name FROM saved_queries WHERE folder_id IS NULL")?;
+            let rows: Result<Vec<String>, _> = stmt.query_map([], |r| r.get(0))?.collect();
             rows?
         }
     };
@@ -813,23 +800,13 @@ mod tests {
         let child = mk_folder_under(&conn, &parent.id, "child");
         let grandchild = mk_folder_under(&conn, &child.id, "grandchild");
 
-        let err = folder_move(
-            &conn,
-            parent.id.clone(),
-            Some(grandchild.id.clone()),
-            None,
-        )
-        .unwrap_err();
+        let err =
+            folder_move(&conn, parent.id.clone(), Some(grandchild.id.clone()), None).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
 
         // Also self-move.
-        let err2 = folder_move(
-            &conn,
-            parent.id.clone(),
-            Some(parent.id.clone()),
-            None,
-        )
-        .unwrap_err();
+        let err2 =
+            folder_move(&conn, parent.id.clone(), Some(parent.id.clone()), None).unwrap_err();
         assert!(matches!(err2, AppError::Validation(_)));
     }
 

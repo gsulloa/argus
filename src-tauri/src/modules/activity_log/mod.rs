@@ -28,7 +28,9 @@ pub enum ActivityKind {
     CountTable,
     ApplyEdits,
     RunSql,
+    RunSqlMany,
     TableStructure,
+    TableDdl,
     ListTables,
     DescribeTable,
     ScanTable,
@@ -75,6 +77,14 @@ impl ActivityError {
             AppError::Postgres(body) => Self {
                 message: body.message.clone(),
                 code: body.code.clone(),
+            },
+            AppError::Mysql(body) => Self {
+                message: body.message.clone(),
+                code: body.code.clone(),
+            },
+            AppError::Mssql(body) => Self {
+                message: body.message.clone(),
+                code: body.code.map(|c| c.to_string()),
             },
             other => Self {
                 message: other.to_string(),

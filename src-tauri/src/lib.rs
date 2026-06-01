@@ -17,6 +17,23 @@ use crate::modules::dynamo::commands::{
 use crate::modules::dynamo::edit::{dynamo_delete_item, dynamo_put_item, dynamo_update_item};
 use crate::modules::dynamo::items::{dynamo_count_items, dynamo_query, dynamo_scan};
 use crate::modules::dynamo::tables::commands::{dynamo_describe_table, dynamo_list_tables};
+use crate::modules::mssql::{
+    mssql_apply_table_edits, mssql_connect, mssql_count_table, mssql_disconnect,
+    mssql_disconnect_all, mssql_get_object_definition, mssql_get_routine_signature,
+    mssql_list_active, mssql_list_columns_bulk as mssql_list_columns_bulk,
+    mssql_list_databases, mssql_list_relations, mssql_list_schemas,
+    mssql_list_structure, mssql_list_table_extras, mssql_parse_url, mssql_query_table,
+    mssql_run_sql, mssql_run_sql_batch, mssql_run_sql_many,
+    mssql_table_ddl, mssql_table_primary_key, mssql_table_structure,
+    mssql_test_connection, MssqlPoolRegistry,
+};
+use crate::modules::mysql::{
+    mysql_apply_table_edits, mysql_connect, mysql_count_table, mysql_disconnect,
+    mysql_disconnect_all, mysql_get_routine_signature, mysql_list_active, mysql_list_columns_bulk,
+    mysql_list_relations, mysql_list_schemas, mysql_list_structure, mysql_list_table_extras,
+    mysql_parse_url, mysql_query_table, mysql_run_sql, mysql_run_sql_many, mysql_table_ddl,
+    mysql_table_primary_key, mysql_table_structure, mysql_test_connection, MysqlPoolRegistry,
+};
 use crate::modules::postgres::{
     postgres_apply_table_edits, postgres_connect, postgres_count_table, postgres_disconnect,
     postgres_disconnect_all, postgres_get_function_signature, postgres_list_active,
@@ -47,11 +64,12 @@ use crate::platform::{
         connections_move, connections_refresh_secret, connections_update,
     },
     settings::{self, settings_get, settings_set},
-    storage, DbState,
+    storage,
     updater::commands::{
         log_updater_event, updater_check_and_download, updater_install_and_restart,
         updater_logs_reveal, updater_logs_tail,
     },
+    DbState,
 };
 
 const QUERY_HISTORY_RETENTION_DAYS_KEY: &str = "queryHistory.retentionDays";
@@ -139,6 +157,8 @@ pub fn run() {
             }
 
             app.manage(PgPoolRegistry::new());
+            app.manage(MysqlPoolRegistry::new());
+            app.manage(MssqlPoolRegistry::new());
             app.manage(DynamoClientRegistry::new());
             app.manage(platform::updater::UpdaterState::default());
 
@@ -177,6 +197,51 @@ pub fn run() {
             postgres_run_sql,
             postgres_run_sql_many,
             postgres_list_columns_bulk,
+            // MS SQL Server commands
+            mssql_test_connection,
+            mssql_connect,
+            mssql_disconnect,
+            mssql_disconnect_all,
+            mssql_list_active,
+            mssql_parse_url,
+            mssql_list_schemas,
+            mssql_list_databases,
+            mssql_list_relations,
+            mssql_list_structure,
+            mssql_list_table_extras,
+            mssql_get_routine_signature,
+            mssql_get_object_definition,
+            mssql_query_table,
+            mssql_count_table,
+            mssql_table_primary_key,
+            mssql_apply_table_edits,
+            mssql_run_sql,
+            mssql_run_sql_many,
+            mssql_run_sql_batch,
+            mssql_table_structure,
+            mssql_table_ddl,
+            mssql_list_columns_bulk,
+            // MySQL commands
+            mysql_test_connection,
+            mysql_connect,
+            mysql_disconnect,
+            mysql_disconnect_all,
+            mysql_list_active,
+            mysql_parse_url,
+            mysql_list_schemas,
+            mysql_list_relations,
+            mysql_list_structure,
+            mysql_list_table_extras,
+            mysql_get_routine_signature,
+            mysql_query_table,
+            mysql_count_table,
+            mysql_table_primary_key,
+            mysql_apply_table_edits,
+            mysql_run_sql,
+            mysql_run_sql_many,
+            mysql_table_structure,
+            mysql_table_ddl,
+            mysql_list_columns_bulk,
             query_history_list,
             query_history_delete,
             query_history_clear,
@@ -216,46 +281,38 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error building tauri application")
         .run(|app_handle, event| {
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
-            let state = app_handle.state::<platform::updater::UpdaterState>();
-            // If a user-triggered install just called app.restart(), let Tauri's
-            // relaunch sequence proceed — do NOT prevent_exit and do NOT block.
-            if state
-                .relaunching
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
-                tracing::info!(target: "updater", "relaunch_allowed_by_exit_handler");
-                let _ = api;
-                return;
-            }
-            let installing =
-                state.installing.load(std::sync::atomic::Ordering::Acquire);
-            let has_pending = tauri::async_runtime::block_on(async {
-                state.pending.lock().await.is_some()
-            });
-
-            if has_pending && !installing {
-                api.prevent_exit();
-                let app_clone = app_handle.clone();
-                tauri::async_runtime::block_on(async {
-                    platform::updater::commands::apply_pending_on_exit(&app_clone).await;
-                });
-                app_handle.exit(0);
-            } else if installing {
-                api.prevent_exit();
-                // Wait up to 10 s for the in-flight install to settle.
-                let deadline =
-                    std::time::Instant::now() + std::time::Duration::from_secs(10);
-                while state
-                    .installing
-                    .load(std::sync::atomic::Ordering::Acquire)
-                    && std::time::Instant::now() < deadline
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                let state = app_handle.state::<platform::updater::UpdaterState>();
+                // If a user-triggered install just called app.restart(), let Tauri's
+                // relaunch sequence proceed — do NOT prevent_exit and do NOT block.
+                if state.relaunching.load(std::sync::atomic::Ordering::Acquire) {
+                    tracing::info!(target: "updater", "relaunch_allowed_by_exit_handler");
+                    let _ = api;
+                    return;
                 }
-                app_handle.exit(0);
+                let installing = state.installing.load(std::sync::atomic::Ordering::Acquire);
+                let has_pending =
+                    tauri::async_runtime::block_on(async { state.pending.lock().await.is_some() });
+
+                if has_pending && !installing {
+                    api.prevent_exit();
+                    let app_clone = app_handle.clone();
+                    tauri::async_runtime::block_on(async {
+                        platform::updater::commands::apply_pending_on_exit(&app_clone).await;
+                    });
+                    app_handle.exit(0);
+                } else if installing {
+                    api.prevent_exit();
+                    // Wait up to 10 s for the in-flight install to settle.
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while state.installing.load(std::sync::atomic::Ordering::Acquire)
+                        && std::time::Instant::now() < deadline
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    app_handle.exit(0);
+                }
+                // else: no pending update → fall through, default exit proceeds
             }
-            // else: no pending update → fall through, default exit proceeds
-        }
-    });
+        });
 }
