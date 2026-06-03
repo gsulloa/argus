@@ -1,0 +1,224 @@
+## Context
+
+Argus is a multi-source desktop client (Postgres, MySQL/MariaDB, MSSQL, DynamoDB, CloudWatch). Connections today carry only their wire credentials plus introspected schema. Per-team domain knowledge — column semantics, soft-delete conventions, "canonical queries" — has no home in Argus and is duplicated in wikis. The existing `saved-queries` module stores blobs in Argus's local sqlite, which is intentionally personal/scratch and not versionable with the service repo.
+
+The user wants the Bruno API client's storage model applied to data exploration: documentation and prefab queries as **plain files on disk inside the service's repo**, where one folder can describe a dataset and be referenced by several Argus connections (e.g. prod + staging + local Postgres of the same service).
+
+Constraints inherited from this codebase:
+- Tauri 2 + Rust backend + React/TS frontend.
+- One sqlite for app state (`src-tauri/migrations/000N_*.sql` style migrations already established).
+- Per-engine module organisation (`src/modules/{postgres,mysql,mssql,dynamo,cloudwatch}` + matching Rust modules). Each engine has its own schema browser, data view, SQL editor.
+- Secrets in the OS keychain, not in sqlite (precedent: `secrets.rs`).
+- `DESIGN.md` defines the visual language; no decorative additions.
+
+## Goals / Non-Goals
+
+**Goals:**
+- A connection optionally points at a folder on disk that holds structured docs and prefab queries.
+- The folder format is **source-agnostic at the root** (one folder can describe a Postgres and a Dynamo of the same service) but **engine-segregated underneath**.
+- Multiple connections referencing the same path share one in-memory parsed representation and one filesystem watcher.
+- Schema introspection can sync the machine-managed parts of object docs without ever clobbering human-authored prose or notes.
+- Context is consumable by (a) the schema browser UI, (b) a separate "Context Queries" runner, (c) the AI query-generation flow as a structured payload.
+- The folder lives entirely on the user's disk. Argus stores only the path.
+
+**Non-Goals:**
+- Portable / variable paths (`${HOME}`, `${ARGUS_CONTEXT_ROOTS}/…`). v1 is absolute paths only; multi-machine portability is the user's problem.
+- Conflict resolution for two Argus instances editing the folder concurrently. Argus mostly reads; only `Sync schema` writes, and the user runs it deliberately.
+- Importing existing schemas from dbdocs / Schemaspy / Bruno collections.
+- Editing object docs or query bodies from inside Argus's UI. Folder is read-mostly; the user edits in VS Code or whatever editor they prefer. (Argus offers "Reveal in Finder" and "Open in editor".)
+- Per-environment overrides inside one folder (i.e. "this query uses a different table name in staging"). One folder, one canonical doc; environments differ only in their connection params, not in their docs.
+
+## Decisions
+
+### D1. Folder layout: engine-segregated under a neutral root
+
+```
+~/code/billing-service/argus-context/
+├── context.yaml                  # root manifest (schema_version, name, engines[])
+├── README.md                     # free-form prose for humans + AI
+├── postgres/
+│   ├── public/                   # mirrors DB schema hierarchy
+│   │   ├── users.md
+│   │   ├── orders.md
+│   │   └── _generated.json      # introspection cache; gitignored
+│   ├── billing/
+│   │   └── invoices.md
+│   └── queries/
+│       ├── top-customers.sql
+│       └── top-customers.meta.yaml
+├── dynamo/
+│   ├── tables/
+│   │   ├── sessions.md
+│   │   └── audit-log.md
+│   └── queries/
+│       └── recent-sessions.partiql
+├── cloudwatch/
+│   ├── groups/
+│   │   └── api-gateway-prod.md
+│   └── queries/
+│       └── error-spikes.cwlogs
+└── ai/
+    ├── overview.md
+    └── glossary.md
+```
+
+**Rationale.** Neutral root preserves the "one folder per service, multi-engine" use case without forcing every artifact into a contrived shared schema. Engine subtrees match each source's natural taxonomy (SQL has `schema/table`, Dynamo has flat tables, CloudWatch has flat log groups). A Postgres connection only ever reads `postgres/**`; this isolates parsing complexity and avoids cross-engine name collisions.
+
+**Alternatives considered.**
+- *Flat `objects/` directory with `engine:` discriminator in frontmatter.* Rejected: forces synthetic naming (`public.users` keys), loses the natural mapping to schema-tree navigation, and makes file listing across an engine slower.
+- *One file per folder (`context.yaml`) for everything.* Rejected: merge-conflict nightmare for teams; doesn't scale past a handful of tables.
+
+### D2. Object-doc format: split `system:` / `human:` frontmatter + free Markdown body
+
+```markdown
+---
+# SYSTEM — regenerated by `Sync schema → context`. Do not edit by hand.
+system:
+  kind: table
+  schema: public
+  name: users
+  primary_key: [id]
+  columns:
+    - { name: id,         type: uuid }
+    - { name: email,      type: text }
+    - { name: deleted_at, type: timestamptz }
+  last_synced: 2026-06-02T10:00:00Z
+  deleted_in_db: false
+
+# HUMAN — yours forever. Sync never reads or writes this.
+human:
+  tags: [pii, core]
+  owners: ["@team-identity"]
+  column_notes:
+    email: "lowercased before insert (trigger). Always lowercase before lookup."
+    deleted_at: "soft-delete; queries should filter NULL."
+---
+
+# users
+
+The user identity table. Every authenticated entity has a row here.
+Joined frequently with `orders.user_id` and `sessions.user_id`.
+
+## Gotchas
+- `email` is unique but case-insensitive.
+- Soft-deleted users keep their row; respect `deleted_at IS NULL`.
+```
+
+**Rationale.** A single regenerable frontmatter would force the sync command to merge human-authored fields with machine fields, which is brittle (rename a column → which note follows? both keys collide?). The split makes the contract dead simple: `system:` is owned by the sync tool, `human:` is owned by the human, the Markdown body is owned by the human. The sync command **replaces** `system:` entirely and **never touches** `human:` or the body.
+
+Column-level human notes live under `human.column_notes`, keyed by column name. If a column is renamed in the DB, the note becomes orphaned (key no longer matches any `system.columns[].name`); Argus surfaces these orphans in the sync report so the user decides whether to rename the key or drop the note. We do not auto-migrate notes on rename.
+
+**Deleted-in-DB handling.** When sync finds a previously-documented table that no longer exists in the source, it sets `system.deleted_in_db: true` and leaves the file alone. The schema browser dims the doc and labels it "no longer in DB". The user deletes the file manually when ready.
+
+### D3. Prefab queries: `.sql` (or `.partiql`, `.cwlogs`) + sibling `.meta.yaml`
+
+```sql
+-- queries/top-customers.sql
+SELECT u.email, COUNT(o.id) AS orders
+FROM users u
+JOIN orders o ON o.user_id = u.id
+WHERE o.created_at >= :since AND u.deleted_at IS NULL
+GROUP BY u.email
+ORDER BY orders DESC
+LIMIT :limit;
+```
+
+```yaml
+# queries/top-customers.meta.yaml
+name: "Top customers since date"
+description: "Customer ranking by order count since a given date."
+params:
+  - { name: since, type: timestamp, default: "2026-01-01" }
+  - { name: limit, type: int,       default: 50 }
+tags: [analytics, customers]
+```
+
+**Rationale.** Keeping the query body in a clean `.sql` file means editor syntax highlighting, formatters, and linters Just Work. Embedding metadata in SQL comments (`-- @param since: timestamp`) was considered and rejected because (a) it pollutes the query when copy-pasted, (b) the format zoo across engines makes it ambiguous, (c) frontmatter-in-SQL is non-standard. A sibling `.meta.yaml` is verbose but obvious. The pair is matched by basename within the same `queries/` directory.
+
+Parameter substitution uses **named placeholders** in engine-native syntax where possible (`:since` for Postgres/MySQL, `@since` for MSSQL, `$since` for DynamoDB PartiQL ExpressionAttributeValues). The meta file declares logical names; the runner translates to the right binding form for the engine that owns the query's parent directory.
+
+### D4. Storage on the connection: a single nullable column
+
+```sql
+-- 0005_connection_context.sql
+ALTER TABLE connections ADD COLUMN context_path TEXT;
+```
+
+**Rationale.** A dedicated `contexts` table with its own id, name, colour, etc. was considered. Rejected for v1: it adds a join, a CRUD surface, and a "shared folder identity" concept the user hasn't asked for. The simpler model is: the path *is* the identity. Two connections sharing a folder simply have equal `context_path`. The UI computes "shared with: prod, staging" by grouping on canonical path. If the user later wants per-folder metadata, we can promote to a table without breaking on-disk compatibility.
+
+Path is stored absolute, exactly as the user picked it. We canonicalise (resolve symlinks, normalise separators, strip trailing slash) **at read time, in memory**, for the purposes of registry-keying and equality. We do not rewrite the user's chosen path on disk; what the user sees in settings is what they typed.
+
+### D5. Backend: a `ContextRegistry` singleton, path-keyed
+
+```
+            Rust process (Tauri backend)
+┌───────────────────────────────────────────────────┐
+│  ContextRegistry (Mutex<HashMap<CanonPath, Entry>>)│
+│                                                   │
+│   "/Users/me/billing/argus-context" → Entry {     │
+│       parsed: ParsedContext,                      │
+│       watcher: notify::RecommendedWatcher,        │
+│       subscribers: HashSet<ConnectionId>,         │
+│       last_load: Instant,                         │
+│   }                                               │
+└───────────────────────────────────────────────────┘
+        ▲           ▲           ▲
+        │           │           │
+   conn:prod   conn:staging   conn:dynamo
+```
+
+**Rationale.** A per-connection watcher would mean three watchers on the same folder, three parses on every file save, and three change events to the frontend. The registry keys by canonical path so subscribers naturally fan in, and refcounting via `subscribers` lets the registry drop the watcher when the last connection unlinks.
+
+**Watcher semantics.** Uses the `notify` crate (cross-platform). Events are debounced at 200 ms for single edits, 500 ms when more than 5 events arrive in the same window (matches a `git checkout` storm). On debounce flush, the registry re-parses only the affected files, recomputes any indices, and emits a Tauri event `context://changed` with payload `{ path, kinds: ["object", "query", "manifest"] }`. The frontend receives one event regardless of how many connections subscribe.
+
+**Lifecycle edge cases.**
+- *Folder missing at load*: registry records the entry as `Unavailable`, fires no watcher, exposes a "folder not found" state. The connection still works; the schema browser shows a banner.
+- *Folder appears later*: there is no global "rescan unavailable paths" loop in v1. The user re-opens the connection or clicks "Retry" in the banner; the registry attempts load again.
+- *Folder removed at runtime*: watcher emits a delete event for the root; registry transitions to `Unavailable` and emits `context://changed` with `kinds: ["manifest"]`. UI shows the banner.
+
+### D6. Schema sync: idempotent, additive, non-destructive
+
+`context_sync_schema(connection_id)` walks the live schema via the existing per-engine introspection (already implemented for the schema browsers), then for each found object:
+
+1. Resolve target file path (`postgres/<schema>/<table>.md` or `dynamo/tables/<name>.md` …). Create parent dirs as needed.
+2. If file does not exist: write a new file with `system:` populated, `human:` empty, body containing only `# <name>`.
+3. If file exists: parse, replace the `system:` block entirely, leave `human:` and body byte-for-byte intact. Re-serialise with the same line-ending and indentation conventions the file already used (detected by sampling).
+
+For each documented object **not** found in the live schema: open the file, set `system.deleted_in_db: true`, leave everything else.
+
+The command returns a `SyncReport` with `{ created: [...], updated: [...], marked_deleted: [...], orphaned_notes: [{file, key}] }` so the UI can show "12 tables synced, 1 table marked deleted, 1 orphaned column note in `users.md` (`old_email_col`)".
+
+**Atomicity.** Writes go through a temp file + rename per target. The sync as a whole is not transactional across files; a mid-sync crash leaves a partially-updated folder, which is recoverable by re-running.
+
+**Sync never runs automatically.** It is always user-initiated (command palette or "Sync" button on the connection). Implicit sync would be surprising and would race with the user's editor.
+
+### D7. Frontend surfacing: objects inline, queries separate
+
+- **Schema browser (per engine).** When a connection has a linked context folder, each tree node that matches a documented object renders a `📄` badge. Selecting the node opens the existing detail view plus a new "Docs" tab showing the rendered Markdown body and a chip strip from `human.tags` / `human.owners`. Column-level notes from `human.column_notes` decorate the columns list.
+- **Context Queries.** A new sidebar branch under the connection node, labelled "Context Queries", listing `queries/*.{sql,partiql,cwlogs}` for the connection's engine. Distinct from "Saved Queries" (which remains a top-level personal scratchpad backed by sqlite). Selecting a query opens an editor tab pre-populated with the body; if the meta declares `params`, a parameter strip appears above the editor with the declared defaults. "Run" substitutes named bindings using each engine's existing binding mechanism.
+- **Connection form.** A new "Context folder" row with three states: *None* (button "Create…" + "Link…"), *Linked* (path with "Reveal", "Open in editor", "Unlink", "Sync schema…"), *Linked but missing* (path with "Locate…" + "Unlink").
+- **AI integration.** The existing AI query-generation entrypoint receives a `context_payload` of: `{ overview, glossary, objects: [{name, system, human, body_summary}], queries: [{name, description, body}] }`. `body_summary` is the first paragraph of each object doc (not the full body) to keep token usage tractable on large folders. The user can toggle "Include full bodies" in settings.
+
+### D8. Naming, file names, and `.gitignore`
+
+- Root manifest is `context.yaml`. (Considered `argus.yaml`; rejected because the folder is intentionally tool-agnostic — another inspector could read it.)
+- Manifest carries `schema_version: 1`. Loader rejects unknown major versions with a clear error.
+- `Create context folder…` writes a `.gitignore` containing `**/_generated.*` and `**/.argus-cache/` so introspection caches don't pollute git.
+
+## Risks / Trade-offs
+
+- **Absolute paths break across machines** → Mitigation: documented limitation in v1; the folder lives in a repo, so colleagues clone the repo and re-link the connection on their machine (one click). Path variables can be added later without breaking on-disk format.
+- **Watcher misses events on network drives / NFS / Dropbox folders** → Mitigation: registry exposes a "Reload" command per connection that bypasses the watcher and re-parses from disk. We do not promise live updates on non-local filesystems.
+- **Schema sync overwrites a user who hand-edited `system:`** → Mitigation: docstring at the top of the block ("regenerated by Sync; do not edit by hand"). Sync never reads `system:`, so a hand edit is silently lost on the next sync. Acceptable: the `human:` block is the documented place for hand edits.
+- **Column rename strands `human.column_notes` keys** → Mitigation: sync surfaces orphans in the report; user resolves manually. Auto-renaming would require fuzzy matching with false-positive risk.
+- **AI payload size on large schemas** → Mitigation: default to body summaries only; provide an explicit opt-in for full bodies; show a token estimate in the AI panel.
+- **Two Argus instances syncing the same folder simultaneously** → Mitigation: writes are per-file atomic-rename; collision yields whichever finished last. Documented as "don't sync from two places at once".
+- **`notify` adds a non-trivial native dependency** → Accepted: it's the established cross-platform watcher for Rust, used widely, no comparable alternative.
+- **Inline `📄` badge in the schema tree adds visual noise** → Mitigation: badge is subtle (small caption icon, no fill), only renders when the folder is linked and the object has a doc. Behind a per-connection toggle if users complain.
+
+## Migration Plan
+
+- **Schema migration** `0005_connection_context.sql`: `ALTER TABLE connections ADD COLUMN context_path TEXT;`. Backward-compatible (nullable column, ignored by existing code).
+- **No data migration**: existing connections start with `context_path = NULL` and behave exactly as today.
+- **Rollback**: drop the column (sqlite requires table rebuild) or simply ignore it; the folder on disk is unaffected.
+- **Release sequencing**: ship the backend (registry, commands, migration) first; ship the schema-tree integration and Context Queries runner once the backend has soaked. AI payload export ships last so it can consume the stabilised internal model.
