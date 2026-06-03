@@ -252,9 +252,7 @@ fn compile_row(
     match op {
         Operator::IsNull => {
             if !row.values.is_empty() {
-                return Err(AppError::Validation(
-                    "IS NULL must not carry values".into(),
-                ));
+                return Err(AppError::Validation("IS NULL must not carry values".into()));
             }
             Ok(format!("{col_q} IS NULL"))
         }
@@ -296,7 +294,11 @@ fn compile_row(
             for v in &row.values {
                 binds.push((*bind_kind, v.clone()));
             }
-            let kw = if matches!(op, Operator::In) { "IN" } else { "NOT IN" };
+            let kw = if matches!(op, Operator::In) {
+                "IN"
+            } else {
+                "NOT IN"
+            };
             Ok(format!("{col_q} {kw} ({})", placeholders.join(", ")))
         }
         Operator::Contains => {
@@ -309,9 +311,7 @@ fn compile_row(
             binds.push((str_kind, row.values[0].clone()));
             if ci {
                 // LOWER([col]) LIKE LOWER('%' + @PN + '%')
-                Ok(format!(
-                    "LOWER({col_q}) LIKE LOWER('%' + {p} + '%')"
-                ))
+                Ok(format!("LOWER({col_q}) LIKE LOWER('%' + {p} + '%')"))
             } else {
                 Ok(format!("{col_q} LIKE '%' + {p} + '%'"))
             }
@@ -352,7 +352,11 @@ fn compile_row(
             }
             let p = next_placeholder(next_param);
             binds.push((str_kind, row.values[0].clone()));
-            let kw = if matches!(op, Operator::Like) { "LIKE" } else { "NOT LIKE" };
+            let kw = if matches!(op, Operator::Like) {
+                "LIKE"
+            } else {
+                "NOT LIKE"
+            };
             if ci {
                 Ok(format!("LOWER({col_q}) {kw} LOWER({p})"))
             } else {
@@ -426,8 +430,12 @@ pub async fn fetch_column_meta(
     let mut bind_map: HashMap<String, BindKind> = HashMap::with_capacity(rows.len());
 
     for row in &rows {
-        let name: &str = row.get(0).ok_or_else(|| AppError::mssql("column name is null"))?;
-        let type_name: &str = row.get(1).ok_or_else(|| AppError::mssql("type name is null"))?;
+        let name: &str = row
+            .get(0)
+            .ok_or_else(|| AppError::mssql("column name is null"))?;
+        let type_name: &str = row
+            .get(1)
+            .ok_or_else(|| AppError::mssql("type name is null"))?;
         let max_length: i16 = row.get::<i16, _>(2).unwrap_or(0);
         let precision: u8 = row.get::<u8, _>(3).unwrap_or(0);
         let scale: u8 = row.get::<u8, _>(4).unwrap_or(0);
@@ -518,9 +526,12 @@ pub async fn mssql_query_table(
     let inner: AppResult<QueryResult> = run_cancellable_query(
         &pool,
         QUERY_TIMEOUT_SECS,
-        cancel_params_opt
-            .as_ref()
-            .map(|(_, _, p, pw)| (p as &crate::modules::mssql::params::MssqlParams, pw.as_str())),
+        cancel_params_opt.as_ref().map(|(_, _, p, pw)| {
+            (
+                p as &crate::modules::mssql::params::MssqlParams,
+                pw.as_str(),
+            )
+        }),
         move |mut conn| async move {
             // 1. Fetch column metadata.
             let meta = fetch_column_meta(&mut conn, &schema_clone, &relation_clone).await?;
@@ -557,7 +568,8 @@ pub async fn mssql_query_table(
                 parts.join(", ")
             } else {
                 // Default: PK ASC; fallback to (SELECT NULL) for heaps.
-                let pk_cols = fetch_pk_columns_for_order(&mut conn, &schema_clone, &relation_clone).await?;
+                let pk_cols =
+                    fetch_pk_columns_for_order(&mut conn, &schema_clone, &relation_clone).await?;
                 if pk_cols.is_empty() {
                     "(SELECT NULL)".to_string()
                 } else {
@@ -574,9 +586,7 @@ pub async fn mssql_query_table(
             let offset = options.offset.unwrap_or(0);
             let qualified = mssql_quote_qualified(&schema_clone, &relation_clone);
 
-            let mut sql = format!(
-                "SELECT {projection} FROM {qualified}"
-            );
+            let mut sql = format!("SELECT {projection} FROM {qualified}");
             if !where_clause.is_empty() {
                 sql.push(' ');
                 sql.push_str(&where_clause);
@@ -640,9 +650,8 @@ pub async fn mssql_query_table(
 
     // Activity log.
     let total_ms = started.elapsed().as_millis() as u64;
-    let builder =
-        ActivityLogEntryBuilder::new(ActivityKind::QueryTable, activity_origin, total_ms)
-            .connection(id);
+    let builder = ActivityLogEntryBuilder::new(ActivityKind::QueryTable, activity_origin, total_ms)
+        .connection(id);
     match &inner {
         Ok(r) => emit_activity(
             &app,
@@ -718,9 +727,12 @@ pub async fn mssql_count_table(
     let inner: AppResult<CountResult> = run_cancellable_query(
         &pool,
         QUERY_TIMEOUT_SECS,
-        cancel_params_opt
-            .as_ref()
-            .map(|(_, _, p, pw)| (p as &crate::modules::mssql::params::MssqlParams, pw.as_str())),
+        cancel_params_opt.as_ref().map(|(_, _, p, pw)| {
+            (
+                p as &crate::modules::mssql::params::MssqlParams,
+                pw.as_str(),
+            )
+        }),
         move |mut conn| async move {
             // Determine if filter is active.
             let has_filter = options
@@ -770,10 +782,7 @@ pub async fn mssql_count_table(
                     .into_first_result()
                     .await
                     .map_err(map_tiberius_error)?;
-                let count: i64 = rows
-                    .first()
-                    .and_then(|r| r.get::<i64, _>(0))
-                    .unwrap_or(0);
+                let count: i64 = rows.first().and_then(|r| r.get::<i64, _>(0)).unwrap_or(0);
                 return Ok(CountResult {
                     count,
                     approximate: false,
@@ -808,10 +817,7 @@ pub async fn mssql_count_table(
                 .await
                 .map_err(map_tiberius_error)?;
 
-            let count: i64 = rows
-                .first()
-                .and_then(|r| r.get::<i64, _>(0))
-                .unwrap_or(0);
+            let count: i64 = rows.first().and_then(|r| r.get::<i64, _>(0)).unwrap_or(0);
 
             Ok(CountResult {
                 count,
@@ -823,14 +829,10 @@ pub async fn mssql_count_table(
     .await;
 
     let total_ms = started.elapsed().as_millis() as u64;
-    let builder =
-        ActivityLogEntryBuilder::new(ActivityKind::CountTable, activity_origin, total_ms)
-            .connection(id);
+    let builder = ActivityLogEntryBuilder::new(ActivityKind::CountTable, activity_origin, total_ms)
+        .connection(id);
     match &inner {
-        Ok(r) => emit_activity(
-            &app,
-            builder.ok(Some(Metric::Count { value: r.count })),
-        ),
+        Ok(r) => emit_activity(&app, builder.ok(Some(Metric::Count { value: r.count }))),
         Err(e) => emit_activity(&app, builder.err(e)),
     }
     inner
@@ -926,7 +928,10 @@ mod tests {
 
     #[test]
     fn eq_operator() {
-        let tree = make_tree(Combinator::And, vec![row("id", Operator::Eq, vec![json!(1)])]);
+        let tree = make_tree(
+            Combinator::And,
+            vec![row("id", Operator::Eq, vec![json!(1)])],
+        );
         let (clause, binds) = compile(&tree).unwrap();
         assert_eq!(clause, "WHERE [id] = @P1");
         assert_eq!(binds.len(), 1);
@@ -935,35 +940,50 @@ mod tests {
 
     #[test]
     fn ne_operator() {
-        let tree = make_tree(Combinator::And, vec![row("id", Operator::Ne, vec![json!(5)])]);
+        let tree = make_tree(
+            Combinator::And,
+            vec![row("id", Operator::Ne, vec![json!(5)])],
+        );
         let (clause, _) = compile(&tree).unwrap();
         assert_eq!(clause, "WHERE [id] != @P1");
     }
 
     #[test]
     fn lt_operator() {
-        let tree = make_tree(Combinator::And, vec![row("id", Operator::Lt, vec![json!(10)])]);
+        let tree = make_tree(
+            Combinator::And,
+            vec![row("id", Operator::Lt, vec![json!(10)])],
+        );
         let (clause, _) = compile(&tree).unwrap();
         assert_eq!(clause, "WHERE [id] < @P1");
     }
 
     #[test]
     fn le_operator() {
-        let tree = make_tree(Combinator::And, vec![row("id", Operator::Le, vec![json!(10)])]);
+        let tree = make_tree(
+            Combinator::And,
+            vec![row("id", Operator::Le, vec![json!(10)])],
+        );
         let (clause, _) = compile(&tree).unwrap();
         assert_eq!(clause, "WHERE [id] <= @P1");
     }
 
     #[test]
     fn gt_operator() {
-        let tree = make_tree(Combinator::And, vec![row("id", Operator::Gt, vec![json!(10)])]);
+        let tree = make_tree(
+            Combinator::And,
+            vec![row("id", Operator::Gt, vec![json!(10)])],
+        );
         let (clause, _) = compile(&tree).unwrap();
         assert_eq!(clause, "WHERE [id] > @P1");
     }
 
     #[test]
     fn ge_operator() {
-        let tree = make_tree(Combinator::And, vec![row("id", Operator::Ge, vec![json!(10)])]);
+        let tree = make_tree(
+            Combinator::And,
+            vec![row("id", Operator::Ge, vec![json!(10)])],
+        );
         let (clause, _) = compile(&tree).unwrap();
         assert_eq!(clause, "WHERE [id] >= @P1");
     }
@@ -1018,11 +1038,7 @@ mod tests {
     fn between_operator() {
         let tree = make_tree(
             Combinator::And,
-            vec![row(
-                "id",
-                Operator::Between,
-                vec![json!(1), json!(10)],
-            )],
+            vec![row("id", Operator::Between, vec![json!(1), json!(10)])],
         );
         let (clause, binds) = compile(&tree).unwrap();
         assert_eq!(clause, "WHERE [id] BETWEEN @P1 AND @P2");
@@ -1167,7 +1183,11 @@ mod tests {
     fn ends_with_without_ci() {
         let tree = make_tree(
             Combinator::And,
-            vec![row("email", Operator::EndsWith, vec![json!("@example.com")])],
+            vec![row(
+                "email",
+                Operator::EndsWith,
+                vec![json!("@example.com")],
+            )],
         );
         let (clause, _) = compile(&tree).unwrap();
         assert_eq!(clause, "WHERE [email] LIKE '%' + @P1");
@@ -1225,8 +1245,7 @@ mod tests {
             ],
         );
         let mut next = 1u32;
-        let (clause, binds) =
-            compile_filter(&tree, &col_map(), &mut next).unwrap();
+        let (clause, binds) = compile_filter(&tree, &col_map(), &mut next).unwrap();
         // country=@P1, between @P2/@P3, in @P4/@P5
         assert!(clause.contains("@P1"), "clause: {clause}");
         assert!(clause.contains("@P2"), "clause: {clause}");

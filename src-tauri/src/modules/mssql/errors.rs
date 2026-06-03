@@ -163,7 +163,10 @@ mod tests {
     fn is_constraint_error_detects_all_codes() {
         for code in &[547u32, 2627, 2601, 515, 8152, 8115, 241, 242, 2628] {
             let err = make_server_error(*code, "constraint", 1, "");
-            assert!(is_constraint_error(&err), "expected constraint error for code {code}");
+            assert!(
+                is_constraint_error(&err),
+                "expected constraint error for code {code}"
+            );
         }
     }
 
@@ -171,7 +174,10 @@ mod tests {
     fn is_constraint_error_false_for_read_only_codes() {
         for code in &[3906u32, 3908] {
             let err = make_server_error(*code, "read-only", 0, "");
-            assert!(!is_constraint_error(&err), "unexpected constraint error for code {code}");
+            assert!(
+                !is_constraint_error(&err),
+                "unexpected constraint error for code {code}"
+            );
         }
     }
 

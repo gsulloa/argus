@@ -23,6 +23,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0004_saved_queries.sql",
         include_str!("../../migrations/0004_saved_queries.sql"),
     ),
+    (
+        "0005_connection_context.sql",
+        include_str!("../../migrations/0005_connection_context.sql"),
+    ),
 ];
 
 pub fn open_db(app: &AppHandle) -> AppResult<Connection> {

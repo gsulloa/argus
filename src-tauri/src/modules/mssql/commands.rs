@@ -85,10 +85,7 @@ pub async fn mssql_test_connection(
             serde_json::json!({ "ok": false, "error": e })
         }
         Err(_) => {
-            let err = AppError::mssql(format!(
-                "test timed out after {}s",
-                MSSQL_TIMEOUT.as_secs()
-            ));
+            let err = AppError::mssql(format!("test timed out after {}s", MSSQL_TIMEOUT.as_secs()));
             emit_activity(
                 &app,
                 ActivityLogEntryBuilder::new(
@@ -170,7 +167,10 @@ pub async fn mssql_connect(
         timeout(MSSQL_TIMEOUT, registry.connect(uuid, params, password))
             .await
             .map_err(|_| {
-                AppError::mssql(format!("connect timed out after {}s", MSSQL_TIMEOUT.as_secs()))
+                AppError::mssql(format!(
+                    "connect timed out after {}s",
+                    MSSQL_TIMEOUT.as_secs()
+                ))
             })?
     }
     .await;

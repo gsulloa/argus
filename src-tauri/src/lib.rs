@@ -2,13 +2,19 @@ pub mod error;
 pub mod modules;
 pub mod platform;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
+use crate::modules::context::commands::{
+    context_ai_payload, context_create_folder, context_get_object, context_get_query,
+    context_link_folder, context_list_objects, context_list_queries, context_reveal_path,
+    context_sync_schema, context_unlink,
+};
+use crate::modules::context::registry::{ContextRegistry, TauriEmitter};
 use crate::modules::dynamo::client::DynamoClientRegistry;
 use crate::modules::dynamo::commands::{
     dynamo_connect, dynamo_disconnect, dynamo_list_active, dynamo_list_aws_profiles,
@@ -20,12 +26,10 @@ use crate::modules::dynamo::tables::commands::{dynamo_describe_table, dynamo_lis
 use crate::modules::mssql::{
     mssql_apply_table_edits, mssql_connect, mssql_count_table, mssql_disconnect,
     mssql_disconnect_all, mssql_get_object_definition, mssql_get_routine_signature,
-    mssql_list_active, mssql_list_columns_bulk as mssql_list_columns_bulk,
-    mssql_list_databases, mssql_list_relations, mssql_list_schemas,
-    mssql_list_structure, mssql_list_table_extras, mssql_parse_url, mssql_query_table,
-    mssql_run_sql, mssql_run_sql_batch, mssql_run_sql_many,
-    mssql_table_ddl, mssql_table_primary_key, mssql_table_structure,
-    mssql_test_connection, MssqlPoolRegistry,
+    mssql_list_active, mssql_list_columns_bulk, mssql_list_databases, mssql_list_relations,
+    mssql_list_schemas, mssql_list_structure, mssql_list_table_extras, mssql_parse_url,
+    mssql_query_table, mssql_run_sql, mssql_run_sql_batch, mssql_run_sql_many, mssql_table_ddl,
+    mssql_table_primary_key, mssql_table_structure, mssql_test_connection, MssqlPoolRegistry,
 };
 use crate::modules::mysql::{
     mysql_apply_table_edits, mysql_connect, mysql_count_table, mysql_disconnect,
@@ -162,6 +166,11 @@ pub fn run() {
             app.manage(DynamoClientRegistry::new());
             app.manage(platform::updater::UpdaterState::default());
 
+            // Context registry — shared singleton keyed by canonical folder path.
+            let emitter: Arc<dyn crate::modules::context::registry::EventEmitter> =
+                Arc::new(TauriEmitter(app.handle().clone()));
+            app.manage(ContextRegistry::new(emitter));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -277,6 +286,17 @@ pub fn run() {
             log_updater_event,
             updater_logs_tail,
             updater_logs_reveal,
+            // Context folder commands
+            context_create_folder,
+            context_link_folder,
+            context_unlink,
+            context_list_objects,
+            context_get_object,
+            context_list_queries,
+            context_get_query,
+            context_sync_schema,
+            context_ai_payload,
+            context_reveal_path,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

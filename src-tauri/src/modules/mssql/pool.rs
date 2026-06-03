@@ -190,17 +190,13 @@ impl MssqlPoolRegistry {
         // Arc and immediately leak it into a Box, the Pool lives for 'static.
         // This is the standard pattern for returning pool connections without
         // borrowing the registry.
-        let leaked: &'static bb8::Pool<bb8_tiberius::ConnectionManager> =
-            Box::leak(Box::new(pool));
+        let leaked: &'static bb8::Pool<bb8_tiberius::ConnectionManager> = Box::leak(Box::new(pool));
         leaked.get().await.map_err(map_bb8_error)
     }
 
     /// Return the (encrypt_mode, trust_cert, params, password) tuple for the
     /// cancellation path. Used by Phase D to open a fresh connection for KILL.
-    pub fn encrypt_mode_for(
-        &self,
-        id: Uuid,
-    ) -> Option<(EncryptMode, bool, MssqlParams, String)> {
+    pub fn encrypt_mode_for(&self, id: Uuid) -> Option<(EncryptMode, bool, MssqlParams, String)> {
         let guard = self.pools.try_read().ok()?;
         guard.get(&id).map(|e| {
             (
@@ -555,8 +551,14 @@ mod tests {
             params.trust_server_certificate = trust_cert();
             let reg = MssqlPoolRegistry::new();
             let id = Uuid::new_v4();
-            let s1 = reg.connect(id, params.clone(), password.clone()).await.unwrap();
-            let s2 = reg.connect(id, params.clone(), password.clone()).await.unwrap();
+            let s1 = reg
+                .connect(id, params.clone(), password.clone())
+                .await
+                .unwrap();
+            let s2 = reg
+                .connect(id, params.clone(), password.clone())
+                .await
+                .unwrap();
             assert_eq!(s1.server_version, s2.server_version);
             assert_eq!(reg.list_active().len(), 1, "idempotent: still 1 pool");
         }
@@ -572,7 +574,9 @@ mod tests {
                 None => return,
             };
             params.trust_server_certificate = trust_cert();
-            let pool = build_mssql_pool(&params, &password).await.expect("build pool");
+            let pool = build_mssql_pool(&params, &password)
+                .await
+                .expect("build pool");
             let mut conn = pool.get().await.expect("acquire");
             let (ver, _pver, _ee) = run_handshake_query(&mut conn).await.expect("handshake");
             assert!(!ver.is_empty(), "version should be non-empty; got: {ver:?}");
@@ -672,8 +676,14 @@ mod tests {
                 .iter()
                 .filter_map(|r| r.get::<&str, usize>(0).map(|s| s.to_string()))
                 .collect();
-            assert!(names.iter().any(|n| n == "dbo"), "expected 'dbo' schema; got {names:?}");
-            assert!(names.iter().any(|n| n == "sys"), "expected 'sys' schema; got {names:?}");
+            assert!(
+                names.iter().any(|n| n == "dbo"),
+                "expected 'dbo' schema; got {names:?}"
+            );
+            assert!(
+                names.iter().any(|n| n == "sys"),
+                "expected 'sys' schema; got {names:?}"
+            );
         }
 
         #[tokio::test]
@@ -699,10 +709,15 @@ mod tests {
                 .iter()
                 .filter_map(|r| r.get::<&str, usize>(0).map(|s| s.to_string()))
                 .collect();
-            assert!(!names.is_empty(), "should have at least one accessible database");
+            assert!(
+                !names.is_empty(),
+                "should have at least one accessible database"
+            );
             // At minimum, the connected database should be accessible.
             assert!(
-                names.iter().any(|n| n.eq_ignore_ascii_case(&params.database)),
+                names
+                    .iter()
+                    .any(|n| n.eq_ignore_ascii_case(&params.database)),
                 "connected database '{}' should be in accessible list; got {names:?}",
                 params.database,
             );
@@ -727,7 +742,11 @@ mod tests {
                 "IF OBJECT_ID('dbo._argus_live_test_25_4','U') IS NULL \
                  CREATE TABLE dbo._argus_live_test_25_4 (id INT PRIMARY KEY, name NVARCHAR(64))",
             )
-            .await.unwrap().into_results().await.unwrap();
+            .await
+            .unwrap()
+            .into_results()
+            .await
+            .unwrap();
             conn.simple_query(
                 "IF OBJECT_ID('dbo._argus_live_view_25_4','V') IS NULL \
                  EXEC('CREATE VIEW dbo._argus_live_view_25_4 AS SELECT id, name FROM dbo._argus_live_test_25_4')",
@@ -741,13 +760,20 @@ mod tests {
                      JOIN sys.schemas s ON s.schema_id = t.schema_id \
                      WHERE s.name = 'dbo' AND t.name LIKE '_argus_live%25_4'",
                 )
-                .await.unwrap().into_first_result().await.unwrap();
+                .await
+                .unwrap()
+                .into_first_result()
+                .await
+                .unwrap();
 
-            let items: Vec<(String, String)> = rows.iter().filter_map(|r| {
-                let n: &str = r.get(0)?;
-                let t: &str = r.get(1)?;
-                Some((n.to_string(), t.to_string()))
-            }).collect();
+            let items: Vec<(String, String)> = rows
+                .iter()
+                .filter_map(|r| {
+                    let n: &str = r.get(0)?;
+                    let t: &str = r.get(1)?;
+                    Some((n.to_string(), t.to_string()))
+                })
+                .collect();
 
             assert!(
                 items.iter().any(|(n, _)| n == "_argus_live_test_25_4"),
@@ -759,10 +785,14 @@ mod tests {
             );
 
             // Cleanup.
-            let _ = conn.simple_query("DROP VIEW IF EXISTS dbo._argus_live_view_25_4")
-                .await.ok();
-            let _ = conn.simple_query("DROP TABLE IF EXISTS dbo._argus_live_test_25_4")
-                .await.ok();
+            let _ = conn
+                .simple_query("DROP VIEW IF EXISTS dbo._argus_live_view_25_4")
+                .await
+                .ok();
+            let _ = conn
+                .simple_query("DROP TABLE IF EXISTS dbo._argus_live_test_25_4")
+                .await
+                .ok();
         }
 
         // -------------------------------------------------------------------
@@ -792,18 +822,28 @@ mod tests {
                     "SELECT name FROM sys.objects WHERE schema_id = SCHEMA_ID('dbo') \
                      AND type IN ('FN','IF','TF','FS','FT')"
                 ),
-                c3.simple_query(
-                    "SELECT name FROM sys.triggers WHERE parent_class = 0"
-                ),
+                c3.simple_query("SELECT name FROM sys.triggers WHERE parent_class = 0"),
                 c4.simple_query(
                     "SELECT name FROM sys.sequences WHERE schema_id = SCHEMA_ID('dbo')"
                 ),
             );
             // All four should succeed (or degrade gracefully on permission deny).
-            assert!(procs.is_ok() || matches!(procs.as_ref().unwrap_err(), _), "procs");
-            assert!(funcs.is_ok() || matches!(funcs.as_ref().unwrap_err(), _), "funcs");
-            assert!(trigs.is_ok() || matches!(trigs.as_ref().unwrap_err(), _), "trigs");
-            assert!(seqs.is_ok() || matches!(seqs.as_ref().unwrap_err(), _), "seqs");
+            assert!(
+                procs.is_ok() || matches!(procs.as_ref().unwrap_err(), _),
+                "procs"
+            );
+            assert!(
+                funcs.is_ok() || matches!(funcs.as_ref().unwrap_err(), _),
+                "funcs"
+            );
+            assert!(
+                trigs.is_ok() || matches!(trigs.as_ref().unwrap_err(), _),
+                "trigs"
+            );
+            assert!(
+                seqs.is_ok() || matches!(seqs.as_ref().unwrap_err(), _),
+                "seqs"
+            );
         }
 
         // -------------------------------------------------------------------
@@ -827,12 +867,21 @@ mod tests {
                  (id INT PRIMARY KEY IDENTITY(1,1), name NVARCHAR(64) NOT NULL, value INT NOT NULL)",
             )
             .await.unwrap().into_results().await.unwrap();
-            conn.simple_query("DELETE FROM dbo._argus_query_test_25_6").await.unwrap().into_results().await.unwrap();
+            conn.simple_query("DELETE FROM dbo._argus_query_test_25_6")
+                .await
+                .unwrap()
+                .into_results()
+                .await
+                .unwrap();
             conn.simple_query(
                 "INSERT INTO dbo._argus_query_test_25_6 (name, value) \
                  VALUES ('alice',10),('bob',20),('carol',30),('dave',40)",
             )
-            .await.unwrap().into_results().await.unwrap();
+            .await
+            .unwrap()
+            .into_results()
+            .await
+            .unwrap();
 
             // OFFSET FETCH NEXT: skip first row, take 2.
             let rows = conn
@@ -840,13 +889,23 @@ mod tests {
                     "SELECT id, name, value FROM dbo._argus_query_test_25_6 \
                      ORDER BY id OFFSET 1 ROWS FETCH NEXT 2 ROWS ONLY",
                 )
-                .await.unwrap().into_first_result().await.unwrap();
+                .await
+                .unwrap()
+                .into_first_result()
+                .await
+                .unwrap();
             assert_eq!(rows.len(), 2, "expected 2 rows with OFFSET 1 FETCH NEXT 2");
             let first_name: &str = rows[0].get(1).unwrap();
-            assert_eq!(first_name, "bob", "expected 'bob' as first row after offset 1");
+            assert_eq!(
+                first_name, "bob",
+                "expected 'bob' as first row after offset 1"
+            );
 
             // Cleanup.
-            let _ = conn.simple_query("DROP TABLE IF EXISTS dbo._argus_query_test_25_6").await.ok();
+            let _ = conn
+                .simple_query("DROP TABLE IF EXISTS dbo._argus_query_test_25_6")
+                .await
+                .ok();
         }
 
         // -------------------------------------------------------------------
@@ -870,8 +929,17 @@ mod tests {
                   name NVARCHAR(64) NOT NULL, \
                   CONSTRAINT uq_argus_25_7 UNIQUE (name))",
             )
-            .await.unwrap().into_results().await.unwrap();
-            conn.simple_query("DELETE FROM dbo._argus_edit_test_25_7").await.unwrap().into_results().await.unwrap();
+            .await
+            .unwrap()
+            .into_results()
+            .await
+            .unwrap();
+            conn.simple_query("DELETE FROM dbo._argus_edit_test_25_7")
+                .await
+                .unwrap()
+                .into_results()
+                .await
+                .unwrap();
 
             // INSERT + OUTPUT INSERTED.* to recover IDENTITY value.
             let inserted = conn
@@ -879,7 +947,11 @@ mod tests {
                     "INSERT INTO dbo._argus_edit_test_25_7 (name) \
                      OUTPUT INSERTED.id, INSERTED.name VALUES (N'initial')",
                 )
-                .await.unwrap().into_first_result().await.unwrap();
+                .await
+                .unwrap()
+                .into_first_result()
+                .await
+                .unwrap();
             assert_eq!(inserted.len(), 1, "OUTPUT should return 1 row");
             let new_id: i32 = inserted[0].get(0).expect("id from OUTPUT");
             assert!(new_id > 0);
@@ -888,24 +960,32 @@ mod tests {
             conn.simple_query(&format!(
                 "UPDATE dbo._argus_edit_test_25_7 SET name = N'updated' WHERE id = {new_id}"
             ))
-            .await.unwrap().into_results().await.unwrap();
+            .await
+            .unwrap()
+            .into_results()
+            .await
+            .unwrap();
             let updated = conn
                 .simple_query(&format!(
                     "SELECT name FROM dbo._argus_edit_test_25_7 WHERE id = {new_id}"
                 ))
-                .await.unwrap().into_first_result().await.unwrap();
+                .await
+                .unwrap()
+                .into_first_result()
+                .await
+                .unwrap();
             let upd_name: &str = updated[0].get(0).unwrap();
             assert_eq!(upd_name, "updated");
 
             // Duplicate key → unique constraint violation (code 2627).
-            conn.simple_query(
-                "INSERT INTO dbo._argus_edit_test_25_7 (name) VALUES (N'dup')",
-            )
-            .await.unwrap().into_results().await.unwrap();
+            conn.simple_query("INSERT INTO dbo._argus_edit_test_25_7 (name) VALUES (N'dup')")
+                .await
+                .unwrap()
+                .into_results()
+                .await
+                .unwrap();
             let dup_result = conn
-                .simple_query(
-                    "INSERT INTO dbo._argus_edit_test_25_7 (name) VALUES (N'dup')",
-                )
+                .simple_query("INSERT INTO dbo._argus_edit_test_25_7 (name) VALUES (N'dup')")
                 .await;
             assert!(dup_result.is_err(), "duplicate key should fail");
 
@@ -913,16 +993,27 @@ mod tests {
             conn.simple_query(&format!(
                 "DELETE FROM dbo._argus_edit_test_25_7 WHERE id = {new_id}"
             ))
-            .await.unwrap().into_results().await.unwrap();
+            .await
+            .unwrap()
+            .into_results()
+            .await
+            .unwrap();
             let gone = conn
                 .simple_query(&format!(
                     "SELECT id FROM dbo._argus_edit_test_25_7 WHERE id = {new_id}"
                 ))
-                .await.unwrap().into_first_result().await.unwrap();
+                .await
+                .unwrap()
+                .into_first_result()
+                .await
+                .unwrap();
             assert!(gone.is_empty(), "row should be gone after delete");
 
             // Cleanup.
-            let _ = conn.simple_query("DROP TABLE IF EXISTS dbo._argus_edit_test_25_7").await.ok();
+            let _ = conn
+                .simple_query("DROP TABLE IF EXISTS dbo._argus_edit_test_25_7")
+                .await
+                .ok();
         }
 
         // -------------------------------------------------------------------
@@ -941,7 +1032,11 @@ mod tests {
 
             let rows = conn
                 .simple_query("SELECT 1 AS one, N'hello' AS greeting")
-                .await.unwrap().into_first_result().await.unwrap();
+                .await
+                .unwrap()
+                .into_first_result()
+                .await
+                .unwrap();
             assert_eq!(rows.len(), 1);
             let one: i32 = rows[0].get(0).unwrap();
             assert_eq!(one, 1);
@@ -962,19 +1057,28 @@ mod tests {
                  CREATE TABLE dbo._argus_sql_test_25_8 (id INT PRIMARY KEY IDENTITY(1,1), v NVARCHAR(32))",
             )
             .await.unwrap().into_results().await.unwrap();
-            conn.simple_query("DELETE FROM dbo._argus_sql_test_25_8").await.unwrap().into_results().await.unwrap();
+            conn.simple_query("DELETE FROM dbo._argus_sql_test_25_8")
+                .await
+                .unwrap()
+                .into_results()
+                .await
+                .unwrap();
 
             let result = conn
                 .execute(
                     "INSERT INTO dbo._argus_sql_test_25_8 (v) VALUES (@P1), (@P2), (@P3)",
                     &[&"a", &"b", &"c"],
                 )
-                .await.unwrap();
+                .await
+                .unwrap();
             // rows_affected() returns u64.
             let affected: u64 = result.rows_affected().iter().sum();
             assert_eq!(affected, 3, "expected 3 rows affected");
 
-            let _ = conn.simple_query("DROP TABLE IF EXISTS dbo._argus_sql_test_25_8").await.ok();
+            let _ = conn
+                .simple_query("DROP TABLE IF EXISTS dbo._argus_sql_test_25_8")
+                .await
+                .ok();
         }
 
         // -------------------------------------------------------------------
@@ -1000,7 +1104,11 @@ mod tests {
                   created_at DATETIME2 DEFAULT GETDATE(), \
                   INDEX idx_name_25_9 (name))",
             )
-            .await.unwrap().into_results().await.unwrap();
+            .await
+            .unwrap()
+            .into_results()
+            .await
+            .unwrap();
 
             // Verify columns via sys.columns.
             let col_rows = conn
@@ -1013,17 +1121,32 @@ mod tests {
                      WHERE s.name = 'dbo' AND tb.name = '_argus_struct_25_9' \
                      ORDER BY c.column_id",
                 )
-                .await.unwrap().into_first_result().await.unwrap();
+                .await
+                .unwrap()
+                .into_first_result()
+                .await
+                .unwrap();
 
-            assert!(col_rows.len() >= 4, "expected ≥4 columns; got {}", col_rows.len());
-            let col_names: Vec<String> = col_rows.iter()
+            assert!(
+                col_rows.len() >= 4,
+                "expected ≥4 columns; got {}",
+                col_rows.len()
+            );
+            let col_names: Vec<String> = col_rows
+                .iter()
                 .filter_map(|r| r.get::<&str, usize>(0).map(|s| s.to_string()))
                 .collect();
             assert!(col_names.iter().any(|n| n == "id"), "expected 'id' column");
-            assert!(col_names.iter().any(|n| n == "data"), "expected 'data' column");
+            assert!(
+                col_names.iter().any(|n| n == "data"),
+                "expected 'data' column"
+            );
 
             // IDENTITY column check.
-            let id_row = col_rows.iter().find(|r| r.get::<&str, usize>(0) == Some("id")).unwrap();
+            let id_row = col_rows
+                .iter()
+                .find(|r| r.get::<&str, usize>(0) == Some("id"))
+                .unwrap();
             let is_identity: bool = id_row.get(2).unwrap_or(false);
             assert!(is_identity, "id column should be IDENTITY");
 
@@ -1044,7 +1167,10 @@ mod tests {
             assert_eq!(pk_col, "id");
 
             // Cleanup.
-            let _ = conn.simple_query("DROP TABLE IF EXISTS dbo._argus_struct_25_9").await.ok();
+            let _ = conn
+                .simple_query("DROP TABLE IF EXISTS dbo._argus_struct_25_9")
+                .await
+                .ok();
         }
 
         // -------------------------------------------------------------------
@@ -1066,12 +1192,20 @@ mod tests {
                 "IF OBJECT_ID('dbo._argus_bulk_a_25_10','U') IS NULL \
                  CREATE TABLE dbo._argus_bulk_a_25_10 (id INT PRIMARY KEY, x NVARCHAR(8))",
             )
-            .await.unwrap().into_results().await.unwrap();
+            .await
+            .unwrap()
+            .into_results()
+            .await
+            .unwrap();
             conn.simple_query(
                 "IF OBJECT_ID('dbo._argus_bulk_b_25_10','U') IS NULL \
                  CREATE TABLE dbo._argus_bulk_b_25_10 (id INT PRIMARY KEY, y DECIMAL(10,2))",
             )
-            .await.unwrap().into_results().await.unwrap();
+            .await
+            .unwrap()
+            .into_results()
+            .await
+            .unwrap();
 
             // Query all columns in the schema (mirrors mssql_list_columns_bulk).
             let col_rows = conn
@@ -1084,17 +1218,34 @@ mod tests {
                      WHERE s.name = 'dbo' AND tb.name LIKE '_argus_bulk_%_25_10' \
                      ORDER BY tb.name, c.column_id",
                 )
-                .await.unwrap().into_first_result().await.unwrap();
+                .await
+                .unwrap()
+                .into_first_result()
+                .await
+                .unwrap();
 
-            let table_names: std::collections::HashSet<String> = col_rows.iter()
+            let table_names: std::collections::HashSet<String> = col_rows
+                .iter()
                 .filter_map(|r| r.get::<&str, usize>(0).map(|s| s.to_string()))
                 .collect();
-            assert!(table_names.contains("_argus_bulk_a_25_10"), "expected table a");
-            assert!(table_names.contains("_argus_bulk_b_25_10"), "expected table b");
+            assert!(
+                table_names.contains("_argus_bulk_a_25_10"),
+                "expected table a"
+            );
+            assert!(
+                table_names.contains("_argus_bulk_b_25_10"),
+                "expected table b"
+            );
 
             // Cleanup.
-            let _ = conn.simple_query("DROP TABLE IF EXISTS dbo._argus_bulk_a_25_10").await.ok();
-            let _ = conn.simple_query("DROP TABLE IF EXISTS dbo._argus_bulk_b_25_10").await.ok();
+            let _ = conn
+                .simple_query("DROP TABLE IF EXISTS dbo._argus_bulk_a_25_10")
+                .await
+                .ok();
+            let _ = conn
+                .simple_query("DROP TABLE IF EXISTS dbo._argus_bulk_b_25_10")
+                .await
+                .ok();
         }
 
         // -------------------------------------------------------------------
@@ -1113,11 +1264,8 @@ mod tests {
 
             // Attempt a 30-second WAITFOR DELAY but cancel it after 1 second.
             let timeout = tokio::time::Duration::from_secs(1);
-            let result = tokio::time::timeout(
-                timeout,
-                conn.simple_query("WAITFOR DELAY '00:00:30'"),
-            )
-            .await;
+            let result =
+                tokio::time::timeout(timeout, conn.simple_query("WAITFOR DELAY '00:00:30'")).await;
 
             // A timeout::timeout() returns Err(Elapsed) when time expires —
             // that means cancellation happened as expected.
@@ -1140,7 +1288,8 @@ mod tests {
             };
             params.trust_server_certificate = trust_cert();
             params.read_only = true;
-            params.application_intent = Some(crate::modules::mssql::params::ApplicationIntent::ReadOnly);
+            params.application_intent =
+                Some(crate::modules::mssql::params::ApplicationIntent::ReadOnly);
             let pool = build_mssql_pool(&params, &password).await.expect("pool");
             let mut conn = pool.get().await.unwrap();
             // Verify we connected to a secondary replica (engine_edition 5 or 8).

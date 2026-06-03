@@ -49,10 +49,7 @@ pub fn skip_leading_comments_tsql(sql: &str) -> &str {
     loop {
         // Skip whitespace.
         while i < bytes.len()
-            && (bytes[i] == b' '
-                || bytes[i] == b'\t'
-                || bytes[i] == b'\n'
-                || bytes[i] == b'\r')
+            && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r')
         {
             i += 1;
         }
@@ -383,10 +380,7 @@ pub fn split_statements(sql: &str) -> Result<Vec<Batch>, AppError> {
 /// - `[...]` bracket identifiers with `]]` escape
 /// - `--` line comments (to EOL)
 /// - `/* ... */` block comments with nesting depth tracking
-fn split_batch_statements(
-    batch: &str,
-    _original_sql: &str,
-) -> Result<Vec<Statement>, AppError> {
+fn split_batch_statements(batch: &str, _original_sql: &str) -> Result<Vec<Statement>, AppError> {
     let bytes = batch.as_bytes();
     let mut statements: Vec<Statement> = Vec::new();
     let mut current = String::new();
@@ -561,10 +555,7 @@ fn split_batch_statements(
             current_char_offset += 1;
             // Skip whitespace to find start of next statement.
             while i < bytes.len()
-                && (bytes[i] == b' '
-                    || bytes[i] == b'\t'
-                    || bytes[i] == b'\n'
-                    || bytes[i] == b'\r')
+                && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r')
             {
                 if bytes[i] == b'\n' {
                     current_line += 1;
@@ -828,10 +819,7 @@ async fn run_single_sql_inner(
         })
     } else {
         // Mutating path: use `execute`.
-        let exec_result = client
-            .execute(sql, &[])
-            .await
-            .map_err(map_tiberius_error)?;
+        let exec_result = client.execute(sql, &[]).await.map_err(map_tiberius_error)?;
 
         let query_ms = started.elapsed().as_millis() as u64;
         // `rows_affected()` returns total rows affected across all result sets.
@@ -964,18 +952,20 @@ pub async fn mssql_run_sql(
     let read_only = registry.read_only_for(id).unwrap_or(false);
     let connection_name = fetch_connection_name(&app, id);
 
-    let result =
-        tokio::time::timeout(RUN_SQL_TIMEOUT, run_single_sql_inner(&mut client, &sql, read_only))
-            .await
-            .map_err(|_| {
-                AppError::Mssql(MssqlErrorBody {
-                    code: None,
-                    message: format!("query timed out ({}s)", RUN_SQL_TIMEOUT.as_secs()),
-                    line: None,
-                    procedure: None,
-                })
-            })
-            .and_then(|r| r);
+    let result = tokio::time::timeout(
+        RUN_SQL_TIMEOUT,
+        run_single_sql_inner(&mut client, &sql, read_only),
+    )
+    .await
+    .map_err(|_| {
+        AppError::Mssql(MssqlErrorBody {
+            code: None,
+            message: format!("query timed out ({}s)", RUN_SQL_TIMEOUT.as_secs()),
+            line: None,
+            procedure: None,
+        })
+    })
+    .and_then(|r| r);
 
     let duration_ms = started.elapsed().as_millis() as u64;
 
@@ -1132,10 +1122,7 @@ pub async fn mssql_run_sql_many(
                     statement_index: idx as u32,
                     result: None,
                     error: Some(MssqlStatementError {
-                        message: format!(
-                            "statement timeout ({}s)",
-                            per_stmt_timeout.as_secs()
-                        ),
+                        message: format!("statement timeout ({}s)", per_stmt_timeout.as_secs()),
                         code: None,
                         line: None,
                         procedure: None,
@@ -1409,10 +1396,7 @@ mod tests {
 
     #[test]
     fn tag_strips_block_comment() {
-        assert_eq!(
-            extract_command_tag("/* comment */ SELECT 1"),
-            "SELECT"
-        );
+        assert_eq!(extract_command_tag("/* comment */ SELECT 1"), "SELECT");
     }
 
     // -----------------------------------------------------------------------
