@@ -1,0 +1,4 @@
+{"type":"message_start","message":{"id":"msg_03","type":"message","role":"assistant","content":[],"model":"claude-opus-4-7","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}
+{"type":"something_new","data":{"future":"field"}}
+{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"SELECT 1;"}}
+{"type":"message_stop","stop_reason":"end_turn"}
