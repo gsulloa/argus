@@ -149,6 +149,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             init_tracing(&handle);
+            crate::modules::ai::path_fix::fix_macos_path();
 
             match storage::open_db(&handle) {
                 Ok(mut conn) => {

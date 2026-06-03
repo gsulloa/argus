@@ -22,6 +22,16 @@ use crate::error::{AppError, AppResult};
 use crate::modules::ai::caps::{CODEX_CLI_DEFAULT_MODEL, CODEX_CLI_MODELS};
 use crate::modules::ai::claude_cli::{build_cli_prompt, flatten_history_for_cli, resolve_model};
 use crate::modules::ai::provider::AiProvider;
+
+/// Return the `codex` binary path to use.
+/// Respects the `ARGUS_CODEX_BIN` environment variable as an escape hatch
+/// for users whose `codex` is not on the inherited PATH.
+fn codex_bin() -> String {
+    std::env::var("ARGUS_CODEX_BIN")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "codex".to_string())
+}
 use crate::modules::ai::types::{
     Capabilities, ChatDelta, ChatRequest, ChatStream, GenerateDelta, GenerateRequest, GenerateStream,
     ProviderId, ValidationResult,
@@ -57,7 +67,7 @@ impl AiProvider for CodexCli {
     }
 
     async fn validate(&self) -> ValidationResult {
-        match timeout(VALIDATION_TIMEOUT, run_version_probe("codex")).await {
+        match timeout(VALIDATION_TIMEOUT, run_version_probe(&codex_bin())).await {
             Ok(Ok(_)) => ValidationResult::Ready,
             Ok(Err(msg)) => ValidationResult::Missing { hint: msg },
             Err(_) => ValidationResult::Missing {
@@ -77,7 +87,7 @@ impl AiProvider for CodexCli {
         let cwd = req.context_path.clone().unwrap_or_else(std::env::temp_dir);
         let prompt = build_cli_prompt(&req.prompt);
 
-        let mut cmd = Command::new("codex");
+        let mut cmd = Command::new(codex_bin());
         cmd.arg("exec");
         if let Some(m) = model.as_deref() {
             cmd.args(["-m", m]);
@@ -116,7 +126,7 @@ impl AiProvider for CodexCli {
 
         let warning_shown = req.provider_state.get("codex_warning_shown").is_some();
 
-        let mut cmd = Command::new("codex");
+        let mut cmd = Command::new(codex_bin());
         cmd.arg("exec");
         if let Some(m) = model.as_deref() {
             cmd.args(["-m", m]);
@@ -203,7 +213,12 @@ async fn run_version_probe(cmd: &str) -> Result<(), String> {
         .kill_on_drop(true)
         .status()
         .await
-        .map_err(|e| format!("could not find `{cmd}` on PATH ({e}). If installed, launch Argus from a terminal or add the CLI to /usr/local/bin"))?;
+        .map_err(|e| format!(
+        "could not find `{cmd}` on PATH ({e}). Argus tried to inherit your shell PATH at startup \
+but couldn't find the binary. Either (a) ensure `codex` is in PATH for your login shell \
+(e.g. ~/.zprofile), (b) symlink it to /usr/local/bin, or (c) set the ARGUS_CODEX_BIN env var \
+to the absolute path of the binary."
+    ))?;
     if out.success() {
         Ok(())
     } else {
@@ -217,7 +232,10 @@ async fn run_version_probe(cmd: &str) -> Result<(), String> {
 fn map_spawn_err(name: &str, e: std::io::Error) -> AppError {
     if e.kind() == std::io::ErrorKind::NotFound {
         AppError::Internal(format!(
-            "could not find `{name}` on PATH. If installed, launch Argus from a terminal or add the CLI to /usr/local/bin"
+            "could not find `{name}` on PATH. Argus tried to inherit your shell PATH at startup \
+but couldn't find the binary. Either (a) ensure `codex` is in PATH for your login shell \
+(e.g. ~/.zprofile), (b) symlink it to /usr/local/bin, or (c) set the ARGUS_CODEX_BIN env var \
+to the absolute path of the binary."
         ))
     } else {
         AppError::Internal(format!("failed to spawn `{name}`: {e}"))
@@ -269,6 +287,26 @@ mod tests {
     use crate::modules::ai::types::{ChatRole, ChatTurn};
 
     // Spawn tests are omitted — see claude_cli.rs for rationale.
+
+    #[test]
+    fn codex_bin_respects_env_override() {
+        // Note: std::env::set_var is not thread-safe in a parallel test runner.
+        // This test is kept simple intentionally; if flakiness is observed in CI,
+        // wrap with a Mutex or add `serial_test` crate.
+        std::env::set_var("ARGUS_CODEX_BIN", "/custom/path/codex");
+        assert_eq!(codex_bin(), "/custom/path/codex");
+        std::env::remove_var("ARGUS_CODEX_BIN");
+        assert_eq!(codex_bin(), "codex");
+    }
+
+    #[test]
+    fn codex_bin_ignores_empty_env_var() {
+        // Remove first to avoid interference from parallel tests setting the var.
+        std::env::remove_var("ARGUS_CODEX_BIN");
+        std::env::set_var("ARGUS_CODEX_BIN", "");
+        assert_eq!(codex_bin(), "codex");
+        std::env::remove_var("ARGUS_CODEX_BIN");
+    }
 
     #[test]
     fn resolve_model_accepts_known_codex_model() {

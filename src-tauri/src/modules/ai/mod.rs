@@ -7,6 +7,7 @@ pub mod commands;
 pub mod factory;
 pub mod keys;
 pub mod openai_api;
+pub mod path_fix;
 pub mod provider;
 pub mod settings;
 pub mod types;
