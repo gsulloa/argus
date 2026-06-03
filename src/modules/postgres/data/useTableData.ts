@@ -152,6 +152,14 @@ export interface UseTableDataParams {
    * supersede. Defaults to `true`.
    */
   enabled?: boolean;
+  /**
+   * Monotonically-advancing token incremented on every user-initiated Apply
+   * gesture (Apply All, per-row Apply, ⌘↵, ⇧⌘↵). Including the token in
+   * `depsKey` ensures the fetch fires even when the resulting `applied` value
+   * is structurally equal to its previous value. Callers MUST advance this
+   * token on every Apply commit. Defaults to `0`.
+   */
+  applyToken?: number;
 }
 
 export interface UseTableDataResult {
@@ -183,6 +191,7 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
     orderBy,
     applied,
     enabled = true,
+    applyToken = 0,
   } = params;
 
   const [state, dispatch] = useReducer(reducer, undefined, initialState);
@@ -206,7 +215,12 @@ export function useTableData(params: UseTableDataParams): UseTableDataResult {
   // render (mirroring `pageSizeRef`). Comparing the captured key against the
   // ref after each await detects stale responses without falling out of phase
   // with the params under React 18 batching.
-  const depsKey = `${connectionId}|${schema}|${relation}|${pageSize}|${orderKey}|${filtersKey}`;
+  //
+  // applyToken is included so that pressing Apply with a structurally-equal
+  // filter model still invalidates the key and triggers a refetch.
+  // see openspec/changes/fix-reapply-same-filter-refetch/specs/postgres-data-grid
+  // "Filter Apply always refetches" requirement.
+  const depsKey = `${connectionId}|${schema}|${relation}|${pageSize}|${orderKey}|${filtersKey}|${applyToken}`;
   const paramsKeyRef = useRef(depsKey);
   paramsKeyRef.current = depsKey;
 

@@ -139,6 +139,9 @@ export function TableViewer({
     active: null,
   });
   const [activeSubtab, setActiveSubtab] = useState<Subtab>("data");
+  // Monotonically-advancing token incremented on every Apply gesture so that
+  // re-applying a structurally-identical filter model still triggers a refetch.
+  const [applyToken, setApplyToken] = useState(0);
 
   // Context folder integration
   const { items: connections } = useConnections();
@@ -225,6 +228,7 @@ export function TableViewer({
     orderBy,
     applied,
     enabled: filterLoaded && orderByLoaded,
+    applyToken,
   });
 
   // Edit buffer (per-tab; survives in-memory re-renders).
@@ -561,12 +565,14 @@ export function TableViewer({
     // Apply All: only enabled+complete rows.
     const enabledRows = draft.rows.filter((r) => r.enabled && isCompleteRow(r));
     setApplied({ rows: enabledRows, combinator: draft.combinator });
+    setApplyToken((t) => t + 1);
   }, [draft, setApplied]);
 
   const onApplyOnlyRow = useCallback((index: number) => {
     const row = draft.rows[index];
     if (!row) return;
     setApplied({ rows: [row], combinator: draft.combinator });
+    setApplyToken((t) => t + 1);
   }, [draft, setApplied]);
 
   const onResetFilters = useCallback(() => {
