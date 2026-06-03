@@ -1016,6 +1016,8 @@ The filter bar SHALL render an `Apply All` button composed of a primary click ar
 
 The active combinator MUST be reflected in the menu with a `✓` checkmark. Activating either menu item MUST first set `draft.combinator` then immediately perform Apply All.
 
+Pressing plain `Enter` (no modifier) while focus is inside a filter row's value input MUST perform Apply All using whatever value `draft.combinator` currently holds — identical to clicking the primary `Apply All` click area. Plain `Enter` MUST NOT modify `draft.combinator`.
+
 `draft.combinator` MUST persist across Applies. The combinator MUST be persisted per-table under `filter_root_combinator` (default `"AND"`).
 
 Apply All MUST set `applied` to `{ rows: draft.rows.filter(r => r.enabled && isComplete(r)), combinator: draft.combinator }`. A row is `complete` when `column` is set, `op` is set, AND the operator has a non-empty `value` (where required).
@@ -1039,6 +1041,13 @@ If the filtered subset is empty, Apply All MUST send no `filter` (no WHERE claus
 - **WHEN** focus is inside the filter bar and the user presses `⇧⌘↵`
 - **THEN** `draft.combinator` is set to `"OR"` and Apply All is performed
 
+#### Scenario: Plain Enter applies with current combinator
+
+- **WHEN** focus is in a filter row's value input, `draft.combinator === "OR"`, and the user presses `Enter` with no modifier
+- **THEN** Apply All is performed
+- **AND** `applied.combinator === "OR"` (the persisted combinator is unchanged)
+- **AND** `mysql.queryTable` is invoked with the new `applied` filter
+
 #### Scenario: Combinator persists across reopens
 
 - **WHEN** the user picks `OR`, closes the tab, and reopens the table
@@ -1056,6 +1065,7 @@ While the filter bar is visible AND focus is inside the bar AND focus is NOT ins
 | `⌘↑` / `Ctrl+↑` | Move focus to same logical control of row above. No wrap at top. |
 | `⌘↓` / `Ctrl+↓` | Move focus to same logical control of row below. No wrap at bottom. |
 | `⌘←` / `Ctrl+←` | Open the column picker dropdown on the focused row. |
+| `Enter` | Apply All using the current `draft.combinator` (does NOT force AND or OR). Fires from any filter-row value input. |
 | `⌘↵` / `Ctrl+Enter` | Apply All with AND |
 | `⇧⌘↵` / `Ctrl+Shift+Enter` | Apply All with OR |
 
@@ -1075,6 +1085,13 @@ While the filter bar is visible AND focus is inside the bar AND focus is NOT ins
 
 - **WHEN** focus is in row 0's value input and the user presses `⌘←`
 - **THEN** row 0's column picker dropdown opens
+
+#### Scenario: Plain Enter on a value input applies all
+
+- **WHEN** focus is in row 0's text value input, the row is enabled and complete, and the user presses `Enter` with no modifier
+- **THEN** Apply All is performed
+- **AND** `draft.combinator` is NOT changed
+- **AND** `mysql.queryTable` is invoked with the new `applied` filter
 
 ### Requirement: Filter bar footer Unset, SQL, hints
 

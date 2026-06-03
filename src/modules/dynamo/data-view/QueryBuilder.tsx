@@ -139,6 +139,7 @@ interface TypedValueEditorProps {
   "data-testid"?: string;
   /** When provided, sets `data-filter-focus-target` on the value input. */
   "data-filter-focus-target"?: string;
+  onRun?(): void;
 }
 
 function TypedValueEditor({
@@ -147,6 +148,7 @@ function TypedValueEditor({
   fixedType,
   "data-testid": testId,
   "data-filter-focus-target": focusTarget,
+  onRun,
 }: TypedValueEditorProps) {
   const effectiveType = fixedType ?? value.type;
 
@@ -193,6 +195,12 @@ function TypedValueEditor({
         className={styles.textInput}
         value={v}
         onChange={(e) => onChange({ type: "S", value: e.target.value })}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            onRun?.();
+          }
+        }}
         placeholder="string value"
         data-testid={testId}
         data-filter-focus-target={focusTarget}
@@ -212,6 +220,12 @@ function TypedValueEditor({
           // Allow digits, leading minus, one decimal point, exponent notation
           if (raw === "" || raw === "-" || /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d*)?$/.test(raw)) {
             onChange({ type: "N", value: raw });
+          }
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            onRun?.();
           }
         }}
         placeholder="numeric value"
@@ -307,9 +321,10 @@ interface FilterRowEditorProps {
   onApplyOnly?(): void;
   /** When true, this is the first filter row and should receive the focus target marker. */
   isFirst?: boolean;
+  onRun?(): void;
 }
 
-function FilterRowEditor({ row, index, onChange, onRemove, onApplyOnly, isFirst }: FilterRowEditorProps) {
+function FilterRowEditor({ row, index, onChange, onRemove, onApplyOnly, isFirst, onRun }: FilterRowEditorProps) {
   const currentOp = filterRowOp(row);
 
   function handleAttrChange(attr: string) {
@@ -390,6 +405,12 @@ function FilterRowEditor({ row, index, onChange, onRemove, onApplyOnly, isFirst 
                 value: { min: newMin, max },
               });
             }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                e.preventDefault();
+                onRun?.();
+              }
+            }}
             placeholder="min"
             aria-label={`Filter ${index} between min`}
             data-testid={`filter-${index}-between-min`}
@@ -410,6 +431,12 @@ function FilterRowEditor({ row, index, onChange, onRemove, onApplyOnly, isFirst 
                 value: { min, max: newMax },
               });
             }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                e.preventDefault();
+                onRun?.();
+              }
+            }}
             placeholder="max"
             aria-label={`Filter ${index} between max`}
             data-testid={`filter-${index}-between-max`}
@@ -423,6 +450,7 @@ function FilterRowEditor({ row, index, onChange, onRemove, onApplyOnly, isFirst 
           value={tv}
           onChange={(next) => onChange({ kind: "compare", attribute: row.attribute, op, value: next })}
           data-testid={`filter-${index}-value`}
+          onRun={onRun}
         />
       );
     }
@@ -983,6 +1011,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
                     onRemove={() => removeFilter(i)}
                     onApplyOnly={onApplyOnlyFilter ? () => handleApplyOnlyRow(i) : undefined}
                     isFirst={i === 0}
+                    onRun={handleRun}
                   />
                 </React.Fragment>
               ))}

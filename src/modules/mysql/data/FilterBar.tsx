@@ -93,6 +93,7 @@ export function FilterBar({ columns, model, onChange, onApply }: Props) {
           columns={columns}
           onChange={(patch) => updateRow(idx, patch)}
           onRemove={() => removeRow(idx)}
+          onApply={onApply}
         />
       ))}
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -165,9 +166,10 @@ interface RowEditorProps {
   columns: ColumnInfo[];
   onChange(patch: Partial<FilterRow>): void;
   onRemove(): void;
+  onApply?(): void;
 }
 
-function FilterRowEditor({ row, columns, onChange, onRemove }: RowEditorProps) {
+function FilterRowEditor({ row, columns, onChange, onRemove, onApply }: RowEditorProps) {
   const opDef = OPERATOR_DEFS.find((d) => d.op === row.op) ?? OPERATOR_DEFS[0]!;
   const hasCiToggle = opDef.hasCiToggle === true;
 
@@ -248,6 +250,12 @@ function FilterRowEditor({ row, columns, onChange, onRemove }: RowEditorProps) {
           type="text"
           value={displayValue as string}
           onChange={handleValueChange}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+              e.preventDefault();
+              onApply?.();
+            }
+          }}
           placeholder="value"
           style={inputStyle}
           aria-label="Filter value"
