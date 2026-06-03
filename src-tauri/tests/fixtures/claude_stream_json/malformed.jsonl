@@ -1,0 +1,4 @@
+{"type":"message_start","message":{"id":"msg_04","type":"message","role":"assistant"}}
+this is not valid json at all }{broken
+{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"SELECT 1;"}}
+{"type":"message_stop","stop_reason":"end_turn"}

@@ -61,7 +61,7 @@ fn get_conn_kind(db: &State<'_, DbState>, conn_id: Uuid) -> AppResult<String> {
 
 /// Look up a connection and return `(kind, context_path)`.
 /// Drops the DB lock before returning.
-fn get_conn_kind_and_path(
+pub(crate) fn get_conn_kind_and_path(
     db: &State<'_, DbState>,
     conn_id: Uuid,
 ) -> AppResult<(String, Option<String>)> {

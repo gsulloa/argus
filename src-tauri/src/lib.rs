@@ -9,6 +9,11 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
+use crate::modules::ai::commands::{
+    ai_chat_cancel, ai_chat_close, ai_chat_history, ai_chat_send, ai_delete_api_key,
+    ai_generate_sql, ai_get_settings, ai_list_providers, ai_set_api_key, ai_set_settings,
+    ai_validate_provider,
+};
 use crate::modules::context::commands::{
     context_ai_payload, context_create_folder, context_get_object, context_get_query,
     context_link_folder, context_list_objects, context_list_queries, context_reveal_path,
@@ -171,6 +176,12 @@ pub fn run() {
                 Arc::new(TauriEmitter(app.handle().clone()));
             app.manage(ContextRegistry::new(emitter));
 
+            // AI validation cache.
+            app.manage(crate::modules::ai::validation_cache::ValidationCache::new());
+
+            // AI chat session registry.
+            app.manage(crate::modules::ai::chat_session::ChatSessionRegistry::new());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -297,6 +308,20 @@ pub fn run() {
             context_sync_schema,
             context_ai_payload,
             context_reveal_path,
+            // AI provider commands
+            ai_list_providers,
+            ai_validate_provider,
+            ai_get_settings,
+            ai_set_settings,
+            ai_set_api_key,
+            ai_delete_api_key,
+            // TODO: deprecate after add-ai-chat-panel UI ships and confirms no remaining callers.
+            ai_generate_sql,
+            // AI chat commands
+            ai_chat_send,
+            ai_chat_cancel,
+            ai_chat_close,
+            ai_chat_history,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

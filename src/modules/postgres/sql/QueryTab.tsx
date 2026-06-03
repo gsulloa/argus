@@ -22,6 +22,9 @@ import { ConnectionSelector } from "./ConnectionSelector";
 import { useCloseConfirm } from "@/platform/shell/tabs/useCloseConfirm";
 import { savedQueriesStore } from "@/modules/saved-queries/store";
 import { SaveAsModal } from "@/modules/saved-queries/SaveAsModal";
+import { useAiSettings } from "@/modules/ai/store";
+import { useConnections } from "@/platform/connection-registry/useConnections";
+import { ChatPanel } from "@/modules/ai/components/ChatPanel";
 import dialogStyles from "@/platform/shell/Dialog.module.css";
 import styles from "./QueryTab.module.css";
 
@@ -95,6 +98,8 @@ function QueryTab({ tabId, payload }: InnerProps) {
   const { getActive } = useActiveConnections();
   const toast = useToast();
   const { setTabTitle, setTabDirty } = useTabs();
+  const { settings: aiSettings } = useAiSettings();
+  const { items: allConnections } = useConnections();
 
   // Per-tab runtime state.
   const { state: tabState, actions: tabActions } = useQueryTabState({
@@ -310,6 +315,91 @@ function QueryTab({ tabId, payload }: InnerProps) {
     );
     ed.replaceBody(substituted);
   }, [payload.contextQuery, payload.initialSql, paramValues]);
+
+  // ---------------------------------------------------------------------------
+  // AI chat panel state (Phase F)
+  // ---------------------------------------------------------------------------
+
+  // Determine whether AI is configured for this connection.
+  // Show the button if there's a global default OR a per-connection override.
+  const currentConnectionId = tabState.currentConnectionId;
+  const aiConfigured: boolean = (() => {
+    if (!aiSettings) return false;
+    if (aiSettings.default_provider !== null) return true;
+    if (
+      currentConnectionId &&
+      aiSettings.overrides.some((o) => o.connection_id === currentConnectionId)
+    )
+      return true;
+    return false;
+  })();
+
+  // Resolve context_path for the active connection.
+  const contextPath =
+    allConnections.find((c) => c.id === currentConnectionId)?.context_path ?? null;
+
+  // Panel width — persisted to localStorage, clamped to [280, 800].
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    const stored = localStorage.getItem("argus.ai.panelWidth");
+    const n = stored ? parseInt(stored, 10) : 360;
+    return Number.isFinite(n) ? Math.min(800, Math.max(280, n)) : 360;
+  });
+
+  // Panel open state — persisted to localStorage; only restored when aiConfigured.
+  const [panelOpen, setPanelOpen] = useState<boolean>(() => {
+    if (!aiSettings) return false;
+    const stored = localStorage.getItem("argus.ai.panelOpen");
+    return stored === "1";
+  });
+
+  // Force-close panel when AI becomes unconfigured.
+  useEffect(() => {
+    if (!aiConfigured && panelOpen) setPanelOpen(false);
+  }, [aiConfigured, panelOpen]);
+
+  // Listen for the ai.focusChatPanel palette command.
+  useEffect(() => {
+    function onFocusPanel() {
+      if (aiConfigured) setPanelOpen(true);
+    }
+    window.addEventListener("argus:ai:openPanel", onFocusPanel as EventListener);
+    return () => window.removeEventListener("argus:ai:openPanel", onFocusPanel as EventListener);
+  }, [aiConfigured]);
+
+  // Persist panelOpen to localStorage.
+  useEffect(() => {
+    localStorage.setItem("argus.ai.panelOpen", panelOpen ? "1" : "0");
+  }, [panelOpen]);
+
+  // Splitter drag logic.
+  const latestWidthRef = useRef(panelWidth);
+  latestWidthRef.current = panelWidth;
+
+  const dragStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const handleSplitterMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      dragStartRef.current = { startX: e.clientX, startWidth: latestWidthRef.current };
+      e.preventDefault();
+      function onMove(ev: MouseEvent) {
+        const d = dragStartRef.current;
+        if (!d) return;
+        // Dragging left increases panel width (panel is on the right).
+        const dx = d.startX - ev.clientX;
+        const next = Math.min(800, Math.max(280, d.startWidth + dx));
+        setPanelWidth(next);
+      }
+      function onUp() {
+        dragStartRef.current = null;
+        localStorage.setItem("argus.ai.panelWidth", String(latestWidthRef.current));
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      }
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [],
+  );
 
   // ---------------------------------------------------------------------------
   // Save flow (task 7.3 - 7.7)
@@ -537,6 +627,20 @@ function QueryTab({ tabId, payload }: InnerProps) {
             <span>Save</span>
             <span className={styles.kbd}>{SAVE_HINT}</span>
           </button>
+          {/* Generate button — only rendered when AI is configured */}
+          {aiConfigured ? (
+            <button
+              type="button"
+              className={styles.toolbarButton}
+              onClick={() => setPanelOpen((prev) => !prev)}
+              title="Open AI chat panel"
+              aria-label="Open AI chat panel"
+              aria-pressed={panelOpen}
+            >
+              <span>✨</span>
+              <span>Generate</span>
+            </button>
+          ) : null}
           <button
             type="button"
             className={styles.toolbarButton}
@@ -557,20 +661,43 @@ function QueryTab({ tabId, payload }: InnerProps) {
             missingRequired={missingRequired}
           />
         )}
-        {buffer.loaded ? (
-          <QueryEditor
-            ref={editorRef}
-            connectionId={tabState.currentConnectionId ?? ""}
-            initialSql={buffer.initialSql}
-            onChange={onEditorChange}
-            onRun={onRun}
-            onRunAll={onRunAll}
-            onFormat={onFormat}
-            onSave={onSave}
-          />
-        ) : (
-          <div className={styles.editorPlaceholder}>Loading editor…</div>
-        )}
+        <div className={styles.editorRow}>
+          <div className={styles.editorWrap}>
+            {buffer.loaded ? (
+              <QueryEditor
+                ref={editorRef}
+                connectionId={tabState.currentConnectionId ?? ""}
+                initialSql={buffer.initialSql}
+                onChange={onEditorChange}
+                onRun={onRun}
+                onRunAll={onRunAll}
+                onFormat={onFormat}
+                onSave={onSave}
+              />
+            ) : (
+              <div className={styles.editorPlaceholder}>Loading editor…</div>
+            )}
+          </div>
+          {panelOpen && aiConfigured && currentConnectionId ? (
+            <>
+              <div
+                className={styles.splitter}
+                role="separator"
+                aria-orientation="vertical"
+                onMouseDown={handleSplitterMouseDown}
+              />
+              <div className={styles.chatHost} style={{ width: panelWidth }}>
+                <ChatPanel
+                  open={true}
+                  onClose={() => setPanelOpen(false)}
+                  connectionId={currentConnectionId}
+                  contextPath={contextPath}
+                  editorRef={editorRef}
+                />
+              </div>
+            </>
+          ) : null}
+        </div>
       </div>
       <button
         type="button"
