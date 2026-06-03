@@ -1,5 +1,5 @@
 import { Command as Cmdk } from "cmdk";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTabs } from "@/platform/shell/tabs";
 import { useActiveConnections } from "@/modules/postgres/useActiveConnections";
 import { useActiveMysqlConnections } from "@/modules/mysql/useActiveConnections";
@@ -8,10 +8,11 @@ import { openObjectTab } from "@/modules/postgres/schema/openObjectTab";
 import { openMysqlObjectTab } from "@/modules/mysql/schema/openObjectTab";
 import { openMssqlObjectTab } from "@/modules/mssql/schema/openObjectTab";
 import type { RelationKind } from "@/modules/postgres/data/types";
-import { PaletteShell } from "./PaletteShell";
+import { PaletteShell, type PaletteFilter } from "./PaletteShell";
 import { useTablePalette } from "./PaletteContext";
 import { useTableIndex, type TableEntry } from "./useTableIndex";
 import { useRecentTables } from "./useRecentTables";
+import { scoreTableEntry } from "./scoreTableEntry";
 import paletteStyles from "./Palette.module.css";
 import styles from "./TablePalette.module.css";
 
@@ -46,6 +47,7 @@ function TableRow({ entry, valuePrefix = "", onSelect }: RowProps) {
   return (
     <Cmdk.Item
       value={value}
+      keywords={[entry.schema, entry.name, entry.connectionName, entry.kind]}
       className={styles.row}
       onSelect={() => onSelect(entry)}
     >
@@ -82,6 +84,16 @@ export function TablePalette() {
   const hasConnections = actives.length > 0;
   const indexLoading = hasConnections && entries.length === 0;
   const showRecents = search === "" && visibleRecents.length > 0;
+
+  const tableFilter = useCallback<PaletteFilter>((_value, queryStr, keywords) => {
+    const schema = keywords?.[0];
+    const name = keywords?.[1];
+    const connectionName = keywords?.[2];
+    if (schema === undefined || name === undefined || connectionName === undefined) {
+      return 0;
+    }
+    return scoreTableEntry(queryStr, { schema, name, connectionName });
+  }, []);
 
   function handleSelect(entry: TableEntry) {
     hide();
@@ -123,6 +135,7 @@ export function TablePalette() {
       search={search}
       onSearchChange={setSearch}
       shouldFilter={hasConnections && entries.length > 0 && search.length > 0}
+      filter={tableFilter}
     >
       {!hasConnections ? (
         <div className={paletteStyles.empty}>
