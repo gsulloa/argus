@@ -62,6 +62,8 @@ Four providers are supported. CLI providers (Claude Code, Codex) are spawned as 
 
 Current scope: the ✨ button is wired into the Postgres editor only. MySQL, MSSQL, DynamoDB, and CloudWatch editors follow in a subsequent change.
 
+**Troubleshooting `claude`/`codex` not found:** macOS does not pass your shell `PATH` to apps launched from Finder, the Dock, or the auto-updater — only `/usr/bin:/bin:/usr/sbin:/sbin` is available. Argus automatically inherits the login-shell PATH at startup by running `$SHELL -l`, so any `export PATH=…` in your `~/.zprofile` or `~/.bash_profile` will be picked up. If your CLI is only exported from an interactive `.zshrc`, move the `export` to `.zprofile` (or create a symlink in `/usr/local/bin`). As a last resort, launch the app with the binary path set explicitly: `ARGUS_CLAUDE_BIN=/abs/path/to/claude open -a Argus` (likewise `ARGUS_CODEX_BIN` for Codex).
+
 ## Prerequisites
 
 - **Node.js** 20+
