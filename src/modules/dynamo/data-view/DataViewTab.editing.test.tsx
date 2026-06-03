@@ -20,6 +20,30 @@ import type { TableDescription } from "@/modules/dynamo/tables/types";
 import { useState } from "react";
 
 // ---------------------------------------------------------------------------
+// Mock context hooks + eventBus — Inspector now calls useContextObject
+// These must be declared before the Inspector import further below.
+// ---------------------------------------------------------------------------
+
+vi.mock("@/modules/context/hooks", () => ({
+  useContextObject: () => ({ data: null, loading: false, error: null, refresh: vi.fn() }),
+  useContextObjects: () => ({ data: [], loading: false, error: null, refresh: vi.fn() }),
+  useContextQueries: () => ({ data: [], loading: false, error: null, refresh: vi.fn() }),
+  useContextQuery: () => ({ data: null, loading: false, error: null, refresh: vi.fn() }),
+}));
+
+vi.mock("@/modules/context/eventBus", () => ({
+  useContextChangeListener: vi.fn(),
+  useContextEventBus: vi.fn(() => ({
+    subscribe: vi.fn(() => () => undefined),
+    subscribeAll: vi.fn(() => () => undefined),
+  })),
+}));
+
+vi.mock("@/modules/context/components/DocsPanel", () => ({
+  DocsPanel: () => null,
+}));
+
+// ---------------------------------------------------------------------------
 // Mock @tanstack/react-virtual
 // ---------------------------------------------------------------------------
 

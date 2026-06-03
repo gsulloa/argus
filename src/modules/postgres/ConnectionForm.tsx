@@ -4,6 +4,7 @@ import { AppError, toAppError } from "@/platform/errors/AppError";
 import { connectionsApi } from "@/platform/connection-registry/api";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import type { Connection } from "@/platform/connection-registry/types";
+import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow";
 import { postgresApi } from "./api";
 import {
   POSTGRES_KIND,
@@ -128,7 +129,7 @@ export function ConnectionForm({
   onSaved,
   onConnected,
 }: ConnectionFormProps) {
-  const { create, update } = useConnections();
+  const { create, update, refresh: refreshConnections } = useConnections();
   const [view, setView] = useState<"form" | "url">("form");
   const [form, setForm] = useState<FormState>(() =>
     initial ? fromConnection(initial, mode) : emptyForm(),
@@ -139,6 +140,7 @@ export function ConnectionForm({
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [contextTick, setContextTick] = useState(0);
 
   // Reset state when the dialog (re)opens.
   useEffect(() => {
@@ -460,6 +462,26 @@ export function ConnectionForm({
                 />
                 <span>Read-only — block all writes from this connection</span>
               </label>
+
+              {mode === "edit" && initial ? (
+                <div className={`${styles.field} ${styles.fieldFull}`}>
+                  <ContextFolderRow
+                    key={contextTick}
+                    connectionId={initial.id}
+                    contextPath={initial.context_path ?? null}
+                    onChanged={() => {
+                      setContextTick((t) => t + 1);
+                      void refreshConnections();
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className={`${styles.field} ${styles.fieldFull}`}>
+                  <p className={styles.subtitle} style={{ margin: 0 }}>
+                    Save this connection first to link a context folder.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 

@@ -33,6 +33,7 @@ import { DynamoConnectionSubtree, useDynamoTableCache } from "@/modules/dynamo/t
 import {
   MYSQL_KIND,
   MysqlIcon,
+  MysqlSchemaTree,
   mysqlApi,
   useActiveMysqlConnections,
   useMysqlForm,
@@ -49,6 +50,8 @@ import {
   MssqlSchemaToolbar,
 } from "@/modules/mssql";
 import { openMssqlQueryTab } from "@/modules/mssql/openMssqlQueryTab";
+import { ContextQueriesBranch } from "@/modules/context/components/ContextQueriesBranch";
+import { openContextQuery } from "@/modules/context/openContextQuery";
 import { useTabs } from "@/platform/shell/tabs";
 import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
 import { listDirtySummaries } from "@/platform/shell/tabs/useDirtySummary";
@@ -632,16 +635,62 @@ export function ConnectionRow({
       {isPostgres && active && (
         <div className={styles.subtree}>
           <SchemaTree connectionId={connection.id} />
+          <ContextQueriesBranch
+            connectionId={connection.id}
+            connectionName={connection.name}
+            contextPath={connection.context_path}
+            engine="postgres"
+            onActivate={(q) => {
+              void openContextQuery(tabs, connection.id, connection.name, "postgres", q);
+            }}
+          />
         </div>
       )}
-      {isDynamo && active && (
+      {isMySQL && active && (
         <div className={styles.subtree}>
-          <DynamoConnectionSubtree connectionId={connection.id} connectionName={connection.name} />
+          <MysqlSchemaTree connectionId={connection.id} />
+          <ContextQueriesBranch
+            connectionId={connection.id}
+            connectionName={connection.name}
+            contextPath={connection.context_path}
+            engine="mysql"
+            onActivate={(q) => {
+              void openContextQuery(tabs, connection.id, connection.name, "mysql", q);
+            }}
+          />
         </div>
       )}
       {isMssql && active && (
         <div className={styles.subtree}>
           <MssqlSchemaTree connectionId={connection.id} />
+          <ContextQueriesBranch
+            connectionId={connection.id}
+            connectionName={connection.name}
+            contextPath={connection.context_path}
+            engine="mssql"
+            onActivate={(q) => {
+              void openContextQuery(tabs, connection.id, connection.name, "mssql", q);
+            }}
+          />
+        </div>
+      )}
+      {isDynamo && active && (
+        <div className={styles.subtree}>
+          <DynamoConnectionSubtree connectionId={connection.id} connectionName={connection.name} />
+          <ContextQueriesBranch
+            connectionId={connection.id}
+            connectionName={connection.name}
+            contextPath={connection.context_path}
+            engine="dynamo"
+            onActivate={(q) => {
+              void openContextQuery(tabs, connection.id, connection.name, "dynamo", q, {
+                onCopied: (name) => {
+                  // TODO: wire up a toast notification system when available
+                  console.log(`[argus] context query copied to clipboard: ${name}`);
+                },
+              });
+            }}
+          />
         </div>
       )}
 

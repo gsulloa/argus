@@ -10,6 +10,9 @@ import { Loader2, X } from "lucide-react";
 import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
 import { useDirtySummary } from "@/platform/shell/tabs/useDirtySummary";
 import type { Tab } from "@/platform/shell/tabs/types";
+import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useContextObjects, useContextObject } from "@/modules/context/hooks";
+import { DocsSubtab } from "@/modules/context/components/DocsSubtab";
 import { useActiveMysqlConnections } from "../useActiveConnections";
 import { AppError } from "@/platform/errors/AppError";
 import { dataApi } from "./api";
@@ -26,6 +29,7 @@ import type { EditOp, EditValue, PrimaryKeyResult } from "../types";
 import { useTableStructureCache } from "../structure/useTableStructureCache";
 import { StructureSubtab } from "../structure/StructureSubtab";
 import { RawSubtab } from "../structure/RawSubtab";
+import { SubtabHeader, type Subtab } from "../structure/SubtabHeader";
 
 // ---------------------------------------------------------------------------
 // Tab kind constant
@@ -100,6 +104,32 @@ function MysqlTableViewer({
   const isReadOnly = getActive(connectionId)?.read_only ?? false;
   const isView = relationKind === "view";
 
+  // Context folder integration
+  const { items: connections } = useConnections();
+  const contextPath = connections.find((c) => c.id === connectionId)?.context_path ?? null;
+  const identity = `${schema}.${relation}`;
+
+  // Fetch the list of documented objects to know if this relation has a doc
+  const { data: contextObjectsList } = useContextObjects(connectionId, contextPath);
+  const documentedObjectItem = useMemo(
+    () => contextObjectsList.find((item) => item.identity === identity) ?? null,
+    [contextObjectsList, identity],
+  );
+  const docsAvailable = documentedObjectItem !== null && contextPath !== null;
+
+  // Full object doc — consumed by DocsSubtab and column-notes decoration.
+  const { data: contextDoc } = useContextObject(
+    connectionId,
+    docsAvailable ? identity : null,
+    contextPath,
+  );
+
+  // Column notes derived from context doc
+  const columnNotes: Record<string, string> | undefined = useMemo(() => {
+    if (!contextDoc?.human?.column_notes) return undefined;
+    return contextDoc.human.column_notes;
+  }, [contextDoc]);
+
   // Table data
   const tableData = useTableData({
     connectionId,
@@ -127,10 +157,20 @@ function MysqlTableViewer({
   // Inspector
   const [inspectorVisible, setInspectorVisible] = useState(true);
 
-  // §21 — Subtab: "data" | "structure" | "raw"
-  type SubtabKind = "data" | "structure" | "raw";
-  const [subtab, setSubtab] = useState<SubtabKind>("data");
+  // §21 — Subtab
+  const [subtab, setSubtab] = useState<Subtab>("data");
   const structureCache = useTableStructureCache(connectionId, schema, relation);
+
+  // §7.5 — Snap back to "data" when navigating to a relation that has no doc
+  useEffect(() => {
+    if (subtab === "docs" && !docsAvailable) {
+      setSubtab("data");
+    }
+  }, [subtab, docsAvailable]);
+
+  const visibleTabs: Subtab[] = docsAvailable
+    ? ["data", "structure", "raw", "docs"]
+    : ["data", "structure", "raw"];
 
   // Discard dialog (§19.4)
   const [discardOpen, setDiscardOpen] = useState(false);
@@ -362,37 +402,7 @@ function MysqlTableViewer({
           </span>
         )}
 
-        {/* Subtab toggle */}
-        <div style={{ display: "flex", gap: 2, marginLeft: "auto" }}>
-          {(["data", "structure", "raw"] as const).map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => setSubtab(s)}
-              style={{
-                ...toolbarBtnStyle,
-                background: subtab === s ? "var(--accent)" : "transparent",
-                color: subtab === s ? "var(--on-accent, #fff)" : "var(--text-muted)",
-                borderColor: subtab === s ? "var(--accent)" : "var(--border)",
-                textTransform: "capitalize",
-              }}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-
-        {/* Filter toggle — only visible in data subtab */}
-        {subtab === "data" && (
-          <button
-            type="button"
-            onClick={() => setFilterVisible((v) => !v)}
-            style={toolbarBtnStyle}
-            title="Toggle filter"
-          >
-            Filter
-          </button>
-        )}
+        {/* Subtab toggle — rendered below; spacer for layout */}
 
         {/* Apply / Discard — hidden on read-only */}
         {!isReadOnly && (
@@ -433,6 +443,15 @@ function MysqlTableViewer({
           Inspector
         </button>
       </div>
+
+      {/* Subtab header */}
+      <SubtabHeader
+        active={subtab}
+        onChange={setSubtab}
+        filterBarVisible={filterVisible}
+        onFilterToggle={subtab === "data" ? () => setFilterVisible((v) => !v) : undefined}
+        visibleTabs={visibleTabs}
+      />
 
       {/* Apply error banner */}
       {applyError && (
@@ -500,6 +519,7 @@ function MysqlTableViewer({
           relation={relation}
           relationKind={relationKind}
           cache={structureCache}
+          columnNotes={columnNotes}
         />
       )}
 
@@ -509,6 +529,15 @@ function MysqlTableViewer({
           schema={schema}
           relation={relation}
           cache={structureCache}
+        />
+      )}
+
+      {/* Docs subtab — full-height replacement */}
+      {subtab === "docs" && docsAvailable && (
+        <DocsSubtab
+          connectionId={connectionId}
+          contextPath={contextPath}
+          identity={identity}
         />
       )}
 

@@ -11,6 +11,9 @@ import { useTabs } from "@/platform/shell/tabs";
 import { SidebarTree, type TreeNode } from "@/platform/shell/SidebarTree";
 import { useSidebarScrollRef } from "@/platform/shell/sidebarScroll";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useContextObjects } from "@/modules/context/hooks";
+import { DocBadge } from "@/modules/context/components/DocBadge";
+import { ContextFolderBanner } from "@/modules/context/components/ContextFolderBanner";
 import { SchemaSearch } from "@/modules/postgres/schema/SchemaSearch";
 import { GroupIcon, LeafIcon, type GroupKind, type LeafKind } from "./objectIcons";
 import { useSchemaTree, type PublicGroupState } from "./useSchemaTree";
@@ -814,9 +817,20 @@ export function MssqlSchemaTree({ connectionId }: Props) {
   const [query, setQuery] = useState("");
   const tabs = useTabs();
   const { items: connections } = useConnections();
-  const connectionName =
-    connections.find((c) => c.id === connectionId)?.name ?? connectionId;
+  const connection = connections.find((c) => c.id === connectionId);
+  const connectionName = connection?.name ?? connectionId;
+  const contextPath = connection?.context_path ?? null;
   const sidebarScrollRef = useSidebarScrollRef();
+
+  // Documented objects map: "schema.name" → { deleted_in_db }
+  const { data: contextObjectsList } = useContextObjects(connectionId, contextPath);
+  const documentedObjectsMap = useMemo(() => {
+    const m = new Map<string, { deleted_in_db: boolean }>();
+    for (const item of contextObjectsList) {
+      m.set(item.identity, { deleted_in_db: item.deleted_in_db });
+    }
+    return m;
+  }, [contextObjectsList]);
 
   // Eager `relations` fetch for visible schemas.
   useEffect(() => {
@@ -958,8 +972,18 @@ export function MssqlSchemaTree({ connectionId }: Props) {
     const data = n.data as NodeData | undefined;
     if (!data) return null;
     if (data.kind === "leaf") {
-      if (data.partitioned) return <span className={styles.tableBadge}>partitioned</span>;
-      if (data.indexed) return <span className={styles.indexedBadge}>INDEXED</span>;
+      // Compute DocBadge for documentable object kinds (table/view)
+      const isDocumentable = data.objectKind === "table" || data.objectKind === "view";
+      const docEntry =
+        isDocumentable && contextPath
+          ? documentedObjectsMap.get(`${data.schema}.${data.name}`)
+          : undefined;
+      const docBadge = docEntry ? (
+        <DocBadge deletedInDb={docEntry.deleted_in_db} />
+      ) : null;
+
+      if (data.partitioned) return <>{<span className={styles.tableBadge}>partitioned</span>}{docBadge}</>;
+      if (data.indexed) return <>{<span className={styles.indexedBadge}>INDEXED</span>}{docBadge}</>;
       // Function kind badge (SCALAR / INLINE-TVF / TVF / CLR-SCALAR / CLR-TVF)
       if (data.objectKind === "function" && data.functionType) {
         const badge = FUNCTION_TYPE_BADGE[data.functionType.toLowerCase()] ?? data.functionType.toUpperCase();
@@ -969,7 +993,7 @@ export function MssqlSchemaTree({ connectionId }: Props) {
       if (data.objectKind === "procedure") {
         return <span className={styles.routineBadge}>PROC</span>;
       }
-      return null;
+      return docBadge;
     }
     if (data.spinner) {
       return (
@@ -1035,6 +1059,7 @@ export function MssqlSchemaTree({ connectionId }: Props) {
 
   return (
     <div className={styles.root}>
+      <ContextFolderBanner connectionId={connectionId} contextPath={contextPath} />
       <SchemaSearch
         value={query}
         onChange={setQuery}

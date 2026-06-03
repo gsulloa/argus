@@ -19,6 +19,9 @@ import { VisibleSchemasPicker } from "./VisibleSchemasPicker";
 import { openMysqlObjectTab } from "./openObjectTab";
 import { subscribeMysqlSchemaEvent } from "./events";
 import { openMysqlQueryTab } from "../openMysqlQueryTab";
+import { useContextObjects } from "@/modules/context/hooks";
+import { DocBadge } from "@/modules/context/components/DocBadge";
+import { ContextFolderBanner } from "@/modules/context/components/ContextFolderBanner";
 import type {
   ForeignKeyInfo,
   IndexInfo,
@@ -669,9 +672,20 @@ export function MysqlSchemaTree({ connectionId }: Props) {
   const [query, setQuery] = useState("");
   const tabs = useTabs();
   const { items: connections } = useConnections();
-  const connectionName =
-    connections.find((c) => c.id === connectionId)?.name ?? connectionId;
+  const connection = connections.find((c) => c.id === connectionId);
+  const connectionName = connection?.name ?? connectionId;
+  const contextPath = connection?.context_path ?? null;
   const sidebarScrollRef = useSidebarScrollRef();
+
+  // Documented objects map: "schema.name" → ObjectListItem
+  const { data: contextObjectsList } = useContextObjects(connectionId, contextPath);
+  const documentedObjectsMap = useMemo(() => {
+    const m = new Map<string, { deleted_in_db: boolean }>();
+    for (const item of contextObjectsList) {
+      m.set(item.identity, { deleted_in_db: item.deleted_in_db });
+    }
+    return m;
+  }, [contextObjectsList]);
 
   // Eager `relations` fetch for visible schemas.
   useEffect(() => {
@@ -809,13 +823,23 @@ export function MysqlSchemaTree({ connectionId }: Props) {
     const data = n.data as NodeData | undefined;
     if (!data) return null;
     if (data.kind === "leaf") {
-      if (data.partitioned) return <span className={styles.tableBadge}>partitioned</span>;
+      // Compute DocBadge for documentable object kinds (table/view)
+      const isDocumentable = data.objectKind === "table" || data.objectKind === "view";
+      const docEntry =
+        isDocumentable && contextPath
+          ? documentedObjectsMap.get(`${data.schema}.${data.name}`)
+          : undefined;
+      const docBadge = docEntry ? (
+        <DocBadge deletedInDb={docEntry.deleted_in_db} />
+      ) : null;
+
+      if (data.partitioned) return <>{<span className={styles.tableBadge}>partitioned</span>}{docBadge}</>;
       // Routine kind badge (PROC / FUNC)
       if (data.objectKind === "routine" && data.routineKind) {
         const badge = data.routineKind === "procedure" ? "PROC" : "FUNC";
         return <span className={styles.routineBadge}>{badge}</span>;
       }
-      return null;
+      return docBadge;
     }
     if (data.spinner) {
       return (
@@ -881,6 +905,7 @@ export function MysqlSchemaTree({ connectionId }: Props) {
 
   return (
     <div className={styles.root}>
+      <ContextFolderBanner connectionId={connectionId} contextPath={contextPath} />
       <SchemaSearch
         value={query}
         onChange={setQuery}

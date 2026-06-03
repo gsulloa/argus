@@ -26,6 +26,7 @@ import {
 } from "@/platform/command-palette";
 import { ConnectionsProvider } from "@/platform/connection-registry/useConnections";
 import { ConnectionGroupsProvider } from "@/platform/connection-registry/useConnectionGroups";
+import { ContextEventBusProvider } from "@/modules/context/eventBus";
 import { ActivityLogProvider } from "@/platform/activity-log/store";
 import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
 import { UpdaterProvider } from "@/platform/updater";
@@ -55,6 +56,7 @@ export function App() {
             <TabsProvider>
               <ConnectionGroupsProvider>
                 <ConnectionsProvider>
+                  <ContextEventBusProvider>
                   <ActivityLogProvider>
                     <PostgresFormProvider>
                       <MysqlFormProvider>
@@ -71,6 +73,7 @@ export function App() {
                       </MysqlFormProvider>
                     </PostgresFormProvider>
                   </ActivityLogProvider>
+                  </ContextEventBusProvider>
                 </ConnectionsProvider>
               </ConnectionGroupsProvider>
             </TabsProvider>

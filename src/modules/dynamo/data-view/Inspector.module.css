@@ -228,6 +228,20 @@
   white-space: nowrap;
 }
 
+/* ── Attribute note (§9.6 column_notes decoration) ──────────────────────────── */
+
+.attrNote {
+  padding: 2px 12px 2px 44px; /* align with attrName (16px expand + 6px gap + 12px pad) */
+  font-family: var(--font-sans, system-ui);
+  font-size: 11px; /* --text-xs */
+  color: var(--text-subtle);
+  font-style: italic;
+  border-bottom: 1px solid var(--hairline, rgba(255, 255, 255, 0.04));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── Empty state ─────────────────────────────────────────────────────────────── */
 
 .empty {

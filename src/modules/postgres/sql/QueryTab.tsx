@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Lock, Save, Wand2 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
+import type { QueryParam } from "@/modules/context/types";
+import { ParamStrip } from "@/modules/context/components/ParamStrip";
+import { substitutePostgresParams } from "@/modules/context/components/substituteParams";
 import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { useTabs } from "@/platform/shell/tabs/TabsContext";
@@ -56,6 +59,15 @@ export interface PostgresQueryPayload {
    * The authoritative runtime copy lives in `useQueryTabState`.
    */
   savedQueryId?: string;
+  /**
+   * When opening a tab from a context-folder prefab query, this carries the
+   * query name and declared params so the tab can render a parameter strip
+   * above the editor.
+   */
+  contextQuery?: {
+    name: string;
+    params: QueryParam[];
+  };
 }
 
 function isPayload(v: unknown): v is PostgresQueryPayload {
@@ -252,6 +264,52 @@ function QueryTab({ tabId, payload }: InnerProps) {
       toast.show("Could not format SQL", "error");
     }
   }, [toast]);
+
+  // ---------------------------------------------------------------------------
+  // Context-query param strip (Group 11)
+  // ---------------------------------------------------------------------------
+
+  // Initialise param values from defaults.
+  const [paramValues, setParamValues] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    if (payload.contextQuery) {
+      for (const p of payload.contextQuery.params) {
+        init[p.name] = p.default !== null && p.default !== undefined ? String(p.default) : "";
+      }
+    }
+    return init;
+  });
+
+  const handleParamChange = useCallback((name: string, value: string) => {
+    setParamValues((prev) => ({ ...prev, [name]: value }));
+  }, []);
+
+  // Names of required params (no default) that are currently empty.
+  const missingRequired = payload.contextQuery
+    ? payload.contextQuery.params
+        .filter(
+          (p) =>
+            (p.default === null || p.default === undefined) &&
+            (paramValues[p.name] ?? "").trim() === "",
+        )
+        .map((p) => p.name)
+    : [];
+
+  // "Insert into editor": substitute params and write the result into the editor.
+  const handleInsertIntoEditor = useCallback(() => {
+    if (!payload.contextQuery) return;
+    const ed = editorRef.current;
+    if (!ed) return;
+    const body = payload.initialSql;
+    const substituted = substitutePostgresParams(
+      body,
+      payload.contextQuery.params.map((p) => ({
+        name: p.name,
+        value: paramValues[p.name] ?? "",
+      })),
+    );
+    ed.replaceBody(substituted);
+  }, [payload.contextQuery, payload.initialSql, paramValues]);
 
   // ---------------------------------------------------------------------------
   // Save flow (task 7.3 - 7.7)
@@ -490,6 +548,15 @@ function QueryTab({ tabId, payload }: InnerProps) {
             <span className={styles.kbd}>{FORMAT_HINT}</span>
           </button>
         </div>
+        {payload.contextQuery && payload.contextQuery.params.length > 0 && (
+          <ParamStrip
+            params={payload.contextQuery.params}
+            values={paramValues}
+            onChange={handleParamChange}
+            onInsert={handleInsertIntoEditor}
+            missingRequired={missingRequired}
+          />
+        )}
         {buffer.loaded ? (
           <QueryEditor
             ref={editorRef}

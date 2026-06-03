@@ -6,6 +6,7 @@
  */
 
 import { MYSQL_QUERY_KIND } from "./sql/QueryTab";
+import type { QueryParam } from "@/modules/context/types";
 
 /** Minimal tabs surface required to open a MySQL query tab. */
 interface TabsMinimal {
@@ -22,13 +23,26 @@ export interface OpenMysqlQueryTabArgs {
   connectionId: string;
   connectionName?: string;
   sql?: string;
+  /**
+   * When opening a tab from a context-folder prefab query, pass its name and
+   * declared params so the tab renders a parameter strip and the title uses
+   * the prefab's name.
+   */
+  contextQuery?: {
+    /** basename or meta.name; used as the tab title */
+    name: string;
+    params: QueryParam[];
+  };
 }
 
 let globalMysqlQueryCounter = 0;
 
-function nextTitle(connectionName?: string): string {
+function nextTitle(args: OpenMysqlQueryTabArgs): string {
+  if (args.contextQuery) {
+    return args.contextQuery.name;
+  }
   globalMysqlQueryCounter += 1;
-  const base = connectionName ? `${connectionName} — ` : "";
+  const base = args.connectionName ? `${args.connectionName} — ` : "";
   return `${base}Query ${globalMysqlQueryCounter}`;
 }
 
@@ -51,12 +65,13 @@ export function openMysqlQueryTab(
   tabs.open({
     id,
     kind: MYSQL_QUERY_KIND,
-    title: nextTitle(args.connectionName),
+    title: nextTitle(args),
     closable: true,
     payload: {
       connectionId: args.connectionId,
       connectionName: args.connectionName ?? args.connectionId,
       initialSql: args.sql ?? "",
+      contextQuery: args.contextQuery,
     },
   });
   return id;

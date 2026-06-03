@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { toAppError } from "@/platform/errors/AppError";
 import { connectionsApi } from "@/platform/connection-registry/api";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow";
 import type { ConnectionUpdate } from "@/platform/connection-registry/types";
 import type { Connection } from "@/platform/connection-registry/types";
 import { dynamoApi } from "./api";
@@ -107,7 +108,7 @@ export function DynamoConnectionForm({
   onSaved,
   onConnected,
 }: DynamoConnectionFormProps) {
-  const { create, update } = useConnections();
+  const { create, update, refresh: refreshConnections } = useConnections();
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
@@ -117,6 +118,7 @@ export function DynamoConnectionForm({
 
   const isCredentialsOnly = mode.kind === "credentials-only";
   const isEdit = mode.kind === "edit";
+  const [contextTick, setContextTick] = useState(0);
 
   // Reset and initialize form when dialog opens
   useEffect(() => {
@@ -541,6 +543,29 @@ export function DynamoConnectionForm({
                 />
                 <span>Read-only — block all writes from this connection</span>
               </label>
+            )}
+
+            {/* Context folder row — edit mode only */}
+            {!isCredentialsOnly && (
+              mode.kind === "edit" ? (
+                <div className={`${styles.field} ${styles.fieldFull}`}>
+                  <ContextFolderRow
+                    key={contextTick}
+                    connectionId={mode.connection.id}
+                    contextPath={mode.connection.context_path ?? null}
+                    onChanged={() => {
+                      setContextTick((t) => t + 1);
+                      void refreshConnections();
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className={`${styles.field} ${styles.fieldFull}`}>
+                  <p className={styles.hint} style={{ margin: 0 }}>
+                    Save this connection first to link a context folder.
+                  </p>
+                </div>
+              )
             )}
           </div>
 

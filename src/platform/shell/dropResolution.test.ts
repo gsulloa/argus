@@ -13,6 +13,7 @@ function makeConn(id: string, groupId: string | null, sortOrder: number): Connec
     params: {},
     group_id: groupId,
     sort_order: sortOrder,
+    context_path: null,
     created_at: 0,
     updated_at: 0,
   };

@@ -22,6 +22,10 @@ import { SidebarTree, type TreeNode } from "@/platform/shell/SidebarTree";
 import { useSidebarScrollRef } from "@/platform/shell/sidebarScroll";
 import { useSetting } from "@/platform/settings/useSetting";
 import { useTabs } from "@/platform/shell/tabs";
+import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useContextObjects } from "@/modules/context/hooks";
+import { DocBadge } from "@/modules/context/components/DocBadge";
+import { ContextFolderBanner } from "@/modules/context/components/ContextFolderBanner";
 import { useActiveDynamoConnections } from "@/modules/dynamo/useActiveConnections";
 import { useDynamoTableCache } from "./CacheProvider";
 import type { DescribeSlot } from "./CacheProvider";
@@ -65,6 +69,22 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
   const sidebarScrollRef = useSidebarScrollRef();
   const tabs = useTabs();
   const { getActive } = useActiveDynamoConnections();
+
+  // ── Context folder integration ─────────────────────────────────────────────
+  const { items: connections } = useConnections();
+  const contextPath = useMemo(
+    () => connections.find((c) => c.id === connectionId)?.context_path ?? null,
+    [connections, connectionId],
+  );
+  const { data: contextObjectsList } = useContextObjects(connectionId, contextPath);
+  // Dynamo: identity = table name (no schema prefix)
+  const documentedTablesMap = useMemo(() => {
+    const m = new Map<string, { deleted_in_db: boolean }>();
+    for (const item of contextObjectsList) {
+      m.set(item.name, { deleted_in_db: item.deleted_in_db });
+    }
+    return m;
+  }, [contextObjectsList]);
 
   // Context-menu state: which tableName was right-clicked
   const contextMenuTableRef = useRef<string>("");
@@ -178,19 +198,26 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
   );
 
   // renderBadge: shimmer → badges → retry, driven by describe slot state.
+  // Also renders a DocBadge when the table is documented in the context folder.
   const renderBadge = useCallback(
     (node: TreeNode): ReactNode => {
       const data = node.data as LeafData;
       const describeSlot: DescribeSlot | undefined = describe.get(data.tableName);
+      const docEntry = contextPath
+        ? documentedTablesMap.get(data.tableName)
+        : undefined;
       return (
-        <TableLeafBadge
-          tableName={data.tableName}
-          describeSlot={describeSlot}
-          retryDescribe={retryDescribe}
-        />
+        <>
+          <TableLeafBadge
+            tableName={data.tableName}
+            describeSlot={describeSlot}
+            retryDescribe={retryDescribe}
+          />
+          {docEntry && <DocBadge deletedInDb={docEntry.deleted_in_db} />}
+        </>
       );
     },
-    [describe, retryDescribe],
+    [describe, retryDescribe, contextPath, documentedTablesMap],
   );
 
   // onActivate: open or focus placeholder tab.
@@ -301,6 +328,7 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
 
   return (
     <div className={styles.root}>
+      <ContextFolderBanner connectionId={connectionId} contextPath={contextPath} />
       <TableSearchInput
         value={query}
         onChange={handleQueryChange}

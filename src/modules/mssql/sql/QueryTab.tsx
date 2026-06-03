@@ -22,6 +22,9 @@ import { mssqlApi } from "../api";
 import { savedQueriesStore } from "@/modules/saved-queries/store";
 import { SaveAsModal } from "@/modules/saved-queries/SaveAsModal";
 import { useToast } from "@/platform/toast";
+import { ParamStrip } from "@/modules/context/components/ParamStrip";
+import { substituteMssqlParams } from "@/modules/context/components/substituteParams";
+import type { QueryParam } from "@/modules/context/types";
 import { QueryEditor, type QueryEditorHandle } from "./QueryEditor";
 import { ResultPanel } from "./ResultPanel";
 import { useQueryRun } from "./useQueryRun";
@@ -47,6 +50,14 @@ export interface MssqlQueryPayload {
   connectionId: string;
   connectionName: string;
   initialSql: string;
+  /**
+   * When opening a tab from a context-folder prefab query, the name and
+   * declared params are carried here so the tab can render a ParamStrip.
+   */
+  contextQuery?: {
+    name: string;
+    params: QueryParam[];
+  };
 }
 
 function isPayload(v: unknown): v is MssqlQueryPayload {
@@ -253,6 +264,53 @@ function MssqlQueryTab({ tabId, payload }: InnerProps) {
   }, [connectionId, currentSchema]);
 
   // -------------------------------------------------------------------------
+  // Context-query param strip
+  // -------------------------------------------------------------------------
+
+  // Initialise param values from defaults.
+  const [paramValues, setParamValues] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    if (payload.contextQuery) {
+      for (const p of payload.contextQuery.params) {
+        init[p.name] = p.default !== null && p.default !== undefined ? String(p.default) : "";
+      }
+    }
+    return init;
+  });
+
+  const handleParamChange = useCallback((name: string, value: string) => {
+    setParamValues((prev) => ({ ...prev, [name]: value }));
+  }, []);
+
+  // Names of required params (no default) that are currently empty.
+  const missingRequired = payload.contextQuery
+    ? payload.contextQuery.params
+        .filter(
+          (p) =>
+            (p.default === null || p.default === undefined) &&
+            (paramValues[p.name] ?? "").trim() === "",
+        )
+        .map((p) => p.name)
+    : [];
+
+  // "Insert into editor": substitute @name params and write the result into the editor.
+  // CRITICAL: uses substituteMssqlParams (not substitutePostgresParams) — MSSQL uses @name.
+  const handleInsertIntoEditor = useCallback(() => {
+    if (!payload.contextQuery) return;
+    const ed = editorRef.current;
+    if (!ed) return;
+    const body = payload.initialSql;
+    const substituted = substituteMssqlParams(
+      body,
+      payload.contextQuery.params.map((p) => ({
+        name: p.name,
+        value: paramValues[p.name] ?? "",
+      })),
+    );
+    ed.replaceBody(substituted);
+  }, [payload.contextQuery, payload.initialSql, paramValues]);
+
+  // -------------------------------------------------------------------------
   // Save query flow.
   // -------------------------------------------------------------------------
   const [showSaveAs, setShowSaveAs] = useState(false);
@@ -404,6 +462,16 @@ function MssqlQueryTab({ tabId, payload }: InnerProps) {
             Save
           </button>
         </div>
+
+        {payload.contextQuery && payload.contextQuery.params.length > 0 && (
+          <ParamStrip
+            params={payload.contextQuery.params}
+            values={paramValues}
+            onChange={handleParamChange}
+            onInsert={handleInsertIntoEditor}
+            missingRequired={missingRequired}
+          />
+        )}
 
         <QueryEditor
           ref={editorRef}

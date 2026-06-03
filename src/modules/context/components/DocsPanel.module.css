@@ -1,0 +1,112 @@
+/**
+ * DocsPanel.module.css
+ *
+ * Collapsible docs panel. DESIGN.md: neutral typography, no gradients,
+ * no bubbly radii, monospace body text.
+ */
+
+/* ── Root ───────────────────────────────────────────────────────────────────── */
+
+.root {
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 6px 12px;
+  background: var(--surface);
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-muted);
+  font-family: var(--font-sans, system-ui);
+  font-size: 11px; /* --text-xs */
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  user-select: none;
+}
+
+.header:hover {
+  background: var(--surface-2);
+}
+
+/* ── Chevron ──────────────────────────────────────────────────────────────────── */
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-subtle);
+  transition: transform 120ms ease-out;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+/* ── Header label ─────────────────────────────────────────────────────────────── */
+
+.headerLabel {
+  flex: 1;
+}
+
+/* ── Stale badge ─────────────────────────────────────────────────────────────── */
+
+.deletedBadge {
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--warning, #f59e0b);
+  background: transparent;
+  border: 1px solid var(--warning, #f59e0b);
+  border-radius: 3px; /* --radius-sm */
+  padding: 0 4px;
+  line-height: 14px;
+}
+
+/* ── Body ────────────────────────────────────────────────────────────────────── */
+
+.body {
+  padding: 8px 12px 12px;
+  overflow: auto;
+  max-height: 240px;
+}
+
+.deletedBanner {
+  padding: 6px 0;
+  color: var(--warning, #f59e0b);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.bodyPre {
+  margin: 0;
+  font: var(--text-sm, 12px) / 1.6 var(--font-mono, "Geist Mono", monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+/* ── Chips ───────────────────────────────────────────────────────────────────── */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 8px;
+}
+
+.chip {
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px; /* --radius-sm */
+  font-size: 11px; /* --text-xs */
+  color: var(--text-muted);
+  white-space: nowrap;
+}

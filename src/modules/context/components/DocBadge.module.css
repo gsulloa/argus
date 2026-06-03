@@ -1,0 +1,11 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-subtle);
+  /* No background fill at idle, per DESIGN.md */
+}
+
+.root[data-deleted] {
+  color: var(--warning);
+}

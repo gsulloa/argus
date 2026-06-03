@@ -1,10 +1,11 @@
 /**
  * Open a mssql-query tab.
- * The actual tab kind constant is defined in sql/QueryTab.tsx (Phase F3).
- * For F1 we define a stub constant and opener so palette commands can compile.
+ * Supports optional contextQuery payload for prefab queries from a context folder.
  */
 
-/** Tab kind for MS SQL query tabs — matches the backend constant defined in Phase F3. */
+import type { QueryParam } from "@/modules/context/types";
+
+/** Tab kind for MS SQL query tabs. */
 export const MSSQL_QUERY_KIND = "mssql-query" as const;
 
 /** Minimal tabs surface required to open an MS SQL query tab. */
@@ -22,6 +23,15 @@ export interface OpenMssqlQueryTabArgs {
   connectionId: string;
   connectionName?: string;
   sql?: string;
+  /**
+   * When opening a tab from a context-folder prefab query, pass its name and
+   * declared params so the tab renders a parameter strip.
+   */
+  contextQuery?: {
+    /** basename or meta.name; used as the tab title */
+    name: string;
+    params: QueryParam[];
+  };
 }
 
 let globalMssqlQueryCounter = 0;
@@ -41,21 +51,26 @@ function genId(): string {
 
 /**
  * Open an mssql-query tab. Each call opens a new tab with a unique id.
+ *
+ * - Context queries use `args.contextQuery.name` as the tab title.
+ * - Ad-hoc queries get "Query N".
  */
 export function openMssqlQueryTab(
   tabs: TabsMinimal,
   args: OpenMssqlQueryTabArgs,
 ): string {
   const id = `mssqlquery:${genId()}`;
+  const title = args.contextQuery ? args.contextQuery.name : nextTitle(args.connectionName);
   tabs.open({
     id,
     kind: MSSQL_QUERY_KIND,
-    title: nextTitle(args.connectionName),
+    title,
     closable: true,
     payload: {
       connectionId: args.connectionId,
       connectionName: args.connectionName ?? args.connectionId,
       initialSql: args.sql ?? "",
+      contextQuery: args.contextQuery,
     },
   });
   return id;

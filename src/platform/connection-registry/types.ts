@@ -7,6 +7,7 @@ export interface Connection {
   params: ConnectionParams;
   group_id: string | null;
   sort_order: number;
+  context_path: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -17,6 +18,7 @@ export interface ConnectionInput {
   params: ConnectionParams;
   group_id?: string | null;
   secret?: string | null;
+  context_path?: string | null;
 }
 
 export interface ConnectionUpdate {
@@ -24,6 +26,8 @@ export interface ConnectionUpdate {
   params?: ConnectionParams;
   /** `null` clears the keychain entry; omit to leave it untouched. */
   secret?: string | null;
+  /** Omit to leave unchanged. `null` clears. */
+  context_path?: string | null;
 }
 
 export interface ConnectionMove {
