@@ -3,6 +3,12 @@ import { Command as Cmdk } from "cmdk";
 import type { ReactNode } from "react";
 import styles from "./Palette.module.css";
 
+export type PaletteFilter = (
+  value: string,
+  search: string,
+  keywords?: string[],
+) => number;
+
 export interface PaletteShellProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -16,6 +22,9 @@ export interface PaletteShellProps {
   /** Pass false when the list is empty or the consumer renders only static
    *  content; cmdk would otherwise filter away custom empty/loading nodes. */
   shouldFilter?: boolean;
+  /** Optional custom filter forwarded to cmdk. When omitted, cmdk uses its
+   *  default `command-score` fuzzy scorer (current behaviour for ⌘K). */
+  filter?: PaletteFilter;
   children: ReactNode;
 }
 
@@ -33,6 +42,7 @@ export function PaletteShell({
   search,
   onSearchChange,
   shouldFilter = true,
+  filter,
   children,
 }: PaletteShellProps) {
   return (
@@ -44,7 +54,12 @@ export function PaletteShell({
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <Dialog.Title className={styles.title}>{title}</Dialog.Title>
-          <Cmdk label={ariaLabel} shouldFilter={shouldFilter} value={undefined}>
+          <Cmdk
+            label={ariaLabel}
+            shouldFilter={shouldFilter}
+            value={undefined}
+            {...(filter ? { filter } : {})}
+          >
             <Cmdk.Input
               autoFocus
               className={styles.input}
