@@ -214,6 +214,14 @@ export function useTableData({
     void fetchFirstPage();
   }, [depsKey, fetchFirstPage]);
 
+  // refresh() is the explicit Apply gesture handler. It MUST unconditionally
+  // reset the buffer and issue a new first-page fetch. It MUST NOT be routed
+  // through the depsKey auto-fetch effect — that effect's guard
+  // (`depsKeyRef.current === depsKey`) would swallow the fetch when filterModel
+  // is unchanged. Calling dispatch("reset") + fetchFirstPage() directly
+  // bypasses that guard and guarantees a network round-trip.
+  // see openspec/changes/fix-reapply-same-filter-refetch/specs/mssql-data-grid
+  // "Filter Apply always refetches" requirement.
   const refresh = useCallback(() => {
     dispatch({ type: "reset" });
     void fetchFirstPage();
