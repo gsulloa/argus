@@ -923,6 +923,12 @@ The active combinator (`draft.combinator`) MUST be reflected in the menu with a 
 
 Activating the primary click area MUST perform Apply All using whatever value `draft.combinator` currently holds. The button label MUST stay `Apply All` regardless of combinator; the active combinator is signaled only via the menu's checkmark (and OPTIONALLY a small text suffix like `(OR)` when `draft.combinator === "OR"` — implementation MAY add this for clarity).
 
+Pressing plain `Enter` (no modifier) while focus is inside the filter bar MUST perform Apply All using whatever value `draft.combinator` currently holds — identical to clicking the primary `Apply All` click area. Plain `Enter` MUST NOT modify `draft.combinator`. Plain `Enter` MUST NOT fire when:
+- focus is inside a CodeMirror surface (the bar's Raw editor MUST take Enter for itself); or
+- focus is inside the `ChipInput` editor used by `In` / `NotIn` operators AND the chip draft input is non-empty (Enter in that context commits the in-progress chip and MUST NOT propagate to Apply All).
+
+When the chip draft input is empty AND the user presses plain `Enter`, the handler MUST behave like pressing Enter anywhere else in the bar (Apply All).
+
 `draft.combinator` MUST persist across Applies (it does NOT reset to `"AND"` after each Apply). The combinator MUST be persisted in per-table viewer settings under `filter_root_combinator` (default `"AND"`), scoped by `(connection_id, schema, relation)`. The persisted value MUST be reloaded when the tab is reopened.
 
 Apply All MUST set `applied` to:
@@ -959,6 +965,26 @@ If the filtered subset is empty, the Apply All MUST send no `filter_tree` (no WH
 - **AND** Apply All is performed
 - **AND** the menu's `Apply All Checked Filters with OR` item shows the `✓` checkmark on next open
 
+#### Scenario: Plain Enter applies with current combinator
+
+- **WHEN** focus is inside a filter row's value input, `draft.combinator === "OR"`, and the user presses `Enter` with no modifier
+- **THEN** Apply All is performed
+- **AND** `applied.combinator === "OR"` (the persisted combinator is unchanged)
+- **AND** `postgres.queryTable` is invoked with the new `applied` filter set
+
+#### Scenario: Plain Enter in ChipInput with draft commits chip and does not apply
+
+- **WHEN** a filter row uses the `In` operator, focus is in its `ChipInput` text input, the user has typed `pending` (chip not yet committed), and presses `Enter`
+- **THEN** the chip `pending` is committed to that row's `value` array
+- **AND** the chip draft input is cleared
+- **AND** Apply All is NOT performed
+- **AND** the data grid does NOT re-fetch
+
+#### Scenario: Plain Enter in ChipInput with empty draft applies
+
+- **WHEN** a filter row uses the `In` operator, focus is in its `ChipInput` text input, the chip draft is empty, and the user presses `Enter`
+- **THEN** Apply All is performed using the current `draft.combinator`
+
 #### Scenario: Combinator persists across reopens
 
 - **WHEN** the user picks `OR` via the chevron menu, closes the tab, and reopens the same table later
@@ -984,6 +1010,7 @@ While the filter bar is visible AND focus is somewhere inside the bar AND focus 
 | `⌘↑` / `Ctrl+↑` | Move focus to the same logical control (column / op / value) of the row above the focused row. No wrap at top. |
 | `⌘↓` / `Ctrl+↓` | Move focus to the same logical control of the row below the focused row. No wrap at bottom. |
 | `⌘←` / `Ctrl+←` | Open the column picker dropdown on the focused row. No-op if focus is not on a row. |
+| `Enter` | Apply All using the current `draft.combinator` (does NOT force AND or OR). Suppressed when focus is in `ChipInput` and the chip draft is non-empty (Enter commits the chip instead). |
 | `⌘↵` / `Ctrl+Enter` | Apply All with AND – Default (see "Apply All with persistent root combinator") |
 | `⇧⌘↵` / `Ctrl+Shift+Enter` | Apply All with OR |
 
@@ -1026,6 +1053,13 @@ While the filter bar is visible AND focus is somewhere inside the bar AND focus 
 - **WHEN** focus is in row 0's value input and the user presses `⌘←`
 - **THEN** row 0's column picker dropdown opens
 - **AND** keyboard focus is in the dropdown's search input
+
+#### Scenario: Plain Enter on a scalar value input applies all
+
+- **WHEN** focus is in row 0's text value input, the row is enabled and complete, and the user presses `Enter` with no modifier
+- **THEN** Apply All is performed
+- **AND** `draft.combinator` is NOT changed
+- **AND** `postgres.queryTable` is invoked with the new `applied` filter set
 
 #### Scenario: Shortcuts do not fire when bar is hidden
 

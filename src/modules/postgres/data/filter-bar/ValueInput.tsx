@@ -160,11 +160,13 @@ function ChipInput({ values, category, onChange }: ChipInputProps) {
       ))}
       <input
         className={styles.chipInput}
+        data-chip-input="true"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === ",") {
             e.preventDefault();
+            e.stopPropagation();
             commit();
           } else if (e.key === "Backspace" && draft === "" && values.length > 0) {
             e.preventDefault();

@@ -190,6 +190,17 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
         if ((document.activeElement as HTMLElement | null)?.closest(".cm-editor")) return;
 
         const meta = e.metaKey || e.ctrlKey;
+
+        if (e.key === "Enter" && !meta && !e.shiftKey && !e.altKey) {
+          const active = document.activeElement as HTMLElement | null;
+          if (active?.dataset.chipInput === "true" && (active as HTMLInputElement).value !== "") {
+            return;
+          }
+          e.preventDefault();
+          handleApplyAll();
+          return;
+        }
+
         if (!meta) return;
 
         // ⌘F → close (hide) the bar when focused inside it.
