@@ -43,6 +43,25 @@ CloudWatch is on the roadmap (same folder format).
 
 A minimal example folder lives in `docs/context-folder-example/`.
 
+## AI providers
+
+Four providers are supported. CLI providers (Claude Code, Codex) are spawned as local processes and can read context-folder content from disk. API providers (Anthropic, OpenAI) receive a serialised context payload over HTTP.
+
+| Provider | Kind | Install |
+|----------|------|---------|
+| Claude Code | CLI | [anthropic.com/claude-code](https://www.anthropic.com/claude-code) |
+| OpenAI Codex CLI | CLI | [github.com/openai/codex](https://github.com/openai/codex) |
+| Anthropic API | API | No install — API key required |
+| OpenAI API | API | No install — API key required |
+
+**API keys** are stored in the OS keychain under service `argus`, accounts `ai:anthropic` and `ai:openai`. Keys are set (or cleared) via the **AI: Configure providers** command-palette entry — never stored on disk in plaintext.
+
+**Configure providers:** open the command palette (⌘K / Ctrl+K), search for `AI: Configure providers`. The settings modal lists all four providers with live validation status, model dropdowns, and API key fields for the API providers. CLI providers show an install hint when the binary is not found on `PATH`.
+
+**✨ Generate button:** appears in the Postgres SQL editor toolbar after a default provider is configured (or a per-connection override exists). Click it to open a docked chat panel on the right side of the SQL editor. The panel supports multi-turn conversation; CLI providers (Claude Code, Codex) show their reasoning and tool calls as they work. Use **AI: Focus chat panel** from the command palette (⌘K / Ctrl+K) to open the panel from anywhere.
+
+Current scope: the ✨ button is wired into the Postgres editor only. MySQL, MSSQL, DynamoDB, and CloudWatch editors follow in a subsequent change.
+
 ## Prerequisites
 
 - **Node.js** 20+

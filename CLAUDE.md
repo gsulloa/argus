@@ -20,6 +20,10 @@ Full layout, format, and behaviour: see `README.md` "Context folders" and
 `docs/context-folder-example/`. Schema-sync ships for Postgres, MySQL, MSSQL,
 and DynamoDB (`introspect_adapters.rs`); CloudWatch is on the roadmap.
 
+## AI providers (cross-engine)
+
+Four providers are supported: **Claude Code** and **OpenAI Codex CLI** (local process, reads context folder from disk) and **Anthropic API** and **OpenAI API** (HTTP, context serialised as payload). API keys live in the OS keychain under service `argus`, accounts `ai:anthropic` and `ai:openai`; keys are set via the **AI: Configure providers** command-palette entry, never in plaintext on disk. The ✨ button in the Postgres SQL editor toolbar toggles a docked chat panel; CLI providers stream tool-call events as they work, enabling multi-turn conversation. Use **AI: Focus chat panel** from the palette to open the panel from anywhere. Full install instructions and provider details: see `README.md` "AI providers".
+
 ## Design System
 
 Always read `DESIGN.md` before making any visual or UI decisions. All font choices, colors, spacing, border radii, motion, and aesthetic direction are defined there. Do not deviate without explicit user approval.
