@@ -45,6 +45,11 @@ export interface QueryEditorHandle {
   reconfigureAutocomplete(): void;
   /** Format the entire buffer. Returns true on success, false on no-op or error. */
   formatBuffer(): boolean;
+  /**
+   * Replace the entire editor body with `text`.
+   * Used by the context-query "Insert into editor" action.
+   */
+  replaceBody(text: string): void;
 }
 
 export interface QueryEditorProps {
@@ -364,6 +369,17 @@ export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
           scrollIntoView: true,
         });
         return true;
+      },
+      replaceBody(text: string) {
+        const view = viewRef.current;
+        if (!view) return;
+        const len = view.state.doc.length;
+        view.dispatch({
+          changes: { from: 0, to: len, insert: text },
+          selection: { anchor: 0, head: 0 },
+          scrollIntoView: true,
+        });
+        view.focus();
       },
     }));
 

@@ -1,0 +1,199 @@
+/* ContextFolderRow — matches ConnectionForm rhythm */
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: var(--text-xs, 11px);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* Button group */
+.btnGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.btn {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 5px 10px;
+  border-radius: var(--radius-md, 5px);
+  font-size: 12px;
+  font-family: var(--font-ui, inherit);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface-3, var(--surface));
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btnPrimary {
+  background: var(--accent);
+  color: var(--accent-text, #fff);
+  border-color: var(--accent);
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btnDanger {
+  background: var(--surface-2);
+  color: var(--danger, #f87171);
+  border-color: var(--danger, #f87171);
+}
+
+.btnDanger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+/* None state */
+.noneState {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* Linked state */
+.linkedState {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pathRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.folderIcon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.warnIcon {
+  color: var(--danger, #f87171);
+  flex-shrink: 0;
+}
+
+.pathText {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: var(--text-sm, 12px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pathTextDanger {
+  color: var(--danger, #f87171);
+}
+
+.sharedHint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Missing state */
+.missingState {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.missingHint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* Inline error */
+.inlineError {
+  font-size: 11px;
+  color: var(--danger, #f87171);
+}
+
+/* Inline prompt dialog (folder name, unlink confirm) */
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 60;
+}
+
+.promptDialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 8px);
+  box-shadow: var(--shadow-lg);
+  padding: 18px 20px;
+  width: 320px;
+  z-index: 61;
+}
+
+.promptTitle {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.promptDesc {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.promptForm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.promptInput {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 6px 10px;
+  border-radius: var(--radius-md, 5px);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+
+.promptInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.promptFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

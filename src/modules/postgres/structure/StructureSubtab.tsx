@@ -24,6 +24,8 @@ interface Props {
   relation: string;
   relkind: Relkind;
   cache: TableStructureCache;
+  /** Optional column-level notes from the context folder's `human.column_notes`. */
+  columnNotes?: Record<string, string>;
 }
 
 export function StructureSubtab({
@@ -34,6 +36,7 @@ export function StructureSubtab({
   relation,
   relkind,
   cache,
+  columnNotes,
 }: Props) {
   useEffect(() => {
     if (cache.state.status === "idle") {
@@ -84,6 +87,7 @@ export function StructureSubtab({
           connectionName={connectionName}
           response={cache.state.response}
           onRetry={onRefresh}
+          columnNotes={columnNotes}
         />
       ) : null}
     </div>
@@ -107,9 +111,10 @@ interface BodyProps {
   connectionName: string;
   response: TableStructureResult;
   onRetry(): void;
+  columnNotes?: Record<string, string>;
 }
 
-function Body({ tabs, connectionId, connectionName, response, onRetry }: BodyProps) {
+function Body({ tabs, connectionId, connectionName, response, onRetry, columnNotes }: BodyProps) {
   const failuresByKind = useMemo(() => {
     const m = new Map<string, KindFailure>();
     for (const f of response.failures) m.set(f.kind, f);
@@ -140,6 +145,7 @@ function Body({ tabs, connectionId, connectionName, response, onRetry }: BodyPro
           columns={response.columns}
           pkColumns={pkColumns}
           fkByColumn={fkColumnIndex}
+          columnNotes={columnNotes}
         />
       </Section>
 
@@ -281,6 +287,7 @@ function ColumnsTable({
   columns,
   pkColumns,
   fkByColumn,
+  columnNotes,
 }: {
   tabs: ReturnType<typeof useTabs>;
   connectionId: string;
@@ -288,6 +295,7 @@ function ColumnsTable({
   columns: ColumnDetail[];
   pkColumns: Set<string>;
   fkByColumn: Map<string, ForeignKeyInfo>;
+  columnNotes?: Record<string, string>;
 }) {
   return (
     <table className={styles.table}>
@@ -306,11 +314,17 @@ function ColumnsTable({
       <tbody>
         {columns.map((c) => {
           const fk = fkByColumn.get(c.name);
+          const note = columnNotes?.[c.name];
           return (
             <tr key={c.ordinal_position}>
               <td className={styles.numeric}>{c.ordinal_position}</td>
               <td className={styles.mono}>{c.name}</td>
-              <td className={styles.mono}>{c.data_type}</td>
+              <td className={styles.mono}>
+                {c.data_type}
+                {note && (
+                  <span className={styles.columnNote}> · {note}</span>
+                )}
+              </td>
               <td className={styles.colFlag}>{c.is_nullable ? "✓" : "—"}</td>
               <td className={styles.mono}>{c.default ?? "—"}</td>
               <td className={styles.colFlag}>

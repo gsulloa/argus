@@ -1,0 +1,15 @@
+name: "Events by tenant and time range"
+description: "Fetch audit events for a tenant within a sort-key time range."
+params:
+  - name: tenantId
+    type: string
+    default: "tenant_example"
+  - name: since
+    type: string
+    default: "2026-01-01T00:00:00Z#00000000-0000-0000-0000-000000000000"
+  - name: until
+    type: string
+    default: "2026-12-31T23:59:59Z#ffffffff-ffff-ffff-ffff-ffffffffffff"
+tags:
+  - events
+  - audit

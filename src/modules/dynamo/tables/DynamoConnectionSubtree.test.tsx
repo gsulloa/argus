@@ -1,16 +1,14 @@
 /**
- * DynamoConnectionSubtree tests — task group 13.8: load-more affordance.
+ * DynamoConnectionSubtree tests.
+ *
+ * § 13.8: load-more affordance.
+ * § 12.6 (Dynamo subtree badge test extension):
+ *   - DocBadge renders next to a documented table name.
  *
  * Strategy: mock the CacheProvider's useDynamoTableCache hook directly so we
  * can control the cache state without spinning up the full provider (which
  * has an unbounded describe-pipeline effect that causes infinite renders
  * in test environments).
- *
- * Tests:
- *  - Initial render with truncated=true shows the load-more row.
- *  - Activating the load-more button calls dynamoTablesApi.listTables with paginationToken.
- *  - When the follow-up response is also truncated, the affordance remains.
- *  - When the follow-up response is not truncated, the affordance disappears.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -64,6 +62,37 @@ vi.mock("@/modules/dynamo/useActiveConnections", () => ({
     isActive: vi.fn(() => false),
     getActive: vi.fn(() => undefined),
   }),
+}));
+
+// ── Context folder mocks ────────────────────────────────────────────────────
+
+// Controllable context objects list for the DocBadge test.
+let mockContextObjects: Array<{ name: string; deleted_in_db: boolean }> = [];
+
+vi.mock("@/platform/connection-registry/useConnections", () => ({
+  useConnections: () => ({
+    items: [{ id: "test-conn", context_path: "/fake/path" }],
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    move: vi.fn(),
+    remove: vi.fn(),
+  }),
+}));
+
+vi.mock("@/modules/context/hooks", () => ({
+  useContextObjects: () => ({
+    data: mockContextObjects,
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
+}));
+
+vi.mock("@/modules/context/components/ContextFolderBanner", () => ({
+  ContextFolderBanner: () => null,
 }));
 
 // ---------------------------------------------------------------------------
@@ -204,6 +233,65 @@ describe("DynamoConnectionSubtree — 13.8: load-more affordance", () => {
       expect(mockListTables).toHaveBeenCalledWith(
         expect.objectContaining({ paginationToken: "tok-1" }),
       );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — §12.6: DocBadge renders next to documented table names
+// ---------------------------------------------------------------------------
+
+describe("DynamoConnectionSubtree — §12.6: DocBadge for documented tables", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockContextObjects = [];
+  });
+
+  it("renders a DocBadge (title=Documented) next to a documented table", async () => {
+    mockTablesSlot = {
+      status: "ready",
+      names: ["Orders", "Products"],
+      truncated: false,
+    };
+    // Mark "Orders" as documented.
+    mockContextObjects = [{ name: "Orders", deleted_in_db: false }];
+
+    renderSubtree();
+
+    // DocBadge renders a span with title="Documented"
+    await waitFor(() => {
+      const badges = screen.queryAllByTitle("Documented");
+      expect(badges.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("does NOT render a DocBadge when no tables are documented", () => {
+    mockTablesSlot = {
+      status: "ready",
+      names: ["Orders", "Products"],
+      truncated: false,
+    };
+    mockContextObjects = [];
+
+    renderSubtree();
+
+    expect(screen.queryAllByTitle("Documented").length).toBe(0);
+  });
+
+  it("renders a DocBadge with deleted indication for a stale documented table", async () => {
+    mockTablesSlot = {
+      status: "ready",
+      names: ["OldTable"],
+      truncated: false,
+    };
+    mockContextObjects = [{ name: "OldTable", deleted_in_db: true }];
+
+    renderSubtree();
+
+    await waitFor(() => {
+      // DocBadge with deletedInDb renders title "Documented, no DB match"
+      const badges = screen.queryAllByTitle("Documented, no DB match");
+      expect(badges.length).toBeGreaterThanOrEqual(1);
     });
   });
 });

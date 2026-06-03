@@ -27,6 +27,9 @@ import { QueryEditor, type QueryEditorHandle } from "./QueryEditor";
 import { ResultPanel } from "./ResultPanel";
 import { useQueryRun } from "./useQueryRun";
 import { ExportMenu } from "./export/ExportMenu";
+import { ParamStrip } from "@/modules/context/components/ParamStrip";
+import { substitutePostgresParams } from "@/modules/context/components/substituteParams";
+import type { QueryParam } from "@/modules/context/types";
 import type { CellValue } from "../data/types";
 import styles from "./QueryTab.module.css";
 
@@ -47,6 +50,14 @@ export interface MysqlQueryPayload {
   connectionId: string;
   connectionName: string;
   initialSql: string;
+  /**
+   * When opening a tab from a context-folder prefab query, this carries the
+   * query's name and declared params so the tab renders a ParamStrip.
+   */
+  contextQuery?: {
+    name: string;
+    params: QueryParam[];
+  };
 }
 
 function isPayload(v: unknown): v is MysqlQueryPayload {
@@ -236,6 +247,52 @@ function MysqlQueryTab({ tabId, payload }: InnerProps) {
   }, [connectionId, currentSchema]);
 
   // -------------------------------------------------------------------------
+  // Context-query param strip (§10.5 / §10.6)
+  // -------------------------------------------------------------------------
+
+  // Initialise param values from defaults.
+  const [paramValues, setParamValues] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    if (payload.contextQuery) {
+      for (const p of payload.contextQuery.params) {
+        init[p.name] = p.default !== null && p.default !== undefined ? String(p.default) : "";
+      }
+    }
+    return init;
+  });
+
+  const handleParamChange = useCallback((name: string, value: string) => {
+    setParamValues((prev) => ({ ...prev, [name]: value }));
+  }, []);
+
+  // Names of required params (no default) that are currently empty.
+  const missingRequired = payload.contextQuery
+    ? payload.contextQuery.params
+        .filter(
+          (p) =>
+            (p.default === null || p.default === undefined) &&
+            (paramValues[p.name] ?? "").trim() === "",
+        )
+        .map((p) => p.name)
+    : [];
+
+  // "Insert into editor": substitute params (MySQL uses :name — same as Postgres) and write into the editor.
+  const handleInsertIntoEditor = useCallback(() => {
+    if (!payload.contextQuery) return;
+    const ed = editorRef.current;
+    if (!ed) return;
+    const body = payload.initialSql;
+    const substituted = substitutePostgresParams(
+      body,
+      payload.contextQuery.params.map((p) => ({
+        name: p.name,
+        value: paramValues[p.name] ?? "",
+      })),
+    );
+    ed.replaceBody(substituted);
+  }, [payload.contextQuery, payload.initialSql, paramValues]);
+
+  // -------------------------------------------------------------------------
   // §23.3 — Save query flow.
   // -------------------------------------------------------------------------
   const [showSaveAs, setShowSaveAs] = useState(false);
@@ -376,6 +433,16 @@ function MysqlQueryTab({ tabId, payload }: InnerProps) {
             Save
           </button>
         </div>
+
+        {payload.contextQuery && (
+          <ParamStrip
+            params={payload.contextQuery.params}
+            values={paramValues}
+            onChange={handleParamChange}
+            onInsert={handleInsertIntoEditor}
+            missingRequired={missingRequired}
+          />
+        )}
 
         <QueryEditor
           ref={editorRef}

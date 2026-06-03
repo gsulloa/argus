@@ -102,11 +102,7 @@ pub fn build_tiberius_config(params: &MssqlParams, password: &str) -> Config {
 
     config.authentication(AuthMethod::sql_server(&params.username, password));
 
-    apply_tls_to_config(
-        &mut config,
-        params.encrypt,
-        params.trust_server_certificate,
-    );
+    apply_tls_to_config(&mut config, params.encrypt, params.trust_server_certificate);
 
     // ApplicationIntent routing — set ReadOnly when:
     // 1. The user explicitly chose ReadOnly intent, OR

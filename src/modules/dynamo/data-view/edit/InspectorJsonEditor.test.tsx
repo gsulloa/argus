@@ -56,6 +56,29 @@ vi.mock("@/platform/toast", () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// Mock context hooks + eventBus — Inspector now calls useContextObject
+// ---------------------------------------------------------------------------
+
+vi.mock("@/modules/context/hooks", () => ({
+  useContextObject: () => ({ data: null, loading: false, error: null, refresh: vi.fn() }),
+  useContextObjects: () => ({ data: [], loading: false, error: null, refresh: vi.fn() }),
+  useContextQueries: () => ({ data: [], loading: false, error: null, refresh: vi.fn() }),
+  useContextQuery: () => ({ data: null, loading: false, error: null, refresh: vi.fn() }),
+}));
+
+vi.mock("@/modules/context/eventBus", () => ({
+  useContextChangeListener: vi.fn(),
+  useContextEventBus: vi.fn(() => ({
+    subscribe: vi.fn(() => () => undefined),
+    subscribeAll: vi.fn(() => () => undefined),
+  })),
+}));
+
+vi.mock("@/modules/context/components/DocsPanel", () => ({
+  DocsPanel: () => null,
+}));
+
+// ---------------------------------------------------------------------------
 // Mock CodeMirror — minimal shim that makes EditorView constructable in jsdom
 // ---------------------------------------------------------------------------
 

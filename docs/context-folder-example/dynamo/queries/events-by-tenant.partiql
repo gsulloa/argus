@@ -1,0 +1,4 @@
+SELECT tenant_id, "event_ts#event_id", type, payload
+FROM events
+WHERE tenant_id = $tenantId
+  AND "event_ts#event_id" BETWEEN $since AND $until

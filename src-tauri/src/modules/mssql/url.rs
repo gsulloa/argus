@@ -82,10 +82,7 @@ pub fn parse_mssql_url(input: &str) -> AppResult<ParseUrlResult> {
 
     // Strip the `jdbc:` prefix so the rest looks like a standard URL.
     // Then split on the first `;` to separate the URL base from JDBC properties.
-    let (url_part, jdbc_props_str) = if trimmed
-        .to_ascii_lowercase()
-        .starts_with("jdbc:")
-    {
+    let (url_part, jdbc_props_str) = if trimmed.to_ascii_lowercase().starts_with("jdbc:") {
         let without_jdbc = &trimmed["jdbc:".len()..];
         match without_jdbc.find(';') {
             Some(pos) => (&without_jdbc[..pos], Some(&without_jdbc[pos + 1..])),
@@ -99,8 +96,8 @@ pub fn parse_mssql_url(input: &str) -> AppResult<ParseUrlResult> {
         }
     };
 
-    let url = Url::parse(url_part)
-        .map_err(|e| AppError::Validation(format!("malformed URL: {e}")))?;
+    let url =
+        Url::parse(url_part).map_err(|e| AppError::Validation(format!("malformed URL: {e}")))?;
 
     match url.scheme() {
         "mssql" | "sqlserver" | "microsoftsqlserver" => {}
@@ -206,9 +203,7 @@ pub fn parse_mssql_url(input: &str) -> AppResult<ParseUrlResult> {
         AppError::Validation("database is required (supply as path or databaseName param)".into())
     })?;
     let username_final = username.ok_or_else(|| {
-        AppError::Validation(
-            "username is required (supply in URL or as user= param)".into(),
-        )
+        AppError::Validation("username is required (supply in URL or as user= param)".into())
     })?;
 
     let params = MssqlParams {
@@ -284,10 +279,7 @@ fn apply_url_param(
             other => tracing::warn!("ignoring unknown tLSMode value: {}", other),
         },
         other => {
-            tracing::warn!(
-                "ignoring unsupported mssql URL query param: {}",
-                other
-            );
+            tracing::warn!("ignoring unsupported mssql URL query param: {}", other);
         }
     }
     Ok(())
@@ -424,10 +416,7 @@ pub fn parse_adonet_connection_string(input: &str) -> AppResult<ParseUrlResult> 
                 );
             }
             other => {
-                tracing::warn!(
-                    "ignoring unknown ADO.NET connection string key: {}",
-                    other
-                );
+                tracing::warn!("ignoring unknown ADO.NET connection string key: {}", other);
             }
         }
     }
@@ -484,10 +473,7 @@ pub fn parse_adonet_connection_string(input: &str) -> AppResult<ParseUrlResult> 
 /// Returns `(host, Option<port>, Option<instance_name>)`.
 fn parse_server_value(value: &str) -> (String, Option<u16>, Option<String>) {
     // Strip optional `tcp:` prefix
-    let v = value
-        .strip_prefix("tcp:")
-        .unwrap_or(value)
-        .trim();
+    let v = value.strip_prefix("tcp:").unwrap_or(value).trim();
 
     // Split on `\` first (before the comma) to extract an instance name
     let (host_and_port, inst) = if let Some(bs_pos) = v.find('\\') {
@@ -497,10 +483,7 @@ fn parse_server_value(value: &str) -> (String, Option<u16>, Option<String>) {
         if let Some(comma_pos) = rest.find(',') {
             let inst_part = &rest[..comma_pos];
             let port_part = &rest[comma_pos + 1..];
-            (
-                format!("{},{}", h, port_part),
-                Some(inst_part.to_string()),
-            )
+            (format!("{},{}", h, port_part), Some(inst_part.to_string()))
         } else {
             (h.to_string(), Some(rest.to_string()))
         }
@@ -554,8 +537,8 @@ mod tests {
 
     #[test]
     fn mssql_scheme_full_url_parses() {
-        let r = parse_mssql_url("mssql://sa:s3cr3t@db.local:1433/AdventureWorks?encrypt=on")
-            .unwrap();
+        let r =
+            parse_mssql_url("mssql://sa:s3cr3t@db.local:1433/AdventureWorks?encrypt=on").unwrap();
         assert_eq!(r.params.host, "db.local");
         assert_eq!(r.params.port, 1433);
         assert_eq!(r.params.database, "AdventureWorks");
@@ -592,45 +575,35 @@ mod tests {
 
     #[test]
     fn url_encoded_credentials_decoded() {
-        let r =
-            parse_mssql_url("mssql://us%40r:p%40ss@db.local/mydb").unwrap();
+        let r = parse_mssql_url("mssql://us%40r:p%40ss@db.local/mydb").unwrap();
         assert_eq!(r.params.username, "us@r");
         assert_eq!(r.password.as_deref(), Some("p@ss"));
     }
 
     #[test]
     fn trust_server_certificate_param() {
-        let r = parse_mssql_url(
-            "mssql://sa@db.local/mydb?trustServerCertificate=true",
-        )
-        .unwrap();
+        let r = parse_mssql_url("mssql://sa@db.local/mydb?trustServerCertificate=true").unwrap();
         assert!(r.params.trust_server_certificate);
     }
 
     #[test]
     fn trust_server_certificate_underscore_param() {
-        let r = parse_mssql_url(
-            "mssql://sa@db.local/mydb?trust_server_certificate=true",
-        )
-        .unwrap();
+        let r = parse_mssql_url("mssql://sa@db.local/mydb?trust_server_certificate=true").unwrap();
         assert!(r.params.trust_server_certificate);
     }
 
     #[test]
     fn application_intent_param() {
-        let r = parse_mssql_url(
-            "mssql://sa@db.local/mydb?applicationIntent=ReadOnly",
-        )
-        .unwrap();
-        assert_eq!(r.params.application_intent, Some(ApplicationIntent::ReadOnly));
+        let r = parse_mssql_url("mssql://sa@db.local/mydb?applicationIntent=ReadOnly").unwrap();
+        assert_eq!(
+            r.params.application_intent,
+            Some(ApplicationIntent::ReadOnly)
+        );
     }
 
     #[test]
     fn instance_name_param() {
-        let r = parse_mssql_url(
-            "mssql://sa@db.local/mydb?instanceName=SQLEXPRESS",
-        )
-        .unwrap();
+        let r = parse_mssql_url("mssql://sa@db.local/mydb?instanceName=SQLEXPRESS").unwrap();
         assert_eq!(r.params.instance_name.as_deref(), Some("SQLEXPRESS"));
     }
 
@@ -643,10 +616,7 @@ mod tests {
     #[test]
     fn unknown_query_params_do_not_fail() {
         // Unknown params should warn but not error
-        let r = parse_mssql_url(
-            "mssql://sa@db.local/mydb?connectTimeout=30&charset=utf8",
-        )
-        .unwrap();
+        let r = parse_mssql_url("mssql://sa@db.local/mydb?connectTimeout=30&charset=utf8").unwrap();
         assert_eq!(r.params.host, "db.local");
     }
 
@@ -706,10 +676,7 @@ mod tests {
 
     #[test]
     fn microsoftsqlserver_scheme_accepted() {
-        let r = parse_mssql_url(
-            "microsoftsqlserver://sa:s3cr3t@localhost/bhp_api",
-        )
-        .unwrap();
+        let r = parse_mssql_url("microsoftsqlserver://sa:s3cr3t@localhost/bhp_api").unwrap();
         assert_eq!(r.params.host, "localhost");
         assert_eq!(r.params.port, 1433);
         assert_eq!(r.params.database, "bhp_api");
@@ -805,28 +772,23 @@ mod tests {
 
     #[test]
     fn adonet_addr_synonym() {
-        let r = parse_adonet_connection_string(
-            "Addr=myserver;Database=d;User=u;Password=p",
-        )
-        .unwrap();
+        let r =
+            parse_adonet_connection_string("Addr=myserver;Database=d;User=u;Password=p").unwrap();
         assert_eq!(r.params.host, "myserver");
     }
 
     #[test]
     fn adonet_address_synonym() {
-        let r = parse_adonet_connection_string(
-            "Address=myserver;Database=d;Uid=u;Password=p",
-        )
-        .unwrap();
+        let r =
+            parse_adonet_connection_string("Address=myserver;Database=d;Uid=u;Password=p").unwrap();
         assert_eq!(r.params.host, "myserver");
     }
 
     #[test]
     fn adonet_network_address_synonym() {
-        let r = parse_adonet_connection_string(
-            "Network Address=myserver;Database=d;Uid=u;Password=p",
-        )
-        .unwrap();
+        let r =
+            parse_adonet_connection_string("Network Address=myserver;Database=d;Uid=u;Password=p")
+                .unwrap();
         assert_eq!(r.params.host, "myserver");
     }
 
@@ -841,37 +803,30 @@ mod tests {
 
     #[test]
     fn adonet_uid_synonym() {
-        let r = parse_adonet_connection_string(
-            "Server=myserver;Database=d;Uid=u;Password=p",
-        )
-        .unwrap();
+        let r =
+            parse_adonet_connection_string("Server=myserver;Database=d;Uid=u;Password=p").unwrap();
         assert_eq!(r.params.username, "u");
     }
 
     #[test]
     fn adonet_user_synonym() {
-        let r = parse_adonet_connection_string(
-            "Server=myserver;Database=d;User=u;Password=p",
-        )
-        .unwrap();
+        let r =
+            parse_adonet_connection_string("Server=myserver;Database=d;User=u;Password=p").unwrap();
         assert_eq!(r.params.username, "u");
     }
 
     #[test]
     fn adonet_pwd_synonym() {
-        let r = parse_adonet_connection_string(
-            "Server=myserver;Database=d;User Id=u;Pwd=secret",
-        )
-        .unwrap();
+        let r = parse_adonet_connection_string("Server=myserver;Database=d;User Id=u;Pwd=secret")
+            .unwrap();
         assert_eq!(r.password.as_deref(), Some("secret"));
     }
 
     #[test]
     fn adonet_server_with_port_comma() {
-        let r = parse_adonet_connection_string(
-            "Server=db.local,5433;Database=d;User Id=u;Password=p",
-        )
-        .unwrap();
+        let r =
+            parse_adonet_connection_string("Server=db.local,5433;Database=d;User Id=u;Password=p")
+                .unwrap();
         assert_eq!(r.params.host, "db.local");
         assert_eq!(r.params.port, 5433);
     }
@@ -920,7 +875,10 @@ mod tests {
             "Server=s;Database=d;User Id=u;Password=p;ApplicationIntent=ReadOnly",
         )
         .unwrap();
-        assert_eq!(r.params.application_intent, Some(ApplicationIntent::ReadOnly));
+        assert_eq!(
+            r.params.application_intent,
+            Some(ApplicationIntent::ReadOnly)
+        );
     }
 
     #[test]
@@ -944,10 +902,7 @@ mod tests {
 
     #[test]
     fn adonet_case_insensitive_keys() {
-        let r = parse_adonet_connection_string(
-            "SERVER=s;DATABASE=d;USER ID=u;PASSWORD=p",
-        )
-        .unwrap();
+        let r = parse_adonet_connection_string("SERVER=s;DATABASE=d;USER ID=u;PASSWORD=p").unwrap();
         assert_eq!(r.params.host, "s");
         assert_eq!(r.params.database, "d");
         assert_eq!(r.params.username, "u");
@@ -955,37 +910,26 @@ mod tests {
 
     #[test]
     fn adonet_missing_server_fails() {
-        let err = parse_adonet_connection_string(
-            "Database=d;User Id=u;Password=p",
-        )
-        .unwrap_err();
+        let err = parse_adonet_connection_string("Database=d;User Id=u;Password=p").unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
 
     #[test]
     fn adonet_missing_database_fails() {
-        let err = parse_adonet_connection_string(
-            "Server=s;User Id=u;Password=p",
-        )
-        .unwrap_err();
+        let err = parse_adonet_connection_string("Server=s;User Id=u;Password=p").unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
 
     #[test]
     fn adonet_missing_user_fails() {
-        let err = parse_adonet_connection_string(
-            "Server=s;Database=d;Password=p",
-        )
-        .unwrap_err();
+        let err = parse_adonet_connection_string("Server=s;Database=d;Password=p").unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
 
     #[test]
     fn adonet_default_port_is_1433() {
-        let r = parse_adonet_connection_string(
-            "Server=myserver;Database=d;User Id=u;Password=p",
-        )
-        .unwrap();
+        let r = parse_adonet_connection_string("Server=myserver;Database=d;User Id=u;Password=p")
+            .unwrap();
         assert_eq!(r.params.port, 1433);
     }
 
@@ -1016,19 +960,14 @@ mod tests {
 
     #[test]
     fn parse_any_detects_jdbc_url() {
-        let r = parse_any(
-            "jdbc:sqlserver://db.local:1433;databaseName=mydb;user=sa;password=pw",
-        )
-        .unwrap();
+        let r = parse_any("jdbc:sqlserver://db.local:1433;databaseName=mydb;user=sa;password=pw")
+            .unwrap();
         assert_eq!(r.params.host, "db.local");
     }
 
     #[test]
     fn parse_any_detects_adonet() {
-        let r = parse_any(
-            "Server=db.local;Database=mydb;User Id=sa;Password=pw",
-        )
-        .unwrap();
+        let r = parse_any("Server=db.local;Database=mydb;User Id=sa;Password=pw").unwrap();
         assert_eq!(r.params.host, "db.local");
     }
 

@@ -1,4 +1,5 @@
 pub mod activity_log;
+pub mod context;
 pub mod dynamo;
 pub mod mssql;
 pub mod mysql;

@@ -4,6 +4,9 @@ import { useTabs } from "@/platform/shell/tabs";
 import { SidebarTree, type TreeNode } from "@/platform/shell/SidebarTree";
 import { useSidebarScrollRef } from "@/platform/shell/sidebarScroll";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useContextObjects } from "@/modules/context/hooks";
+import { DocBadge } from "@/modules/context/components/DocBadge";
+import { ContextFolderBanner } from "@/modules/context/components/ContextFolderBanner";
 import { openQueryTab } from "../sql";
 import { GroupIcon, LeafIcon, type GroupKind, type LeafKind } from "./objectIcons";
 import { SchemaSearch } from "./SchemaSearch";
@@ -639,9 +642,20 @@ export function SchemaTree({ connectionId }: Props) {
   const [query, setQuery] = useState("");
   const tabs = useTabs();
   const { items: connections } = useConnections();
-  const connectionName =
-    connections.find((c) => c.id === connectionId)?.name ?? connectionId;
+  const connection = connections.find((c) => c.id === connectionId);
+  const connectionName = connection?.name ?? connectionId;
+  const contextPath = connection?.context_path ?? null;
   const sidebarScrollRef = useSidebarScrollRef();
+
+  // Documented objects map: "schema.name" → ObjectListItem
+  const { data: contextObjectsList } = useContextObjects(connectionId, contextPath);
+  const documentedObjectsMap = useMemo(() => {
+    const m = new Map<string, { deleted_in_db: boolean }>();
+    for (const item of contextObjectsList) {
+      m.set(item.identity, { deleted_in_db: item.deleted_in_db });
+    }
+    return m;
+  }, [contextObjectsList]);
 
   // Eager `relations` fetch for visible schemas. The hook de-dupes loading
   // state — this is idempotent and only the cheap query fires.
@@ -776,13 +790,26 @@ export function SchemaTree({ connectionId }: Props) {
     const data = n.data as NodeData | undefined;
     if (!data) return null;
     if (data.kind === "leaf") {
+      // Compute DocBadge for documentable object kinds (table/view/materialized_view)
+      const isDocumentable =
+        data.objectKind === "table" ||
+        data.objectKind === "view" ||
+        data.objectKind === "materialized_view";
+      const docEntry =
+        isDocumentable && contextPath
+          ? documentedObjectsMap.get(`${data.schema}.${data.name}`)
+          : undefined;
+      const docBadge = docEntry ? (
+        <DocBadge deletedInDb={docEntry.deleted_in_db} />
+      ) : null;
+
       // Tables share the same icon across regular/partitioned/foreign — disambiguate via badge.
-      if (data.fdw) return <span className={styles.tableBadge}>FDW</span>;
-      if (data.partitioned) return <span className={styles.tableBadge}>partitioned</span>;
+      if (data.fdw) return <>{<span className={styles.tableBadge}>FDW</span>}{docBadge}</>;
+      if (data.partitioned) return <>{<span className={styles.tableBadge}>partitioned</span>}{docBadge}</>;
       if (data.objectKind === "function" && data.overloadIndex !== undefined) {
         return <span className={styles.overloadBadge}>#{data.overloadIndex}</span>;
       }
-      return null;
+      return docBadge;
     }
     // Group node — spinner / retry / count, in priority order.
     if (data.spinner) {
@@ -850,6 +877,7 @@ export function SchemaTree({ connectionId }: Props) {
 
   return (
     <div className={styles.root}>
+      <ContextFolderBanner connectionId={connectionId} contextPath={contextPath} />
       <SchemaSearch
         value={query}
         onChange={setQuery}

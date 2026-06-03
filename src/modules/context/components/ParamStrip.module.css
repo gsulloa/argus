@@ -1,0 +1,93 @@
+.root {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.param {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 80px;
+  max-width: 180px;
+}
+
+.paramLabel {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.paramLabel[data-required="true"] {
+  color: var(--warning);
+}
+
+.paramInput {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  background: var(--canvas);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 3px 6px;
+  color: var(--text);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.paramInput:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.paramInput::placeholder {
+  color: var(--text-subtle);
+}
+.paramInput[data-missing="true"] {
+  border-color: var(--warning);
+}
+
+.actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.insertBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 100ms;
+}
+.insertBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.insertBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.missingHint {
+  font-size: 10px;
+  color: var(--warning);
+  white-space: nowrap;
+  padding-bottom: 5px;
+}

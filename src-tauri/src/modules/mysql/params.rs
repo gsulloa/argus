@@ -216,7 +216,8 @@ mod tests {
 
     #[test]
     fn read_only_default_is_false() {
-        let json = r#"{"host":"h","port":3306,"database":"d","username":"u","ssl_mode":"preferred"}"#;
+        let json =
+            r#"{"host":"h","port":3306,"database":"d","username":"u","ssl_mode":"preferred"}"#;
         let p: MysqlParams = serde_json::from_str(json).unwrap();
         assert!(!p.read_only);
     }

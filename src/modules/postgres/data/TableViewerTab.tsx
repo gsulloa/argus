@@ -6,6 +6,9 @@ import { useCloseConfirm } from "@/platform/shell/tabs/useCloseConfirm";
 import { useDirtySummary } from "@/platform/shell/tabs/useDirtySummary";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { AppError } from "@/platform/errors/AppError";
+import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useContextObjects, useContextObject } from "@/modules/context/hooks";
+import { DocsSubtab } from "@/modules/context/components/DocsSubtab";
 import { useActiveConnections } from "../useActiveConnections";
 import { openQueryTab } from "../sql/openQueryTab";
 import { dataApi } from "./api";
@@ -136,6 +139,44 @@ export function TableViewer({
     active: null,
   });
   const [activeSubtab, setActiveSubtab] = useState<Subtab>("data");
+
+  // Context folder integration
+  const { items: connections } = useConnections();
+  const contextPath = connections.find((c) => c.id === connectionId)?.context_path ?? null;
+  const identity = `${schema}.${relation}`;
+
+  // Fetch the list of documented objects to know if this relation has a doc
+  const { data: contextObjectsList } = useContextObjects(connectionId, contextPath);
+  const documentedObjectItem = useMemo(
+    () => contextObjectsList.find((item) => item.identity === identity) ?? null,
+    [contextObjectsList, identity],
+  );
+  const docsAvailable = documentedObjectItem !== null && contextPath !== null;
+
+  // Full object doc — consumed by both DocsSubtab and column-notes decoration.
+  // Only fetches when this specific object is documented.
+  const { data: contextDoc } = useContextObject(
+    connectionId,
+    docsAvailable ? identity : null,
+    contextPath,
+  );
+
+  // Column notes derived from context doc
+  const columnNotes: Record<string, string> | undefined = useMemo(() => {
+    if (!contextDoc?.human?.column_notes) return undefined;
+    return contextDoc.human.column_notes;
+  }, [contextDoc]);
+
+  // Snap back to "data" when navigating to a relation that has no doc
+  useEffect(() => {
+    if (activeSubtab === "docs" && !docsAvailable) {
+      setActiveSubtab("data");
+    }
+  }, [activeSubtab, docsAvailable]);
+
+  const visibleTabs: Subtab[] = docsAvailable
+    ? ["data", "structure", "raw", "docs"]
+    : ["data", "structure", "raw"];
   const structureCache = useTableStructureCache(connectionId, schema, relation);
 
   const { pageSize, setPageSize, options: pageSizeOptions } = usePageSize(
@@ -434,13 +475,13 @@ export function TableViewer({
         e.preventDefault();
         onSave();
       }
-      // ⌘1 / ⌘2 / ⌘3 → sub-tab switching. Skip when focus is in an editable
+      // ⌘1 / ⌘2 / ⌘3 / ⌘4 → sub-tab switching. Skip when focus is in an editable
       // surface (input/textarea/CodeMirror) so the user's typing isn't stolen.
       if (
         (e.metaKey || e.ctrlKey) &&
         !e.shiftKey &&
         !e.altKey &&
-        (e.key === "1" || e.key === "2" || e.key === "3")
+        (e.key === "1" || e.key === "2" || e.key === "3" || e.key === "4")
       ) {
         const focused = document.activeElement as HTMLElement | null;
         const tag = focused?.tagName ?? "";
@@ -451,9 +492,15 @@ export function TableViewer({
           (focused?.closest(".cm-editor") ?? null) !== null;
         if (!isEditable) {
           e.preventDefault();
-          const next: Subtab =
-            e.key === "1" ? "data" : e.key === "2" ? "structure" : "raw";
-          setActiveSubtab(next);
+          if (e.key === "1") {
+            setActiveSubtab("data");
+          } else if (e.key === "2") {
+            setActiveSubtab("structure");
+          } else if (e.key === "3") {
+            setActiveSubtab("raw");
+          } else if (e.key === "4" && docsAvailable) {
+            setActiveSubtab("docs");
+          }
         }
       }
       // ⌘Z → undo (only when buffer has entries; don't swallow text-edit undo
@@ -562,6 +609,7 @@ export function TableViewer({
         onChange={setActiveSubtab}
         filterBarVisible={filterBarVisible}
         onFilterToggle={() => setFilterBarVisible(!filterBarVisible)}
+        visibleTabs={visibleTabs}
       />
       {/* Data subtab: kept mounted so scroll/buffer/grid state survive subtab
           switches; visually hidden when inactive. Structure / Raw mount on
@@ -706,6 +754,7 @@ export function TableViewer({
           relation={relation}
           relkind={relationKind}
           cache={structureCache}
+          columnNotes={columnNotes}
         />
       )}
       {activeSubtab === "raw" && (
@@ -713,6 +762,13 @@ export function TableViewer({
           schema={schema}
           relation={relation}
           cache={structureCache}
+        />
+      )}
+      {activeSubtab === "docs" && docsAvailable && (
+        <DocsSubtab
+          connectionId={connectionId}
+          contextPath={contextPath}
+          identity={identity}
         />
       )}
       {showDiscardConfirm && (

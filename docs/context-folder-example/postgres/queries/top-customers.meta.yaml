@@ -1,0 +1,12 @@
+name: "Top customers since date"
+description: "Customer ranking by order count since a given date."
+params:
+  - name: since
+    type: timestamp
+    default: "2026-01-01"
+  - name: limit
+    type: int
+    default: 50
+tags:
+  - analytics
+  - customers

@@ -126,8 +126,8 @@ pub struct DefaultConstraintInfo {
 #[serde(rename_all = "snake_case")]
 pub struct TriggerStructInfo {
     pub name: String,
-    pub event: String,   // e.g. "INSERT,UPDATE"
-    pub timing: String,  // "AFTER" | "INSTEAD OF"
+    pub event: String,  // e.g. "INSERT,UPDATE"
+    pub timing: String, // "AFTER" | "INSTEAD OF"
     pub is_disabled: bool,
     pub definition: Option<String>,
 }
@@ -175,12 +175,7 @@ pub struct DdlResult {
 /// Build the `full_type` string from base type + size/precision/scale.
 /// For nvarchar/nchar: max_length in sys.columns is bytes; divide by 2 for chars.
 /// -1 means MAX.
-pub fn build_full_type(
-    base_type: &str,
-    max_length: i16,
-    precision: u8,
-    scale: u8,
-) -> String {
+pub fn build_full_type(base_type: &str, max_length: i16, precision: u8, scale: u8) -> String {
     let lower = base_type.to_ascii_lowercase();
     match lower.as_str() {
         // Variable-length string types — max_length is bytes, divide by 2 for N-types.
@@ -353,7 +348,12 @@ ORDER BY c.column_id
 
         let full_type = build_full_type(base_type, max_length, precision, scale);
         let category = category_for_type(base_type).to_string();
-        let bind_kind = bind_kind_for_type(base_type, Some(max_length as i32), Some(precision), Some(scale));
+        let bind_kind = bind_kind_for_type(
+            base_type,
+            Some(max_length as i32),
+            Some(precision),
+            Some(scale),
+        );
 
         // identity_seed / increment come from sys.identity_columns as sql_variant
         // which tiberius may decode as a string. Parse as i64.
@@ -749,11 +749,7 @@ ORDER BY t.name
         let is_disabled: bool = row.get::<bool, _>(3).unwrap_or(false);
         let definition: Option<&str> = row.get(4);
 
-        let timing = if is_instead_of {
-            "INSTEAD OF"
-        } else {
-            "AFTER"
-        };
+        let timing = if is_instead_of { "INSTEAD OF" } else { "AFTER" };
         result.push(TriggerStructInfo {
             name: trigger_name.to_string(),
             event: events.to_uppercase(),
@@ -832,128 +828,140 @@ pub async fn mssql_table_structure(
     // For simplicity in v1, we run concurrently using separate acquired clients.
     let pool = registry.get_pool(id)?;
 
-    let inner_result = timeout(STRUCTURE_TOTAL_TIMEOUT, async {
-        // Acquire 9 clients for concurrent sub-queries.
-        async fn get_client(
-            pool: &bb8::Pool<bb8_tiberius::ConnectionManager>,
-        ) -> AppResult<bb8::PooledConnection<'static, bb8_tiberius::ConnectionManager>> {
-            let leaked: &'static bb8::Pool<bb8_tiberius::ConnectionManager> =
-                Box::leak(Box::new(pool.clone()));
-            leaked.get().await.map_err(map_bb8_error)
-        }
-
-        let (
-            c0r, c1r, c2r, c3r,
-            c4r, c5r, c6r, c7r, c8r,
-        ) = tokio::join!(
-            get_client(&pool), get_client(&pool), get_client(&pool), get_client(&pool),
-            get_client(&pool), get_client(&pool), get_client(&pool), get_client(&pool),
-            get_client(&pool),
-        );
-
-        let mut c0 = c0r?;
-        let mut c1 = c1r?;
-        let mut c2 = c2r?;
-        let mut c3 = c3r?;
-        let mut c4 = c4r?;
-        let mut c5 = c5r?;
-        let mut c6 = c6r?;
-        let mut c7 = c7r?;
-        let mut c8 = c8r?;
-
-        let s = schema.as_str();
-        let r = relation.as_str();
-
-        let (
-            cols_res, pk_res, unique_res, fk_res,
-            idx_res, check_res, def_res, trig_res, opts_res,
-        ) = tokio::join!(
-            timeout(PER_QUERY_TIMEOUT, fetch_columns(&mut c0, s, r)),
-            timeout(PER_QUERY_TIMEOUT, fetch_primary_key(&mut c1, s, r)),
-            timeout(PER_QUERY_TIMEOUT, fetch_unique_constraints(&mut c2, s, r)),
-            timeout(PER_QUERY_TIMEOUT, fetch_foreign_keys(&mut c3, s, r)),
-            timeout(PER_QUERY_TIMEOUT, fetch_indexes(&mut c4, s, r)),
-            timeout(PER_QUERY_TIMEOUT, fetch_check_constraints(&mut c5, s, r)),
-            timeout(PER_QUERY_TIMEOUT, fetch_default_constraints(&mut c6, s, r)),
-            timeout(PER_QUERY_TIMEOUT, fetch_triggers(&mut c7, s, r)),
-            timeout(PER_QUERY_TIMEOUT, fetch_table_options(&mut c8, s, r)),
-        );
-
-        let mut failures: Vec<KindFailure> = Vec::new();
-
-        // Columns are required.
-        let columns: Vec<ColumnInfo> = match cols_res {
-            Ok(Ok(v)) => v,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                return Err(AppError::mssql(format!(
-                    "columns query timed out ({}s)",
-                    PER_QUERY_TIMEOUT.as_secs()
-                )));
+    let inner_result =
+        timeout(STRUCTURE_TOTAL_TIMEOUT, async {
+            // Acquire 9 clients for concurrent sub-queries.
+            async fn get_client(
+                pool: &bb8::Pool<bb8_tiberius::ConnectionManager>,
+            ) -> AppResult<bb8::PooledConnection<'static, bb8_tiberius::ConnectionManager>>
+            {
+                let leaked: &'static bb8::Pool<bb8_tiberius::ConnectionManager> =
+                    Box::leak(Box::new(pool.clone()));
+                leaked.get().await.map_err(map_bb8_error)
             }
-        };
 
-        // Primary key — optional.
-        let primary_key = match pk_res {
-            Ok(Ok(v)) => v,
-            Ok(Err(e)) => {
-                failures.push(map_failure("primary_key", e));
-                None
-            }
-            Err(_) => {
-                failures.push(KindFailure {
-                    kind: "primary_key".into(),
-                    code: None,
-                    message: format!(
-                        "primary_key query timed out ({}s)",
+            let (c0r, c1r, c2r, c3r, c4r, c5r, c6r, c7r, c8r) = tokio::join!(
+                get_client(&pool),
+                get_client(&pool),
+                get_client(&pool),
+                get_client(&pool),
+                get_client(&pool),
+                get_client(&pool),
+                get_client(&pool),
+                get_client(&pool),
+                get_client(&pool),
+            );
+
+            let mut c0 = c0r?;
+            let mut c1 = c1r?;
+            let mut c2 = c2r?;
+            let mut c3 = c3r?;
+            let mut c4 = c4r?;
+            let mut c5 = c5r?;
+            let mut c6 = c6r?;
+            let mut c7 = c7r?;
+            let mut c8 = c8r?;
+
+            let s = schema.as_str();
+            let r = relation.as_str();
+
+            let (
+                cols_res,
+                pk_res,
+                unique_res,
+                fk_res,
+                idx_res,
+                check_res,
+                def_res,
+                trig_res,
+                opts_res,
+            ) = tokio::join!(
+                timeout(PER_QUERY_TIMEOUT, fetch_columns(&mut c0, s, r)),
+                timeout(PER_QUERY_TIMEOUT, fetch_primary_key(&mut c1, s, r)),
+                timeout(PER_QUERY_TIMEOUT, fetch_unique_constraints(&mut c2, s, r)),
+                timeout(PER_QUERY_TIMEOUT, fetch_foreign_keys(&mut c3, s, r)),
+                timeout(PER_QUERY_TIMEOUT, fetch_indexes(&mut c4, s, r)),
+                timeout(PER_QUERY_TIMEOUT, fetch_check_constraints(&mut c5, s, r)),
+                timeout(PER_QUERY_TIMEOUT, fetch_default_constraints(&mut c6, s, r)),
+                timeout(PER_QUERY_TIMEOUT, fetch_triggers(&mut c7, s, r)),
+                timeout(PER_QUERY_TIMEOUT, fetch_table_options(&mut c8, s, r)),
+            );
+
+            let mut failures: Vec<KindFailure> = Vec::new();
+
+            // Columns are required.
+            let columns: Vec<ColumnInfo> = match cols_res {
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    return Err(AppError::mssql(format!(
+                        "columns query timed out ({}s)",
                         PER_QUERY_TIMEOUT.as_secs()
-                    ),
-                });
-                None
-            }
-        };
+                    )));
+                }
+            };
 
-        let unique_constraints = map_tib(unique_res, "unique_constraints", &mut failures);
-        let foreign_keys = map_tib(fk_res, "foreign_keys", &mut failures);
-        let indexes = map_tib(idx_res, "indexes", &mut failures);
-        let check_constraints = map_tib(check_res, "check_constraints", &mut failures);
-        let default_constraints = map_tib(def_res, "default_constraints", &mut failures);
-        let triggers = map_tib(trig_res, "triggers", &mut failures);
-        let table_options: Option<TableOptionsInfo> = match opts_res {
-            Ok(Ok(v)) => v,
-            Ok(Err(e)) => {
-                failures.push(map_failure("table_options", e));
-                None
-            }
-            Err(_) => {
-                failures.push(KindFailure {
-                    kind: "table_options".into(),
-                    code: None,
-                    message: format!(
-                        "table_options query timed out ({}s)",
-                        PER_QUERY_TIMEOUT.as_secs()
-                    ),
-                });
-                None
-            }
-        };
+            // Primary key — optional.
+            let primary_key = match pk_res {
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => {
+                    failures.push(map_failure("primary_key", e));
+                    None
+                }
+                Err(_) => {
+                    failures.push(KindFailure {
+                        kind: "primary_key".into(),
+                        code: None,
+                        message: format!(
+                            "primary_key query timed out ({}s)",
+                            PER_QUERY_TIMEOUT.as_secs()
+                        ),
+                    });
+                    None
+                }
+            };
 
-        Ok(TableStructureResult {
-            schema: schema.clone(),
-            relation: relation.clone(),
-            columns: Some(columns),
-            primary_key,
-            unique_constraints,
-            foreign_keys,
-            indexes,
-            check_constraints,
-            default_constraints,
-            triggers,
-            table_options,
-            failures,
+            let unique_constraints = map_tib(unique_res, "unique_constraints", &mut failures);
+            let foreign_keys = map_tib(fk_res, "foreign_keys", &mut failures);
+            let indexes = map_tib(idx_res, "indexes", &mut failures);
+            let check_constraints = map_tib(check_res, "check_constraints", &mut failures);
+            let default_constraints = map_tib(def_res, "default_constraints", &mut failures);
+            let triggers = map_tib(trig_res, "triggers", &mut failures);
+            let table_options: Option<TableOptionsInfo> = match opts_res {
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => {
+                    failures.push(map_failure("table_options", e));
+                    None
+                }
+                Err(_) => {
+                    failures.push(KindFailure {
+                        kind: "table_options".into(),
+                        code: None,
+                        message: format!(
+                            "table_options query timed out ({}s)",
+                            PER_QUERY_TIMEOUT.as_secs()
+                        ),
+                    });
+                    None
+                }
+            };
+
+            Ok(TableStructureResult {
+                schema: schema.clone(),
+                relation: relation.clone(),
+                columns: Some(columns),
+                primary_key,
+                unique_constraints,
+                foreign_keys,
+                indexes,
+                check_constraints,
+                default_constraints,
+                triggers,
+                table_options,
+                failures,
+            })
         })
-    })
-    .await;
+        .await;
 
     let duration_ms = started.elapsed().as_millis() as u64;
 
@@ -1118,7 +1126,11 @@ fn synthesize_create_table(
                 .map(|c| mssql_quote_ident(c))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let clustered = if uq.is_clustered { " CLUSTERED" } else { " NONCLUSTERED" };
+            let clustered = if uq.is_clustered {
+                " CLUSTERED"
+            } else {
+                " NONCLUSTERED"
+            };
             defs.push(format!(
                 "    CONSTRAINT {} UNIQUE{clustered} ({})",
                 mssql_quote_ident(&uq.name),
@@ -1186,13 +1198,7 @@ fn synthesize_create_table(
                 .columns
                 .iter()
                 .filter(|c| !c.is_included)
-                .map(|c| {
-                    format!(
-                        "{} {}",
-                        mssql_quote_ident(&c.name),
-                        c.direction
-                    )
-                })
+                .map(|c| format!("{} {}", mssql_quote_ident(&c.name), c.direction))
                 .collect::<Vec<_>>()
                 .join(", ");
             let inc_cols_str = {
@@ -1446,7 +1452,19 @@ mod tests {
 
     #[test]
     fn category_numeric_types() {
-        for t in &["bit", "tinyint", "smallint", "int", "bigint", "decimal", "numeric", "money", "smallmoney", "float", "real"] {
+        for t in &[
+            "bit",
+            "tinyint",
+            "smallint",
+            "int",
+            "bigint",
+            "decimal",
+            "numeric",
+            "money",
+            "smallmoney",
+            "float",
+            "real",
+        ] {
             assert_eq!(category_for_type(t), "numeric", "failed for {t}");
         }
     }
@@ -1460,7 +1478,14 @@ mod tests {
 
     #[test]
     fn category_temporal_types() {
-        for t in &["date", "time", "datetime", "datetime2", "datetimeoffset", "smalldatetime"] {
+        for t in &[
+            "date",
+            "time",
+            "datetime",
+            "datetime2",
+            "datetimeoffset",
+            "smalldatetime",
+        ] {
             assert_eq!(category_for_type(t), "temporal", "failed for {t}");
         }
     }
@@ -1534,9 +1559,8 @@ mod tests {
             columns: vec!["Id".to_string()],
             identity_column: Some("Id".to_string()),
         });
-        let ddl = synthesize_create_table(
-            "dbo", "Test", &cols, &pk, &None, &None, &None, &None, &None,
-        );
+        let ddl =
+            synthesize_create_table("dbo", "Test", &cols, &pk, &None, &None, &None, &None, &None);
         assert!(ddl.contains("CREATE TABLE [dbo].[Test]"), "got: {ddl}");
         assert!(ddl.contains("[Id]"), "got: {ddl}");
         assert!(ddl.contains("IDENTITY(1,1)"), "got: {ddl}");

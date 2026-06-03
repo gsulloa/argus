@@ -30,6 +30,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { AttributeMap, AttributeValue } from "./types";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
+import { useContextObject } from "@/modules/context/hooks";
+import { DocsPanel } from "@/modules/context/components/DocsPanel";
 import { InspectorJsonEditor } from "./edit/InspectorJsonEditor";
 import styles from "./Inspector.module.css";
 
@@ -363,6 +365,11 @@ export interface InspectorProps {
   onDirtyChange?: (dirty: boolean) => void;
   /** Optimistic locking config — forwarded to InspectorJsonEditor (task 10.5). */
   locking?: LockingConfig;
+  /**
+   * Context folder path — when provided, the Inspector fetches the table's
+   * doc (§9.5 DocsPanel) and column notes (§9.6 attribute-definition notes).
+   */
+  contextPath?: string | null;
 }
 
 export function Inspector({
@@ -378,7 +385,18 @@ export function Inspector({
   onEditingChange,
   onDirtyChange,
   locking,
+  contextPath,
 }: InspectorProps) {
+  // ── Context-folder doc — §9.5/§9.6 ────────────────────────────────────────
+  // Fetch the table's context doc to get column_notes for attribute decoration.
+  // The DocsPanel also calls useContextObject; hooks run independently (no
+  // React Query dedup in this codebase), but the extra call is cheap (cached
+  // by the Tauri backend) and avoids prop-drilling the doc through DocsPanel.
+  const { data: contextDoc } = useContextObject(
+    connectionId ?? "",
+    tableName ?? null,
+    contextPath ?? null,
+  );
   const keyNames = resolveKeyNames(describe, indexName);
 
   // ── Editing state — task 7.1 ───────────────────────────────────────────────
@@ -524,6 +542,9 @@ export function Inspector({
     return a.localeCompare(b);
   });
 
+  // Column notes from context doc — §9.6
+  const columnNotes = contextDoc?.human?.column_notes ?? null;
+
   return (
     <div className={styles.root} data-testid="inspector-root">
       <div className={styles.header}>
@@ -555,17 +576,38 @@ export function Inspector({
         </div>
       </div>
       <div className={styles.tree}>
-        {sorted.map(([attrName, attrValue]) => (
-          <AttributeNode
-            key={attrName}
-            name={attrName}
-            value={attrValue}
-            depth={0}
-            isPk={attrName === keyNames.pkName}
-            isSk={attrName === keyNames.skName}
-          />
-        ))}
+        {sorted.map(([attrName, attrValue]) => {
+          const note = columnNotes?.[attrName] ?? null;
+          return (
+            <div key={attrName}>
+              <AttributeNode
+                name={attrName}
+                value={attrValue}
+                depth={0}
+                isPk={attrName === keyNames.pkName}
+                isSk={attrName === keyNames.skName}
+              />
+              {note && (
+                <div
+                  className={styles.attrNote}
+                  data-testid="inspector-attr-note"
+                  title={note}
+                >
+                  {note}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
+      {/* §9.5 — DocsPanel: collapsible table docs below the attribute list */}
+      {connectionId && tableName && contextPath && (
+        <DocsPanel
+          connectionId={connectionId}
+          contextPath={contextPath}
+          identity={tableName}
+        />
+      )}
     </div>
   );
 }

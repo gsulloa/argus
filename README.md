@@ -10,6 +10,39 @@ A desktop tool for inspecting and editing data across multiple sources. Built on
 - **DynamoDB** — Table browsing and item scanning.
 - **Amazon CloudWatch Logs** — Log group / stream browsing and querying.
 
+## Context folders
+
+Each connection can optionally link to a **context folder** on disk — a
+structured directory of documentation and prefab queries that lives in the
+service's git repo and can be shared across related connections (e.g. prod +
+staging of the same service).
+
+Layout (engine-segregated under a neutral root):
+
+```
+~/code/billing-service/argus-context/
+├── context.yaml         # required: schema_version, name
+├── README.md            # free-form prose for humans + AI
+├── postgres/
+│   ├── public/
+│   │   └── users.md     # frontmatter + body, one per documented relation
+│   └── queries/
+│       ├── top-customers.sql
+│       └── top-customers.meta.yaml
+├── dynamo/tables/...
+├── cloudwatch/groups/...
+└── ai/{overview.md,glossary.md}
+```
+
+Object docs split frontmatter into two blocks: a `system:` block regenerated
+by **Sync schema** (live introspection) and a `human:` block plus Markdown
+body that the tool never touches. Sharing a folder across connections costs
+one filesystem watcher (path-keyed registry); edits in your editor refresh
+the UI within ~250 ms. Postgres, MySQL, MSSQL, and DynamoDB ship with full sync support;
+CloudWatch is on the roadmap (same folder format).
+
+A minimal example folder lives in `docs/context-folder-example/`.
+
 ## Prerequisites
 
 - **Node.js** 20+

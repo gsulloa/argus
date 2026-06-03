@@ -434,12 +434,19 @@ mod tests {
 
             // Disconnect one.
             reg.disconnect(id1).await.unwrap();
-            assert_eq!(reg.list_active().await.len(), 1, "expect 1 active pool after disconnect");
+            assert_eq!(
+                reg.list_active().await.len(),
+                1,
+                "expect 1 active pool after disconnect"
+            );
 
             // Disconnect all.
             let dropped = reg.disconnect_all().await;
             assert_eq!(dropped, 1, "disconnect_all should drop 1 remaining");
-            assert!(reg.list_active().await.is_empty(), "expect empty after disconnect_all");
+            assert!(
+                reg.list_active().await.is_empty(),
+                "expect empty after disconnect_all"
+            );
         }
 
         // -------------------------------------------------------------------
@@ -517,11 +524,12 @@ mod tests {
                 .await
                 .expect("pool");
 
-            let rows: Vec<(String,)> =
-                sqlx::query_as("SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME")
-                    .fetch_all(&pool)
-                    .await
-                    .expect("query");
+            let rows: Vec<(String,)> = sqlx::query_as(
+                "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME",
+            )
+            .fetch_all(&pool)
+            .await
+            .expect("query");
 
             let schema_names: Vec<String> = rows.into_iter().map(|(n,)| n).collect();
             // System databases must be present.
@@ -580,11 +588,15 @@ mod tests {
             let names_types: Vec<_> = rows.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
 
             assert!(
-                names_types.iter().any(|(n, t)| *n == "_argus_live_test_25_4" && *t == "BASE TABLE"),
+                names_types
+                    .iter()
+                    .any(|(n, t)| *n == "_argus_live_test_25_4" && *t == "BASE TABLE"),
                 "expected table in results; got: {names_types:?}"
             );
             assert!(
-                names_types.iter().any(|(n, t)| *n == "_argus_live_view_25_4" && *t == "VIEW"),
+                names_types
+                    .iter()
+                    .any(|(n, t)| *n == "_argus_live_view_25_4" && *t == "VIEW"),
                 "expected view in results; got: {names_types:?}"
             );
 
@@ -636,8 +648,14 @@ mod tests {
             );
 
             // All should succeed (no error, no panic).
-            assert!(routines_res.is_ok(), "routines query failed: {routines_res:?}");
-            assert!(triggers_res.is_ok(), "triggers query failed: {triggers_res:?}");
+            assert!(
+                routines_res.is_ok(),
+                "routines query failed: {routines_res:?}"
+            );
+            assert!(
+                triggers_res.is_ok(),
+                "triggers query failed: {triggers_res:?}"
+            );
             assert!(events_res.is_ok(), "events query failed: {events_res:?}");
         }
 
@@ -667,7 +685,9 @@ mod tests {
             .await
             .expect("create table");
             // Clear existing rows.
-            let _ = sqlx::query("DELETE FROM _argus_query_test_25_6").execute(&pool).await;
+            let _ = sqlx::query("DELETE FROM _argus_query_test_25_6")
+                .execute(&pool)
+                .await;
 
             // Insert known rows.
             sqlx::query(
@@ -727,27 +747,30 @@ mod tests {
             .execute(&pool)
             .await
             .expect("create table");
-            let _ = sqlx::query("DELETE FROM _argus_edit_test_25_7").execute(&pool).await;
+            let _ = sqlx::query("DELETE FROM _argus_edit_test_25_7")
+                .execute(&pool)
+                .await;
 
             // Insert a row.
-            let insert_result = sqlx::query(
-                "INSERT INTO _argus_edit_test_25_7 (name) VALUES ('initial')",
-            )
-            .execute(&pool)
-            .await
-            .expect("insert");
+            let insert_result =
+                sqlx::query("INSERT INTO _argus_edit_test_25_7 (name) VALUES ('initial')")
+                    .execute(&pool)
+                    .await
+                    .expect("insert");
             let last_id = insert_result.last_insert_id();
             assert!(last_id > 0, "LAST_INSERT_ID should be >0");
 
             // Verify LAST_INSERT_ID-based refetch.
-            let row: Option<(i64, String)> = sqlx::query_as(
-                "SELECT id, name FROM _argus_edit_test_25_7 WHERE id = ?",
-            )
-            .bind(last_id as i64)
-            .fetch_optional(&pool)
-            .await
-            .expect("refetch");
-            assert!(row.is_some(), "inserted row should be refetchable via LAST_INSERT_ID");
+            let row: Option<(i64, String)> =
+                sqlx::query_as("SELECT id, name FROM _argus_edit_test_25_7 WHERE id = ?")
+                    .bind(last_id as i64)
+                    .fetch_optional(&pool)
+                    .await
+                    .expect("refetch");
+            assert!(
+                row.is_some(),
+                "inserted row should be refetchable via LAST_INSERT_ID"
+            );
 
             // Update the row.
             sqlx::query("UPDATE _argus_edit_test_25_7 SET name = 'updated' WHERE id = ?")
@@ -755,21 +778,19 @@ mod tests {
                 .execute(&pool)
                 .await
                 .expect("update");
-            let updated: (i64, String) = sqlx::query_as(
-                "SELECT id, name FROM _argus_edit_test_25_7 WHERE id = ?",
-            )
-            .bind(last_id as i64)
-            .fetch_one(&pool)
-            .await
-            .expect("read updated");
+            let updated: (i64, String) =
+                sqlx::query_as("SELECT id, name FROM _argus_edit_test_25_7 WHERE id = ?")
+                    .bind(last_id as i64)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read updated");
             assert_eq!(updated.1, "updated");
 
             // Duplicate key insert — should fail with code 23000.
-            let dup_err = sqlx::query(
-                "INSERT INTO _argus_edit_test_25_7 (name) VALUES ('updated')",
-            )
-            .execute(&pool)
-            .await;
+            let dup_err =
+                sqlx::query("INSERT INTO _argus_edit_test_25_7 (name) VALUES ('updated')")
+                    .execute(&pool)
+                    .await;
             assert!(dup_err.is_err(), "duplicate key insert should fail");
             match dup_err.unwrap_err() {
                 sqlx::Error::Database(db_err) => {
@@ -785,13 +806,12 @@ mod tests {
                 .execute(&pool)
                 .await
                 .expect("delete");
-            let after_delete: Option<(i64,)> = sqlx::query_as(
-                "SELECT id FROM _argus_edit_test_25_7 WHERE id = ?",
-            )
-            .bind(last_id as i64)
-            .fetch_optional(&pool)
-            .await
-            .expect("check deleted");
+            let after_delete: Option<(i64,)> =
+                sqlx::query_as("SELECT id FROM _argus_edit_test_25_7 WHERE id = ?")
+                    .bind(last_id as i64)
+                    .fetch_optional(&pool)
+                    .await
+                    .expect("check deleted");
             assert!(after_delete.is_none(), "row should be gone after delete");
 
             // Cleanup.
@@ -849,14 +869,15 @@ mod tests {
             .execute(&pool)
             .await
             .expect("create");
-            let _ = sqlx::query("DELETE FROM _argus_sql_test_25_8").execute(&pool).await;
+            let _ = sqlx::query("DELETE FROM _argus_sql_test_25_8")
+                .execute(&pool)
+                .await;
 
-            let result = sqlx::query(
-                "INSERT INTO _argus_sql_test_25_8 (v) VALUES ('a'), ('b'), ('c')",
-            )
-            .execute(&pool)
-            .await
-            .expect("insert");
+            let result =
+                sqlx::query("INSERT INTO _argus_sql_test_25_8 (v) VALUES ('a'), ('b'), ('c')")
+                    .execute(&pool)
+                    .await
+                    .expect("insert");
             assert_eq!(result.rows_affected(), 3, "expected 3 rows affected");
 
             let _ = sqlx::query("DROP TABLE IF EXISTS _argus_sql_test_25_8")
@@ -907,12 +928,10 @@ mod tests {
             .expect("columns");
 
             assert!(cols.len() >= 4, "expected ≥4 columns; got {}", cols.len());
+            assert!(cols.iter().any(|(n, _)| n == "id"), "expected 'id' column");
             assert!(
-                cols.iter().any(|(n, _)| n == "id"),
-                "expected 'id' column"
-            );
-            assert!(
-                cols.iter().any(|(n, t)| n == "data" && t.to_lowercase().contains("json")),
+                cols.iter()
+                    .any(|(n, t)| n == "data" && t.to_lowercase().contains("json")),
                 "expected 'data' json column; got {cols:?}"
             );
 
@@ -986,7 +1005,10 @@ mod tests {
             use std::collections::HashMap;
             let mut by_table: HashMap<&str, Vec<_>> = HashMap::new();
             for (t, c, ty) in &cols {
-                by_table.entry(t.as_str()).or_default().push((c.as_str(), ty.as_str()));
+                by_table
+                    .entry(t.as_str())
+                    .or_default()
+                    .push((c.as_str(), ty.as_str()));
             }
 
             assert!(

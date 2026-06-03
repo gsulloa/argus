@@ -34,7 +34,6 @@ use crate::modules::mssql::pool::MssqlPoolRegistry;
 /// enabled triggers".
 const ERROR_OUTPUT_TRIGGER: i32 = 334;
 
-
 /// Truncation threshold (same as data grid).
 const TRUNCATE_BYTES: usize = 1_048_576;
 
@@ -53,7 +52,12 @@ fn trigger_cache() -> &'static TriggerCache {
 
 async fn is_degraded(conn_id: Uuid, schema: &str, relation: &str) -> bool {
     let key = (conn_id, schema.to_string(), relation.to_string());
-    trigger_cache().read().await.get(&key).copied().unwrap_or(false)
+    trigger_cache()
+        .read()
+        .await
+        .get(&key)
+        .copied()
+        .unwrap_or(false)
 }
 
 async fn mark_degraded(conn_id: Uuid, schema: &str, relation: &str) {
@@ -285,9 +289,7 @@ pub fn build_insert_sql(
     next_param: &mut u32,
 ) -> AppResult<(String, Vec<String>)> {
     if col_names.is_empty() {
-        return Err(AppError::Validation(
-            "insert op has empty values".into(),
-        ));
+        return Err(AppError::Validation("insert op has empty values".into()));
     }
     let qualified = mssql_quote_qualified(schema, relation);
     let cols: Vec<String> = col_names.iter().map(|c| mssql_quote_ident(c)).collect();
@@ -320,10 +322,14 @@ pub fn build_update_sql(
     next_param: &mut u32,
 ) -> AppResult<String> {
     if changes.is_empty() {
-        return Err(AppError::Validation("update op: changes must not be empty".into()));
+        return Err(AppError::Validation(
+            "update op: changes must not be empty".into(),
+        ));
     }
     if pk.is_empty() {
-        return Err(AppError::Validation("update op: pk must not be empty".into()));
+        return Err(AppError::Validation(
+            "update op: pk must not be empty".into(),
+        ));
     }
     let qualified = mssql_quote_qualified(schema, relation);
 
@@ -367,7 +373,9 @@ pub fn build_delete_sql(
     next_param: &mut u32,
 ) -> AppResult<String> {
     if pk.is_empty() {
-        return Err(AppError::Validation("delete op: pk must not be empty".into()));
+        return Err(AppError::Validation(
+            "delete op: pk must not be empty".into(),
+        ));
     }
     let qualified = mssql_quote_qualified(schema, relation);
 
@@ -434,10 +442,7 @@ fn bind_btree_values(
 }
 
 /// Decode a tiberius Row to a Vec<JsonValue> with truncation.
-fn decode_row(
-    row: &tiberius::Row,
-    columns: &[ColumnMeta],
-) -> AppResult<Vec<JsonValue>> {
+fn decode_row(row: &tiberius::Row, columns: &[ColumnMeta]) -> AppResult<Vec<JsonValue>> {
     let mut vals: Vec<JsonValue> = Vec::with_capacity(columns.len());
     for (i, col) in columns.iter().enumerate() {
         let val = decode_row_value(row, i, col.bind_kind)?;
@@ -585,9 +590,8 @@ pub async fn mssql_apply_table_edits(
     .await;
 
     let total_ms = started.elapsed().as_millis() as u64;
-    let builder =
-        ActivityLogEntryBuilder::new(ActivityKind::ApplyEdits, activity_origin, total_ms)
-            .connection(id);
+    let builder = ActivityLogEntryBuilder::new(ActivityKind::ApplyEdits, activity_origin, total_ms)
+        .connection(id);
     match &inner {
         Ok(r) => emit_activity(
             &app,
@@ -643,10 +647,7 @@ async fn apply_ops_with_output(
             }
             Err(e) => {
                 // Rollback on any failure (best-effort).
-                let _ = conn
-                    .simple_query("ROLLBACK TRAN")
-                    .await
-                    .map(|_| ());
+                let _ = conn.simple_query("ROLLBACK TRAN").await.map(|_| ());
 
                 // Check if this is a trigger degradation error (code 334).
                 if is_trigger_error(&e) {
@@ -697,7 +698,8 @@ async fn apply_one_op(
         EditOp::Insert { values } => {
             let col_names: Vec<&str> = values.keys().map(|s| s.as_str()).collect();
             let mut next_param = 1u32;
-            let (sql, _) = build_insert_sql(schema, relation, &col_names, use_output, &mut next_param)?;
+            let (sql, _) =
+                build_insert_sql(schema, relation, &col_names, use_output, &mut next_param)?;
 
             let mut query = tiberius::Query::new(sql.as_str());
             // Bind in column order (BTreeMap iteration order is alphabetical).
@@ -725,13 +727,13 @@ async fn apply_one_op(
                 Ok(decoded)
             } else {
                 // Degradation path: INSERT without OUTPUT.
-                query
-                    .execute(conn)
-                    .await
-                    .map_err(map_tiberius_error)?;
+                query.execute(conn).await.map_err(map_tiberius_error)?;
 
                 // Re-fetch via SCOPE_IDENTITY() if there's an identity column.
-                let identity_col = columns.iter().find(|c| c.is_identity).map(|c| c.name.clone());
+                let identity_col = columns
+                    .iter()
+                    .find(|c| c.is_identity)
+                    .map(|c| c.name.clone());
                 if let Some(id_col) = &identity_col {
                     // Check if this identity col is the PK.
                     if pk_columns.contains(id_col) {
@@ -743,16 +745,14 @@ async fn apply_one_op(
                             .await
                             .map_err(map_tiberius_error)?;
                         // SCOPE_IDENTITY() returns NUMERIC; we cast to BIGINT.
-                        let scope_id: Option<i64> = scope_id_rows
-                            .first()
-                            .and_then(|r| r.get::<i64, _>(0));
+                        let scope_id: Option<i64> =
+                            scope_id_rows.first().and_then(|r| r.get::<i64, _>(0));
                         if let Some(sid) = scope_id {
                             // Re-fetch by identity value.
                             let id_col_q = mssql_quote_ident(id_col);
                             let qualified = mssql_quote_qualified(schema, relation);
-                            let refetch_sql = format!(
-                                "SELECT * FROM {qualified} WHERE {id_col_q} = @P1;"
-                            );
+                            let refetch_sql =
+                                format!("SELECT * FROM {qualified} WHERE {id_col_q} = @P1;");
                             let mut rq = tiberius::Query::new(refetch_sql.as_str());
                             rq.bind(sid);
                             let refetch_rows = rq
@@ -773,9 +773,7 @@ async fn apply_one_op(
                 // Fallback: re-fetch by provided PK values.
                 let pk_from_values: BTreeMap<String, JsonValue> = pk_columns
                     .iter()
-                    .filter_map(|pk_col| {
-                        values.get(pk_col).map(|v| (pk_col.clone(), v.clone()))
-                    })
+                    .filter_map(|pk_col| values.get(pk_col).map(|v| (pk_col.clone(), v.clone())))
                     .collect();
                 if pk_from_values.is_empty() {
                     return Ok(vec![]);
@@ -829,10 +827,7 @@ async fn apply_one_op(
                 Ok(decoded)
             } else {
                 // Degradation path: UPDATE without OUTPUT; re-fetch by PK.
-                query
-                    .execute(conn)
-                    .await
-                    .map_err(map_tiberius_error)?;
+                query.execute(conn).await.map_err(map_tiberius_error)?;
 
                 // PK after update: if any PK col was changed, use new value.
                 let pk_for_refetch: Vec<(String, JsonValue)> = pk_columns
@@ -894,10 +889,7 @@ async fn apply_one_op(
                 Ok(decoded)
             } else {
                 // Degradation path: DELETE without OUTPUT — no re-fetch for deletes.
-                query
-                    .execute(conn)
-                    .await
-                    .map_err(map_tiberius_error)?;
+                query.execute(conn).await.map_err(map_tiberius_error)?;
                 Ok(vec![])
             }
         }
@@ -960,7 +952,11 @@ async fn fetch_primary_key_inner(
         .and_then(|r| r.get::<&str, _>(0).map(|s| s.to_string()));
 
     Ok(PrimaryKeyInfo {
-        columns: if pk_cols.is_empty() { None } else { Some(pk_cols) },
+        columns: if pk_cols.is_empty() {
+            None
+        } else {
+            Some(pk_cols)
+        },
         identity_column,
     })
 }
@@ -991,10 +987,7 @@ pub async fn mssql_table_primary_key(
         Ok(r) => {
             let count = r.columns.as_ref().map(|c| c.len()).unwrap_or(0) as u32
                 + r.identity_column.as_ref().map(|_| 1).unwrap_or(0);
-            emit_activity(
-                &app,
-                builder.ok(Some(Metric::Items { value: count })),
-            );
+            emit_activity(&app, builder.ok(Some(Metric::Items { value: count })));
         }
         Err(e) => emit_activity(&app, builder.err(e)),
     }
@@ -1023,12 +1016,30 @@ mod tests {
     fn col_info_map() -> HashMap<String, ColumnInfo> {
         let mut m = HashMap::new();
         m.insert("id".into(), mk_col_info("id", BindKind::Int, false, false));
-        m.insert("name".into(), mk_col_info("name", BindKind::NVarchar, false, false));
-        m.insert("email".into(), mk_col_info("email", BindKind::Varchar, false, false));
-        m.insert("geo".into(), mk_col_info("geo", BindKind::Geometry, false, false));
-        m.insert("rv".into(), mk_col_info("rv", BindKind::RowVersion, false, false));
-        m.insert("hier".into(), mk_col_info("hier", BindKind::HierarchyId, false, false));
-        m.insert("sv".into(), mk_col_info("sv", BindKind::SqlVariant, false, false));
+        m.insert(
+            "name".into(),
+            mk_col_info("name", BindKind::NVarchar, false, false),
+        );
+        m.insert(
+            "email".into(),
+            mk_col_info("email", BindKind::Varchar, false, false),
+        );
+        m.insert(
+            "geo".into(),
+            mk_col_info("geo", BindKind::Geometry, false, false),
+        );
+        m.insert(
+            "rv".into(),
+            mk_col_info("rv", BindKind::RowVersion, false, false),
+        );
+        m.insert(
+            "hier".into(),
+            mk_col_info("hier", BindKind::HierarchyId, false, false),
+        );
+        m.insert(
+            "sv".into(),
+            mk_col_info("sv", BindKind::SqlVariant, false, false),
+        );
         m.insert(
             "id_col".into(),
             mk_col_info("id_col", BindKind::Int, true, false),
@@ -1171,7 +1182,8 @@ mod tests {
     #[test]
     fn pathological_identifier_escaped() {
         let mut next = 1u32;
-        let (sql, _) = build_insert_sql("we]ird", "ta]ble", &["col]name"], true, &mut next).unwrap();
+        let (sql, _) =
+            build_insert_sql("we]ird", "ta]ble", &["col]name"], true, &mut next).unwrap();
         assert!(sql.contains("[we]]ird]"), "sql: {sql}");
         assert!(sql.contains("[ta]]ble]"), "sql: {sql}");
         assert!(sql.contains("[col]]name]"), "sql: {sql}");
@@ -1317,14 +1329,15 @@ mod tests {
         let ops = vec![EditOp::Delete {
             pk: btree(&[("id", json!(1))]),
         }];
-        let err =
-            validate_edit_ops(&ops, &col_info_map(), &pk(&["id", "tenant_id"])).unwrap_err();
+        let err = validate_edit_ops(&ops, &col_info_map(), &pk(&["id", "tenant_id"])).unwrap_err();
         assert!(err.1.to_string().contains("tenant_id"));
     }
 
     #[test]
     fn validate_delete_empty_pk_rejected() {
-        let ops = vec![EditOp::Delete { pk: BTreeMap::new() }];
+        let ops = vec![EditOp::Delete {
+            pk: BTreeMap::new(),
+        }];
         let err = validate_edit_ops(&ops, &col_info_map(), &pk(&["id"])).unwrap_err();
         assert!(err.1.to_string().contains("empty"));
     }

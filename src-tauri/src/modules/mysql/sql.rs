@@ -791,9 +791,11 @@ fn record_mysql_history_ok(
 ) {
     let (row_count, command_tag) = match result {
         RunSqlResult::Rows { rows, .. } => (Some(rows.len() as i64), None),
-        RunSqlResult::Affected { affected_rows, command_tag, .. } => {
-            (Some(*affected_rows as i64), Some(command_tag.clone()))
-        }
+        RunSqlResult::Affected {
+            affected_rows,
+            command_tag,
+            ..
+        } => (Some(*affected_rows as i64), Some(command_tag.clone())),
     };
     let entry = NewEntry {
         connection_id,
@@ -1321,7 +1323,10 @@ mod tests {
         let result = split_statements(
             "CREATE TRIGGER t BEFORE INSERT ON x FOR EACH ROW BEGIN SET NEW.c = 1; END;\nSELECT 1;",
         );
-        assert!(result.is_err(), "should reject CREATE TRIGGER in multi-statement");
+        assert!(
+            result.is_err(),
+            "should reject CREATE TRIGGER in multi-statement"
+        );
         let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("DELIMITER") || msg.contains("not supported"),
@@ -1334,7 +1339,10 @@ mod tests {
         let result = split_statements(
             "CREATE EVENT e ON SCHEDULE EVERY 1 HOUR DO BEGIN SELECT 1; END;\nSELECT 1;",
         );
-        assert!(result.is_err(), "should reject CREATE EVENT in multi-statement");
+        assert!(
+            result.is_err(),
+            "should reject CREATE EVENT in multi-statement"
+        );
     }
 
     #[test]
@@ -1388,7 +1396,10 @@ mod tests {
 
     #[test]
     fn command_tag_create_database() {
-        assert_eq!(extract_command_tag("CREATE DATABASE mydb"), "CREATE DATABASE");
+        assert_eq!(
+            extract_command_tag("CREATE DATABASE mydb"),
+            "CREATE DATABASE"
+        );
     }
 
     #[test]
@@ -1398,7 +1409,10 @@ mod tests {
 
     #[test]
     fn command_tag_delete() {
-        assert_eq!(extract_command_tag("DELETE FROM users WHERE id=1"), "DELETE");
+        assert_eq!(
+            extract_command_tag("DELETE FROM users WHERE id=1"),
+            "DELETE"
+        );
     }
 
     #[test]
@@ -1411,10 +1425,7 @@ mod tests {
 
     #[test]
     fn command_tag_with_hash_comment_skipped() {
-        assert_eq!(
-            extract_command_tag("# comment\nSELECT 1"),
-            "SELECT"
-        );
+        assert_eq!(extract_command_tag("# comment\nSELECT 1"), "SELECT");
     }
 
     #[test]

@@ -36,6 +36,8 @@ interface Props {
   relation: string;
   relationKind: "table" | "view";
   cache: TableStructureCache;
+  /** Optional column notes from a linked context folder (human.column_notes). */
+  columnNotes?: Record<string, string>;
 }
 
 export function StructureSubtab({
@@ -43,6 +45,7 @@ export function StructureSubtab({
   relation,
   relationKind,
   cache,
+  columnNotes,
 }: Props) {
   useEffect(() => {
     if (cache.structureState.status === "idle") {
@@ -99,6 +102,7 @@ export function StructureSubtab({
           response={cache.structureState.response}
           isView={relationKind === "view"}
           onRetry={onRefresh}
+          columnNotes={columnNotes}
         />
       ) : null}
     </div>
@@ -113,9 +117,10 @@ interface BodyProps {
   response: TableStructureResult;
   isView: boolean;
   onRetry(): void;
+  columnNotes?: Record<string, string>;
 }
 
-function Body({ response, isView, onRetry }: BodyProps) {
+function Body({ response, isView, onRetry, columnNotes }: BodyProps) {
   const failuresByKind = new Map<string, KindFailure>();
   for (const f of response.failures) failuresByKind.set(f.kind, f);
 
@@ -129,6 +134,7 @@ function Body({ response, isView, onRetry }: BodyProps) {
             columns={response.columns}
             primaryKey={response.primary_key}
             autoIncrementColumn={response.primary_key?.auto_increment_column ?? null}
+            columnNotes={columnNotes}
           />
         </div>
       </section>
@@ -255,10 +261,12 @@ function ColumnsTable({
   columns,
   primaryKey,
   autoIncrementColumn,
+  columnNotes,
 }: {
   columns: TableStructureColumn[];
   primaryKey: PrimaryKey | null;
   autoIncrementColumn: string | null;
+  columnNotes?: Record<string, string>;
 }) {
   const pkCols = new Set(primaryKey?.columns ?? []);
   return (
@@ -277,6 +285,7 @@ function ColumnsTable({
         {columns.map((col) => {
           const isPk = pkCols.has(col.name);
           const isAi = col.name === autoIncrementColumn;
+          const note = columnNotes?.[col.name];
           return (
             <tr key={col.name}>
               <td className={styles.colNum} style={{ color: "var(--text-subtle)" }}>
@@ -288,6 +297,11 @@ function ColumnsTable({
                   {isPk ? <span className={`${styles.badge} ${styles.badgePk}`}>PK</span> : null}
                   {isAi ? <span className={`${styles.badge} ${styles.badgeAi}`}>AI</span> : null}
                 </span>
+                {note ? (
+                  <span style={{ display: "block", fontSize: 10, color: "var(--text-muted)", fontStyle: "italic", marginTop: 1 }}>
+                    {note}
+                  </span>
+                ) : null}
               </td>
               <td style={{ fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
                 {col.column_type}

@@ -175,6 +175,12 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
   /** Whether the connection is read-only — used to gate all edit affordances. */
   const isReadOnly = connParams?.read_only === true;
 
+  // ── Context folder path — §9.5/§9.6 DocsPanel + column notes ─────────────
+  const contextPath = useMemo(
+    () => allConnections.find((c) => c.id === connectionId)?.context_path ?? null,
+    [allConnections, connectionId],
+  );
+
   // ── QueryBuilder imperative ref (⌘F shortcut) ────────────────────────────
   const queryBuilderRef = useRef<FilterBarHandle>(null);
 
@@ -955,6 +961,7 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
                     enabled: useConditionExpression,
                     pkAttr: describe?.key_schema?.[0]?.attribute_name ?? "",
                   } : undefined}
+                  contextPath={contextPath}
                 />
               </div>
             </>

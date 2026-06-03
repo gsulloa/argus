@@ -10,6 +10,16 @@ A Tauri 2 desktop app for inspecting and editing data across multiple sources.
 - **DynamoDB** — Table browsing and item scanning.
 - **Amazon CloudWatch Logs** — Log group / stream browsing and querying.
 
+## Context folders (cross-engine)
+
+Each connection can optionally link to a **context folder** on disk holding
+structured documentation (object docs with `system:` / `human:` frontmatter)
+and prefab queries. Folders are engine-segregated under a neutral root and
+shareable across connections (one filesystem watcher per canonical path).
+Full layout, format, and behaviour: see `README.md` "Context folders" and
+`docs/context-folder-example/`. Schema-sync ships for Postgres, MySQL, MSSQL,
+and DynamoDB (`introspect_adapters.rs`); CloudWatch is on the roadmap.
+
 ## Design System
 
 Always read `DESIGN.md` before making any visual or UI decisions. All font choices, colors, spacing, border radii, motion, and aesthetic direction are defined there. Do not deviate without explicit user approval.

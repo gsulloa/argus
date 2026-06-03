@@ -1,6 +1,7 @@
 import { POSTGRES_QUERY_KIND, type PostgresQueryPayload } from "./QueryTab";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { savedQueriesStore } from "@/modules/saved-queries/store";
+import type { QueryParam } from "@/modules/context/types";
 
 interface TabsApi {
   tabs: Tab[];
@@ -46,6 +47,16 @@ export interface OpenQueryTabArgs {
    * `savedQueryId` instead of creating a new one.
    */
   savedQueryId?: string;
+  /**
+   * When opening a tab from a context-folder prefab query, pass its name and
+   * declared params so the tab renders a parameter strip and the title uses
+   * the prefab's name (or meta.name if available).
+   */
+  contextQuery?: {
+    /** basename or meta.name; used as the tab title */
+    name: string;
+    params: QueryParam[];
+  };
 }
 
 /**
@@ -75,15 +86,19 @@ export function openQueryTab(tabs: TabsApi, args: OpenQueryTabArgs): string {
     initialConnectionName: args.initialConnectionName,
     initialSql: args.initialSql ?? "",
     savedQueryId: args.savedQueryId,
+    contextQuery: args.contextQuery,
   };
 
-  // Saved queries use the saved name as title; ad-hoc tabs get "Query N".
+  // Saved queries use the saved name as title; context queries use the prefab
+  // name; ad-hoc tabs get "Query N".
   // Reads from the store synchronously — the store should be loaded by the
   // time the user can interact with the panel. Falls back to "Loading…" if the
   // store hasn't loaded yet (the hydration effect in useQueryTabState will
   // update the tab title once data arrives).
   let title: string;
-  if (args.savedQueryId) {
+  if (args.contextQuery) {
+    title = args.contextQuery.name;
+  } else if (args.savedQueryId) {
     const snapshot = savedQueriesStore.getSnapshot();
     const savedQ = snapshot.queries.find((q) => q.id === args.savedQueryId);
     title = savedQ?.name ?? "Loading…";

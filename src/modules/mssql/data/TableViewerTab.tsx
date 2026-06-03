@@ -14,6 +14,9 @@ import { Loader2, X } from "lucide-react";
 import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
 import { useDirtySummary } from "@/platform/shell/tabs/useDirtySummary";
 import type { Tab } from "@/platform/shell/tabs/types";
+import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useContextObjects, useContextObject } from "@/modules/context/hooks";
+import { DocsSubtab } from "@/modules/context/components/DocsSubtab";
 import { useActiveMssqlConnections } from "../useActiveConnections";
 import { AppError } from "@/platform/errors/AppError";
 import { dataApi } from "./api";
@@ -24,6 +27,10 @@ import { useEditBuffer, buildRowKey } from "./useEditBuffer";
 import { useTableData } from "./useTableData";
 import { type CellValue, type RelationKind } from "./types";
 import type { EditOp, EditValue, PrimaryKeyResult } from "../types";
+import { useTableStructureCache } from "../structure/useTableStructureCache";
+import { StructureSubtab } from "../structure/StructureSubtab";
+import { RawSubtab } from "../structure/RawSubtab";
+import { SubtabHeader, type Subtab } from "../structure/SubtabHeader";
 
 // ---------------------------------------------------------------------------
 // Tab kind constant
@@ -132,6 +139,49 @@ function MssqlTableViewer({
   const { getActive } = useActiveMssqlConnections();
   const isReadOnly = getActive(connectionId)?.read_only ?? false;
   const isView = relationKind === "view";
+
+  // Context folder integration
+  const { items: connections } = useConnections();
+  const contextPath = connections.find((c) => c.id === connectionId)?.context_path ?? null;
+  const identity = `${schema}.${relation}`;
+
+  // Fetch the list of documented objects to know if this relation has a doc
+  const { data: contextObjectsList } = useContextObjects(connectionId, contextPath);
+  const documentedObjectItem = useMemo(
+    () => contextObjectsList.find((item) => item.identity === identity) ?? null,
+    [contextObjectsList, identity],
+  );
+  const docsAvailable = documentedObjectItem !== null && contextPath !== null;
+
+  // Full object doc — consumed by DocsSubtab and column-notes decoration.
+  const { data: contextDoc } = useContextObject(
+    connectionId,
+    docsAvailable ? identity : null,
+    contextPath,
+  );
+
+  // Column notes derived from context doc
+  const columnNotes: Record<string, string> | undefined = useMemo(() => {
+    if (!contextDoc?.human?.column_notes) return undefined;
+    return contextDoc.human.column_notes;
+  }, [contextDoc]);
+
+  // Active subtab state
+  const [activeSubtab, setActiveSubtab] = useState<Subtab>("data");
+
+  // Snap back to "data" when navigating to a relation with no doc
+  useEffect(() => {
+    if (activeSubtab === "docs" && !docsAvailable) {
+      setActiveSubtab("data");
+    }
+  }, [activeSubtab, docsAvailable]);
+
+  const visibleTabs: Subtab[] = docsAvailable
+    ? ["data", "structure", "raw", "docs"]
+    : ["data", "structure", "raw"];
+
+  // Structure cache for structure/raw subtabs
+  const structureCache = useTableStructureCache(connectionId, schema, relation);
 
   // Table data
   const tableData = useTableData({
@@ -351,6 +401,47 @@ function MssqlTableViewer({
       role="region"
       aria-label={`${relation} data`}
     >
+      {/* SubtabHeader */}
+      <SubtabHeader
+        active={activeSubtab}
+        onChange={setActiveSubtab}
+        visibleTabs={visibleTabs}
+      />
+
+      {/* Structure subtab */}
+      {activeSubtab === "structure" && (
+        <StructureSubtab
+          connectionId={connectionId}
+          schema={schema}
+          relation={relation}
+          relationKind={relationKind}
+          cache={structureCache}
+          columnNotes={columnNotes}
+        />
+      )}
+
+      {/* Raw subtab */}
+      {activeSubtab === "raw" && (
+        <RawSubtab
+          schema={schema}
+          relation={relation}
+          objectKind={relationKind}
+          cache={structureCache}
+        />
+      )}
+
+      {/* Docs subtab */}
+      {activeSubtab === "docs" && docsAvailable && (
+        <DocsSubtab
+          connectionId={connectionId}
+          contextPath={contextPath}
+          identity={identity}
+        />
+      )}
+
+      {/* Data subtab — kept mounted so scroll/buffer/grid state survive subtab switches */}
+      <div style={{ display: activeSubtab === "data" ? "contents" : "none" }}>
+
       {/* Toolbar */}
       <div
         style={{
@@ -714,6 +805,7 @@ function MssqlTableViewer({
           onCancel={() => setDiscardOpen(false)}
         />
       )}
+      </div>{/* end data subtab wrapper */}
     </div>
   );
 }

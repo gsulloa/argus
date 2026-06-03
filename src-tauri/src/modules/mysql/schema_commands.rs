@@ -116,6 +116,46 @@ where
 
 const SYSTEM_SCHEMAS: &[&str] = &["mysql", "information_schema", "performance_schema", "sys"];
 
+/// Pool-only inner function for listing schemas. Usable by the context adapter.
+pub async fn list_schemas_for_pool(pool: &sqlx::MySqlPool) -> AppResult<Vec<SchemaInfo>> {
+    let rows = timeout(
+        RELATIONS_TIMEOUT,
+        sqlx::query(
+            "SELECT s.SCHEMA_NAME AS name, \
+                    s.DEFAULT_CHARACTER_SET_NAME AS charset, \
+                    s.DEFAULT_COLLATION_NAME AS collation \
+             FROM information_schema.SCHEMATA s \
+             ORDER BY LOWER(s.SCHEMA_NAME)",
+        )
+        .fetch_all(pool),
+    )
+    .await
+    .map_err(|_| {
+        AppError::mysql_with_code(
+            "70100",
+            format!("list schemas timed out ({}s)", RELATIONS_TIMEOUT.as_secs()),
+        )
+    })?
+    .map_err(map_sqlx_error)?;
+
+    let schemas = rows
+        .into_iter()
+        .map(|row| {
+            let name: String = row.try_get("name").unwrap_or_default();
+            let charset: String = row.try_get("charset").unwrap_or_default();
+            let collation: String = row.try_get("collation").unwrap_or_default();
+            let is_system = SYSTEM_SCHEMAS.contains(&name.as_str());
+            SchemaInfo {
+                name,
+                charset,
+                collation,
+                is_system,
+            }
+        })
+        .collect();
+    Ok(schemas)
+}
+
 #[tauri::command]
 pub async fn mysql_list_schemas(
     app: AppHandle,
@@ -128,45 +168,7 @@ pub async fn mysql_list_schemas(
 
     let pool = registry.acquire(parsed)?;
 
-    let result: AppResult<Vec<SchemaInfo>> = async {
-        let rows = timeout(
-            RELATIONS_TIMEOUT,
-            sqlx::query(
-                "SELECT s.SCHEMA_NAME AS name, \
-                        s.DEFAULT_CHARACTER_SET_NAME AS charset, \
-                        s.DEFAULT_COLLATION_NAME AS collation \
-                 FROM information_schema.SCHEMATA s \
-                 ORDER BY LOWER(s.SCHEMA_NAME)",
-            )
-            .fetch_all(&pool),
-        )
-        .await
-        .map_err(|_| {
-            AppError::mysql_with_code(
-                "70100",
-                format!("list schemas timed out ({}s)", RELATIONS_TIMEOUT.as_secs()),
-            )
-        })?
-        .map_err(map_sqlx_error)?;
-
-        let schemas = rows
-            .into_iter()
-            .map(|row| {
-                let name: String = row.try_get("name").unwrap_or_default();
-                let charset: String = row.try_get("charset").unwrap_or_default();
-                let collation: String = row.try_get("collation").unwrap_or_default();
-                let is_system = SYSTEM_SCHEMAS.contains(&name.as_str());
-                SchemaInfo {
-                    name,
-                    charset,
-                    collation,
-                    is_system,
-                }
-            })
-            .collect();
-        Ok(schemas)
-    }
-    .await;
+    let result = list_schemas_for_pool(&pool).await;
 
     let ms = started.elapsed().as_millis();
     let duration_ms = ms as u64;
@@ -234,6 +236,78 @@ pub(crate) fn bucket_relations(
     (tables, views)
 }
 
+/// Pool-only inner function for listing relations in a schema. Usable by the context adapter.
+pub async fn list_relations_for_pool(
+    pool: &sqlx::MySqlPool,
+    schema: &str,
+) -> AppResult<RelationsResult> {
+    let schema_clone = schema.to_string();
+    let inner_future = async {
+        let (table_result, partition_result) = tokio::join!(
+            sqlx::query(
+                "SELECT t.TABLE_NAME AS name, \
+                        t.TABLE_TYPE AS table_type, \
+                        t.TABLE_COMMENT AS comment, \
+                        IFNULL(t.TABLE_ROWS, 0) AS estimated_rows \
+                 FROM information_schema.TABLES t \
+                 WHERE t.TABLE_SCHEMA = ? \
+                 ORDER BY LOWER(t.TABLE_NAME)",
+            )
+            .bind(&schema_clone)
+            .fetch_all(pool),
+            sqlx::query(
+                "SELECT TABLE_NAME, COUNT(*) AS n \
+                 FROM information_schema.PARTITIONS \
+                 WHERE TABLE_SCHEMA = ? AND PARTITION_NAME IS NOT NULL \
+                 GROUP BY TABLE_NAME",
+            )
+            .bind(&schema_clone)
+            .fetch_all(pool),
+        );
+
+        let raw_tables = table_result.map_err(map_sqlx_error)?;
+        let raw_partitions = partition_result.map_err(map_sqlx_error)?;
+
+        let partition_set: HashSet<String> = raw_partitions
+            .into_iter()
+            .map(|row| {
+                let name: String = row.try_get("TABLE_NAME").unwrap_or_default();
+                name
+            })
+            .collect();
+
+        let table_rows: Vec<(String, String, Option<String>, i64)> = raw_tables
+            .into_iter()
+            .map(|row| {
+                let name: String = row.try_get("name").unwrap_or_default();
+                let table_type: String = row.try_get("table_type").unwrap_or_default();
+                let comment: Option<String> = row.try_get("comment").ok().flatten();
+                let estimated_rows: i64 = row.try_get("estimated_rows").unwrap_or(0);
+                (name, table_type, comment, estimated_rows)
+            })
+            .collect();
+
+        let (tables, views) = bucket_relations(table_rows, partition_set);
+        Ok::<RelationsResult, AppError>(RelationsResult {
+            schema: schema_clone,
+            tables,
+            views,
+        })
+    };
+
+    timeout(RELATIONS_TIMEOUT, inner_future)
+        .await
+        .map_err(|_| {
+            AppError::mysql_with_code(
+                "70100",
+                format!(
+                    "list relations timed out ({}s)",
+                    RELATIONS_TIMEOUT.as_secs()
+                ),
+            )
+        })?
+}
+
 #[tauri::command]
 pub async fn mysql_list_relations(
     app: AppHandle,
@@ -255,74 +329,7 @@ pub async fn mysql_list_relations(
     };
     let _ = params_for_cancel;
 
-    let schema_clone = schema.clone();
-    let result: AppResult<RelationsResult> = async {
-        let inner_future = async {
-            let (table_result, partition_result) = tokio::join!(
-                sqlx::query(
-                    "SELECT t.TABLE_NAME AS name, \
-                            t.TABLE_TYPE AS table_type, \
-                            t.TABLE_COMMENT AS comment, \
-                            IFNULL(t.TABLE_ROWS, 0) AS estimated_rows \
-                     FROM information_schema.TABLES t \
-                     WHERE t.TABLE_SCHEMA = ? \
-                     ORDER BY LOWER(t.TABLE_NAME)",
-                )
-                .bind(&schema_clone)
-                .fetch_all(&pool),
-                sqlx::query(
-                    "SELECT TABLE_NAME, COUNT(*) AS n \
-                     FROM information_schema.PARTITIONS \
-                     WHERE TABLE_SCHEMA = ? AND PARTITION_NAME IS NOT NULL \
-                     GROUP BY TABLE_NAME",
-                )
-                .bind(&schema_clone)
-                .fetch_all(&pool),
-            );
-
-            let raw_tables = table_result.map_err(map_sqlx_error)?;
-            let raw_partitions = partition_result.map_err(map_sqlx_error)?;
-
-            let partition_set: HashSet<String> = raw_partitions
-                .into_iter()
-                .map(|row| {
-                    let name: String = row.try_get("TABLE_NAME").unwrap_or_default();
-                    name
-                })
-                .collect();
-
-            let table_rows: Vec<(String, String, Option<String>, i64)> = raw_tables
-                .into_iter()
-                .map(|row| {
-                    let name: String = row.try_get("name").unwrap_or_default();
-                    let table_type: String = row.try_get("table_type").unwrap_or_default();
-                    let comment: Option<String> = row.try_get("comment").ok().flatten();
-                    let estimated_rows: i64 = row.try_get("estimated_rows").unwrap_or(0);
-                    (name, table_type, comment, estimated_rows)
-                })
-                .collect();
-
-            let (tables, views) = bucket_relations(table_rows, partition_set);
-            Ok::<RelationsResult, AppError>(RelationsResult {
-                schema: schema_clone,
-                tables,
-                views,
-            })
-        };
-
-        timeout(RELATIONS_TIMEOUT, inner_future)
-            .await
-            .map_err(|_| {
-                AppError::mysql_with_code(
-                    "70100",
-                    format!(
-                        "list relations timed out ({}s)",
-                        RELATIONS_TIMEOUT.as_secs()
-                    ),
-                )
-            })?
-    }
-    .await;
+    let result = list_relations_for_pool(&pool, &schema).await;
 
     let ms = started.elapsed().as_millis();
     let duration_ms = ms as u64;
@@ -353,6 +360,47 @@ pub async fn mysql_list_relations(
         }
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// §1.3 — list_structure_for_pool (columns + PK per relation)
+// ---------------------------------------------------------------------------
+
+/// Pool-only inner function: returns `(columns, pk_columns)` for a single relation.
+/// Used by the context adapter for schema sync.
+pub async fn list_structure_for_pool(
+    pool: &sqlx::MySqlPool,
+    schema: &str,
+    relation: &str,
+) -> AppResult<(Vec<(String, String)>, Vec<String>)> {
+    // Columns: (name, data_type)
+    let col_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT COLUMN_NAME, DATA_TYPE \
+         FROM information_schema.COLUMNS \
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
+         ORDER BY ORDINAL_POSITION",
+    )
+    .bind(schema)
+    .bind(relation)
+    .fetch_all(pool)
+    .await
+    .map_err(map_sqlx_error)?;
+
+    // PK columns in order
+    let pk_rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT COLUMN_NAME \
+         FROM information_schema.STATISTICS \
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_NAME = 'PRIMARY' \
+         ORDER BY SEQ_IN_INDEX",
+    )
+    .bind(schema)
+    .bind(relation)
+    .fetch_all(pool)
+    .await
+    .map_err(map_sqlx_error)?;
+
+    let pk_cols: Vec<String> = pk_rows.into_iter().map(|(c,)| c).collect();
+    Ok((col_rows, pk_cols))
 }
 
 // ---------------------------------------------------------------------------

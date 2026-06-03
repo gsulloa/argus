@@ -39,6 +39,8 @@ interface Props {
   relation: string;
   relationKind: "table" | "view";
   cache: TableStructureCache;
+  /** Optional column-level notes from the context folder's `human.column_notes`. */
+  columnNotes?: Record<string, string>;
 }
 
 export function StructureSubtab({
@@ -46,6 +48,7 @@ export function StructureSubtab({
   relation,
   relationKind,
   cache,
+  columnNotes,
 }: Props) {
   useEffect(() => {
     if (cache.structureState.status === "idle") {
@@ -102,6 +105,7 @@ export function StructureSubtab({
           response={cache.structureState.response}
           isView={relationKind === "view"}
           onRetry={onRefresh}
+          columnNotes={columnNotes}
         />
       ) : null}
     </div>
@@ -116,9 +120,10 @@ interface BodyProps {
   response: TableStructureResult;
   isView: boolean;
   onRetry(): void;
+  columnNotes?: Record<string, string>;
 }
 
-function Body({ response, isView, onRetry }: BodyProps) {
+function Body({ response, isView, onRetry, columnNotes }: BodyProps) {
   const failuresByKind = new Map<string, KindFailure>();
   for (const f of response.failures) failuresByKind.set(f.kind, f);
 
@@ -131,6 +136,7 @@ function Body({ response, isView, onRetry }: BodyProps) {
           <ColumnsTable
             columns={response.columns}
             primaryKey={response.primary_key}
+            columnNotes={columnNotes}
           />
         </div>
       </section>
@@ -280,9 +286,11 @@ function SectionWithFailure<T>({
 function ColumnsTable({
   columns,
   primaryKey,
+  columnNotes,
 }: {
   columns: TableStructureColumn[];
   primaryKey: PrimaryKey | null;
+  columnNotes?: Record<string, string>;
 }) {
   const pkCols = new Set(primaryKey?.columns ?? []);
   const identityCol = primaryKey?.identity_column;
@@ -329,6 +337,11 @@ function ColumnsTable({
                     <span className={`${styles.badge} ${styles.badgeIdentity}`}>IDENTITY</span>
                   ) : null}
                 </span>
+                {columnNotes?.[col.name] ? (
+                  <span style={{ fontSize: 10, color: "var(--text-muted)", display: "block", marginTop: 2 }}>
+                    {columnNotes[col.name]}
+                  </span>
+                ) : null}
               </td>
               <td style={{ fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
                 {col.data_type}

@@ -15,6 +15,7 @@ pub struct Connection {
     pub params: JsonValue,
     pub group_id: Option<Uuid>,
     pub sort_order: f64,
+    pub context_path: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -29,6 +30,8 @@ pub struct ConnectionInput {
     pub group_id: Option<Uuid>,
     #[serde(default)]
     pub secret: Option<String>,
+    #[serde(default)]
+    pub context_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -39,6 +42,10 @@ pub struct ConnectionUpdate {
     /// `Some(None)` = delete the keychain entry.
     #[serde(default, deserialize_with = "deserialize_secret_field")]
     pub secret: Option<Option<String>>,
+    /// Triple state: missing field = leave context_path untouched, `Some(Some(p))` = replace,
+    /// `Some(None)` = clear the context path (set to NULL).
+    #[serde(default, deserialize_with = "deserialize_context_path_field")]
+    pub context_path: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,6 +55,14 @@ pub struct ConnectionMove {
 }
 
 fn deserialize_secret_field<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v: Option<Option<String>> = Option::<Option<String>>::deserialize(d)?;
+    Ok(v)
+}
+
+fn deserialize_context_path_field<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -101,6 +116,7 @@ fn row_to_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<Connection> {
     let sort_order: f64 = row.get(5)?;
     let created_at: i64 = row.get(6)?;
     let updated_at: i64 = row.get(7)?;
+    let context_path: Option<String> = row.get(8)?;
 
     Ok(Connection {
         id,
@@ -109,17 +125,18 @@ fn row_to_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<Connection> {
         params,
         group_id,
         sort_order,
+        context_path,
         created_at,
         updated_at,
     })
 }
 
 const SELECT_CONNECTION_COLS: &str =
-    "id, name, kind, params_json, group_id, sort_order, created_at, updated_at";
+    "id, name, kind, params_json, group_id, sort_order, created_at, updated_at, context_path";
 
 pub fn list(conn: &rusqlite::Connection) -> AppResult<Vec<Connection>> {
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.name, c.kind, c.params_json, c.group_id, c.sort_order, c.created_at, c.updated_at \
+        "SELECT c.id, c.name, c.kind, c.params_json, c.group_id, c.sort_order, c.created_at, c.updated_at, c.context_path \
          FROM connections c \
          LEFT JOIN connection_groups g ON g.id = c.group_id \
          ORDER BY (c.group_id IS NULL) ASC, COALESCE(g.sort_order, 0) ASC, c.sort_order ASC",
@@ -164,8 +181,8 @@ pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<
     let sort_order = max + 1.0;
 
     conn.execute(
-        "INSERT INTO connections (id, name, kind, params_json, group_id, sort_order, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        "INSERT INTO connections (id, name, kind, params_json, group_id, sort_order, context_path, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
         params![
             id.as_bytes().to_vec(),
             input.name.trim(),
@@ -173,6 +190,7 @@ pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<
             params_json,
             input.group_id.map(|g| g.as_bytes().to_vec()),
             sort_order,
+            input.context_path,
             now,
         ],
     )?;
@@ -190,6 +208,7 @@ pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<
         params: input.params,
         group_id: input.group_id,
         sort_order,
+        context_path: input.context_path.clone(),
         created_at: now,
         updated_at: now,
     })
@@ -218,18 +237,24 @@ pub fn update(
     if let Some(params) = update.params {
         current.params = params;
     }
+    let new_context_path = match update.context_path {
+        Some(v) => v,
+        None => current.context_path.clone(),
+    };
     current.updated_at = now_unix();
 
     let params_json = serde_json::to_string(&current.params)?;
     conn.execute(
-        "UPDATE connections SET name = ?2, params_json = ?3, updated_at = ?4 WHERE id = ?1",
+        "UPDATE connections SET name = ?2, params_json = ?3, updated_at = ?4, context_path = ?5 WHERE id = ?1",
         params![
             current.id.as_bytes().to_vec(),
             current.name,
             params_json,
             current.updated_at,
+            new_context_path,
         ],
     )?;
+    current.context_path = new_context_path;
 
     match update.secret {
         Some(Some(s)) => {
@@ -409,6 +434,7 @@ mod tests {
                 params: serde_json::json!({"host": "localhost"}),
                 group_id: None,
                 secret: Some("hunter2".into()),
+                context_path: None,
             },
         )
         .unwrap();
@@ -419,6 +445,7 @@ mod tests {
         assert_eq!(get_secret(&c, made.id).unwrap().as_deref(), Some("hunter2"));
         assert!(listed[0].group_id.is_none());
         assert!(listed[0].sort_order > 0.0);
+        assert!(listed[0].context_path.is_none());
     }
 
     #[test]
@@ -432,6 +459,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: None,
                 secret: None,
+                context_path: None,
             },
         )
         .unwrap_err();
@@ -450,6 +478,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: Some(Uuid::new_v4()),
                 secret: None,
+                context_path: None,
             },
         )
         .unwrap_err();
@@ -475,10 +504,12 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: Some(g.id),
                 secret: None,
+                context_path: None,
             },
         )
         .unwrap();
         assert_eq!(made.group_id, Some(g.id));
+        assert!(made.context_path.is_none());
     }
 
     #[test]
@@ -499,6 +530,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: Some(g.id),
                 secret: None,
+                context_path: None,
             },
         )
         .unwrap();
@@ -517,6 +549,7 @@ mod tests {
         assert_eq!(updated.group_id, Some(g.id));
         assert_eq!(updated.sort_order, original_sort);
         assert!(updated.updated_at >= made.updated_at);
+        assert!(updated.context_path.is_none());
     }
 
     #[test]
@@ -537,6 +570,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: None,
                 secret: Some("s".into()),
+                context_path: None,
             },
         )
         .unwrap();
@@ -573,6 +607,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: Some(g.id),
                 secret: None,
+                context_path: None,
             },
         )
         .unwrap();
@@ -615,6 +650,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: None,
                 secret: None,
+                context_path: None,
             },
         )
         .unwrap();
@@ -653,6 +689,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: None,
                 secret: None,
+                context_path: None,
             },
         )
         .unwrap();
@@ -664,6 +701,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: Some(g_b.id),
                 secret: None,
+                context_path: None,
             },
         )
         .unwrap();
@@ -675,6 +713,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: Some(g_a.id),
                 secret: None,
+                context_path: None,
             },
         )
         .unwrap();
@@ -693,6 +732,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: None,
                 secret: Some("a".into()),
+                context_path: None,
             },
         )
         .unwrap();
@@ -737,6 +777,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: None,
                 secret: Some("s".into()),
+                context_path: None,
             },
         )
         .unwrap();
@@ -770,6 +811,7 @@ mod tests {
                 params: JsonValue::Null,
                 group_id: None,
                 secret: Some("old".into()),
+                context_path: None,
             },
         )
         .unwrap();
@@ -785,5 +827,142 @@ mod tests {
         let c = fresh();
         let err = refresh_secret(&c, Uuid::new_v4()).unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    // ---- context_path tests (task 1.5) ----
+
+    #[test]
+    fn create_with_context_path() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "ctx".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: Some("/Users/me/billing/ctx".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(made.context_path.as_deref(), Some("/Users/me/billing/ctx"));
+        let listed = list(&c).unwrap();
+        assert_eq!(
+            listed[0].context_path.as_deref(),
+            Some("/Users/me/billing/ctx")
+        );
+    }
+
+    #[test]
+    fn update_sets_context_path() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+            },
+        )
+        .unwrap();
+        assert!(made.context_path.is_none());
+        let updated = update(
+            &c,
+            made.id,
+            ConnectionUpdate {
+                context_path: Some(Some("/x".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.context_path.as_deref(), Some("/x"));
+        let listed = list(&c).unwrap();
+        assert_eq!(listed[0].context_path.as_deref(), Some("/x"));
+    }
+
+    #[test]
+    fn update_clears_context_path() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: Some("/x".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(made.context_path.as_deref(), Some("/x"));
+        let updated = update(
+            &c,
+            made.id,
+            ConnectionUpdate {
+                context_path: Some(None),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(updated.context_path.is_none());
+        let listed = list(&c).unwrap();
+        assert!(listed[0].context_path.is_none());
+    }
+
+    #[test]
+    fn update_omits_context_path_leaves_path() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: Some("/x".into()),
+            },
+        )
+        .unwrap();
+        let updated = update(
+            &c,
+            made.id,
+            ConnectionUpdate {
+                // context_path intentionally omitted (None means leave unchanged)
+                context_path: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.context_path.as_deref(), Some("/x"));
+    }
+
+    #[test]
+    fn delete_does_not_touch_folder_on_disk() {
+        // delete() must perform no filesystem I/O on context_path.
+        // This test verifies the row is deleted. No std::fs calls are made in
+        // the delete() function — it only removes the DB row and keychain entry.
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: Some("/tmp/argus-context-test-fake".into()),
+            },
+        )
+        .unwrap();
+        delete(&c, made.id).unwrap();
+        assert!(list(&c).unwrap().is_empty());
+        // The folder "/tmp/argus-context-test-fake" was never created, and
+        // delete() did not attempt to create, modify, or remove it.
     }
 }

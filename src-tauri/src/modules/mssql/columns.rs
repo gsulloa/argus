@@ -91,23 +91,35 @@ fn normalize_char_length(base_type: &str, max_length: i16) -> Option<i32> {
 /// Group raw column rows into a `BTreeMap<table_name, Vec<BulkColumnInfo>>`.
 pub fn group_bulk_columns(
     rows: Vec<(
-        String,  // table_name
-        String,  // column_name
-        String,  // base_type
-        i16,     // max_length (bytes)
-        u8,      // precision
-        u8,      // scale
-        bool,    // is_nullable
-        bool,    // is_identity
-        bool,    // is_computed
+        String,         // table_name
+        String,         // column_name
+        String,         // base_type
+        i16,            // max_length (bytes)
+        u8,             // precision
+        u8,             // scale
+        bool,           // is_nullable
+        bool,           // is_identity
+        bool,           // is_computed
         Option<String>, // default_expression
         Option<String>, // comment
-        i32,     // column_id
+        i32,            // column_id
     )>,
 ) -> BTreeMap<String, Vec<BulkColumnInfo>> {
     let mut map: BTreeMap<String, Vec<BulkColumnInfo>> = BTreeMap::new();
-    for (table_name, col_name, base_type, max_length, precision, scale,
-         is_nullable, is_identity, is_computed, default_expr, comment, ordinal) in rows
+    for (
+        table_name,
+        col_name,
+        base_type,
+        max_length,
+        precision,
+        scale,
+        is_nullable,
+        is_identity,
+        is_computed,
+        default_expr,
+        comment,
+        ordinal,
+    ) in rows
     {
         let full_type = build_full_type(&base_type, max_length, precision, scale);
         let character_max_length = normalize_char_length(&base_type, max_length);
@@ -217,8 +229,18 @@ ORDER BY table_name, column_id
             .map_err(map_tiberius_error)?;
 
         let mut raw_rows: Vec<(
-            String, String, String, i16, u8, u8,
-            bool, bool, bool, Option<String>, Option<String>, i32,
+            String,
+            String,
+            String,
+            i16,
+            u8,
+            u8,
+            bool,
+            bool,
+            bool,
+            Option<String>,
+            Option<String>,
+            i32,
         )> = Vec::with_capacity(rows.len());
 
         for row in &rows {
@@ -343,8 +365,23 @@ mod tests {
     #[test]
     fn group_single_table_two_columns() {
         let rows = vec![
-            make_row("users", "id", "int", 4, 10, 0, false, true, false, None, None, 1),
-            make_row("users", "email", "nvarchar", 510, 0, 0, true, false, false, None, Some("email address"), 2),
+            make_row(
+                "users", "id", "int", 4, 10, 0, false, true, false, None, None, 1,
+            ),
+            make_row(
+                "users",
+                "email",
+                "nvarchar",
+                510,
+                0,
+                0,
+                true,
+                false,
+                false,
+                None,
+                Some("email address"),
+                2,
+            ),
         ];
         let result = group_bulk_columns(rows);
         assert_eq!(result.len(), 1);
@@ -364,9 +401,15 @@ mod tests {
     #[test]
     fn group_multiple_tables() {
         let rows = vec![
-            make_row("orders", "id", "int", 4, 10, 0, false, false, false, None, None, 1),
-            make_row("users", "id", "bigint", 8, 19, 0, false, true, false, None, None, 1),
-            make_row("users", "name", "nvarchar", 202, 0, 0, true, false, false, None, None, 2),
+            make_row(
+                "orders", "id", "int", 4, 10, 0, false, false, false, None, None, 1,
+            ),
+            make_row(
+                "users", "id", "bigint", 8, 19, 0, false, true, false, None, None, 1,
+            ),
+            make_row(
+                "users", "name", "nvarchar", 202, 0, 0, true, false, false, None, None, 2,
+            ),
         ];
         let result = group_bulk_columns(rows);
         assert_eq!(result.len(), 2);
@@ -379,9 +422,9 @@ mod tests {
 
     #[test]
     fn nvarchar_max_normalizes_correctly() {
-        let rows = vec![
-            make_row("t", "body", "nvarchar", -1, 0, 0, true, false, false, None, None, 1),
-        ];
+        let rows = vec![make_row(
+            "t", "body", "nvarchar", -1, 0, 0, true, false, false, None, None, 1,
+        )];
         let result = group_bulk_columns(rows);
         let col = &result["t"][0];
         assert_eq!(col.data_type, "nvarchar(max)");
@@ -390,9 +433,9 @@ mod tests {
 
     #[test]
     fn varchar_max_normalizes_correctly() {
-        let rows = vec![
-            make_row("t", "txt", "varchar", -1, 0, 0, true, false, false, None, None, 1),
-        ];
+        let rows = vec![make_row(
+            "t", "txt", "varchar", -1, 0, 0, true, false, false, None, None, 1,
+        )];
         let result = group_bulk_columns(rows);
         let col = &result["t"][0];
         assert_eq!(col.data_type, "varchar(max)");
@@ -401,9 +444,9 @@ mod tests {
 
     #[test]
     fn decimal_precision_scale_in_full_type() {
-        let rows = vec![
-            make_row("t", "price", "decimal", 9, 18, 4, false, false, false, None, None, 1),
-        ];
+        let rows = vec![make_row(
+            "t", "price", "decimal", 9, 18, 4, false, false, false, None, None, 1,
+        )];
         let result = group_bulk_columns(rows);
         let col = &result["t"][0];
         assert_eq!(col.data_type, "decimal(18,4)");
@@ -412,22 +455,20 @@ mod tests {
 
     #[test]
     fn default_expression_preserved() {
-        let rows = vec![
-            make_row(
-                "t",
-                "created_at",
-                "datetime2",
-                8,
-                0,
-                7,
-                false,
-                false,
-                false,
-                Some("(SYSUTCDATETIME())"),
-                Some("row insertion timestamp"),
-                1,
-            ),
-        ];
+        let rows = vec![make_row(
+            "t",
+            "created_at",
+            "datetime2",
+            8,
+            0,
+            7,
+            false,
+            false,
+            false,
+            Some("(SYSUTCDATETIME())"),
+            Some("row insertion timestamp"),
+            1,
+        )];
         let result = group_bulk_columns(rows);
         let col = &result["t"][0];
         assert_eq!(col.column_default.as_deref(), Some("(SYSUTCDATETIME())"));
@@ -437,9 +478,9 @@ mod tests {
 
     #[test]
     fn no_default_or_comment_is_none() {
-        let rows = vec![
-            make_row("t", "col", "int", 4, 10, 0, false, false, false, None, None, 1),
-        ];
+        let rows = vec![make_row(
+            "t", "col", "int", 4, 10, 0, false, false, false, None, None, 1,
+        )];
         let result = group_bulk_columns(rows);
         let col = &result["t"][0];
         assert!(col.column_default.is_none());
@@ -448,7 +489,20 @@ mod tests {
 
     #[test]
     fn empty_schema_returns_empty_map() {
-        let rows: Vec<(String, String, String, i16, u8, u8, bool, bool, bool, Option<String>, Option<String>, i32)> = vec![];
+        let rows: Vec<(
+            String,
+            String,
+            String,
+            i16,
+            u8,
+            u8,
+            bool,
+            bool,
+            bool,
+            Option<String>,
+            Option<String>,
+            i32,
+        )> = vec![];
         let result = group_bulk_columns(rows);
         assert!(result.is_empty());
     }
@@ -471,9 +525,20 @@ mod tests {
 
     #[test]
     fn computed_column_flag() {
-        let rows = vec![
-            make_row("t", "full_name", "nvarchar", 202, 0, 0, false, false, true, None, None, 1),
-        ];
+        let rows = vec![make_row(
+            "t",
+            "full_name",
+            "nvarchar",
+            202,
+            0,
+            0,
+            false,
+            false,
+            true,
+            None,
+            None,
+            1,
+        )];
         let result = group_bulk_columns(rows);
         assert!(result["t"][0].is_computed);
     }

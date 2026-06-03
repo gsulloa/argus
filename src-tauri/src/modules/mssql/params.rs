@@ -236,14 +236,31 @@ mod tests {
     #[test]
     fn encrypt_mode_parse_off_variants() {
         for s in &["off", "false", "no", "0", "OFF", "False"] {
-            assert_eq!(EncryptMode::parse(s).unwrap(), EncryptMode::Off, "failed for '{s}'");
+            assert_eq!(
+                EncryptMode::parse(s).unwrap(),
+                EncryptMode::Off,
+                "failed for '{s}'"
+            );
         }
     }
 
     #[test]
     fn encrypt_mode_parse_on_variants() {
-        for s in &["on", "true", "yes", "1", "mandatory", "required", "ON", "True"] {
-            assert_eq!(EncryptMode::parse(s).unwrap(), EncryptMode::On, "failed for '{s}'");
+        for s in &[
+            "on",
+            "true",
+            "yes",
+            "1",
+            "mandatory",
+            "required",
+            "ON",
+            "True",
+        ] {
+            assert_eq!(
+                EncryptMode::parse(s).unwrap(),
+                EncryptMode::On,
+                "failed for '{s}'"
+            );
         }
     }
 
@@ -268,7 +285,13 @@ mod tests {
 
     #[test]
     fn application_intent_readwrite_variants() {
-        for s in &["readwrite", "read-write", "read_write", "ReadWrite", "Read-Write"] {
+        for s in &[
+            "readwrite",
+            "read-write",
+            "read_write",
+            "ReadWrite",
+            "Read-Write",
+        ] {
             assert_eq!(
                 ApplicationIntent::parse(s).unwrap(),
                 ApplicationIntent::ReadWrite,
@@ -279,7 +302,13 @@ mod tests {
 
     #[test]
     fn application_intent_readonly_variants() {
-        for s in &["readonly", "read-only", "read_only", "ReadOnly", "Read-Only"] {
+        for s in &[
+            "readonly",
+            "read-only",
+            "read_only",
+            "ReadOnly",
+            "Read-Only",
+        ] {
             assert_eq!(
                 ApplicationIntent::parse(s).unwrap(),
                 ApplicationIntent::ReadOnly,

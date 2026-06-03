@@ -96,11 +96,7 @@ where
 ///
 /// Safety: `spid` must be a positive i32 (SPID values are 1–32767 on
 /// SQL Server). We validate this before formatting into the SQL string.
-pub async fn fire_mssql_cancel(
-    spid: i32,
-    params: &MssqlParams,
-    password: &str,
-) -> AppResult<()> {
+pub async fn fire_mssql_cancel(spid: i32, params: &MssqlParams, password: &str) -> AppResult<()> {
     if spid <= 0 {
         tracing::warn!("mssql cancel: invalid spid {spid}; skipping KILL");
         return Ok(());
@@ -339,6 +335,9 @@ mod tests {
         // Unreachable port → inner connect fails → warn logged, Ok(()) returned.
         let params = dummy_params(); // port 1 is unreachable
         let result = fire_mssql_cancel(1234, &params, "password").await;
-        assert!(result.is_ok(), "cancel failure must not propagate: {result:?}");
+        assert!(
+            result.is_ok(),
+            "cancel failure must not propagate: {result:?}"
+        );
     }
 }

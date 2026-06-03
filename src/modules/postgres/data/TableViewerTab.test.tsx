@@ -46,6 +46,26 @@ vi.mock("@/platform/settings/api", () => ({
   setSetting: vi.fn().mockResolvedValue(undefined),
 }));
 
+// useConnections — TableViewer now reads context_path from the connection list.
+vi.mock("@/platform/connection-registry/useConnections", () => ({
+  useConnections: vi.fn(() => ({
+    items: [],
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    move: vi.fn(),
+    remove: vi.fn(),
+  })),
+}));
+
+// Context hooks — stub out so TableViewer doesn't need ContextEventBusProvider.
+vi.mock("@/modules/context/hooks", () => ({
+  useContextObjects: vi.fn(() => ({ data: [], loading: false, error: null, refresh: vi.fn() })),
+  useContextObject: vi.fn(() => ({ data: null, loading: false, error: null, refresh: vi.fn() })),
+}));
+
 import { dataApi } from "./api";
 import { getSetting, setSetting } from "@/platform/settings/api";
 

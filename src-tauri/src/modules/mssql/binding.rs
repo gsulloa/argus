@@ -182,12 +182,10 @@ pub fn decode_row_value(
             None => JsonValue::Null,
         },
 
-        BindKind::Decimal | BindKind::Money => {
-            match get_opt!(bigdecimal::BigDecimal) {
-                Some(d) => JsonValue::String(d.to_string()),
-                None => JsonValue::Null,
-            }
-        }
+        BindKind::Decimal | BindKind::Money => match get_opt!(bigdecimal::BigDecimal) {
+            Some(d) => JsonValue::String(d.to_string()),
+            None => JsonValue::Null,
+        },
 
         BindKind::Float => match get_opt!(f64) {
             Some(f) if f.is_finite() => serde_json::Number::from_f64(f)
@@ -263,7 +261,9 @@ pub fn decode_row_value(
         BindKind::Json => {
             // The column contains JSON text; parse it into a serde_json::Value.
             match get_opt!(&str) {
-                Some(s) => serde_json::from_str(s).unwrap_or_else(|_| JsonValue::String(s.to_string())),
+                Some(s) => {
+                    serde_json::from_str(s).unwrap_or_else(|_| JsonValue::String(s.to_string()))
+                }
                 None => JsonValue::Null,
             }
         }
@@ -330,7 +330,9 @@ pub fn bind_edit_value(
         BindKind::Int => {
             let n = parse_i64(value, "Int")?;
             if n < i32::MIN as i64 || n > i32::MAX as i64 {
-                return Err(AppError::Validation(format!("value {n} out of range for Int")));
+                return Err(AppError::Validation(format!(
+                    "value {n} out of range for Int"
+                )));
             }
             query.bind(n as i32);
         }
@@ -350,9 +352,9 @@ pub fn bind_edit_value(
                     ))
                 }
             };
-            let bd: bigdecimal::BigDecimal = s.parse().map_err(|_| {
-                AppError::Validation(format!("invalid decimal value: {s}"))
-            })?;
+            let bd: bigdecimal::BigDecimal = s
+                .parse()
+                .map_err(|_| AppError::Validation(format!("invalid decimal value: {s}")))?;
             query.bind(bd);
         }
 
@@ -422,9 +424,7 @@ pub fn bind_edit_value(
                 .or_else(|_| NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S"))
                 .or_else(|_| NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f"))
                 .or_else(|_| NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S"))
-                .map_err(|e| {
-                    AppError::Validation(format!("invalid datetime '{s}': {e}"))
-                })?;
+                .map_err(|e| AppError::Validation(format!("invalid datetime '{s}': {e}")))?;
             query.bind(dt);
         }
 
@@ -433,9 +433,7 @@ pub fn bind_edit_value(
             let dt = DateTime::parse_from_rfc3339(&s)
                 .or_else(|_| DateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f%:z"))
                 .or_else(|_| DateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%:z"))
-                .map_err(|e| {
-                    AppError::Validation(format!("invalid datetimeoffset '{s}': {e}"))
-                })?;
+                .map_err(|e| AppError::Validation(format!("invalid datetimeoffset '{s}': {e}")))?;
             query.bind(dt);
         }
 
@@ -546,14 +544,10 @@ pub fn mssql_quote_qualified(schema: &str, name: &str) -> String {
 fn parse_i64(value: &JsonValue, kind: &str) -> AppResult<i64> {
     match value {
         JsonValue::Number(n) => n.as_i64().ok_or_else(|| {
-            AppError::Validation(format!(
-                "expected integer for {kind} column, got '{value}'"
-            ))
+            AppError::Validation(format!("expected integer for {kind} column, got '{value}'"))
         }),
         JsonValue::String(s) => s.trim().parse::<i64>().map_err(|_| {
-            AppError::Validation(format!(
-                "expected integer for {kind} column, got '{s}'"
-            ))
+            AppError::Validation(format!("expected integer for {kind} column, got '{s}'"))
         }),
         _ => Err(AppError::Validation(format!(
             "expected integer for {kind} column"
@@ -563,9 +557,9 @@ fn parse_i64(value: &JsonValue, kind: &str) -> AppResult<i64> {
 
 fn parse_f64(value: &JsonValue, kind: &str) -> AppResult<f64> {
     match value {
-        JsonValue::Number(n) => n.as_f64().ok_or_else(|| {
-            AppError::Validation(format!("expected number for {kind} column"))
-        }),
+        JsonValue::Number(n) => n
+            .as_f64()
+            .ok_or_else(|| AppError::Validation(format!("expected number for {kind} column"))),
         JsonValue::String(s) => s.trim().parse::<f64>().map_err(|_| {
             AppError::Validation(format!("expected number for {kind} column, got '{s}'"))
         }),
@@ -825,7 +819,11 @@ mod tests {
     #[test]
     fn bind_bigint_max_safe_ok() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &serde_json::json!(9_007_199_254_740_991_i64), BindKind::BigInt);
+        let result = bind_edit_value(
+            &mut q,
+            &serde_json::json!(9_007_199_254_740_991_i64),
+            BindKind::BigInt,
+        );
         assert!(result.is_ok());
     }
 
@@ -865,11 +863,7 @@ mod tests {
     #[test]
     fn bind_money_from_string_ok() {
         let mut q = make_query();
-        let result = bind_edit_value(
-            &mut q,
-            &JsonValue::String("19.99".into()),
-            BindKind::Money,
-        );
+        let result = bind_edit_value(&mut q, &JsonValue::String("19.99".into()), BindKind::Money);
         assert!(result.is_ok());
     }
 
@@ -890,14 +884,22 @@ mod tests {
     #[test]
     fn bind_varchar_from_string_ok() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("hello".into()), BindKind::Varchar);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("hello".into()),
+            BindKind::Varchar,
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn bind_nvarchar_from_string_ok() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("héllo".into()), BindKind::NVarchar);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("héllo".into()),
+            BindKind::NVarchar,
+        );
         assert!(result.is_ok());
     }
 
@@ -912,39 +914,65 @@ mod tests {
     #[test]
     fn bind_binary_invalid_base64_rejected() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("!!!bad!!!".into()), BindKind::Binary);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("!!!bad!!!".into()),
+            BindKind::Binary,
+        );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.to_lowercase().contains("base64") || msg.contains("binary"), "msg: {msg}");
+        assert!(
+            msg.to_lowercase().contains("base64") || msg.contains("binary"),
+            "msg: {msg}"
+        );
     }
 
     #[test]
     fn bind_rowversion_always_rejected() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("0000000000000001".into()), BindKind::RowVersion);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("0000000000000001".into()),
+            BindKind::RowVersion,
+        );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("read-only") || msg.contains("rowversion"), "msg: {msg}");
+        assert!(
+            msg.contains("read-only") || msg.contains("rowversion"),
+            "msg: {msg}"
+        );
     }
 
     #[test]
     fn bind_date_valid_ok() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("2024-06-15".into()), BindKind::Date);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("2024-06-15".into()),
+            BindKind::Date,
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn bind_date_invalid_rejected() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("not-a-date".into()), BindKind::Date);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("not-a-date".into()),
+            BindKind::Date,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn bind_time_valid_ok() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("14:30:00".into()), BindKind::Time);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("14:30:00".into()),
+            BindKind::Time,
+        );
         assert!(result.is_ok());
     }
 
@@ -1017,30 +1045,49 @@ mod tests {
     #[test]
     fn bind_geometry_rejected() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("POINT(1 2)".into()), BindKind::Geometry);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("POINT(1 2)".into()),
+            BindKind::Geometry,
+        );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string().to_lowercase();
-        assert!(msg.contains("geometry") || msg.contains("sql editor"), "msg: {msg}");
+        assert!(
+            msg.contains("geometry") || msg.contains("sql editor"),
+            "msg: {msg}"
+        );
     }
 
     #[test]
     fn bind_geography_rejected() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("POINT(1 2)".into()), BindKind::Geography);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("POINT(1 2)".into()),
+            BindKind::Geography,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn bind_hierarchyid_rejected() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("/1/".into()), BindKind::HierarchyId);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("/1/".into()),
+            BindKind::HierarchyId,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn bind_sql_variant_rejected() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("value".into()), BindKind::SqlVariant);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("value".into()),
+            BindKind::SqlVariant,
+        );
         assert!(result.is_err());
     }
 
@@ -1059,7 +1106,10 @@ mod tests {
         let result = bind_edit_value(&mut q, &serde_json::json!("expr"), BindKind::Computed);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string().to_lowercase();
-        assert!(msg.contains("computed") || msg.contains("read-only"), "msg: {msg}");
+        assert!(
+            msg.contains("computed") || msg.contains("read-only"),
+            "msg: {msg}"
+        );
     }
 
     #[test]
@@ -1108,20 +1158,28 @@ mod tests {
         let result = bind_filter_value(&mut q, &serde_json::json!("AAAA"), BindKind::RowVersion);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string().to_lowercase();
-        assert!(msg.contains("rowversion") || msg.contains("filter"), "msg: {msg}");
+        assert!(
+            msg.contains("rowversion") || msg.contains("filter"),
+            "msg: {msg}"
+        );
     }
 
     #[test]
     fn filter_geometry_rejected() {
         let mut q = make_query();
-        let result = bind_filter_value(&mut q, &serde_json::json!("POINT(0 0)"), BindKind::Geometry);
+        let result =
+            bind_filter_value(&mut q, &serde_json::json!("POINT(0 0)"), BindKind::Geometry);
         assert!(result.is_err());
     }
 
     #[test]
     fn filter_geography_rejected() {
         let mut q = make_query();
-        let result = bind_filter_value(&mut q, &serde_json::json!("POINT(0 0)"), BindKind::Geography);
+        let result = bind_filter_value(
+            &mut q,
+            &serde_json::json!("POINT(0 0)"),
+            BindKind::Geography,
+        );
         assert!(result.is_err());
     }
 
@@ -1142,7 +1200,11 @@ mod tests {
     #[test]
     fn filter_varchar_ok() {
         let mut q = make_query();
-        let result = bind_filter_value(&mut q, &JsonValue::String("hello".into()), BindKind::Varchar);
+        let result = bind_filter_value(
+            &mut q,
+            &JsonValue::String("hello".into()),
+            BindKind::Varchar,
+        );
         assert!(result.is_ok());
     }
 
@@ -1250,7 +1312,11 @@ mod tests {
     #[test]
     fn bind_image_invalid_base64_rejected() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &JsonValue::String("$$invalid$$".into()), BindKind::Image);
+        let result = bind_edit_value(
+            &mut q,
+            &JsonValue::String("$$invalid$$".into()),
+            BindKind::Image,
+        );
         assert!(result.is_err());
     }
 }

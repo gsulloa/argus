@@ -1,0 +1,15 @@
+name: "Recent orders by status"
+description: "List recent orders for a given status since a date."
+params:
+  - name: since
+    type: timestamp
+    default: "2026-01-01"
+  - name: status
+    type: string
+    default: "paid"
+  - name: limit
+    type: int
+    default: 50
+tags:
+  - analytics
+  - orders

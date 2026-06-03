@@ -845,7 +845,10 @@ mod tests {
         match result {
             Err(e) => {
                 let msg = e.to_string();
-                assert!(msg.contains("decimal") || msg.contains("Decimal"), "msg: {msg}");
+                assert!(
+                    msg.contains("decimal") || msg.contains("Decimal"),
+                    "msg: {msg}"
+                );
             }
             Ok(_) => panic!("expected Err"),
         }
@@ -885,7 +888,10 @@ mod tests {
         match result {
             Err(e) => {
                 let err = e.to_string().to_lowercase();
-                assert!(err.contains("sql editor") || err.contains("geometry"), "err: {err}");
+                assert!(
+                    err.contains("sql editor") || err.contains("geometry"),
+                    "err: {err}"
+                );
             }
             Ok(_) => panic!("expected Err"),
         }
@@ -918,22 +924,14 @@ mod tests {
     #[test]
     fn bind_date_valid_string() {
         let q = empty_query();
-        let result = bind_edit_value(
-            q,
-            &JsonValue::String("2024-06-15".into()),
-            &BindKind::Date,
-        );
+        let result = bind_edit_value(q, &JsonValue::String("2024-06-15".into()), &BindKind::Date);
         assert!(result.is_ok());
     }
 
     #[test]
     fn bind_date_invalid_string_rejected() {
         let q = empty_query();
-        let result = bind_edit_value(
-            q,
-            &JsonValue::String("not-a-date".into()),
-            &BindKind::Date,
-        );
+        let result = bind_edit_value(q, &JsonValue::String("not-a-date".into()), &BindKind::Date);
         assert!(result.is_err());
     }
 
@@ -986,11 +984,7 @@ mod tests {
     #[test]
     fn bind_set_accepts_string() {
         let q = empty_query();
-        let result = bind_edit_value(
-            q,
-            &JsonValue::String("a,b,c".into()),
-            &BindKind::Set,
-        );
+        let result = bind_edit_value(q, &JsonValue::String("a,b,c".into()), &BindKind::Set);
         assert!(result.is_ok());
     }
 

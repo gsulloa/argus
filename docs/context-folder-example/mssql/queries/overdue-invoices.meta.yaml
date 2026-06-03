@@ -1,0 +1,12 @@
+name: "Overdue invoices"
+description: "List unpaid invoices whose due date is before a given date."
+params:
+  - name: asOf
+    type: timestamp
+    default: "2026-06-01"
+  - name: minAmountCents
+    type: int
+    default: 0
+tags:
+  - finance
+  - invoices

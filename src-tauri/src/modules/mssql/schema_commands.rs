@@ -13,6 +13,7 @@ use tauri::{AppHandle, State};
 use tokio::time::{error::Elapsed, timeout, Duration};
 use uuid::Uuid;
 
+
 use crate::error::{AppError, AppResult};
 use crate::modules::activity_log::{
     emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
@@ -132,6 +133,132 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// §1.4 — list_schemas_for_pool (pool-only)
+// ---------------------------------------------------------------------------
+
+/// Pool-only inner function for listing schemas. Usable by the context adapter.
+pub async fn list_schemas_for_pool(
+    pool: &bb8::Pool<bb8_tiberius::ConnectionManager>,
+) -> AppResult<Vec<SchemaInfo>> {
+    let mut conn = pool.get().await.map_err(map_bb8_error)?;
+    let rows = timeout(
+        RELATIONS_TIMEOUT,
+        conn.simple_query("SELECT name FROM sys.schemas ORDER BY name"),
+    )
+    .await
+    .map_err(|_| {
+        AppError::mssql(format!(
+            "list schemas timed out ({}s)",
+            RELATIONS_TIMEOUT.as_secs()
+        ))
+    })?
+    .map_err(map_tiberius_error)?
+    .into_first_result()
+    .await
+    .map_err(map_tiberius_error)?;
+
+    let schemas: Vec<SchemaInfo> = rows
+        .into_iter()
+        .map(|row| {
+            let name: &str = row.get(0).unwrap_or_default();
+            let name = name.to_string();
+            let is_system = SYSTEM_SCHEMAS.contains(&name.as_str())
+                || name.starts_with("db_");
+            SchemaInfo { name, is_system }
+        })
+        .collect();
+    Ok(schemas)
+}
+
+// ---------------------------------------------------------------------------
+// §1.5 — list_relations_for_pool (pool-only)
+// ---------------------------------------------------------------------------
+
+/// Pool-only inner function for listing relations in a schema. Usable by the context adapter.
+pub async fn list_relations_for_pool(
+    pool: &bb8::Pool<bb8_tiberius::ConnectionManager>,
+    schema: &str,
+) -> AppResult<RelationsResult> {
+    run_relations_inner(pool, schema).await
+}
+
+// ---------------------------------------------------------------------------
+// §1.6 — list_structure_for_pool (columns + PK per relation, pool-only)
+// ---------------------------------------------------------------------------
+
+/// Pool-only inner function: returns `(columns, pk_columns)` for a single relation.
+/// Used by the context adapter for schema sync.
+pub async fn list_structure_for_pool(
+    pool: &bb8::Pool<bb8_tiberius::ConnectionManager>,
+    schema: &str,
+    relation: &str,
+) -> AppResult<(Vec<(String, String)>, Vec<String>)> {
+    // Columns: (name, data_type)
+    let mut conn = pool.get().await.map_err(map_bb8_error)?;
+    let col_sql = "
+SELECT c.name AS col_name, ty.name AS data_type
+FROM sys.columns c
+JOIN sys.objects o ON o.object_id = c.object_id
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+WHERE s.name = @P1 AND o.name = @P2
+ORDER BY c.column_id
+";
+    let mut qry = tiberius::Query::new(col_sql);
+    qry.bind(schema);
+    qry.bind(relation);
+    let col_rows = qry
+        .query(&mut conn)
+        .await
+        .map_err(map_tiberius_error)?
+        .into_first_result()
+        .await
+        .map_err(map_tiberius_error)?;
+
+    let columns: Vec<(String, String)> = col_rows
+        .into_iter()
+        .map(|row| {
+            let name: &str = row.get(0).unwrap_or_default();
+            let data_type: &str = row.get(1).unwrap_or_default();
+            (name.to_string(), data_type.to_string())
+        })
+        .collect();
+
+    // PK columns
+    let pk_sql = "
+SELECT c.name AS col_name
+FROM sys.indexes i
+JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+JOIN sys.objects o ON o.object_id = i.object_id
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE s.name = @P1 AND o.name = @P2 AND i.is_primary_key = 1 AND ic.is_included_column = 0
+ORDER BY ic.key_ordinal
+";
+    let mut conn2 = pool.get().await.map_err(map_bb8_error)?;
+    let mut pk_qry = tiberius::Query::new(pk_sql);
+    pk_qry.bind(schema);
+    pk_qry.bind(relation);
+    let pk_rows = pk_qry
+        .query(&mut conn2)
+        .await
+        .map_err(map_tiberius_error)?
+        .into_first_result()
+        .await
+        .map_err(map_tiberius_error)?;
+
+    let pk_cols: Vec<String> = pk_rows
+        .into_iter()
+        .map(|row| {
+            let col: &str = row.get(0).unwrap_or_default();
+            col.to_string()
+        })
+        .collect();
+
+    Ok((columns, pk_cols))
+}
+
+// ---------------------------------------------------------------------------
 // §7.2-cmd1 — mssql_list_schemas
 // ---------------------------------------------------------------------------
 
@@ -149,42 +276,17 @@ pub async fn mssql_list_schemas(
 
     let pool = registry.get_pool(parsed)?;
 
-    let result: AppResult<Vec<SchemaInfo>> = async {
-        let mut conn = pool.get().await.map_err(map_bb8_error)?;
-        let rows = timeout(
-            RELATIONS_TIMEOUT,
-            conn.simple_query("SELECT name FROM sys.schemas ORDER BY name"),
-        )
-        .await
-        .map_err(|_| {
-            AppError::mssql(format!(
-                "list schemas timed out ({}s)",
-                RELATIONS_TIMEOUT.as_secs()
-            ))
-        })?
-        .map_err(map_tiberius_error)?
-        .into_first_result()
-        .await
-        .map_err(map_tiberius_error)?;
+    let result = list_schemas_for_pool(&pool).await;
 
-        let schemas: Vec<SchemaInfo> = rows
-            .into_iter()
-            .map(|row| {
-                let name: &str = row.get(0).unwrap_or_default();
-                let name = name.to_string();
-                let is_system = SYSTEM_SCHEMAS.contains(&name.as_str());
-                SchemaInfo { name, is_system }
-            })
-            .collect();
+    // Log schema names at info level (mirrors original behavior).
+    if let Ok(ref schemas) = result {
         let names: Vec<&str> = schemas.iter().map(|s| s.name.as_str()).collect();
         tracing::info!(
             "mssql_list_schemas: returning {} schemas: {:?}",
             schemas.len(),
             names
         );
-        Ok(schemas)
     }
-    .await;
 
     let ms = started.elapsed().as_millis();
     let duration_ms = ms as u64;
@@ -372,7 +474,9 @@ pub async fn mssql_list_relations(
 
     // Retry on cancellation error.
     let result = match result {
-        Err(AppError::Mssql(ref body)) if body.code.is_none() && body.message.contains("cancelled") => {
+        Err(AppError::Mssql(ref body))
+            if body.code.is_none() && body.message.contains("cancelled") =>
+        {
             tracing::info!("mssql_list_relations: cancellation detected, retrying once for schema={schema_clone}");
             run_relations_inner(&pool, &schema_clone).await
         }
@@ -429,9 +533,12 @@ async fn run_relations_inner(
         Ok::<Vec<tiberius::Row>, AppError>(rows)
     };
 
-    let rows = timeout(RELATIONS_TIMEOUT, fut)
-        .await
-        .map_err(|_| AppError::mssql(format!("list relations timed out ({}s)", RELATIONS_TIMEOUT.as_secs())))??;
+    let rows = timeout(RELATIONS_TIMEOUT, fut).await.map_err(|_| {
+        AppError::mssql(format!(
+            "list relations timed out ({}s)",
+            RELATIONS_TIMEOUT.as_secs()
+        ))
+    })??;
 
     tracing::info!(
         "mssql_list_relations: SQL returned {} raw rows for schema='{}'",
@@ -707,7 +814,8 @@ pub async fn mssql_list_structure(
         );
 
         let mut failures = Vec::new();
-        let procedures = aggregate_one(procedures_r, "procedures", &mut failures).unwrap_or_default();
+        let procedures =
+            aggregate_one(procedures_r, "procedures", &mut failures).unwrap_or_default();
         let functions = aggregate_one(functions_r, "functions", &mut failures).unwrap_or_default();
         let triggers = aggregate_one(triggers_r, "triggers", &mut failures).unwrap_or_default();
         let sequences = aggregate_one(sequences_r, "sequences", &mut failures).unwrap_or_default();
@@ -739,10 +847,26 @@ pub async fn mssql_list_structure(
             triggers: Vec::new(),
             sequences: Vec::new(),
             failures: vec![
-                KindFailure { kind: "procedures".into(), code: None, message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()) },
-                KindFailure { kind: "functions".into(), code: None, message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()) },
-                KindFailure { kind: "triggers".into(), code: None, message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()) },
-                KindFailure { kind: "sequences".into(), code: None, message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()) },
+                KindFailure {
+                    kind: "procedures".into(),
+                    code: None,
+                    message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()),
+                },
+                KindFailure {
+                    kind: "functions".into(),
+                    code: None,
+                    message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()),
+                },
+                KindFailure {
+                    kind: "triggers".into(),
+                    code: None,
+                    message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()),
+                },
+                KindFailure {
+                    kind: "sequences".into(),
+                    code: None,
+                    message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()),
+                },
             ],
         })
     });
@@ -753,7 +877,9 @@ pub async fn mssql_list_structure(
         .connection(parsed);
     match &result {
         Ok(r) => {
-            let total = (r.procedures.len() + r.functions.len() + r.triggers.len() + r.sequences.len()) as u32;
+            let total =
+                (r.procedures.len() + r.functions.len() + r.triggers.len() + r.sequences.len())
+                    as u32;
             tracing::info!(
                 "mssql_list_structure ok: id={parsed} schema={schema} procs={} fns={} triggers={} seqs={} failures={} elapsed={ms}ms",
                 r.procedures.len(), r.functions.len(), r.triggers.len(), r.sequences.len(), r.failures.len()
@@ -802,8 +928,18 @@ async fn fetch_indexes(
 
     // Group by index name.
     // Tuple: (is_unique, is_pk, is_clustered, idx_type, filter_def, key_cols, included_col_names)
-    let mut index_map: HashMap<String, (bool, bool, bool, String, Option<String>, Vec<IndexColumn>, Vec<String>)> =
-        HashMap::new();
+    let mut index_map: HashMap<
+        String,
+        (
+            bool,
+            bool,
+            bool,
+            String,
+            Option<String>,
+            Vec<IndexColumn>,
+            Vec<String>,
+        ),
+    > = HashMap::new();
     let mut order: Vec<String> = Vec::new();
 
     for row in rows {
@@ -820,7 +956,15 @@ async fn fetch_indexes(
 
         let entry = index_map.entry(idx_name.to_string()).or_insert_with(|| {
             order.push(idx_name.to_string());
-            (is_unique, is_pk, is_clustered, idx_type.to_string(), filter_def.map(|s| s.to_string()), Vec::new(), Vec::new())
+            (
+                is_unique,
+                is_pk,
+                is_clustered,
+                idx_type.to_string(),
+                filter_def.map(|s| s.to_string()),
+                Vec::new(),
+                Vec::new(),
+            )
         });
         if is_included {
             entry.6.push(col_name.to_string());
@@ -837,18 +981,20 @@ async fn fetch_indexes(
     let indexes = order
         .into_iter()
         .filter_map(|name| {
-            index_map.remove(&name).map(|(is_unique, is_pk, is_clustered, idx_type, filter_def, cols, included_cols)| {
-                IndexSummary {
-                    name,
-                    is_unique,
-                    is_primary_key: is_pk,
-                    is_clustered,
-                    index_type: idx_type,
-                    columns: cols,
-                    included_columns: included_cols,
-                    filter_definition: filter_def,
-                }
-            })
+            index_map.remove(&name).map(
+                |(is_unique, is_pk, is_clustered, idx_type, filter_def, cols, included_cols)| {
+                    IndexSummary {
+                        name,
+                        is_unique,
+                        is_primary_key: is_pk,
+                        is_clustered,
+                        index_type: idx_type,
+                        columns: cols,
+                        included_columns: included_cols,
+                        filter_definition: filter_def,
+                    }
+                },
+            )
         })
         .collect();
     Ok(indexes)
@@ -932,7 +1078,16 @@ async fn fetch_foreign_keys(
 
     let mut fk_map: HashMap<
         String,
-        (String, String, String, String, bool, bool, Vec<String>, Vec<String>),
+        (
+            String,
+            String,
+            String,
+            String,
+            bool,
+            bool,
+            Vec<String>,
+            Vec<String>,
+        ),
     > = HashMap::new();
     let mut order: Vec<String> = Vec::new();
 
@@ -968,7 +1123,16 @@ async fn fetch_foreign_keys(
         .into_iter()
         .filter_map(|name| {
             fk_map.remove(&name).map(
-                |(ref_schema, ref_table, update_rule, delete_rule, is_disabled, is_not_trusted, cols, ref_cols)| {
+                |(
+                    ref_schema,
+                    ref_table,
+                    update_rule,
+                    delete_rule,
+                    is_disabled,
+                    is_not_trusted,
+                    cols,
+                    ref_cols,
+                )| {
                     ForeignKeySummary {
                         name,
                         columns: cols,
@@ -1095,19 +1259,35 @@ pub async fn mssql_list_table_extras(
             ),
             timeout(
                 PER_QUERY_TIMEOUT,
-                try_kind("triggers", || fetch_table_triggers(&pool, &schema_c, &relation_c))
+                try_kind("triggers", || fetch_table_triggers(
+                    &pool,
+                    &schema_c,
+                    &relation_c
+                ))
             ),
             timeout(
                 PER_QUERY_TIMEOUT,
-                try_kind("foreign_keys", || fetch_foreign_keys(&pool, &schema_c, &relation_c))
+                try_kind("foreign_keys", || fetch_foreign_keys(
+                    &pool,
+                    &schema_c,
+                    &relation_c
+                ))
             ),
             timeout(
                 PER_QUERY_TIMEOUT,
-                try_kind("check_constraints", || fetch_check_constraints(&pool, &schema_c, &relation_c))
+                try_kind("check_constraints", || fetch_check_constraints(
+                    &pool,
+                    &schema_c,
+                    &relation_c
+                ))
             ),
             timeout(
                 PER_QUERY_TIMEOUT,
-                try_kind("default_constraints", || fetch_default_constraints(&pool, &schema_c, &relation_c))
+                try_kind("default_constraints", || fetch_default_constraints(
+                    &pool,
+                    &schema_c,
+                    &relation_c
+                ))
             ),
         );
 
@@ -1115,8 +1295,10 @@ pub async fn mssql_list_table_extras(
         let indexes = aggregate_one(indexes_r, "indexes", &mut failures).unwrap_or_default();
         let triggers = aggregate_one(triggers_r, "triggers", &mut failures).unwrap_or_default();
         let foreign_keys = aggregate_one(fks_r, "foreign_keys", &mut failures).unwrap_or_default();
-        let check_constraints = aggregate_one(checks_r, "check_constraints", &mut failures).unwrap_or_default();
-        let default_constraints = aggregate_one(defaults_r, "default_constraints", &mut failures).unwrap_or_default();
+        let check_constraints =
+            aggregate_one(checks_r, "check_constraints", &mut failures).unwrap_or_default();
+        let default_constraints =
+            aggregate_one(defaults_r, "default_constraints", &mut failures).unwrap_or_default();
 
         Ok::<TableExtras, AppError>(TableExtras {
             schema: schema_c.clone(),
@@ -1140,11 +1322,31 @@ pub async fn mssql_list_table_extras(
             check_constraints: Vec::new(),
             default_constraints: Vec::new(),
             failures: vec![
-                KindFailure { kind: "indexes".into(), code: None, message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()) },
-                KindFailure { kind: "triggers".into(), code: None, message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()) },
-                KindFailure { kind: "foreign_keys".into(), code: None, message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()) },
-                KindFailure { kind: "check_constraints".into(), code: None, message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()) },
-                KindFailure { kind: "default_constraints".into(), code: None, message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()) },
+                KindFailure {
+                    kind: "indexes".into(),
+                    code: None,
+                    message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()),
+                },
+                KindFailure {
+                    kind: "triggers".into(),
+                    code: None,
+                    message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()),
+                },
+                KindFailure {
+                    kind: "foreign_keys".into(),
+                    code: None,
+                    message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()),
+                },
+                KindFailure {
+                    kind: "check_constraints".into(),
+                    code: None,
+                    message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()),
+                },
+                KindFailure {
+                    kind: "default_constraints".into(),
+                    code: None,
+                    message: format!("timed out ({}s)", TOTAL_TIMEOUT.as_secs()),
+                },
             ],
         })
     });
@@ -1155,8 +1357,11 @@ pub async fn mssql_list_table_extras(
         .connection(parsed);
     match &result {
         Ok(r) => {
-            let total = (r.indexes.len() + r.triggers.len() + r.foreign_keys.len()
-                + r.check_constraints.len() + r.default_constraints.len()) as u32;
+            let total = (r.indexes.len()
+                + r.triggers.len()
+                + r.foreign_keys.len()
+                + r.check_constraints.len()
+                + r.default_constraints.len()) as u32;
             tracing::info!(
                 "mssql_list_table_extras ok: id={parsed} schema={schema} relation={relation} total={total} failures={} elapsed={ms}ms",
                 r.failures.len()
@@ -1213,7 +1418,12 @@ pub async fn mssql_get_routine_signature(
 
         let rows = timeout(ROUTINE_SIG_TIMEOUT, qry.query(&mut conn))
             .await
-            .map_err(|_| AppError::mssql(format!("routine signature timed out ({}s)", ROUTINE_SIG_TIMEOUT.as_secs())))?
+            .map_err(|_| {
+                AppError::mssql(format!(
+                    "routine signature timed out ({}s)",
+                    ROUTINE_SIG_TIMEOUT.as_secs()
+                ))
+            })?
             .map_err(map_tiberius_error)?
             .into_first_result()
             .await
@@ -1285,14 +1495,18 @@ pub async fn mssql_get_object_definition(
 
     let result: AppResult<Option<String>> = async {
         let mut conn = pool.get().await.map_err(map_bb8_error)?;
-        let mut qry = tiberius::Query::new(
-            "SELECT OBJECT_DEFINITION(OBJECT_ID(@P1)) AS definition",
-        );
+        let mut qry =
+            tiberius::Query::new("SELECT OBJECT_DEFINITION(OBJECT_ID(@P1)) AS definition");
         qry.bind(qualified.as_str());
 
         let rows = timeout(ROUTINE_SIG_TIMEOUT, qry.query(&mut conn))
             .await
-            .map_err(|_| AppError::mssql(format!("object definition timed out ({}s)", ROUTINE_SIG_TIMEOUT.as_secs())))?
+            .map_err(|_| {
+                AppError::mssql(format!(
+                    "object definition timed out ({}s)",
+                    ROUTINE_SIG_TIMEOUT.as_secs()
+                ))
+            })?
             .map_err(map_tiberius_error)?
             .into_first_result()
             .await
@@ -1309,8 +1523,13 @@ pub async fn mssql_get_object_definition(
 
     let ms = started.elapsed().as_millis();
     match &result {
-        Ok(d) => tracing::info!("mssql_get_object_definition ok: id={parsed} has_def={} elapsed={ms}ms", d.is_some()),
-        Err(e) => tracing::error!("mssql_get_object_definition err: id={parsed} elapsed={ms}ms err={e:?}"),
+        Ok(d) => tracing::info!(
+            "mssql_get_object_definition ok: id={parsed} has_def={} elapsed={ms}ms",
+            d.is_some()
+        ),
+        Err(e) => {
+            tracing::error!("mssql_get_object_definition err: id={parsed} elapsed={ms}ms err={e:?}")
+        }
     }
     let _ = app;
     result
@@ -1343,7 +1562,12 @@ mod tests {
     #[test]
     fn table_becomes_regular() {
         let r = build_relation_info(
-            "dbo".into(), "users".into(), "table".into(), Some(100), false, false,
+            "dbo".into(),
+            "users".into(),
+            "table".into(),
+            Some(100),
+            false,
+            false,
         );
         assert_eq!(r.kind, "table");
         assert_eq!(r.name, "users");
@@ -1352,7 +1576,12 @@ mod tests {
     #[test]
     fn partitioned_table_overrides_kind() {
         let r = build_relation_info(
-            "dbo".into(), "orders".into(), "table".into(), Some(50000), false, true,
+            "dbo".into(),
+            "orders".into(),
+            "table".into(),
+            Some(50000),
+            false,
+            true,
         );
         assert_eq!(r.kind, "partitioned");
     }
@@ -1360,7 +1589,12 @@ mod tests {
     #[test]
     fn indexed_view_gets_indexed_view_kind() {
         let r = build_relation_info(
-            "dbo".into(), "v_sales".into(), "view".into(), None, true, false,
+            "dbo".into(),
+            "v_sales".into(),
+            "view".into(),
+            None,
+            true,
+            false,
         );
         assert_eq!(r.kind, "indexed-view");
     }
@@ -1368,7 +1602,12 @@ mod tests {
     #[test]
     fn plain_view_stays_view() {
         let r = build_relation_info(
-            "dbo".into(), "v_active".into(), "view".into(), None, false, false,
+            "dbo".into(),
+            "v_active".into(),
+            "view".into(),
+            None,
+            false,
+            false,
         );
         assert_eq!(r.kind, "view");
     }
@@ -1395,9 +1634,16 @@ mod tests {
     #[test]
     fn all_db_roles_are_system() {
         for schema in &[
-            "db_owner", "db_accessadmin", "db_securityadmin", "db_ddladmin",
-            "db_backupoperator", "db_datareader", "db_datawriter",
-            "db_denydatareader", "db_denydatawriter", "guest",
+            "db_owner",
+            "db_accessadmin",
+            "db_securityadmin",
+            "db_ddladmin",
+            "db_backupoperator",
+            "db_datareader",
+            "db_datawriter",
+            "db_denydatareader",
+            "db_denydatawriter",
+            "guest",
         ] {
             assert!(SYSTEM_SCHEMAS.contains(schema), "{schema} should be system");
         }

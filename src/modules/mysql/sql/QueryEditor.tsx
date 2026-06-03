@@ -99,6 +99,8 @@ export interface QueryEditorHandle {
   reconfigureAutocomplete(): void;
   /** Set or clear the error-position underline. Pass null to clear. */
   setErrorMark(mark: ErrorMark | null): void;
+  /** Replace the entire editor content with new text. */
+  replaceBody(text: string): void;
 }
 
 export interface QueryEditorProps {
@@ -358,6 +360,17 @@ export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
         const view = viewRef.current;
         if (!view) return;
         view.dispatch({ effects: setErrorMark.of(mark) });
+      },
+      replaceBody(text: string) {
+        const view = viewRef.current;
+        if (!view) return;
+        const len = view.state.doc.length;
+        view.dispatch({
+          changes: { from: 0, to: len, insert: text },
+          selection: { anchor: 0, head: 0 },
+          scrollIntoView: true,
+        });
+        view.focus();
       },
     }));
 

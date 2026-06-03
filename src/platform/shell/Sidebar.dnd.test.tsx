@@ -134,6 +134,55 @@ vi.mock("@/modules/dynamo", () => ({
   useDynamoErrorHandler: () => vi.fn(),
 }));
 
+vi.mock("@/modules/dynamo/tables", () => ({
+  DynamoConnectionSubtree: () => null,
+  useDynamoTableCache: () => ({ refresh: vi.fn() }),
+}));
+
+vi.mock("@/modules/mysql", () => ({
+  MYSQL_KIND: "mysql",
+  MysqlIcon: () => null,
+  MysqlSchemaTree: () => null,
+  mysqlApi: { connect: vi.fn(), disconnect: vi.fn() },
+  useActiveMysqlConnections: () => ({ items: [], isActive: () => false }),
+  useMysqlForm: () => ({
+    openCreate: vi.fn(),
+    openEdit: vi.fn(),
+    openDuplicate: vi.fn(),
+  }),
+}));
+
+vi.mock("@/modules/mysql/openMysqlQueryTab", () => ({
+  openMysqlQueryTab: vi.fn(),
+}));
+
+vi.mock("@/modules/mssql", () => ({
+  MSSQL_KIND: "mssql",
+  MssqlIcon: () => null,
+  MssqlSchemaTree: () => null,
+  MssqlSchemaPrimaryActions: () => null,
+  MssqlSchemaToolbar: () => null,
+  mssqlApi: { connect: vi.fn(), disconnect: vi.fn() },
+  useActiveMssqlConnections: () => ({ items: [], isActive: () => false }),
+  useMssqlForm: () => ({
+    openCreate: vi.fn(),
+    openEdit: vi.fn(),
+    openDuplicate: vi.fn(),
+  }),
+}));
+
+vi.mock("@/modules/mssql/openMssqlQueryTab", () => ({
+  openMssqlQueryTab: vi.fn(),
+}));
+
+vi.mock("@/modules/context/openContextQuery", () => ({
+  openContextQuery: vi.fn(),
+}));
+
+vi.mock("@/modules/context/components/ContextQueriesBranch", () => ({
+  ContextQueriesBranch: () => null,
+}));
+
 vi.mock("@/platform/shell/useKindPicker", () => ({
   useKindPicker: () => ({ open: vi.fn(), close: vi.fn() }),
   KindPickerProvider: ({ children }: { children: React.ReactNode }) =>
