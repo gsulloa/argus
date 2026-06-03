@@ -27,6 +27,8 @@ import {
 import { ConnectionsProvider } from "@/platform/connection-registry/useConnections";
 import { ConnectionGroupsProvider } from "@/platform/connection-registry/useConnectionGroups";
 import { ContextEventBusProvider } from "@/modules/context/eventBus";
+import { AiSettingsProvider } from "@/modules/ai/store";
+import { AiSettingsHost } from "@/modules/ai/AiSettingsHost";
 import { ActivityLogProvider } from "@/platform/activity-log/store";
 import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
 import { UpdaterProvider } from "@/platform/updater";
@@ -56,6 +58,7 @@ export function App() {
             <TabsProvider>
               <ConnectionGroupsProvider>
                 <ConnectionsProvider>
+                  <AiSettingsProvider>
                   <ContextEventBusProvider>
                   <ActivityLogProvider>
                     <PostgresFormProvider>
@@ -74,6 +77,7 @@ export function App() {
                     </PostgresFormProvider>
                   </ActivityLogProvider>
                   </ContextEventBusProvider>
+                  </AiSettingsProvider>
                 </ConnectionsProvider>
               </ConnectionGroupsProvider>
             </TabsProvider>
@@ -111,6 +115,7 @@ function ShellMain() {
       <DynamoDataViewLifecycle />
       <DynamoTablesPaletteCommands />
       <QueryHistoryCommands />
+      <AiSettingsHost />
       <SavedQueriesBootstrap />
       <BootstrapTabs />
       <TabStrip />
