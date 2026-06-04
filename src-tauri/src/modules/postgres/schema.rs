@@ -466,16 +466,27 @@ pub async fn list_table_indexes(
     let rows = client
         .query(SQL_LIST_TABLE_INDEXES, &[&schema, &relation])
         .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| IndexInfo {
-            name: r.get::<_, String>(0),
-            table: r.get::<_, String>(1),
-            is_unique: r.get::<_, bool>(2),
-            is_primary: r.get::<_, bool>(3),
-            method: r.get::<_, String>(4),
+    rows.into_iter()
+        .map(|r| -> AppResult<IndexInfo> {
+            Ok(IndexInfo {
+                name: r
+                    .try_get::<_, String>(0)
+                    .map_err(|e| AppError::postgres(format!("decode index name (col 0): {e}")))?,
+                table: r
+                    .try_get::<_, String>(1)
+                    .map_err(|e| AppError::postgres(format!("decode table name (col 1): {e}")))?,
+                is_unique: r
+                    .try_get::<_, bool>(2)
+                    .map_err(|e| AppError::postgres(format!("decode is_unique (col 2): {e}")))?,
+                is_primary: r
+                    .try_get::<_, bool>(3)
+                    .map_err(|e| AppError::postgres(format!("decode is_primary (col 3): {e}")))?,
+                method: r
+                    .try_get::<_, String>(4)
+                    .map_err(|e| AppError::postgres(format!("decode method (col 4): {e}")))?,
+            })
         })
-        .collect())
+        .collect::<AppResult<Vec<_>>>()
 }
 
 /// Variant of `list_table_indexes` that also returns the `pg_get_indexdef`
@@ -513,19 +524,29 @@ pub async fn list_table_triggers(
     let rows = client
         .query(SQL_LIST_TABLE_TRIGGERS, &[&schema, &relation])
         .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| {
-            let tgtype: i32 = r.get::<_, i32>(2);
-            TriggerInfo {
-                name: r.get::<_, String>(0),
-                table: r.get::<_, String>(1),
+    rows.into_iter()
+        .map(|r| -> AppResult<TriggerInfo> {
+            let name = r
+                .try_get::<_, String>(0)
+                .map_err(|e| AppError::postgres(format!("decode trigger name (col 0): {e}")))?;
+            let table = r
+                .try_get::<_, String>(1)
+                .map_err(|e| AppError::postgres(format!("decode table name (col 1): {e}")))?;
+            let tgtype = r
+                .try_get::<_, i32>(2)
+                .map_err(|e| AppError::postgres(format!("decode tgtype (col 2): {e}")))?;
+            let function = r
+                .try_get::<_, String>(3)
+                .map_err(|e| AppError::postgres(format!("decode function (col 3): {e}")))?;
+            Ok(TriggerInfo {
+                name,
+                table,
                 timing: decode_trigger_timing(tgtype),
                 events: decode_trigger_events(tgtype),
-                function: r.get::<_, String>(3),
-            }
+                function,
+            })
         })
-        .collect())
+        .collect::<AppResult<Vec<_>>>()
 }
 
 /// Resolve a single function's signature by OID. Returns `AppError::NotFound`

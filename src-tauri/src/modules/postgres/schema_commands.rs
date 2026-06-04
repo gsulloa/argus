@@ -43,6 +43,12 @@ pub const PER_QUERY_TIMEOUT: Duration = Duration::from_secs(8);
 /// catalog lookup by OID — should always be sub-second.
 pub const FUNCTION_SIG_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Total timeout wrapping connection acquisition (`sslmode_for` + `acquire`)
+/// for `postgres_list_table_extras`. Bounded so that an unhealthy pool cannot
+/// leave the IPC promise pending indefinitely — the user sees a typed
+/// `57014` error instead of an indefinite spinner. See issue #56.
+pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(3);
+
 fn parse_id(id: &str) -> AppResult<Uuid> {
     Uuid::parse_str(id).map_err(|e| AppError::Validation(format!("bad uuid: {e}")))
 }
@@ -392,20 +398,48 @@ async fn list_table_extras_inner<'a>(
     Result<AppResult<Vec<IndexInfo>>, Elapsed>,
     Result<AppResult<Vec<TriggerInfo>>, Elapsed>,
 ) {
-    tokio::join!(
-        timeout(
-            PER_QUERY_TIMEOUT,
-            schema::try_kind("indexes", schema_name, || {
-                schema::list_table_indexes(client, schema_name, relation)
-            })
-        ),
-        timeout(
-            PER_QUERY_TIMEOUT,
-            schema::try_kind("triggers", schema_name, || {
-                schema::list_table_triggers(client, schema_name, relation)
-            })
-        ),
-    )
+    let span = tracing::info_span!(
+        "list_table_extras",
+        schema = %schema_name,
+        relation = %relation,
+    );
+    let _enter = span.enter();
+
+    let indexes_started = Instant::now();
+    let triggers_started = Instant::now();
+
+    let (indexes_res, triggers_res) = tokio::join!(
+        async {
+            let r = timeout(
+                PER_QUERY_TIMEOUT,
+                schema::try_kind("indexes", schema_name, || {
+                    schema::list_table_indexes(client, schema_name, relation)
+                }),
+            )
+            .await;
+            tracing::info!(
+                "indexes sub-query finished in {:?}",
+                indexes_started.elapsed()
+            );
+            r
+        },
+        async {
+            let r = timeout(
+                PER_QUERY_TIMEOUT,
+                schema::try_kind("triggers", schema_name, || {
+                    schema::list_table_triggers(client, schema_name, relation)
+                }),
+            )
+            .await;
+            tracing::info!(
+                "triggers sub-query finished in {:?}",
+                triggers_started.elapsed()
+            );
+            r
+        },
+    );
+
+    (indexes_res, triggers_res)
 }
 
 #[tauri::command]
@@ -423,8 +457,25 @@ pub async fn postgres_list_table_extras(
     );
 
     let inner_result: AppResult<TableExtrasResult> = async {
-        let sslmode = pools.sslmode_for(&parsed).await?;
-        let client = pools.acquire(&parsed).await?;
+        let (sslmode, client) = match timeout(ACQUIRE_TIMEOUT, async {
+            let sslmode = pools.sslmode_for(&parsed).await?;
+            let client = pools.acquire(&parsed).await?;
+            Ok::<_, AppError>((sslmode, client))
+        })
+        .await
+        {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Err(AppError::postgres_with_code(
+                    "57014",
+                    format!(
+                        "Acquiring Postgres connection timed out ({}s)",
+                        ACQUIRE_TIMEOUT.as_secs()
+                    ),
+                ));
+            }
+        };
         let cancel_token = client.cancel_token();
 
         let outcome = timeout(
