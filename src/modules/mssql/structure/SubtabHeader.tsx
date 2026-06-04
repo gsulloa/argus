@@ -1,4 +1,4 @@
-import { Filter } from "lucide-react";
+import { Filter, RotateCw } from "lucide-react";
 import styles from "./SubtabHeader.module.css";
 
 export type Subtab = "data" | "structure" | "raw" | "docs";
@@ -14,6 +14,12 @@ interface Props {
    * Defaults to all four tabs when omitted.
    */
   visibleTabs?: Subtab[];
+  /** Callback to trigger a reload of the current table query (Data subtab only). */
+  onReload?: () => void;
+  /** When true, the Reload button is disabled (first-page fetch in flight). */
+  reloadDisabled?: boolean;
+  /** When true, the Reload icon animates with a spin (in-flight fetch). */
+  reloading?: boolean;
 }
 
 const TABS: { id: Subtab; label: string; shortcut: string }[] = [
@@ -23,7 +29,7 @@ const TABS: { id: Subtab; label: string; shortcut: string }[] = [
   { id: "docs", label: "Docs", shortcut: "4" },
 ];
 
-export function SubtabHeader({ active, onChange, filterBarVisible, onFilterToggle, visibleTabs }: Props) {
+export function SubtabHeader({ active, onChange, filterBarVisible, onFilterToggle, visibleTabs, onReload, reloadDisabled, reloading }: Props) {
   const displayTabs = visibleTabs
     ? TABS.filter((t) => visibleTabs.includes(t.id))
     : TABS;
@@ -56,6 +62,24 @@ export function SubtabHeader({ active, onChange, filterBarVisible, onFilterToggl
           onClick={onFilterToggle}
         >
           <Filter size={13} strokeWidth={2} />
+        </button>
+      )}
+      {/* Reload button — only visible on the Data subtab when onReload is provided */}
+      {active === "data" && onReload !== undefined && (
+        <button
+          type="button"
+          className={styles.filterToggle}
+          disabled={reloadDisabled}
+          aria-label="Reload"
+          title="Reload (⌘R)"
+          onClick={onReload}
+        >
+          <RotateCw
+            size={13}
+            strokeWidth={2}
+            className={styles.reloadIcon}
+            data-spinning={reloading ? "true" : "false"}
+          />
         </button>
       )}
     </div>

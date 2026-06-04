@@ -62,3 +62,13 @@
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
+
+.reloadIcon[data-spinning="true"] {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
