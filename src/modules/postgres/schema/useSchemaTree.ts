@@ -13,6 +13,15 @@ import type {
 } from "./types";
 
 /**
+ * Hard safety timeout for `postgres_list_table_extras` IPC calls. The backend
+ * already has a 10s total query timeout and a 3s acquire timeout, so a healthy
+ * call always resolves well under 12s. If 12s passes with no response, treat
+ * it as a failure so the per-table loading spinner cannot persist indefinitely
+ * (see issue #56).
+ */
+const TABLE_EXTRAS_SAFETY_TIMEOUT_MS = 12_000;
+
+/**
  * Background fire-and-forget bulk fetch of every column in `schema` for
  * autocomplete pre-population. Skipped for system schemas. Idempotent
  * (no-op if cache already has the bulk or it's in flight).
@@ -503,11 +512,22 @@ export function useSchemaTree(connectionId: string | null): UseSchemaTreeResult 
   );
 
   /**
+   * Tracks (schema, relation) pairs whose listTableExtras call has already been
+   * "safety-tripped" — i.e. the 12s safety timer fired and dispatched a failure.
+   * Late-arriving resolve/reject for those calls becomes a no-op so the failed
+   * state isn't clobbered by a stale success.
+   */
+  const safetyTrippedRef = useRef<Set<string>>(new Set());
+
+  /**
    * Lazy per-table extras fetch. No auto-retry.
    */
   const runFetchTableExtras = useCallback(
     async (schema: string, relation: string) => {
       if (!connectionId) return;
+      const key = `${schema} ${relation}`;
+      safetyTrippedRef.current.delete(key);
+
       console.debug(
         "[argus.schema] listTableExtras → fetching",
         connectionId,
@@ -517,34 +537,88 @@ export function useSchemaTree(connectionId: string | null): UseSchemaTreeResult 
         relation,
       );
       dispatch({ type: "tableExtrasLoading", schema, relation });
+
+      const SAFETY_TIMEOUT_SENTINEL = Symbol("safety-timeout");
+      let safetyTimer: ReturnType<typeof setTimeout> | null = null;
+      const safetyTimeout = new Promise<typeof SAFETY_TIMEOUT_SENTINEL>((resolve) => {
+        safetyTimer = setTimeout(() => resolve(SAFETY_TIMEOUT_SENTINEL), TABLE_EXTRAS_SAFETY_TIMEOUT_MS);
+      });
+
       try {
-        const payload = await schemaApi.listTableExtras(connectionId, schema, relation);
-        console.debug(
-          "[argus.schema] listTableExtras ←",
-          connectionId,
-          "/",
-          schema,
-          "/",
-          relation,
-          {
-            indexes: payload.indexes?.length ?? -1,
-            triggers: payload.triggers?.length ?? -1,
-            failures: payload.failures.length,
-          },
-        );
-        dispatch({ type: "tableExtrasLoaded", schema, relation, payload });
-      } catch (e) {
-        const err = e instanceof AppError ? e : new AppError("Internal", String(e));
-        console.error(
-          "[argus.schema] listTableExtras failed for",
-          connectionId,
-          "/",
-          schema,
-          "/",
-          relation,
-          err,
-        );
-        dispatch({ type: "tableExtrasFailed", schema, relation, error: err });
+        const result = await Promise.race([
+          schemaApi
+            .listTableExtras(connectionId, schema, relation)
+            .then((payload) => ({ kind: "ok" as const, payload }))
+            .catch((e: unknown) => ({ kind: "err" as const, error: e })),
+          safetyTimeout,
+        ]);
+
+        if (result === SAFETY_TIMEOUT_SENTINEL) {
+          safetyTrippedRef.current.add(key);
+          const err = new AppError(
+            "Internal",
+            `Loading table details timed out (${TABLE_EXTRAS_SAFETY_TIMEOUT_MS / 1000}s).`,
+          );
+          console.error(
+            "[argus.schema] listTableExtras safety timeout for",
+            connectionId,
+            "/",
+            schema,
+            "/",
+            relation,
+          );
+          dispatch({ type: "tableExtrasFailed", schema, relation, error: err });
+          return;
+        }
+
+        // Late branch — IPC actually returned. Treat as a no-op if the safety
+        // timer already fired for this (schema, relation).
+        if (safetyTrippedRef.current.has(key)) {
+          console.debug(
+            "[argus.schema] listTableExtras late response ignored (safety-tripped)",
+            connectionId,
+            "/",
+            schema,
+            "/",
+            relation,
+          );
+          return;
+        }
+
+        if (result.kind === "ok") {
+          const payload = result.payload;
+          console.debug(
+            "[argus.schema] listTableExtras ←",
+            connectionId,
+            "/",
+            schema,
+            "/",
+            relation,
+            {
+              indexes: payload.indexes?.length ?? -1,
+              triggers: payload.triggers?.length ?? -1,
+              failures: payload.failures.length,
+            },
+          );
+          dispatch({ type: "tableExtrasLoaded", schema, relation, payload });
+        } else {
+          const err =
+            result.error instanceof AppError
+              ? result.error
+              : new AppError("Internal", String(result.error));
+          console.error(
+            "[argus.schema] listTableExtras failed for",
+            connectionId,
+            "/",
+            schema,
+            "/",
+            relation,
+            err,
+          );
+          dispatch({ type: "tableExtrasFailed", schema, relation, error: err });
+        }
+      } finally {
+        if (safetyTimer) clearTimeout(safetyTimer);
       }
     },
     [connectionId],

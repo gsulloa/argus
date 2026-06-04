@@ -334,6 +334,15 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
   const onToggleRef = useRef(onToggle);
   onToggleRef.current = onToggle;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(defaultExpanded ?? []));
+  // Mirror `expanded` into a ref so toggleNode/expandNode/collapseNode can
+  // read the current value synchronously without closing over a mutable outer
+  // variable inside the setState updater. The previous pattern (mutating
+  // `nowExpanded` from inside the updater) is broken under React 18
+  // StrictMode dev mode, which double-invokes the updater and observes the
+  // final mutation from the second call — producing the opposite of the user's
+  // actual intent and silently dropping every other expand event.
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const typeAhead = useRef<{ buffer: string; lastAt: number }>({ buffer: "", lastAt: 0 });
@@ -430,46 +439,39 @@ export const SidebarTree = forwardRef<SidebarTreeHandle, SidebarTreeProps>(funct
 
   const expandNode = useCallback(
     (id: string) => {
-      let didExpand = false;
+      if (expandedRef.current.has(id)) return;
       setExpanded((prev) => {
         if (prev.has(id)) return prev;
-        didExpand = true;
         const next = new Set(prev);
         next.add(id);
         return next;
       });
-      if (didExpand) fireToggle(id, true);
+      fireToggle(id, true);
     },
     [fireToggle],
   );
 
   const collapseNode = useCallback(
     (id: string) => {
-      let didCollapse = false;
+      if (!expandedRef.current.has(id)) return;
       setExpanded((prev) => {
         if (!prev.has(id)) return prev;
-        didCollapse = true;
         const next = new Set(prev);
         next.delete(id);
         return next;
       });
-      if (didCollapse) fireToggle(id, false);
+      fireToggle(id, false);
     },
     [fireToggle],
   );
 
   const toggleNode = useCallback(
     (id: string) => {
-      let nowExpanded = false;
+      const nowExpanded = !expandedRef.current.has(id);
       setExpanded((prev) => {
         const next = new Set(prev);
-        if (next.has(id)) {
-          next.delete(id);
-          nowExpanded = false;
-        } else {
-          next.add(id);
-          nowExpanded = true;
-        }
+        if (nowExpanded) next.add(id);
+        else next.delete(id);
         return next;
       });
       fireToggle(id, nowExpanded);
