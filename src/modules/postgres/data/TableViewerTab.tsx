@@ -458,6 +458,10 @@ export function TableViewer({
     tabs.close(tabId);
   }
 
+  // Reload: bump applyToken to unconditionally refetch the current first page
+  // while preserving the applied filter model, sort order, and page size.
+  const onReload = useCallback(() => setApplyToken((t) => t + 1), []);
+
   // Keyboard shortcuts at the tab root. Only attach when this tab is active
   // so multiple mounted tabs don't double-fire window-level shortcuts.
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -518,6 +522,13 @@ export function TableViewer({
           }
         }
       }
+      // ⌘R / Ctrl+R → Reload the current table query (Data subtab only).
+      // Skip when focus is inside a CodeMirror surface (editor action may be bound there).
+      if ((e.metaKey || e.ctrlKey) && e.key === "r" && !e.shiftKey && !e.altKey) {
+        if (document.activeElement?.closest(".cm-editor")) return;
+        e.preventDefault();
+        onReload();
+      }
       // ⌘F / Ctrl+F → D2 state machine (Data subtab only).
       // hidden + focus outside → show + focus first row.
       // visible + focus outside → focus first row.
@@ -549,7 +560,7 @@ export function TableViewer({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, onSave, buffer, activeSubtab, filterBarVisible, setFilterBarVisible]);
+  }, [active, onSave, buffer, activeSubtab, filterBarVisible, setFilterBarVisible, onReload]);
 
   function onAddRow() {
     if (isReadOnly) return;
@@ -616,6 +627,13 @@ export function TableViewer({
         filterBarVisible={filterBarVisible}
         onFilterToggle={() => setFilterBarVisible(!filterBarVisible)}
         visibleTabs={visibleTabs}
+        onReload={onReload}
+        reloadDisabled={
+          data.status === "loading-first" || data.status === "loading-first-retrying"
+        }
+        reloading={
+          data.status === "loading-first" || data.status === "loading-first-retrying"
+        }
       />
       {/* Data subtab: kept mounted so scroll/buffer/grid state survive subtab
           switches; visually hidden when inactive. Structure / Raw mount on

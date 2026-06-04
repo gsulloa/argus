@@ -125,6 +125,7 @@ interface ViewerProps extends MssqlTableDataPayload {
 
 function MssqlTableViewer({
   tabId,
+  active,
   connectionId,
   schema,
   relation,
@@ -381,8 +382,15 @@ function MssqlTableViewer({
         e.preventDefault();
         void handleApply();
       }
+      // ⌘R / Ctrl+R → Reload the current table query (Data subtab only).
+      // Skip when focus is inside a CodeMirror surface.
+      if (active && (e.metaKey || e.ctrlKey) && e.key === "r" && !e.shiftKey && !e.altKey) {
+        if ((e.target as HTMLElement | null)?.closest(".cm-editor")) return;
+        e.preventDefault();
+        tableData.refresh();
+      }
     },
-    [selection, isReadOnly, unifiedRows, tableData.columns, pkColumns, buffer, handleApply],
+    [active, selection, isReadOnly, unifiedRows, tableData, pkColumns, buffer, handleApply],
   );
 
   // §18.8 — Empty state discrimination
@@ -406,6 +414,9 @@ function MssqlTableViewer({
         active={activeSubtab}
         onChange={setActiveSubtab}
         visibleTabs={visibleTabs}
+        onReload={tableData.refresh}
+        reloadDisabled={tableData.isLoading}
+        reloading={tableData.isLoading}
       />
 
       {/* Structure subtab */}
