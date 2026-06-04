@@ -129,6 +129,9 @@ function baseProps(overrides?: Partial<React.ComponentProps<typeof TabView>>) {
     onCancelEdit: vi.fn(),
     savingCell: null,
     isReadOnly: false,
+    // Sort defaults
+    sorting: [] as import("@tanstack/react-table").SortingState,
+    onSortingChange: vi.fn(),
     ...overrides,
   };
 }
@@ -534,5 +537,239 @@ describe("TabView — empty state", () => {
   it("shows 'Query returned an error.' when error with no items", () => {
     render(<TabView {...baseProps({ status: "error", items: [] })} />);
     expect(screen.getByText("Query returned an error.")).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sort — click cycling (task 4.1)
+// ---------------------------------------------------------------------------
+
+describe("TabView — sort header clicks", () => {
+  it("plain-click calls onSortingChange with the toggled column", () => {
+    const onSortingChange = vi.fn();
+    const items: AttributeMap[] = [
+      { pk: { S: "1" }, quantity: { N: "5" } },
+    ];
+    render(
+      <TabView
+        {...baseProps({ items, onSortingChange, sorting: [] })}
+      />,
+    );
+
+    const headers = screen.getAllByRole("columnheader");
+    // Find the "quantity" header
+    const qtyHeader = headers.find((h) => h.textContent?.includes("quantity"));
+    expect(qtyHeader).toBeTruthy();
+    fireEvent.click(qtyHeader!);
+
+    // onSortingChange should have been called
+    expect(onSortingChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("More… header click does NOT call onSortingChange", () => {
+    const onSortingChange = vi.fn();
+    const items: AttributeMap[] = [{ pk: { S: "1" } }];
+    render(
+      <TabView
+        {...baseProps({ items, onSortingChange, sorting: [] })}
+      />,
+    );
+
+    const headers = screen.getAllByRole("columnheader");
+    const moreHeader = headers[headers.length - 1]!;
+    // Ensure we found the More… header
+    expect(moreHeader.textContent).toContain("…");
+    fireEvent.click(moreHeader);
+
+    expect(onSortingChange).not.toHaveBeenCalled();
+  });
+
+  it("renders ▲ indicator when column is sorted asc", () => {
+    const items: AttributeMap[] = [
+      { pk: { S: "1" }, quantity: { N: "5" } },
+    ];
+    render(
+      <TabView
+        {...baseProps({
+          items,
+          sorting: [{ id: "quantity", desc: false }],
+        })}
+      />,
+    );
+
+    const headers = screen.getAllByRole("columnheader");
+    const qtyHeader = headers.find((h) => h.textContent?.includes("quantity"));
+    expect(qtyHeader?.textContent).toContain("▲");
+  });
+
+  it("renders ▼ indicator when column is sorted desc", () => {
+    const items: AttributeMap[] = [
+      { pk: { S: "1" }, quantity: { N: "5" } },
+    ];
+    render(
+      <TabView
+        {...baseProps({
+          items,
+          sorting: [{ id: "quantity", desc: true }],
+        })}
+      />,
+    );
+
+    const headers = screen.getAllByRole("columnheader");
+    const qtyHeader = headers.find((h) => h.textContent?.includes("quantity"));
+    expect(qtyHeader?.textContent).toContain("▼");
+  });
+
+  it("renders ordinals when ≥2 columns are sorted", () => {
+    const items: AttributeMap[] = [
+      { pk: { S: "1" }, status: { S: "active" }, quantity: { N: "5" } },
+    ];
+    render(
+      <TabView
+        {...baseProps({
+          items,
+          sorting: [
+            { id: "status", desc: false },
+            { id: "quantity", desc: false },
+          ],
+        })}
+      />,
+    );
+
+    const headers = screen.getAllByRole("columnheader");
+    const statusHeader = headers.find((h) => h.textContent?.includes("status"));
+    const qtyHeader = headers.find((h) => h.textContent?.includes("quantity"));
+
+    // Both should have arrow + ordinal
+    expect(statusHeader?.textContent).toContain("▲");
+    expect(statusHeader?.textContent).toContain("1");
+    expect(qtyHeader?.textContent).toContain("▲");
+    expect(qtyHeader?.textContent).toContain("2");
+  });
+
+  it("no sort indicator on More… header regardless of active sort", () => {
+    const items: AttributeMap[] = [
+      { pk: { S: "1" }, quantity: { N: "5" } },
+    ];
+    render(
+      <TabView
+        {...baseProps({
+          items,
+          sorting: [{ id: "quantity", desc: false }],
+        })}
+      />,
+    );
+
+    const headers = screen.getAllByRole("columnheader");
+    const moreHeader = headers[headers.length - 1]!;
+    // More… column should never have sort arrows
+    expect(moreHeader.textContent).not.toContain("▲");
+    expect(moreHeader.textContent).not.toContain("▼");
+  });
+
+  it("resize handle click does NOT call onSortingChange", () => {
+    const onSortingChange = vi.fn();
+    const items: AttributeMap[] = [
+      { pk: { S: "1" }, quantity: { N: "5" } },
+    ];
+    render(
+      <TabView
+        {...baseProps({ items, onSortingChange, sorting: [] })}
+      />,
+    );
+
+    // The ResizeHandle renders a div inside the header — click it
+    // We look for an element with the role=columnheader for "quantity"
+    const headers = screen.getAllByRole("columnheader");
+    const qtyHeader = headers.find((h) => h.textContent?.includes("quantity"));
+    expect(qtyHeader).toBeTruthy();
+
+    // Find the resize handle wrapper span (the one with stopPropagation)
+    // The ResizeHandle is the last child inside the header - click it via its parent span
+    const resizeSpan = qtyHeader!.querySelector("span:last-child");
+    if (resizeSpan) {
+      fireEvent.click(resizeSpan);
+    }
+
+    // onSortingChange should NOT be called since propagation is stopped
+    expect(onSortingChange).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sort — rows ordered by sorting state (task 4.2: sort survives Load more)
+// ---------------------------------------------------------------------------
+
+describe("TabView — sort row ordering", () => {
+  it("renders rows in sorted order when sorting state is active", () => {
+    const items: AttributeMap[] = [
+      { pk: { S: "a" }, quantity: { N: "10" } },
+      { pk: { S: "b" }, quantity: { N: "2" } },
+      { pk: { S: "c" }, quantity: { N: "5" } },
+    ];
+    render(
+      <TabView
+        {...baseProps({
+          items,
+          sorting: [{ id: "quantity", desc: false }],
+        })}
+      />,
+    );
+
+    const rows = screen.getAllByTestId("tabla-row");
+    // Sorted asc by quantity: 2, 5, 10 → pk b, c, a
+    const cellTexts = rows.map((r) => {
+      const pkCell = r.querySelector("[data-testid='tabla-cell']");
+      return pkCell?.textContent ?? "";
+    });
+    expect(cellTexts[0]).toBe("b");
+    expect(cellTexts[1]).toBe("c");
+    expect(cellTexts[2]).toBe("a");
+  });
+
+  it("sort survives Load more — appended items are merged and sorted", () => {
+    const page1: AttributeMap[] = [
+      { pk: { S: "a" }, quantity: { N: "10" } },
+      { pk: { S: "b" }, quantity: { N: "2" } },
+      { pk: { S: "c" }, quantity: { N: "5" } },
+    ];
+
+    const { rerender } = render(
+      <TabView
+        {...baseProps({
+          items: page1,
+          sorting: [{ id: "quantity", desc: true }],
+        })}
+      />,
+    );
+
+    // After Load more, page2 has 3 more items
+    const page2: AttributeMap[] = [
+      ...page1,
+      { pk: { S: "d" }, quantity: { N: "1" } },
+      { pk: { S: "e" }, quantity: { N: "8" } },
+      { pk: { S: "f" }, quantity: { N: "3" } },
+    ];
+
+    rerender(
+      <TabView
+        {...baseProps({
+          items: page2,
+          sorting: [{ id: "quantity", desc: true }],
+        })}
+      />,
+    );
+
+    // Desc order: 10, 8, 5, 3, 2, 1 → pk a, e, c, f, b, d
+    const rows = screen.getAllByTestId("tabla-row");
+    expect(rows).toHaveLength(6);
+
+    const pkTexts = rows.map((r) => {
+      const pkCell = r.querySelector("[data-testid='tabla-cell']");
+      return pkCell?.textContent ?? "";
+    });
+    expect(pkTexts[0]).toBe("a");  // quantity 10
+    expect(pkTexts[1]).toBe("e");  // quantity 8
+    expect(pkTexts[5]).toBe("d");  // quantity 1
   });
 });

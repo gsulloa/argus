@@ -23,8 +23,11 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   flexRender,
   getCoreRowModel,
+  getSortedRowModel,
   useReactTable,
   type ColumnDef,
+  type OnChangeFn,
+  type SortingState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Loader2, MoreHorizontal } from "lucide-react";
@@ -39,6 +42,7 @@ import {
   type ColumnSpec,
 } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
+import { makeSortingFn } from "./dynamoSortHelpers";
 import styles from "./TabView.module.css";
 
 // ---------------------------------------------------------------------------
@@ -95,6 +99,10 @@ export interface TabViewProps {
   savingCell: EditingCell | null;
   /** Disables all double-click edit affordances when true. */
   isReadOnly: boolean;
+  /** Current sort state — persisted by the parent via useDynamoSort. */
+  sorting: SortingState;
+  /** Called by TanStack when the user clicks a sortable header. */
+  onSortingChange: OnChangeFn<SortingState>;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +352,8 @@ export function TabView({
   onCancelEdit,
   savingCell,
   isReadOnly,
+  sorting,
+  onSortingChange,
 }: TabViewProps) {
   // ── Inferred columns ─────────────────────────────────────────────────────
   const inferredCols = useInferredColumns(items, describe, indexName);
@@ -400,6 +410,7 @@ export function TabView({
             id: MORE_COLUMN_ID,
             header: "…",
             size: widthFor(MORE_COLUMN_ID),
+            enableSorting: false,
             cell: (info) => {
               const rowIndex = info.row.index;
               return (
@@ -424,6 +435,11 @@ export function TabView({
           header: col.id,
           size: widthFor(col.id),
           accessorFn: (row: AttributeMap) => row[col.id],
+          enableSorting: true,
+          // sortUndefined: "last" keeps missing-attribute rows at the bottom in
+          // both asc and desc — TanStack respects this before calling sortingFn.
+          sortUndefined: "last",
+          sortingFn: makeSortingFn(col.category as ColumnCategory),
           cell: (info) => {
             const val = info.getValue() as AttributeValue | undefined;
             const rowIdx = info.row.index;
@@ -451,7 +467,6 @@ export function TabView({
           },
         };
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [inferredCols, widthFor, onSelect, editingCell, savingCell, keyColumns, isReadOnly, onStartEdit, onCommitEdit, onCancelEdit],
   );
 
@@ -460,6 +475,12 @@ export function TabView({
     data: items,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    state: { sorting },
+    onSortingChange,
+    enableMultiSort: true,
+    enableSortingRemoval: true,
+    enableMultiRemove: true,
     getRowId: (_row, index) => String(index),
   });
 
@@ -545,12 +566,17 @@ export function TabView({
                 const isKey = col?.isKey ?? false;
                 const isMore = header.id === MORE_COLUMN_ID;
                 const w = widthFor(header.id);
+                const isSorted = !isMore ? header.column.getIsSorted() : false;
+                const sortIndex = !isMore ? header.column.getSortIndex() : -1;
+                const multiSort = table.getState().sorting.length >= 2;
+                const sortArrow = isSorted === "asc" ? "▲" : isSorted === "desc" ? "▼" : null;
                 return (
                   <div
                     key={header.id}
-                    className={`${styles.headerCell} ${isKey ? styles.headerCellKey : ""}`}
+                    className={`${styles.headerCell} ${isKey ? styles.headerCellKey : ""} ${!isMore ? styles.headerCellSortable : ""}`}
                     style={{ width: w, height: HEADER_HEIGHT }}
                     role="columnheader"
+                    onClick={!isMore ? header.column.getToggleSortingHandler() : undefined}
                   >
                     {isMore ? (
                       <span style={{ color: "var(--text-subtle)", fontSize: 11 }}>…</span>
@@ -565,11 +591,23 @@ export function TabView({
                               : "SK"}
                           </span>
                         )}
-                        <ResizeHandle
-                          currentWidth={w}
-                          onChange={(px) => setWidth(header.id, px)}
-                          onReset={() => resetWidth(header.id)}
-                        />
+                        {sortArrow !== null && (
+                          <span className={`${styles.sortIndicator} ${multiSort ? styles.sortIndicatorMulti : ""}`}>
+                            {sortArrow}{multiSort ? ` ${sortIndex + 1}` : ""}
+                          </span>
+                        )}
+                        {/* Wrap ResizeHandle to stop click propagation so
+                            resize gestures don't toggle the column sort. */}
+                        <span
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          <ResizeHandle
+                            currentWidth={w}
+                            onChange={(px) => setWidth(header.id, px)}
+                            onReset={() => resetWidth(header.id)}
+                          />
+                        </span>
                       </>
                     )}
                   </div>

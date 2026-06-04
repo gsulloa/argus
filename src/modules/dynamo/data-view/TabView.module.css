@@ -63,6 +63,28 @@
   color: var(--text);
 }
 
+/* Sortable header hover affordance — subtle, no decorative gradients. */
+.headerCellSortable {
+  cursor: pointer;
+}
+.headerCellSortable:hover {
+  background: var(--surface-2);
+}
+
+/* Sort direction indicator (▲/▼ + optional ordinal). */
+.sortIndicator {
+  font-size: 10px;
+  color: var(--text-subtle);
+  flex-shrink: 0;
+  user-select: none;
+  margin-left: 2px;
+}
+
+/* When ≥2 columns are sorted, highlight the indicator with the accent color. */
+.sortIndicatorMulti {
+  color: var(--accent);
+}
+
 .keyBadge {
   font-family: var(--font-mono);
   font-size: 10px;

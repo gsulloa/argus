@@ -143,6 +143,9 @@ function baseTabViewProps(
     onCancelEdit: vi.fn(),
     savingCell: null,
     isReadOnly: false,
+    // Sort defaults
+    sorting: [] as import("@tanstack/react-table").SortingState,
+    onSortingChange: vi.fn(),
     ...overrides,
   };
 }
