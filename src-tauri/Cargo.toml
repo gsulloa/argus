@@ -1,6 +1,6 @@
 [package]
 name = "argus"
-version = "0.1.24"
+version = "0.1.25"
 description = "A Tauri 2 desktop app for inspecting and editing data across multiple sources (Postgres, with DynamoDB and CloudWatch coming next)."
 authors = ["Gabriel Ulloa <gabriel.ulloa.e@gmail.com>"]
 license = "MIT"
