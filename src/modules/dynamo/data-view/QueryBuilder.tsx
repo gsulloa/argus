@@ -140,6 +140,8 @@ interface TypedValueEditorProps {
   /** When provided, sets `data-filter-focus-target` on the value input. */
   "data-filter-focus-target"?: string;
   onRun?(): void;
+  /** "grow" stretches the input to fill remaining row width (key rows only). */
+  variant?: "default" | "grow";
 }
 
 function TypedValueEditor({
@@ -149,8 +151,12 @@ function TypedValueEditor({
   "data-testid": testId,
   "data-filter-focus-target": focusTarget,
   onRun,
+  variant,
 }: TypedValueEditorProps) {
   const effectiveType = fixedType ?? value.type;
+  const inputClassName = variant === "grow"
+    ? `${styles.textInput} ${styles.keyValueInput}`
+    : styles.textInput;
 
   function handleTypeChange(t: string) {
     switch (t) {
@@ -192,7 +198,7 @@ function TypedValueEditor({
     editor = (
       <input
         type="text"
-        className={styles.textInput}
+        className={inputClassName}
         value={v}
         onChange={(e) => onChange({ type: "S", value: e.target.value })}
         onKeyDown={(e) => {
@@ -213,7 +219,7 @@ function TypedValueEditor({
       <input
         type="text"
         inputMode="decimal"
-        className={styles.textInput}
+        className={inputClassName}
         value={v}
         onChange={(e) => {
           const raw = e.target.value;
@@ -848,6 +854,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
                 fixedType={keySchema.pkType}
                 data-testid="pk-value"
                 data-filter-focus-target={isPkEmpty ? "pk" : undefined}
+                variant="grow"
               />
               {pkHint && (
                 <span className={styles.hint} role="alert" data-testid="pk-hint">
@@ -930,7 +937,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
                       <input
                         type="text"
                         inputMode={keySchema.skType === "N" ? "decimal" : "text"}
-                        className={styles.textInput}
+                        className={`${styles.textInput} ${styles.keyValueInput}`}
                         value={
                           isTypedValue(builder.query.sortKey.value)
                             ? (builder.query.sortKey.value.type === "N" || builder.query.sortKey.value.type === "S"

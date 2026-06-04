@@ -124,6 +124,13 @@
   min-width: 120px;
 }
 
+/* Grow variant — used only in partition-key and sort-key rows so the
+   value editor fills the remaining row width without affecting filter rows. */
+.keyValueInput {
+  flex: 1 1 240px;
+  min-width: 120px;
+}
+
 .textInput:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);

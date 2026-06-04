@@ -156,6 +156,8 @@ function EditingHarness({
       onCancelEdit={() => setEditingCell(null)}
       savingCell={null}
       isReadOnly={isReadOnly}
+      sorting={[]}
+      onSortingChange={() => {}}
     />
   );
 }

@@ -47,6 +47,7 @@ import type { TableDescription } from "@/modules/dynamo/tables/types";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { useCloseConfirm, useActivateConfirm } from "@/platform/shell/tabs/useCloseConfirm";
 import { useDynamoItems } from "./useDynamoItems";
+import { useDynamoSort } from "./useDynamoSort";
 import { useDynamoInspectorWidth } from "./useInspectorWidth";
 import { useCount } from "./useCount";
 import type { BuilderState, AttributeMap, AttributeValue } from "./types";
@@ -333,6 +334,9 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
   // ── Settings — page size ──────────────────────────────────────────────────
   const pageSizeKey = `dynamoLimit:${connectionId}:${tableName}`;
   const [pageSize, setPageSize] = useSetting<number>(pageSizeKey, 100);
+
+  // ── Sort state — client-side column sort (#58) ────────────────────────────
+  const { sorting, setSorting } = useDynamoSort(connectionId, tableName);
 
   // ── Settings — version attribute for optimistic locking (task 10.1) ───────
   const versionAttrKey = `dynamoVersionAttr:${connectionId}:${tableName}`;
@@ -910,6 +914,8 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
                 onCancelEdit={() => setEditingCell(null)}
                 savingCell={savingCell}
                 isReadOnly={isReadOnly}
+                sorting={sorting}
+                onSortingChange={setSorting}
               />
             ) : (
               <JsonView
