@@ -48,6 +48,14 @@ function toPercent(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
 }
 
+function toDraft(model: InspectedModel): ModelDraft {
+  return {
+    name: model.name,
+    access_patterns: model.access_patterns,
+    body: model.body ?? undefined,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // ProposalCard sub-component
 // ---------------------------------------------------------------------------
@@ -208,6 +216,19 @@ export function InspectorReview({
           ? `${proposals.length} model proposal${proposals.length === 1 ? "" : "s"}`
           : "Generate models with AI";
 
+  // Proposals whose access patterns all resolve against the live table schema.
+  const validProposals = proposals.filter(
+    (m) => validateDraft(toDraft(m), describe).valid,
+  );
+
+  async function handleSaveAll() {
+    // Snapshot the valid drafts now; the list mutates as each save removes a card.
+    const drafts = validProposals.map(toDraft);
+    for (const draft of drafts) {
+      await Promise.resolve(onAccept(draft));
+    }
+  }
+
   return (
     <Dialog.Root open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
@@ -257,7 +278,18 @@ export function InspectorReview({
             {/* Proposals */}
             {(status === "done" || proposals.length > 0) && proposals.length === 0 && status !== "running" && (
               <div className={styles.emptyState} data-testid="inspector-empty">
-                No model proposals were generated.
+                No proposals to review. Saved models appear in the “By model”
+                selector; anything you didn’t save was not written.
+              </div>
+            )}
+
+            {proposals.length > 0 && (
+              <div className={styles.intro} data-testid="inspector-intro">
+                Review each proposal below and click{" "}
+                <span className={styles.introStrong}>Save</span> on the ones you want.
+                Models are written to your context folder only when you save —{" "}
+                <span className={styles.introStrong}>nothing is saved automatically</span>.
+                Saved proposals disappear from this list.
               </div>
             )}
 
@@ -269,11 +301,7 @@ export function InspectorReview({
                 saving={saving}
                 onEdit={() => onEdit(model)}
                 onAccept={() => {
-                  void onAccept({
-                    name: model.name,
-                    access_patterns: model.access_patterns,
-                    body: model.body ?? undefined,
-                  });
+                  void onAccept(toDraft(model));
                 }}
                 onDiscard={() => onDiscard(model.name)}
               />
@@ -282,14 +310,34 @@ export function InspectorReview({
 
           {/* Footer */}
           <div className={styles.footer}>
-            <button
-              type="button"
-              className={`${styles.btn} ${styles.btnSecondary}`}
-              onClick={onClose}
-              data-testid="inspector-review-close"
-            >
-              Close
-            </button>
+            <span className={styles.footerInfo} data-testid="inspector-footer-info">
+              {validProposals.length > 0
+                ? `${validProposals.length} valid · ${proposals.length} total`
+                : proposals.length > 0
+                  ? `${proposals.length} proposal${proposals.length === 1 ? "" : "s"} — none valid yet`
+                  : ""}
+            </span>
+            <div className={styles.footerActions}>
+              {validProposals.length > 0 && (
+                <button
+                  type="button"
+                  className={`${styles.btn} ${styles.btnPrimary}`}
+                  onClick={() => void handleSaveAll()}
+                  disabled={saving}
+                  data-testid="inspector-save-all"
+                >
+                  {saving ? "Saving…" : `Save all valid (${validProposals.length})`}
+                </button>
+              )}
+              <button
+                type="button"
+                className={`${styles.btn} ${styles.btnSecondary}`}
+                onClick={onClose}
+                data-testid="inspector-review-close"
+              >
+                {proposals.length > 0 ? "Close without saving rest" : "Close"}
+              </button>
+            </div>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

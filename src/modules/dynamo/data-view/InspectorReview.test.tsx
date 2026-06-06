@@ -253,4 +253,44 @@ describe("InspectorReview", () => {
       expect(screen.getByTestId("proposal-name-BadModel")).toBeInTheDocument();
     });
   });
+
+  // ── Test 9: Save-state clarity (intro + Save all valid) ───────────────────
+  describe("save-state clarity", () => {
+    it("shows the 'nothing is saved automatically' intro when proposals exist", () => {
+      renderReview();
+      expect(screen.getByTestId("inspector-intro")).toHaveTextContent(
+        /nothing is saved automatically/i,
+      );
+    });
+
+    it("shows a 'Save all valid' button counting only valid proposals", () => {
+      renderReview({ proposals: [VALID_PROPOSAL, INVALID_PROPOSAL] });
+      const saveAll = screen.getByTestId("inspector-save-all");
+      // Only the one valid proposal is counted.
+      expect(saveAll).toHaveTextContent("Save all valid (1)");
+    });
+
+    it("Save all valid accepts every valid proposal and skips invalid ones", async () => {
+      const valid2: InspectedModel = { ...VALID_PROPOSAL, name: "Customer" };
+      const { onAccept } = renderReview({
+        proposals: [VALID_PROPOSAL, valid2, INVALID_PROPOSAL],
+      });
+
+      fireEvent.click(screen.getByTestId("inspector-save-all"));
+
+      await waitFor(() => {
+        expect(onAccept).toHaveBeenCalledTimes(2);
+      });
+      const names = onAccept.mock.calls.map(
+        (c) => (c[0] as { name: string }).name,
+      );
+      expect(names).toEqual(["Order", "Customer"]);
+      expect(names).not.toContain("BadModel");
+    });
+
+    it("hides 'Save all valid' when no proposal is valid", () => {
+      renderReview({ proposals: [INVALID_PROPOSAL] });
+      expect(screen.queryByTestId("inspector-save-all")).not.toBeInTheDocument();
+    });
+  });
 });

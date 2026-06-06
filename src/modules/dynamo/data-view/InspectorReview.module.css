@@ -89,11 +89,28 @@
 
 .body {
   flex: 1;
+  /* min-height:0 lets this flex child shrink below its content size so
+     overflow-y can actually scroll instead of expanding past the dialog
+     (and being clipped by .dialog's overflow:hidden). */
+  min-height: 0;
   overflow-y: auto;
   padding: var(--space-md, 16px);
   display: flex;
   flex-direction: column;
   gap: var(--space-md, 16px);
+}
+
+/* ── Intro / help line above the proposal list ───────────────────── */
+
+.intro {
+  font-size: var(--text-sm, 12px);
+  color: var(--text-muted, #a0a2ad);
+  line-height: 1.5;
+}
+
+.introStrong {
+  color: var(--text, #f2f3f7);
+  font-weight: 500;
 }
 
 /* ── Running / loading state ─────────────────────────────────────── */
@@ -380,9 +397,25 @@
 .footer {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   padding: 10px 16px;
   border-top: 1px solid var(--border, #23232c);
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.footerInfo {
+  font-size: var(--text-sm, 12px);
+  color: var(--text-subtle, #6b6e7b);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.footerActions {
+  display: flex;
+  align-items: center;
   gap: 8px;
   flex-shrink: 0;
 }
