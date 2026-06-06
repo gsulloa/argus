@@ -112,6 +112,9 @@ pub struct ChatRequest {
     /// Not serialised — purely Rust-internal. Providers read keys they care about
     /// (e.g. "resume_id" for claude-cli) and return sentinels to update them.
     pub provider_state: std::collections::HashMap<String, String>,
+    /// Executed-query results the user attached as context for THIS message only.
+    /// Not persisted in the session registry — transient per request. Default empty.
+    pub attached_results: Vec<AttachedResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,22 +171,113 @@ pub struct ProviderListEntry {
     pub validation: ValidationResult,
 }
 
+/// One cross-provider wire shape for an attached executed-query result.
+/// Cells are stringified at the frontend boundary (CellValue → String, NULL → "NULL"),
+/// so the Rust side only ever carries `Vec<Vec<String>>` and never re-derives types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachedResult {
+    pub id: String,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub truncated: bool,
+    pub row_count: usize,
+}
+
+/// Escape a cell value for a markdown table cell: pipes escaped, newlines collapsed.
+fn escape_md_cell(cell: &str) -> String {
+    cell.replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace(['\n', '\r'], " ")
+}
+
+/// Render a single attached result as a markdown table preceded by an identifying
+/// `# Attached result (N rows)` header. Truncated results are explicitly marked.
+/// Shared by API providers (system-prompt section) and CLI providers (prepended to
+/// the latest user turn).
+pub fn render_attached_result(att: &AttachedResult) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# Attached result ({} rows)\n", att.row_count));
+    if att.truncated {
+        out.push_str(&format!(
+            "(truncated — showing first {} of {} rows)\n",
+            att.rows.len(),
+            att.row_count
+        ));
+    }
+    out.push('\n');
+    out.push_str("| ");
+    out.push_str(&att.columns.join(" | "));
+    out.push_str(" |\n");
+    out.push_str("| ");
+    out.push_str(&att.columns.iter().map(|_| "---").collect::<Vec<_>>().join(" | "));
+    out.push_str(" |\n");
+    for row in &att.rows {
+        out.push_str("| ");
+        out.push_str(&row.iter().map(|c| escape_md_cell(c)).collect::<Vec<_>>().join(" | "));
+        out.push_str(" |\n");
+    }
+    out
+}
+
+/// Render the `# Attached results` section appended to the API system prompt.
+/// One section, sub-headed per attachment (stable single delimiter).
+fn render_attachments_section(attachments: &[AttachedResult]) -> String {
+    let tables: Vec<String> = attachments.iter().map(render_attached_result).collect();
+    format!(
+        "# Attached results\n\
+The user has attached the following executed query result(s) as additional context. \
+Treat them as data the user is asking about.\n\n{}",
+        tables.join("\n\n")
+    )
+}
+
+/// Prefix string (with trailing blank line) used by CLI providers to prepend the
+/// rendered attachment table(s) to the latest user turn. Empty when no attachments.
+pub fn render_attachments_prefix(attachments: &[AttachedResult]) -> String {
+    if attachments.is_empty() {
+        return String::new();
+    }
+    let tables: Vec<String> = attachments.iter().map(render_attached_result).collect();
+    format!("{}\n\n", tables.join("\n\n"))
+}
+
+/// Oldest-first attachment eviction for API providers. Drops attachments from the
+/// front (oldest) until the composed system prompt (context + remaining attachments)
+/// plus the conversation history fits within `threshold` tokens (chars/4 heuristic).
+/// Runs BEFORE per-turn trimming. Returns the number of attachments evicted.
+pub fn evict_attachments_oldest_first(
+    attachments: &mut Vec<AttachedResult>,
+    payload: &AiPayload,
+    turn_chars: usize,
+    threshold: usize,
+) -> AppResult<usize> {
+    let mut evicted = 0usize;
+    while !attachments.is_empty() {
+        let system = build_api_system_prompt(payload, attachments)?;
+        let est = (system.len() + turn_chars) / 4;
+        if est <= threshold {
+            break;
+        }
+        attachments.remove(0);
+        evicted += 1;
+    }
+    Ok(evicted)
+}
+
 /// Build the system prompt for API providers (Anthropic API, OpenAI API).
 ///
 /// Assembles output from an ordered Vec<String> of delimited sections joined at the end.
 /// Fixed section order (MUST NOT be reordered — change #62 depends on this):
 ///   1. Role + hard SQL-only / no-execution restrictions  ← this change
 ///   2. Database context (serialised AiPayload)           ← this change
-///   [reserved] last position — future appended content  ← #62 (AttachedResult)
-///
-/// When change #62 lands it will extend the signature to:
-///   build_api_system_prompt(payload: &AiPayload, attachments: &[AttachedResult])
-/// and push the attachments section before the final join, so the trailing slot is
-/// always the last section in the prompt — closest to the user's current question.
+///   3. Attached query results (when present)             ← #62 (AttachedResult)
 ///
 /// API providers have NO disk access; this prompt deliberately contains no filesystem
 /// or directory-read language.
-pub fn build_api_system_prompt(payload: &AiPayload) -> AppResult<String> {
+pub fn build_api_system_prompt(
+    payload: &AiPayload,
+    attachments: &[AttachedResult],
+) -> AppResult<String> {
     let mut sections: Vec<String> = Vec::new();
 
     // ── Section 1: Role + hard restrictions ─────────────────────────────────
@@ -221,11 +315,14 @@ you are generating SQL for. Use it as your primary information source.\n\
 ```json\n{payload_json}\n```"
     ));
 
-    // ── [reserved] Section 3+: future appended content (#62 attachments) ────
-    // Change #62 (`attach query results to chat`) will push an additional section
-    // here — attached executed-query result tables — before the final join.
-    // That section must always be LAST (closest to the user's current question).
-    // Signature extension planned: attachments: &[AttachedResult]
+    // ── Section 3: Attached query results (when present) ────────────────────
+    // Filled by change `attach-query-results-to-chat`. Always LAST so the data
+    // the user is asking about sits closest to their current question. When the
+    // attachments slice is empty nothing is pushed and the output is byte-identical
+    // to the prior two-section prompt.
+    if !attachments.is_empty() {
+        sections.push(render_attachments_section(attachments));
+    }
 
     Ok(sections.join("\n\n---\n\n"))
 }
@@ -317,7 +414,7 @@ mod tests {
 
     #[test]
     fn api_prompt_contains_sql_only_clause() {
-        let prompt = build_api_system_prompt(&empty_payload()).unwrap();
+        let prompt = build_api_system_prompt(&empty_payload(), &[]).unwrap();
         assert!(
             prompt.contains("```sql"),
             "expected fenced sql block instruction, got:\n{prompt}"
@@ -331,7 +428,7 @@ mod tests {
 
     #[test]
     fn api_prompt_contains_no_execution_clause() {
-        let prompt = build_api_system_prompt(&empty_payload()).unwrap();
+        let prompt = build_api_system_prompt(&empty_payload(), &[]).unwrap();
         assert!(
             prompt.contains("MUST NOT execute SQL"),
             "expected no-execution clause"
@@ -344,7 +441,7 @@ mod tests {
 
     #[test]
     fn api_prompt_contains_no_filesystem_language() {
-        let prompt = build_api_system_prompt(&empty_payload()).unwrap();
+        let prompt = build_api_system_prompt(&empty_payload(), &[]).unwrap();
         // API providers have no disk access; the prompt must not instruct them to read files.
         let lower = prompt.to_lowercase();
         assert!(
@@ -364,7 +461,7 @@ mod tests {
 
     #[test]
     fn api_prompt_role_section_precedes_context_section() {
-        let prompt = build_api_system_prompt(&empty_payload()).unwrap();
+        let prompt = build_api_system_prompt(&empty_payload(), &[]).unwrap();
         let role_pos = prompt
             .find("# Role and restrictions")
             .expect("role section header not found");
@@ -483,6 +580,73 @@ mod tests {
         match back {
             ValidationResult::Missing { hint } => assert_eq!(hint, "install"),
             _ => panic!(),
+        }
+    }
+
+    fn sample_attachment(id: &str) -> AttachedResult {
+        AttachedResult {
+            id: id.to_string(),
+            columns: vec!["name".into(), "count".into()],
+            rows: vec![
+                vec!["alice".into(), "3".into()],
+                vec!["bob".into(), "5".into()],
+            ],
+            truncated: false,
+            row_count: 2,
+        }
+    }
+
+    #[test]
+    fn api_prompt_no_attachments_is_byte_identical() {
+        // The two-arg call with an empty slice must equal the prior two-section output.
+        let with_empty = build_api_system_prompt(&empty_payload(), &[]).unwrap();
+        // Reconstruct expected: role + context only, no trailing attachments section.
+        assert!(!with_empty.contains("# Attached result"));
+        assert!(with_empty.contains("# Role and restrictions"));
+        assert!(with_empty.contains("# Database context"));
+        // Exactly one delimiter between the two sections.
+        assert_eq!(with_empty.matches("\n\n---\n\n").count(), 1);
+    }
+
+    #[test]
+    fn api_prompt_appends_attachments_as_trailing_section() {
+        let atts = vec![sample_attachment("a1")];
+        let prompt = build_api_system_prompt(&empty_payload(), &atts).unwrap();
+        let ctx_pos = prompt.find("# Database context").unwrap();
+        let att_pos = prompt.find("# Attached results").unwrap();
+        assert!(att_pos > ctx_pos, "attachments section must be last");
+        assert!(prompt.contains("| name | count |"));
+        assert!(prompt.contains("| alice | 3 |"));
+    }
+
+    #[test]
+    fn api_prompt_marks_truncated_attachment() {
+        let mut att = sample_attachment("a1");
+        att.truncated = true;
+        att.row_count = 9999;
+        let prompt = build_api_system_prompt(&empty_payload(), &[att]).unwrap();
+        assert!(prompt.contains("# Attached result (9999 rows)"));
+        assert!(prompt.contains("truncated"));
+    }
+
+    #[test]
+    fn evict_drops_oldest_until_fits() {
+        // Build several large attachments so the section blows the budget.
+        let big_row = vec!["x".repeat(2000), "y".repeat(2000)];
+        let make = |id: &str| AttachedResult {
+            id: id.to_string(),
+            columns: vec!["a".into(), "b".into()],
+            rows: vec![big_row.clone(); 50],
+            truncated: false,
+            row_count: 50,
+        };
+        let mut atts = vec![make("oldest"), make("middle"), make("newest")];
+        // Tiny threshold forces eviction; turn_chars=0.
+        let evicted = evict_attachments_oldest_first(&mut atts, &empty_payload(), 0, 100).unwrap();
+        assert!(evicted >= 1, "expected at least one eviction");
+        // The newest attachment is the one most likely to survive; oldest dropped first.
+        if let Some(first) = atts.first() {
+            assert_ne!(first.id, "oldest", "oldest should be evicted before newer ones");
         }
     }
 

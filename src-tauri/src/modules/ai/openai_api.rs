@@ -10,8 +10,9 @@ use crate::modules::ai::caps::{context_window, OPENAI_API_DEFAULT_MODEL, OPENAI_
 use crate::modules::ai::keys::{self, ACCOUNT_OPENAI};
 use crate::modules::ai::provider::AiProvider;
 use crate::modules::ai::types::{
-    build_api_system_prompt, extract_fenced_block, Capabilities, ChatDelta, ChatRequest, ChatRole,
-    ChatStream, GenerateDelta, GenerateRequest, GenerateStream, ProviderId, ValidationResult,
+    build_api_system_prompt, evict_attachments_oldest_first, extract_fenced_block, Capabilities,
+    ChatDelta, ChatRequest, ChatRole, ChatStream, GenerateDelta, GenerateRequest, GenerateStream,
+    ProviderId, ValidationResult,
 };
 
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(3);
@@ -141,7 +142,7 @@ impl AiProvider for OpenAiApi {
             .map_err(|e| AppError::Keychain(format!("read openai key: {e}")))?
             .ok_or_else(|| AppError::Validation("OpenAI API key not configured".into()))?;
 
-        let system_prompt = build_api_system_prompt(&req.context_payload)?;
+        let system_prompt = build_api_system_prompt(&req.context_payload, &[])?;
         let body = json!({
             "model": model,
             "max_tokens": 4096,
@@ -225,13 +226,20 @@ impl AiProvider for OpenAiApi {
             .map_err(|e| AppError::Keychain(format!("read openai key: {e}")))?
             .ok_or_else(|| AppError::Validation("OpenAI API key not configured".into()))?;
 
-        // 3. Build system prompt.
-        let system_prompt = build_api_system_prompt(&req.context_payload)?;
-
-        // 4. Context-window trimming.
+        // 3. Context-window budget.
         let window = context_window(&model);
         let threshold = (window as f64 * 0.8) as usize;
 
+        // 3a. Oldest-first attachment eviction BEFORE composing the system prompt.
+        let mut attachments = req.attached_results.clone();
+        let turn_chars: usize = req.turns.iter().map(|t| t.content.len()).sum();
+        let evicted =
+            evict_attachments_oldest_first(&mut attachments, &req.context_payload, turn_chars, threshold)?;
+
+        // 3b. Build system prompt with the surviving attachments as the trailing section.
+        let system_prompt = build_api_system_prompt(&req.context_payload, &attachments)?;
+
+        // 4. Per-turn trimming (history), in addition to attachment eviction.
         let mut turns = req.turns.clone();
         let system_chars = system_prompt.len();
         let trim_status = trim_turns_to_fit(&mut turns, system_chars, threshold);
@@ -308,6 +316,11 @@ impl AiProvider for OpenAiApi {
         let extracted = extract_fenced_block(&text);
 
         let mut items: Vec<AppResult<ChatDelta>> = Vec::new();
+        if evicted > 0 {
+            items.push(Ok(ChatDelta::Status(format!(
+                "dropped {evicted} oldest attachment(s) to fit context window"
+            ))));
+        }
         if let Some(n) = trim_status {
             items.push(Ok(ChatDelta::Status(format!(
                 "trimmed {n} old turns to fit context window"
@@ -392,6 +405,7 @@ mod tests {
             model: None,
             session_id: "test-session".into(),
             provider_state: Default::default(),
+            attached_results: vec![],
         };
         (provider, req)
     }
@@ -608,6 +622,7 @@ mod tests {
             model: Some("claude-opus-4-7".into()),
             session_id: "s".into(),
             provider_state: Default::default(),
+            attached_results: vec![],
         };
         let result = provider.chat(req).await;
         assert!(matches!(result, Err(AppError::Validation(_))));
