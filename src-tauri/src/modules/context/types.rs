@@ -17,6 +17,22 @@ pub struct ContextManifest {
 
 // ---- Object docs ----
 
+/// An access pattern for a Single-Table Design entity.
+/// Each pattern maps to a specific index and provides key templates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessPattern {
+    /// Optional human-readable label for the pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The index to use: `"table"` for the primary key, or a GSI/LSI name.
+    pub index: String,
+    /// Partition-key template, e.g. `"USER#${userId}"`.
+    pub pk: String,
+    /// Optional sort-key template, e.g. `"ORDER#${orderId}"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sk: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectColumn {
     pub name: String,
@@ -36,6 +52,15 @@ pub struct ObjectSystem {
     pub columns: Option<Vec<ObjectColumn>>,
     pub last_synced: Option<DateTime<Utc>>,
     pub deleted_in_db: Option<bool>,
+    /// Dynamo model docs only: the access patterns for this entity.
+    /// `None` for all non-`dynamo_model` docs; always `None` after serialising
+    /// a Postgres/MySQL/MSSQL doc (skip_serializing_if).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_patterns: Option<Vec<AccessPattern>>,
+    /// Dynamo model docs only: the physical DynamoDB table this entity belongs
+    /// to, derived from the directory path (never authored in frontmatter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical_table: Option<String>,
     #[serde(flatten)]
     pub extras: HashMap<String, serde_yaml::Value>,
 }
