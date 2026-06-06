@@ -928,5 +928,216 @@ describe("QueryBuilder", () => {
       // No sk params
       expect(screen.queryByTestId("model-param-orderId")).toBeNull();
     });
+
+    // ── 3.4 Required markers, SK op selector, between inputs ─────────────────
+
+    describe("Required markers (task 3.1)", () => {
+      it("marks userId and orderId as required when AP has both pk and sk with those params", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: { entity: "Order", accessPattern: "By user", params: {} },
+        };
+        renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+        // Both userId (pk param) and orderId (sk param) should have required markers
+        expect(screen.getByTestId("model-param-required-userId")).toBeTruthy();
+        expect(screen.getByTestId("model-param-required-orderId")).toBeTruthy();
+      });
+
+      it("productId pk-only AP — productId is required, no sk-param required markers", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: { entity: "Product", accessPattern: "By ID", params: {} },
+        };
+        renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+        expect(screen.getByTestId("model-param-required-productId")).toBeTruthy();
+        // No orderId param rendered at all in this AP
+        expect(screen.queryByTestId("model-param-required-orderId")).toBeNull();
+      });
+
+      it("param inputs have aria-required set to true for required params", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: { entity: "Order", accessPattern: "By user", params: {} },
+        };
+        renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+        const userIdInput = screen.getByTestId("model-param-userId");
+        const orderIdInput = screen.getByTestId("model-param-orderId");
+        expect(userIdInput.getAttribute("aria-required")).toBe("true");
+        expect(orderIdInput.getAttribute("aria-required")).toBe("true");
+      });
+    });
+
+    describe("SK operator selector (task 3.2)", () => {
+      it("model-sk-op selector is present when AP has sk and index has SK", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: { entity: "Order", accessPattern: "By user", params: {} },
+        };
+        renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+        expect(screen.getByTestId("model-sk-op")).toBeTruthy();
+      });
+
+      it("model-sk-op selector is NOT present for pk-only AP", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: { entity: "Product", accessPattern: "By ID", params: {} },
+        };
+        renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+        expect(screen.queryByTestId("model-sk-op")).toBeNull();
+      });
+
+      it("default selector value is 'auto'", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: { entity: "Order", accessPattern: "By user", params: {} },
+        };
+        renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+        const select = screen.getByTestId("model-sk-op") as HTMLSelectElement;
+        expect(select.value).toBe("auto");
+      });
+
+      it("changing SK op to >= emits a sortKey with op >= in the compiled query", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: {
+            entity: "Order",
+            accessPattern: "By user",
+            params: { userId: "u1", orderId: "456" },
+          },
+        };
+        const { onBuilderChange, rerenderWithLatest } = renderQueryBuilder(modelBuilder, {
+          models: STD_MODELS,
+          isStd: true,
+        });
+
+        const skOpSelect = screen.getByTestId("model-sk-op");
+        fireEvent.change(skOpSelect, { target: { value: ">=" } });
+        rerenderWithLatest();
+
+        // Open preview to verify compiled KCE
+        fireEvent.click(screen.getByTestId("preview-toggle"));
+        const kce = screen.getByTestId("preview-kce");
+        // Should contain >= operator expression
+        expect(kce.textContent).toMatch(/>=/);
+
+        // Verify builder state has skOp set
+        const lastCall = onBuilderChange.mock.calls[onBuilderChange.mock.calls.length - 1]![0]!;
+        expect(lastCall.modelSelection?.skOp).toBe(">=");
+      });
+
+      it("auto (undefined skOp) reproduces equality behaviour when all params filled", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: {
+            entity: "Order",
+            accessPattern: "By user",
+            params: { userId: "u1", orderId: "ORD1" },
+          },
+        };
+        renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+        fireEvent.click(screen.getByTestId("preview-toggle"));
+        const kce = screen.getByTestId("preview-kce");
+        // Default auto → equality on sk
+        expect(kce.textContent).toMatch(/=/);
+        // Should NOT contain a range op
+        expect(kce.textContent).not.toMatch(/>=/);
+        expect(kce.textContent).not.toMatch(/between/);
+      });
+    });
+
+    describe("between upper-bound inputs (task 3.3)", () => {
+      it("between op shows model-skmax inputs for SK params", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: {
+            entity: "Order",
+            accessPattern: "By user",
+            params: {},
+            skOp: "between",
+          },
+        };
+        renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+        // orderId is an SK param — should show model-skmax-orderId
+        expect(screen.getByTestId("model-skmax-orderId")).toBeTruthy();
+      });
+
+      it("non-between op does NOT show model-skmax inputs", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: {
+            entity: "Order",
+            accessPattern: "By user",
+            params: {},
+            skOp: ">=",
+          },
+        };
+        renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+        expect(screen.queryByTestId("model-skmax-orderId")).toBeNull();
+      });
+
+      it("filling between upper-bound and lower-bound compiles to a between sort key", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: {
+            entity: "Order",
+            accessPattern: "By user",
+            params: { userId: "u1", orderId: "ORDER#100" },
+            skOp: "between",
+            skMaxParams: { orderId: "ORDER#999" },
+          },
+        };
+        renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+        fireEvent.click(screen.getByTestId("preview-toggle"));
+        const kce = screen.getByTestId("preview-kce");
+        // Should contain BETWEEN keyword from builderCompiler
+        expect(kce.textContent).toMatch(/BETWEEN|between/i);
+      });
+
+      it("changing between max param triggers a recompile with between sortKey", () => {
+        const modelBuilder: BuilderState = {
+          ...QUERY_BUILDER,
+          builderMode: "model",
+          modelSelection: {
+            entity: "Order",
+            accessPattern: "By user",
+            params: { userId: "u1", orderId: "ORDER#100" },
+            skOp: "between",
+            skMaxParams: {},
+          },
+        };
+        const { onBuilderChange, rerenderWithLatest } = renderQueryBuilder(modelBuilder, {
+          models: STD_MODELS,
+          isStd: true,
+        });
+
+        const maxInput = screen.getByTestId("model-skmax-orderId");
+        fireEvent.change(maxInput, { target: { value: "ORDER#999" } });
+        rerenderWithLatest();
+
+        const lastCall = onBuilderChange.mock.calls[onBuilderChange.mock.calls.length - 1]![0]!;
+        expect(lastCall.modelSelection?.skMaxParams?.orderId).toBe("ORDER#999");
+      });
+    });
   });
 });

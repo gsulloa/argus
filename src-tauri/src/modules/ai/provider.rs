@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use crate::error::{AppError, AppResult};
 use crate::modules::ai::types::{
     Capabilities, ChatDelta, ChatRequest, ChatStream, ChatRole, ChatTurn,
-    GenerateDelta, GenerateRequest, GenerateStream, ProviderId, ValidationResult,
+    GenerateDelta, GenerateRequest, GenerateStream, InspectRequest, ProviderId, ValidationResult,
 };
 
 #[async_trait]
@@ -14,6 +14,14 @@ pub trait AiProvider: Send + Sync {
 
     /// Multi-turn chat with rich event stream. Primary method going forward.
     async fn chat(&self, req: ChatRequest) -> AppResult<ChatStream>;
+
+    /// Inspect a source repo and stream proposal output. Default impl errors —
+    /// only file-reading CLI providers override this.
+    async fn inspect(&self, _req: InspectRequest) -> AppResult<ChatStream> {
+        Err(AppError::Validation(
+            "this provider cannot read files and does not support repo inspection".into(),
+        ))
+    }
 
     /// Convenience wrapper for single-turn SQL generation. Retained for the
     /// `ai_generate_sql` Tauri command which has no remaining frontend caller.
@@ -68,4 +76,43 @@ mod tests {
     use super::*;
 
     fn _assert_object_safe(_: Box<dyn AiProvider>) {}
+
+    struct MockNoFiles;
+
+    #[async_trait]
+    impl AiProvider for MockNoFiles {
+        fn id(&self) -> ProviderId {
+            ProviderId::AnthropicApi
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                can_read_files: false,
+                supports_streaming: false,
+                requires_api_key: true,
+                default_model: "mock",
+                available_models: &[],
+            }
+        }
+        async fn validate(&self) -> ValidationResult {
+            ValidationResult::Ready
+        }
+        async fn chat(&self, _req: ChatRequest) -> AppResult<ChatStream> {
+            Err(AppError::Validation("not implemented".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn default_inspect_returns_validation_error() {
+        let provider = MockNoFiles;
+        let req = InspectRequest {
+            project_source_path: std::path::PathBuf::from("/tmp/fake-repo"),
+            table_description_json: "{}".to_string(),
+            model: None,
+        };
+        let result = provider.inspect(req).await;
+        assert!(
+            matches!(result, Err(AppError::Validation(_))),
+            "expected Validation error from default inspect"
+        );
+    }
 }

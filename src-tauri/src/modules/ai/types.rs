@@ -4,8 +4,8 @@ use std::pin::Pin;
 use futures::Stream;
 use serde_json::Value as JsonValue;
 
-use crate::error::AppResult;
-use crate::modules::context::types::AiPayload;
+use crate::error::{AppError, AppResult};
+use crate::modules::context::types::{AccessPattern, AiPayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -166,6 +166,153 @@ pub struct ProviderListEntry {
     pub id: ProviderId,
     pub capabilities: Capabilities,
     pub validation: ValidationResult,
+}
+
+// ── Inspector types ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provenance {
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<String>,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InspectedModel {
+    pub name: String,
+    pub access_patterns: Vec<AccessPattern>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub confidence: f64,
+    #[serde(default)]
+    pub provenance: Vec<Provenance>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InspectRequest {
+    pub project_source_path: std::path::PathBuf,
+    pub table_description_json: String,
+    pub model: Option<String>,
+}
+
+/// Streamed to the frontend on channel `ai-inspect-delta:<session_id>`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "PascalCase")]
+pub enum InspectDelta {
+    Status(String),
+    Proposals(Vec<InspectedModel>),
+    Done,
+    Error(String),
+}
+
+// ── Inspector system prompt ───────────────────────────────────────────────────
+
+/// Build the system prompt for the DynamoDB AI model inspector (CLI providers only).
+///
+/// The agent runs with `cwd` set to the application source repository so it can
+/// Read/Glob/Grep for entity definitions. It is strictly FORBIDDEN from writing
+/// files or executing any commands.
+pub fn build_inspector_system_prompt(table_description_json: &str) -> String {
+    format!(
+        "# Role and restrictions\n\
+You are a DynamoDB model inspector embedded in Argus, a database inspection tool.\n\
+\n\
+**Your only job is to inspect the application source repository in your current working \
+directory and propose `dynamo_model` drafts** — mappings of application entities to \
+DynamoDB access patterns over the table described below.\n\
+\n\
+**You MUST NOT write files, execute code, or run any commands.** You are strictly \
+forbidden from:\n\
+- Writing or modifying any file on disk\n\
+- Running shell or Bash commands\n\
+- Executing AWS, DynamoDB, or any database CLI (e.g. `aws dynamodb`, `psql`, `mysql`)\n\
+- Making network requests\n\
+\n\
+You may ONLY use Read, Glob, and Grep to explore the repository.\n\
+\n\
+---\n\
+\n\
+# Table schema (authoritative)\n\
+\n\
+The following JSON is the live DynamoDB table description. These are the ONLY valid \
+index names — `\"table\"` for the primary key, plus any GSI/LSI names listed in \
+`global_secondary_indexes` and `local_secondary_indexes`. The key attributes are \
+listed in `key_schema` and `attribute_definitions`. Do NOT invent index names.\n\
+\n\
+```json\n\
+{table_description_json}\n\
+```\n\
+\n\
+---\n\
+\n\
+# What to look for in the repository\n\
+\n\
+Search for DynamoDB entity definitions:\n\
+- **Classes or objects exposing key-composition methods** such as `PK()`, `SK()`, \
+  `GSI1PK()`, `GSI1SK()`, `GSI2PK()`, etc.\n\
+- **ElectroDB entity schemas** — look for `new Entity(...)` with `attributes` and \
+  `indexes` blocks.\n\
+- **dynamodb-toolbox schemas** — look for `TableV2`, `EntityV2`, or `Table`/`Entity` \
+  constructors with `partitionKey` / `sortKey` / `indexes` definitions.\n\
+- Any other declarative schema pattern that maps application entities to DynamoDB keys.\n\
+\n\
+For each entity found, extract:\n\
+- The entity name (e.g. `User`, `Order`, `Product`).\n\
+- Its access patterns — which index it uses and what the PK/SK templates look like \
+  (use `${{param}}` placeholders for runtime values, e.g. `USER#${{userId}}`).\n\
+- The source file and line range where you found it (for provenance).\n\
+\n\
+---\n\
+\n\
+# Output format (MANDATORY)\n\
+\n\
+Your reply MUST end with a SINGLE fenced ```json code block (the LAST thing in your \
+reply) containing EXACTLY this shape:\n\
+\n\
+```json\n\
+{{\"models\":[{{\"name\":\"Order\",\"access_patterns\":[{{\"index\":\"table\",\"pk\":\"ORDER#${{orderId}}\",\"sk\":\"METADATA\"}}],\"body\":\"optional markdown\",\"confidence\":0.9,\"provenance\":[{{\"file\":\"src/models/Order.ts\",\"lines\":\"10-40\",\"reason\":\"class exposes PK()/SK() key-composition methods\"}}],\"warnings\":[]}}]}}\n\
+```\n\
+\n\
+Rules:\n\
+- Do NOT include `physical_table` in any model — it is derived from context, not authored.\n\
+- If an index in the table has no usage found in the repo, omit an access pattern for \
+  it and add a `warnings` entry naming the index (e.g. `\"GSI2 has no usage found in repo\"`).\n\
+- Do NOT invent mappings; only emit what you actually found in the source.\n\
+- Use `provenance` to cite where each entity was inferred (file + lines + reason).\n\
+- Set `confidence` between 0.0 and 1.0 per model (1.0 = explicit schema, 0.5 = inferred).\n\
+- The pk/sk values MUST use `${{param}}` placeholders for runtime values.\n\
+- `body` is optional markdown description of the entity; omit or set to `null` if unknown.\n\
+- If no entities are found, return `{{\"models\": []}}`."
+    )
+}
+
+// ── parse_proposals ───────────────────────────────────────────────────────────
+
+/// Parse the AI inspector's fenced JSON block into a list of `InspectedModel` proposals.
+///
+/// Accepts both `{ "models": [...] }` (preferred) and a bare top-level `[...]` array.
+/// On parse failure returns `AppError::Internal`.
+pub fn parse_proposals(text: &str) -> AppResult<Vec<InspectedModel>> {
+    let block = extract_fenced_block(text);
+
+    // Try the preferred wrapper form first.
+    #[derive(Deserialize)]
+    struct Wrapper {
+        models: Vec<InspectedModel>,
+    }
+
+    if let Ok(w) = serde_json::from_str::<Wrapper>(&block) {
+        return Ok(w.models);
+    }
+
+    // Fall back to bare array.
+    serde_json::from_str::<Vec<InspectedModel>>(&block)
+        .map_err(|e| AppError::Internal(format!("could not parse model proposals: {e}")))
 }
 
 /// Build the system prompt for API providers (Anthropic API, OpenAI API).
@@ -484,6 +631,131 @@ mod tests {
             ValidationResult::Missing { hint } => assert_eq!(hint, "install"),
             _ => panic!(),
         }
+    }
+
+    // ── build_inspector_system_prompt tests ──────────────────────────────────
+
+    #[test]
+    fn inspector_prompt_contains_table_json() {
+        let table_json = r#"{"table_name":"AppTable","key_schema":[]}"#;
+        let prompt = build_inspector_system_prompt(table_json);
+        assert!(
+            prompt.contains(table_json),
+            "prompt must embed the table json verbatim"
+        );
+    }
+
+    #[test]
+    fn inspector_prompt_mentions_propose_and_models() {
+        let prompt = build_inspector_system_prompt("{}");
+        assert!(
+            prompt.contains("propose") || prompt.contains("models"),
+            "prompt must mention propose/models"
+        );
+        assert!(
+            prompt.contains("\"models\""),
+            "prompt must include models json instruction"
+        );
+    }
+
+    #[test]
+    fn inspector_prompt_forbids_writing() {
+        let prompt = build_inspector_system_prompt("{}");
+        let lower = prompt.to_lowercase();
+        assert!(
+            lower.contains("must not write") || lower.contains("forbidden") || lower.contains("writing"),
+            "prompt must contain forbid-writing clause"
+        );
+    }
+
+    #[test]
+    fn inspector_prompt_references_pk_sk_and_electrodb() {
+        let prompt = build_inspector_system_prompt("{}");
+        assert!(
+            prompt.contains("PK()") || prompt.contains("PK("),
+            "prompt must reference PK() key methods"
+        );
+        assert!(
+            prompt.contains("SK()") || prompt.contains("SK("),
+            "prompt must reference SK() key methods"
+        );
+        assert!(
+            prompt.contains("ElectroDB"),
+            "prompt must reference ElectroDB"
+        );
+    }
+
+    // ── parse_proposals tests ────────────────────────────────────────────────
+
+    #[test]
+    fn parse_proposals_wrapper_form() {
+        let text = r#"
+Here are the models:
+
+```json
+{"models":[{"name":"Order","access_patterns":[{"index":"GSI1","pk":"USER#${userId}","sk":"ORDER#${orderId}"}],"confidence":0.9,"provenance":[{"file":"src/models/Order.ts","lines":"10-40","reason":"class exposes PK()/SK()"}],"warnings":["GSI2 has no usage found in repo"]}]}
+```
+"#;
+        let models = parse_proposals(text).unwrap();
+        assert_eq!(models.len(), 1);
+        let m = &models[0];
+        assert_eq!(m.name, "Order");
+        assert_eq!(m.access_patterns.len(), 1);
+        assert_eq!(m.access_patterns[0].index, "GSI1");
+        assert_eq!(m.access_patterns[0].pk, "USER#${userId}");
+        assert_eq!(m.access_patterns[0].sk.as_deref(), Some("ORDER#${orderId}"));
+        assert!((m.confidence - 0.9).abs() < 1e-9);
+        assert_eq!(m.provenance.len(), 1);
+        assert_eq!(m.provenance[0].file, "src/models/Order.ts");
+        assert_eq!(m.provenance[0].lines.as_deref(), Some("10-40"));
+        assert_eq!(m.warnings.len(), 1);
+        assert!(m.warnings[0].contains("GSI2"));
+    }
+
+    #[test]
+    fn parse_proposals_bare_array_form() {
+        let text = r#"```json
+[{"name":"User","access_patterns":[{"index":"table","pk":"USER#${userId}"}]}]
+```"#;
+        let models = parse_proposals(text).unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "User");
+    }
+
+    #[test]
+    fn parse_proposals_fills_defaults_when_omitted() {
+        let text = r#"```json
+{"models":[{"name":"Product","access_patterns":[{"index":"table","pk":"PROD#${id}"}]}]}
+```"#;
+        let models = parse_proposals(text).unwrap();
+        assert_eq!(models.len(), 1);
+        let m = &models[0];
+        assert_eq!(m.confidence, 0.0);
+        assert!(m.provenance.is_empty());
+        assert!(m.warnings.is_empty());
+        assert!(m.body.is_none());
+    }
+
+    #[test]
+    fn inspect_delta_round_trips_all_variants() {
+        let variants: Vec<InspectDelta> = vec![
+            InspectDelta::Status("Initialising…".into()),
+            InspectDelta::Proposals(vec![]),
+            InspectDelta::Done,
+            InspectDelta::Error("something failed".into()),
+        ];
+        for variant in &variants {
+            let s = serde_json::to_string(variant).unwrap();
+            let back: InspectDelta = serde_json::from_str(&s).unwrap();
+            assert_eq!(
+                serde_json::to_string(&back).unwrap(),
+                s,
+                "round-trip mismatch for: {s}"
+            );
+        }
+        // Done is a unit variant → {"kind":"Done"}
+        let done_s = serde_json::to_string(&InspectDelta::Done).unwrap();
+        assert_eq!(done_s, r#"{"kind":"Done"}"#);
     }
 
     #[test]
