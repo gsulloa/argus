@@ -7,6 +7,10 @@
 //   - message_stop with optional stop_reason
 //   - session_id with session_id (top-level OR nested in message_start)
 //
+// Pinned CLI flags (verified 2026-06-06 against claude CLI 2.1.152):
+//   --system-prompt <prompt>   replaces the session system prompt (full replace, not append)
+//   --tools <list>             restricts available built-in tools (e.g. "Read Glob Grep")
+//
 // Unknown event types degrade to ChatDelta::Status, not Err. The CLI may evolve;
 // unknown types are not fatal.
 //
@@ -40,8 +44,8 @@ fn claude_bin() -> String {
         .unwrap_or_else(|| "claude".to_string())
 }
 use crate::modules::ai::types::{
-    Capabilities, ChatDelta, ChatRequest, ChatRole, ChatStream, GenerateDelta, GenerateRequest,
-    GenerateStream, ProviderId, ValidationResult,
+    build_cli_system_prompt, Capabilities, ChatDelta, ChatRequest, ChatRole, ChatStream,
+    GenerateDelta, GenerateRequest, GenerateStream, ProviderId, ValidationResult,
 };
 
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(3);
@@ -92,13 +96,22 @@ impl AiProvider for ClaudeCli {
         )?;
 
         let cwd = req.context_path.clone().unwrap_or_else(std::env::temp_dir);
-        let prompt = build_cli_prompt(&req.prompt);
+        let system_prompt = build_cli_system_prompt(&cwd);
 
         let mut cmd = Command::new(claude_bin());
-        cmd.arg("-p").arg(&prompt);
+        cmd.arg("-p");
+        // Ignore any user/project MCP config so no external tool (e.g. a DB MCP
+        // server) can give the agent a path to execute SQL despite --tools.
+        cmd.arg("--strict-mcp-config");
         if let Some(m) = model.as_deref() {
             cmd.args(["--model", m]);
         }
+        cmd.args(["--system-prompt", &system_prompt]);
+        cmd.args(["--tools", "Read Glob Grep"]);
+        // `--` terminates option parsing so the variadic `--tools` does not
+        // swallow the positional prompt (see build_claude_argv for details).
+        cmd.arg("--");
+        cmd.arg(&req.prompt);
         cmd.current_dir(&cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -127,6 +140,7 @@ impl AiProvider for ClaudeCli {
         )?;
 
         let cwd = req.context_path.clone().unwrap_or_else(std::env::temp_dir);
+        let system_prompt = build_cli_system_prompt(&cwd);
         let resume_id = req.provider_state.get("resume_id").cloned();
 
         // If we have a resume id, try to use --resume first.
@@ -142,6 +156,8 @@ impl AiProvider for ClaudeCli {
                 &latest_prompt,
                 model.as_deref(),
                 Some(rid),
+                &system_prompt,
+                "Read Glob Grep",
                 &cwd,
             ) {
                 Ok((child, stdout, stderr)) => {
@@ -161,6 +177,8 @@ impl AiProvider for ClaudeCli {
             &prompt,
             model.as_deref(),
             None,
+            &system_prompt,
+            "Read Glob Grep",
             &cwd,
         )?;
 
@@ -178,31 +196,80 @@ impl AiProvider for ClaudeCli {
     }
 }
 
+/// Build the full argv vector for a `claude` stream-json invocation.
+///
+/// Pure function — takes no `Command`, returns a `Vec<String>`. This makes
+/// the constructed flags (including `--system-prompt` and `--tools`) unit-testable
+/// without spawning a real `claude` binary.
+///
+/// Verified flags (claude CLI 2.1.152, 2026-06-06):
+///   -p                           non-interactive prompt mode
+///   --verbose                    required when -p is paired with --output-format stream-json
+///   --output-format stream-json  machine-readable streaming output
+///   --strict-mcp-config          ignore all user/project MCP servers (none passed)
+///   --model <model>              select model (optional)
+///   --resume <id>                resume a previous session (optional)
+///   --system-prompt <prompt>     replace session system prompt (full replace, not append)
+///   --tools <list>               restrict available built-in tools (VARIADIC: needs `--` after)
+///   --                           terminates option parsing (keeps variadic --tools off the prompt)
+///   <prompt>                     positional prompt (last argument)
+pub(crate) fn build_claude_argv(
+    prompt: &str,
+    model: Option<&str>,
+    resume_id: Option<&str>,
+    system_prompt: &str,
+    tools: &str,
+) -> Vec<String> {
+    let mut argv: Vec<String> = Vec::new();
+    // -p and --verbose are always present.
+    argv.push("-p".into());
+    argv.push("--verbose".into());
+    argv.push("--output-format".into());
+    argv.push("stream-json".into());
+    // Only use MCP servers from --mcp-config (we pass none), ignoring any
+    // user/project MCP configuration. Without this, a globally-configured DB
+    // MCP server could give the agent a way to execute SQL despite --tools.
+    argv.push("--strict-mcp-config".into());
+    if let Some(m) = model {
+        argv.push("--model".into());
+        argv.push(m.to_string());
+    }
+    if let Some(rid) = resume_id {
+        argv.push("--resume".into());
+        argv.push(rid.to_string());
+    }
+    argv.push("--system-prompt".into());
+    argv.push(system_prompt.to_string());
+    argv.push("--tools".into());
+    argv.push(tools.to_string());
+    // `--tools` is variadic (`--tools <tools...>`); without an explicit `--`
+    // option terminator it greedily consumes the positional prompt as another
+    // tool name, and claude then errors with "Input must be provided ...".
+    // `--` ends option parsing so the prompt is treated as the positional arg.
+    argv.push("--".into());
+    // Positional prompt is always last.
+    argv.push(prompt.to_string());
+    argv
+}
+
 /// Spawn claude with --output-format stream-json. Returns (child, stdout, stderr).
 fn spawn_claude_stream_json(
     prompt: &str,
     model: Option<&str>,
     resume_id: Option<&str>,
+    system_prompt: &str,
+    tools: &str,
     cwd: &std::path::Path,
 ) -> AppResult<(
     tokio::process::Child,
     tokio::process::ChildStdout,
     tokio::process::ChildStderr,
 )> {
+    let argv = build_claude_argv(prompt, model, resume_id, system_prompt, tools);
     let mut cmd = Command::new(claude_bin());
-    // --verbose is required by the CLI whenever -p is paired with
-    // --output-format=stream-json (otherwise: "stream-json requires --verbose").
-    cmd.arg("-p")
-        .arg("--verbose")
-        .arg("--output-format")
-        .arg("stream-json");
-    if let Some(m) = model {
-        cmd.args(["--model", m]);
+    for arg in &argv {
+        cmd.arg(arg);
     }
-    if let Some(rid) = resume_id {
-        cmd.args(["--resume", rid]);
-    }
-    cmd.arg(prompt);
     cmd.current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -246,9 +313,18 @@ pub(crate) fn flatten_history_for_cli(turns: &[crate::modules::ai::types::ChatTu
             .collect::<Vec<_>>()
             .join("\n");
         parts.push(history);
+        // ── #62 insertion point ──────────────────────────────────────────────
+        // Change #62 (`attach query results to chat`) will prepend a markdown
+        // result table to `last.content` here, before it is formatted into the
+        // "User's new request:" line. The table prefix must appear BEFORE the
+        // user's natural-language question so the agent sees the data first.
+        // Planned prefix format: "\n\n<result-table-markdown>\n\n{last.content}"
         parts.push(format!("User's new request: {}", last.content));
     } else {
-        // First turn — just the content directly
+        // First turn — just the content directly.
+        // ── #62 insertion point ──────────────────────────────────────────────
+        // Change #62 will prepend a markdown result table to `last.content` here
+        // for single-turn (first) requests, same as the multi-turn case above.
         parts.push(last.content.clone());
     }
 
@@ -540,16 +616,6 @@ to the absolute path of the binary."
     }
 }
 
-pub(crate) fn build_cli_prompt(user_prompt: &str) -> String {
-    format!(
-        "You are inside a project directory containing documentation about a database schema. \
-Read the local files (objects/, queries/, manifest.json, overview.md, glossary.md) as needed. \
-Then write SQL that answers the user's request below. \
-Respond with only a single fenced SQL block, no prose.\n\n\
-User request:\n{user_prompt}"
-    )
-}
-
 fn map_spawn_err(name: &str, e: std::io::Error) -> AppError {
     if e.kind() == std::io::ErrorKind::NotFound {
         AppError::Internal(format!(
@@ -689,11 +755,54 @@ mod tests {
         assert_eq!(result.unwrap(), None);
     }
 
+    // ── build_claude_argv tests ────────────────────────────────────────────────
+
     #[test]
-    fn build_cli_prompt_contains_user_request() {
-        let p = build_cli_prompt("list all users");
-        assert!(p.contains("list all users"));
-        assert!(p.contains("fenced SQL block"));
+    fn build_claude_argv_no_resume_contains_required_flags() {
+        let sp = "You are a SQL assistant. MUST NOT execute SQL.";
+        let argv = build_claude_argv("SELECT 1", None, None, sp, "Read Glob Grep");
+        assert!(argv.contains(&"-p".to_string()), "must contain -p");
+        assert!(argv.contains(&"--verbose".to_string()), "must contain --verbose");
+        assert!(argv.contains(&"--output-format".to_string()));
+        assert!(argv.contains(&"stream-json".to_string()));
+        assert!(argv.contains(&"--strict-mcp-config".to_string()), "must ignore external MCP servers");
+        // --system-prompt with SQL-only text
+        let sp_idx = argv.iter().position(|a| a == "--system-prompt")
+            .expect("--system-prompt flag not found");
+        assert_eq!(argv[sp_idx + 1], sp, "--system-prompt value must follow the flag");
+        assert!(argv[sp_idx + 1].contains("MUST NOT execute SQL"), "system prompt must contain no-execution clause");
+        // --tools with read-only set
+        let tools_idx = argv.iter().position(|a| a == "--tools")
+            .expect("--tools flag not found");
+        assert_eq!(argv[tools_idx + 1], "Read Glob Grep");
+        // `--` terminator must sit right before the positional prompt so the
+        // variadic --tools cannot swallow it.
+        assert_eq!(argv[argv.len() - 2], "--", "`--` must precede the positional prompt");
+        // positional prompt is last
+        assert_eq!(argv.last().unwrap(), "SELECT 1");
+        // --resume must NOT be present
+        assert!(!argv.contains(&"--resume".to_string()), "no --resume for None resume_id");
+    }
+
+    #[test]
+    fn build_claude_argv_with_resume_contains_resume_flag() {
+        let sp = "You are a SQL assistant. MUST NOT execute SQL.";
+        let argv = build_claude_argv("follow up", Some("claude-sonnet-4-6"), Some("sess-abc"), sp, "Read Glob Grep");
+        let resume_idx = argv.iter().position(|a| a == "--resume")
+            .expect("--resume flag not found");
+        assert_eq!(argv[resume_idx + 1], "sess-abc");
+        // --system-prompt still present on resume path
+        assert!(argv.contains(&"--system-prompt".to_string()), "--system-prompt must be present on resume path");
+        // --tools still present
+        assert!(argv.contains(&"--tools".to_string()), "--tools must be present on resume path");
+        // model present
+        let model_idx = argv.iter().position(|a| a == "--model")
+            .expect("--model flag not found");
+        assert_eq!(argv[model_idx + 1], "claude-sonnet-4-6");
+        // `--` terminator right before the positional prompt
+        assert_eq!(argv[argv.len() - 2], "--", "`--` must precede the positional prompt");
+        // positional prompt is last
+        assert_eq!(argv.last().unwrap(), "follow up");
     }
 
     // ── stream-json parser unit tests ──────────────────────────────────────────

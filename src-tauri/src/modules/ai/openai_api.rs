@@ -10,7 +10,7 @@ use crate::modules::ai::caps::{context_window, OPENAI_API_DEFAULT_MODEL, OPENAI_
 use crate::modules::ai::keys::{self, ACCOUNT_OPENAI};
 use crate::modules::ai::provider::AiProvider;
 use crate::modules::ai::types::{
-    build_system_prompt, extract_fenced_block, Capabilities, ChatDelta, ChatRequest, ChatRole,
+    build_api_system_prompt, extract_fenced_block, Capabilities, ChatDelta, ChatRequest, ChatRole,
     ChatStream, GenerateDelta, GenerateRequest, GenerateStream, ProviderId, ValidationResult,
 };
 
@@ -141,7 +141,7 @@ impl AiProvider for OpenAiApi {
             .map_err(|e| AppError::Keychain(format!("read openai key: {e}")))?
             .ok_or_else(|| AppError::Validation("OpenAI API key not configured".into()))?;
 
-        let system_prompt = build_system_prompt(&req.context_payload)?;
+        let system_prompt = build_api_system_prompt(&req.context_payload)?;
         let body = json!({
             "model": model,
             "max_tokens": 4096,
@@ -226,7 +226,7 @@ impl AiProvider for OpenAiApi {
             .ok_or_else(|| AppError::Validation("OpenAI API key not configured".into()))?;
 
         // 3. Build system prompt.
-        let system_prompt = build_system_prompt(&req.context_payload)?;
+        let system_prompt = build_api_system_prompt(&req.context_payload)?;
 
         // 4. Context-window trimming.
         let window = context_window(&model);
