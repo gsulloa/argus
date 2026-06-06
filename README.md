@@ -114,6 +114,8 @@ Chatting requires **both** prerequisites: a configured AI provider **and** a lin
 
 The panel supports multi-turn conversation; CLI providers (Claude Code, Codex) show their reasoning and tool calls as they work. Use **AI: Focus chat panel** from the command palette (⌘K / Ctrl+K) to open the panel from anywhere.
 
+**Attach query results:** after running a query, the chat composer offers an "Attach result" chip that hands the executed result rows (first 100 rows / 50 KB, larger results marked truncated) to the next message as context — useful for drill-down follow-ups. Multiple results can be attached and removed individually; attachments live only in the current chat session and are never written to disk.
+
 Current scope: the ✨ button is wired into the Postgres editor only. MySQL, MSSQL, DynamoDB, and CloudWatch editors follow in a subsequent change.
 
 **Troubleshooting `claude`/`codex` not found:** macOS does not pass your shell `PATH` to apps launched from Finder, the Dock, or the auto-updater — only `/usr/bin:/bin:/usr/sbin:/sbin` is available. Argus automatically inherits the login-shell PATH at startup by running `$SHELL -l`, so any `export PATH=…` in your `~/.zprofile` or `~/.bash_profile` will be picked up. If your CLI is only exported from an interactive `.zshrc`, move the `export` to `.zprofile` (or create a symlink in `/usr/local/bin`). As a last resort, launch the app with the binary path set explicitly: `ARGUS_CLAUDE_BIN=/abs/path/to/claude open -a Argus` (likewise `ARGUS_CODEX_BIN` for Codex).

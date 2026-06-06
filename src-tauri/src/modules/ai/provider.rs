@@ -43,6 +43,7 @@ async fn default_generate_via_chat<P: AiProvider + ?Sized>(
         model: req.model,
         session_id: format!("legacy-generate-{}", uuid::Uuid::new_v4()),
         provider_state: std::collections::HashMap::new(),
+        attached_results: vec![],
     };
     let mut stream = provider.chat(chat_req).await?;
     let mut text = String::new();
