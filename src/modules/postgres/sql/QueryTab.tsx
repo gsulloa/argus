@@ -22,7 +22,8 @@ import { ConnectionSelector } from "./ConnectionSelector";
 import { useCloseConfirm } from "@/platform/shell/tabs/useCloseConfirm";
 import { savedQueriesStore } from "@/modules/saved-queries/store";
 import { SaveAsModal } from "@/modules/saved-queries/SaveAsModal";
-import { useAiSettings } from "@/modules/ai/store";
+import { useAiReadiness } from "@/modules/ai/useAiReadiness";
+import { usePostgresForm } from "../FormController";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { ChatPanel } from "@/modules/ai/components/ChatPanel";
 import dialogStyles from "@/platform/shell/Dialog.module.css";
@@ -98,7 +99,6 @@ function QueryTab({ tabId, payload }: InnerProps) {
   const { getActive } = useActiveConnections();
   const toast = useToast();
   const { setTabTitle, setTabDirty } = useTabs();
-  const { settings: aiSettings } = useAiSettings();
   const { items: allConnections } = useConnections();
 
   // Per-tab runtime state.
@@ -320,23 +320,22 @@ function QueryTab({ tabId, payload }: InnerProps) {
   // AI chat panel state (Phase F)
   // ---------------------------------------------------------------------------
 
-  // Determine whether AI is configured for this connection.
-  // Show the button if there's a global default OR a per-connection override.
   const currentConnectionId = tabState.currentConnectionId;
-  const aiConfigured: boolean = (() => {
-    if (!aiSettings) return false;
-    if (aiSettings.default_provider !== null) return true;
-    if (
-      currentConnectionId &&
-      aiSettings.overrides.some((o) => o.connection_id === currentConnectionId)
-    )
-      return true;
-    return false;
-  })();
 
-  // Resolve context_path for the active connection.
-  const contextPath =
-    allConnections.find((c) => c.id === currentConnectionId)?.context_path ?? null;
+  // Single derived readiness state (provider + context folder) driving the
+  // button dot, the panel mode, and chat gating.
+  const readiness = useAiReadiness(currentConnectionId);
+
+  // Resolve the active connection + its context_path.
+  const currentConnection =
+    allConnections.find((c) => c.id === currentConnectionId) ?? null;
+  const contextPath = currentConnection?.context_path ?? null;
+
+  // Open the connection form so the user can link/locate a context folder.
+  const { openEdit } = usePostgresForm();
+  const handleLinkContext = useCallback(() => {
+    if (currentConnection) openEdit(currentConnection);
+  }, [openEdit, currentConnection]);
 
   // Panel width — persisted to localStorage, clamped to [280, 800].
   const [panelWidth, setPanelWidth] = useState<number>(() => {
@@ -345,26 +344,20 @@ function QueryTab({ tabId, payload }: InnerProps) {
     return Number.isFinite(n) ? Math.min(800, Math.max(280, n)) : 360;
   });
 
-  // Panel open state — persisted to localStorage; only restored when aiConfigured.
+  // Panel open state — persisted to localStorage.
   const [panelOpen, setPanelOpen] = useState<boolean>(() => {
-    if (!aiSettings) return false;
     const stored = localStorage.getItem("argus.ai.panelOpen");
     return stored === "1";
   });
 
-  // Force-close panel when AI becomes unconfigured.
-  useEffect(() => {
-    if (!aiConfigured && panelOpen) setPanelOpen(false);
-  }, [aiConfigured, panelOpen]);
-
-  // Listen for the ai.focusChatPanel palette command.
+  // Listen for the ai.focusChatPanel palette command — always opens the panel.
   useEffect(() => {
     function onFocusPanel() {
-      if (aiConfigured) setPanelOpen(true);
+      setPanelOpen(true);
     }
     window.addEventListener("argus:ai:openPanel", onFocusPanel as EventListener);
     return () => window.removeEventListener("argus:ai:openPanel", onFocusPanel as EventListener);
-  }, [aiConfigured]);
+  }, []);
 
   // Persist panelOpen to localStorage.
   useEffect(() => {
@@ -627,20 +620,30 @@ function QueryTab({ tabId, payload }: InnerProps) {
             <span>Save</span>
             <span className={styles.kbd}>{SAVE_HINT}</span>
           </button>
-          {/* Generate button — only rendered when AI is configured */}
-          {aiConfigured ? (
-            <button
-              type="button"
-              className={styles.toolbarButton}
-              onClick={() => setPanelOpen((prev) => !prev)}
-              title="Open AI chat panel"
-              aria-label="Open AI chat panel"
-              aria-pressed={panelOpen}
-            >
-              <span>✨</span>
-              <span>Generate</span>
-            </button>
-          ) : null}
+          {/* Generate button — always rendered; status dot reflects readiness */}
+          <button
+            type="button"
+            className={`${styles.toolbarButton} ${styles.aiButton}`}
+            onClick={() => setPanelOpen((prev) => !prev)}
+            title={
+              readiness.level === "ready"
+                ? "Open AI chat panel"
+                : readiness.level === "not-configured"
+                  ? "Set up AI to start chatting"
+                  : "Link a context folder to use AI"
+            }
+            aria-label="Open AI chat panel"
+            aria-pressed={panelOpen}
+          >
+            <span>✨</span>
+            <span>Generate</span>
+            <span
+              className={`${styles.aiDot} ${
+                readiness.level === "ready" ? styles.aiDotReady : styles.aiDotSetup
+              }`}
+              aria-hidden="true"
+            />
+          </button>
           <button
             type="button"
             className={styles.toolbarButton}
@@ -678,7 +681,7 @@ function QueryTab({ tabId, payload }: InnerProps) {
               <div className={styles.editorPlaceholder}>Loading editor…</div>
             )}
           </div>
-          {panelOpen && aiConfigured && currentConnectionId ? (
+          {panelOpen && currentConnectionId ? (
             <>
               <div
                 className={styles.splitter}
@@ -692,6 +695,8 @@ function QueryTab({ tabId, payload }: InnerProps) {
                   onClose={() => setPanelOpen(false)}
                   connectionId={currentConnectionId}
                   contextPath={contextPath}
+                  readiness={readiness}
+                  onLinkContext={handleLinkContext}
                   editorRef={editorRef}
                 />
               </div>

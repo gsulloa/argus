@@ -58,7 +58,11 @@ Four providers are supported. CLI providers (Claude Code, Codex) are spawned as 
 
 **Configure providers:** open the command palette (⌘K / Ctrl+K), search for `AI: Configure providers`. The settings modal lists all four providers with live validation status, model dropdowns, and API key fields for the API providers. CLI providers show an install hint when the binary is not found on `PATH`.
 
-**✨ Generate button:** appears in the Postgres SQL editor toolbar after a default provider is configured (or a per-connection override exists). Click it to open a docked chat panel on the right side of the SQL editor. The panel supports multi-turn conversation; CLI providers (Claude Code, Codex) show their reasoning and tool calls as they work. Use **AI: Focus chat panel** from the command palette (⌘K / Ctrl+K) to open the panel from anywhere.
+**✨ Generate button:** is always present in the Postgres SQL editor toolbar. A small status dot on the button reflects readiness — green when AI is ready, amber when setup is still required. Clicking it always opens a docked chat panel on the right side of the SQL editor.
+
+Chatting requires **both** prerequisites: a configured AI provider **and** a linked context folder. Until both are met, the panel opens in a setup mode showing a two-item checklist (AI provider, context folder), each with a direct call-to-action — *Configure providers* opens the AI settings modal, *Link context folder* opens the connection form. The chat input is hidden until both are satisfied; there is no longer a degraded "no context folder" chat mode (CLI/API providers are never invoked with an empty or temp-directory payload). Once both are configured the panel transitions to chat automatically.
+
+The panel supports multi-turn conversation; CLI providers (Claude Code, Codex) show their reasoning and tool calls as they work. Use **AI: Focus chat panel** from the command palette (⌘K / Ctrl+K) to open the panel from anywhere.
 
 Current scope: the ✨ button is wired into the Postgres editor only. MySQL, MSSQL, DynamoDB, and CloudWatch editors follow in a subsequent change.
 
