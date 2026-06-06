@@ -585,3 +585,94 @@
   background: var(--surface);
   color: var(--text);
 }
+
+/* ---------------------------------------------------------------------------
+   Setup checklist (prerequisites not yet met)
+   --------------------------------------------------------------------------- */
+
+.setup {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.setupIntro {
+  margin: 0;
+  font-size: var(--text-sm, 12px);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.checkItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 5px);
+}
+
+.checkMarkOk {
+  color: var(--success, #4ade80);
+  font-size: 12px;
+  line-height: 1.4;
+  flex: 0 0 auto;
+}
+
+.checkMarkTodo {
+  color: var(--text-subtle);
+  font-size: 12px;
+  line-height: 1.4;
+  flex: 0 0 auto;
+}
+
+.checkBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.checkLabel {
+  font-size: var(--text-sm, 12px);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.checkHint {
+  font-size: var(--text-xs, 11px);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.checkCta {
+  align-self: flex-start;
+  margin-top: 2px;
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  padding: 3px 10px;
+  font-size: var(--text-xs, 11px);
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--duration-instant, 80ms) ease-out;
+}
+
+.checkCta:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}

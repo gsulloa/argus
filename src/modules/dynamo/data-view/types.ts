@@ -217,6 +217,37 @@ export type FilterRow =
       type: "S" | "N" | "B" | "BOOL" | "NULL" | "L" | "M" | "SS" | "NS" | "BS";
     };
 
+// ---------------------------------------------------------------------------
+// §5.3  Model layer types — DynamoModel, AccessPattern (cross-engine STD)
+// ---------------------------------------------------------------------------
+
+/**
+ * A single access pattern inside a DynamoModel.
+ * `index` is either "table" (primary key schema) or a GSI/LSI name.
+ * `pk` and `sk` are template strings with `${ident}` placeholders.
+ */
+export interface AccessPattern {
+  /** Optional human-readable label. Derived from index+templates when absent. */
+  name?: string;
+  /** "table" → primary key schema; otherwise the GSI/LSI name. */
+  index: string;
+  /** Partition-key template, e.g. "USER#${userId}". */
+  pk: string;
+  /** Optional sort-key template, e.g. "ORDER#${orderId}". */
+  sk?: string;
+}
+
+/**
+ * A single entity model from a dynamo_model context doc.
+ * Returned by the `context_list_models` backend command.
+ */
+export interface DynamoModel {
+  name: string;
+  /** Physical DynamoDB table this model belongs to (derived from file path). */
+  physical_table?: string;
+  access_patterns: AccessPattern[];
+}
+
 export interface BuilderState {
   mode: "scan" | "query";
   indexName: string | null;
@@ -233,6 +264,20 @@ export interface BuilderState {
   };
   filters: FilterRow[];
   filterCombinator?: "AND" | "OR";
+  /**
+   * Builder mode toggle.
+   * Defaults to "raw" when absent (backward-compatible).
+   */
+  builderMode?: "model" | "raw";
+  /**
+   * Model-mode source of truth — persisted independently of `query`.
+   * The compiled `query` is always derived from this while in model mode.
+   */
+  modelSelection?: {
+    entity: string;
+    accessPattern: string;
+    params: Record<string, string>;
+  };
 }
 
 /**

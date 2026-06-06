@@ -28,6 +28,7 @@ const {
   mockCancel,
   mockClose,
   mockUseAiSettings,
+  mockCtor,
 } = vi.hoisted(() => ({
   mockSubscribe: vi.fn(),
   mockGetSnapshot: vi.fn(),
@@ -35,6 +36,7 @@ const {
   mockCancel: vi.fn(),
   mockClose: vi.fn(),
   mockUseAiSettings: vi.fn(),
+  mockCtor: vi.fn(),
 }));
 
 vi.mock("@/modules/ai/session", () => {
@@ -44,6 +46,7 @@ vi.mock("@/modules/ai/session", () => {
     connectionId: string;
     constructor(connectionId: string) {
       this.connectionId = connectionId;
+      mockCtor(connectionId);
     }
     subscribe = mockSubscribe;
     getSnapshot = mockGetSnapshot;
@@ -66,6 +69,24 @@ vi.mock("@/modules/ai/store", () => ({
 import { ChatPanel } from "./ChatPanel";
 import type { ChatSessionSnapshot } from "@/modules/ai/session";
 import type { ChatTurn } from "@/modules/ai/types";
+import type { AiReadiness } from "../useAiReadiness";
+import { CommandRegistry } from "@/platform/command-palette/CommandRegistry";
+
+const READY: AiReadiness = {
+  providerConfigured: true,
+  contextState: "available",
+  level: "ready",
+};
+const NOT_CONFIGURED: AiReadiness = {
+  providerConfigured: false,
+  contextState: "none",
+  level: "not-configured",
+};
+const NEEDS_CONTEXT: AiReadiness = {
+  providerConfigured: true,
+  contextState: "none",
+  level: "needs-context",
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -113,17 +134,22 @@ function renderPanel({
   onClose = vi.fn(),
   connectionId = "c1",
   contextPath = null as string | null,
+  readiness = READY as AiReadiness,
+  onLinkContext = vi.fn(),
   editorRef = makeEditorRef() as EditorRef,
   result = null as import("../../../modules/ai/components/ChatPanel").ChatPanelProps["result"],
 } = {}) {
   return {
     editorRef,
+    onLinkContext,
     ...render(
       <ChatPanel
         open={open}
         onClose={onClose}
         connectionId={connectionId}
         contextPath={contextPath}
+        readiness={readiness}
+        onLinkContext={onLinkContext}
         editorRef={editorRef as React.RefObject<typeof baseEditor>}
         result={result}
       />,
@@ -212,10 +238,11 @@ describe("ChatPanel — open with empty state", () => {
     expect(screen.getByText(/billing-ctx/i)).toBeTruthy();
   });
 
-  it("shows 'No context folder' when contextPath is null", () => {
+  it("does not show degraded 'temp directory' / 'empty payload' messaging", () => {
     setupSession();
-    renderPanel({ open: true, contextPath: null });
-    expect(screen.getByText(/No context folder/i)).toBeTruthy();
+    renderPanel({ open: true, contextPath: "/Users/me/billing-ctx" });
+    expect(screen.queryByText(/temp directory/i)).toBeNull();
+    expect(screen.queryByText(/empty payload/i)).toBeNull();
   });
 
   it("Send button is disabled when textarea is whitespace-only", () => {
@@ -711,6 +738,7 @@ describe("ChatPanel — attachment UI", () => {
     mockSend.mockReset();
     mockCancel.mockReset();
     mockClose.mockReset();
+    mockCtor.mockReset();
     mockUseAiSettings.mockReturnValue({
       settings: DEFAULT_SETTINGS,
       providers: [],
@@ -795,5 +823,91 @@ describe("ChatPanel — attachment UI", () => {
 
     // Chip should be cleared after send.
     expect(screen.queryByTestId("attachment-chip")).toBeNull();
+  });
+});
+
+describe("ChatPanel — setup mode", () => {
+  beforeEach(() => {
+    mockSubscribe.mockReset();
+    mockGetSnapshot.mockReset();
+    mockSend.mockReset();
+    mockCancel.mockReset();
+    mockClose.mockReset();
+    mockCtor.mockReset();
+    mockUseAiSettings.mockReturnValue({
+      settings: DEFAULT_SETTINGS,
+      providers: [],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+  });
+
+  it("shows the checklist and hides chat input when not configured", () => {
+    setupSession();
+    renderPanel({ open: true, readiness: NOT_CONFIGURED });
+    expect(screen.getByText("AI provider")).toBeTruthy();
+    expect(screen.getByText("Context folder")).toBeTruthy();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByTestId("btn-send")).toBeNull();
+  });
+
+  it("provider CTA runs the ai.configureProviders command", () => {
+    const run = vi.fn();
+    const getSpy = vi
+      .spyOn(CommandRegistry, "get")
+      .mockReturnValue({ id: "ai.configureProviders", label: "x", run } as never);
+    setupSession();
+    renderPanel({ open: true, readiness: NOT_CONFIGURED });
+    fireEvent.click(screen.getByText(/Configure providers/i));
+    expect(run).toHaveBeenCalledTimes(1);
+    getSpy.mockRestore();
+  });
+
+  it("context CTA invokes onLinkContext when provider set but context missing", () => {
+    setupSession();
+    const { onLinkContext } = renderPanel({
+      open: true,
+      readiness: NEEDS_CONTEXT,
+    });
+    fireEvent.click(screen.getByText(/Link context folder/i));
+    expect(onLinkContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not create a chat session while not ready", () => {
+    setupSession();
+    mockCtor.mockClear();
+    renderPanel({ open: true, readiness: NOT_CONFIGURED });
+    expect(mockCtor).not.toHaveBeenCalled();
+  });
+
+  it("transitions from setup to chat when readiness becomes ready", () => {
+    setupSession();
+    const editorRef = makeEditorRef();
+    const { rerender } = render(
+      <ChatPanel
+        open
+        onClose={vi.fn()}
+        connectionId="c1"
+        contextPath={null}
+        readiness={NOT_CONFIGURED}
+        onLinkContext={vi.fn()}
+        editorRef={editorRef as React.RefObject<typeof baseEditor>}
+      />,
+    );
+    expect(screen.queryByRole("textbox")).toBeNull();
+
+    rerender(
+      <ChatPanel
+        open
+        onClose={vi.fn()}
+        connectionId="c1"
+        contextPath="/Users/me/ctx"
+        readiness={READY}
+        onLinkContext={vi.fn()}
+        editorRef={editorRef as React.RefObject<typeof baseEditor>}
+      />,
+    );
+    expect(screen.getByRole("textbox")).toBeTruthy();
   });
 });

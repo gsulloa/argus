@@ -16,8 +16,8 @@ use crate::modules::ai::commands::{
 };
 use crate::modules::context::commands::{
     context_ai_payload, context_create_folder, context_get_object, context_get_query,
-    context_link_folder, context_list_objects, context_list_queries, context_reveal_path,
-    context_sync_schema, context_unlink,
+    context_link_folder, context_list_models, context_list_objects, context_list_queries,
+    context_reveal_path, context_sync_schema, context_unlink,
 };
 use crate::modules::context::registry::{ContextRegistry, TauriEmitter};
 use crate::modules::dynamo::client::DynamoClientRegistry;
@@ -304,6 +304,7 @@ pub fn run() {
             context_unlink,
             context_list_objects,
             context_get_object,
+            context_list_models,
             context_list_queries,
             context_get_query,
             context_sync_schema,

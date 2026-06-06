@@ -18,7 +18,10 @@ impl EngineKind {
             "postgres" => Some(Self::Postgres),
             "mysql" => Some(Self::Mysql),
             "mssql" => Some(Self::Mssql),
-            "dynamo" => Some(Self::Dynamo),
+            // Connections persist the Dynamo kind as "dynamodb" (see
+            // modules/dynamo: DYNAMO_KIND). "dynamo" is accepted as a
+            // defensive alias in case of older/migrated rows.
+            "dynamodb" | "dynamo" => Some(Self::Dynamo),
             "cloudwatch" => Some(Self::Cloudwatch),
             _ => None,
         }
@@ -42,5 +45,50 @@ impl EngineKind {
             Self::Dynamo => &["partiql"],
             Self::Cloudwatch => &["cwlogs"],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_each_connection_kind_to_engine() {
+        assert_eq!(
+            EngineKind::from_connection_kind("postgres"),
+            Some(EngineKind::Postgres)
+        );
+        assert_eq!(
+            EngineKind::from_connection_kind("mysql"),
+            Some(EngineKind::Mysql)
+        );
+        assert_eq!(
+            EngineKind::from_connection_kind("mssql"),
+            Some(EngineKind::Mssql)
+        );
+        assert_eq!(
+            EngineKind::from_connection_kind("cloudwatch"),
+            Some(EngineKind::Cloudwatch)
+        );
+    }
+
+    #[test]
+    fn dynamo_connection_kind_is_dynamodb() {
+        // Connections persist "dynamodb" (modules/dynamo: DYNAMO_KIND); the
+        // legacy "dynamo" alias must also resolve. Regression for
+        // "unsupported engine kind: dynamodb" when linking a context folder.
+        assert_eq!(
+            EngineKind::from_connection_kind("dynamodb"),
+            Some(EngineKind::Dynamo)
+        );
+        assert_eq!(
+            EngineKind::from_connection_kind("dynamo"),
+            Some(EngineKind::Dynamo)
+        );
+    }
+
+    #[test]
+    fn unknown_kind_is_none() {
+        assert_eq!(EngineKind::from_connection_kind("redis"), None);
     }
 }

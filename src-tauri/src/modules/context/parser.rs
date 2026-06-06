@@ -296,6 +296,25 @@ pub fn parse_queries_dir(dir: &Path, engine: EngineKind) -> (Vec<QueryDoc>, Vec<
     (docs, warnings)
 }
 
+// ---- Template well-formedness (D9) ----
+
+/// Return `true` if `template` contains an unterminated placeholder (`${` with
+/// no closing `}`).  This is the minimal validation mandated by D9 — the TS
+/// `modelCompiler` is the authoritative parser; we only warn on obviously
+/// broken inputs here.
+fn has_unterminated_placeholder(template: &str) -> bool {
+    let mut rest = template;
+    while let Some(open) = rest.find("${") {
+        let after_open = &rest[open + 2..];
+        if !after_open.contains('}') {
+            return true;
+        }
+        // Advance past this `${...}` occurrence.
+        rest = &rest[open + 2..];
+    }
+    false
+}
+
 // ---- 3.4: load_folder ----
 
 /// Load a full context folder for a given engine.
@@ -363,14 +382,16 @@ pub fn load_folder(root: &Path, engine: EngineKind) -> Result<ParsedContext, Par
             }
         }
         EngineKind::Dynamo => {
-            // <engine_root>/tables/<name>.md
+            // <engine_root>/tables/<name>.md   — flat table docs
+            // <engine_root>/tables/<name>/models/<Model>.md — model docs
             let tables_dir = engine_root.join("tables");
             if tables_dir.exists() {
                 match std::fs::read_dir(&tables_dir) {
-                    Ok(files) => {
-                        for entry in files.flatten() {
+                    Ok(entries) => {
+                        for entry in entries.flatten() {
                             let p = entry.path();
                             if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("md") {
+                                // Flat table doc: tables/<name>.md
                                 match parse_object_doc(&p) {
                                     Ok(doc) => objects.push(doc),
                                     Err(e) => warnings.push(LoadWarning {
@@ -378,6 +399,99 @@ pub fn load_folder(root: &Path, engine: EngineKind) -> Result<ParsedContext, Par
                                         message: e.to_string(),
                                     }),
                                 }
+                            } else if p.is_dir() {
+                                // Subdirectory: tables/<table>/
+                                // Derive the physical table name from the directory name.
+                                let table_name = match p.file_name().and_then(|n| n.to_str()) {
+                                    Some(n) => n.to_owned(),
+                                    None => continue,
+                                };
+                                // Walk tables/<table>/models/*.md
+                                let models_dir = p.join("models");
+                                if models_dir.exists() {
+                                    match std::fs::read_dir(&models_dir) {
+                                        Ok(model_files) => {
+                                            for model_entry in model_files.flatten() {
+                                                let mp = model_entry.path();
+                                                if mp.is_file()
+                                                    && mp
+                                                        .extension()
+                                                        .and_then(|e| e.to_str())
+                                                        == Some("md")
+                                                {
+                                                    match parse_object_doc(&mp) {
+                                                        Ok(mut doc) => {
+                                                            // D7-bis: derive physical_table from
+                                                            // the directory name, not frontmatter.
+                                                            doc.system.physical_table =
+                                                                Some(table_name.clone());
+                                                            // Warn on empty access_patterns.
+                                                            let empty_patterns = doc
+                                                                .system
+                                                                .access_patterns
+                                                                .as_ref()
+                                                                .map(|v| v.is_empty())
+                                                                .unwrap_or(true);
+                                                            if empty_patterns {
+                                                                warnings.push(LoadWarning {
+                                                                    path: mp.clone(),
+                                                                    message:
+                                                                        "dynamo_model has no access_patterns"
+                                                                            .into(),
+                                                                });
+                                                            }
+                                                            // D9: warn on unterminated `${` in
+                                                            // any pk/sk template.
+                                                            if let Some(patterns) =
+                                                                &doc.system.access_patterns
+                                                            {
+                                                                for ap in patterns {
+                                                                    if has_unterminated_placeholder(
+                                                                        &ap.pk,
+                                                                    ) {
+                                                                        warnings.push(LoadWarning {
+                                                                            path: mp.clone(),
+                                                                            message: format!(
+                                                                                "unterminated `${{` in pk template: {:?}",
+                                                                                ap.pk
+                                                                            ),
+                                                                        });
+                                                                    }
+                                                                    if let Some(sk) = &ap.sk {
+                                                                        if has_unterminated_placeholder(sk) {
+                                                                            warnings.push(
+                                                                                LoadWarning {
+                                                                                    path: mp
+                                                                                        .clone(),
+                                                                                    message: format!(
+                                                                                        "unterminated `${{` in sk template: {sk:?}"
+                                                                                    ),
+                                                                                },
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            objects.push(doc);
+                                                        }
+                                                        Err(e) => warnings.push(LoadWarning {
+                                                            path: mp,
+                                                            message: e.to_string(),
+                                                        }),
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => warnings.push(LoadWarning {
+                                            path: models_dir,
+                                            message: format!(
+                                                "failed to read models dir: {e}"
+                                            ),
+                                        }),
+                                    }
+                                }
+                                // Other files/dirs inside the table directory
+                                // are silently ignored (forward compat).
                             }
                         }
                     }
@@ -640,5 +754,255 @@ mod tests {
         let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
         assert!(ctx.objects.is_empty());
         assert!(ctx.queries.is_empty());
+    }
+
+    // ---- dynamo_model tests (task 1.6) ----
+
+    /// Helper: a minimal dynamo_table doc content.
+    fn dynamo_table_doc(name: &str) -> String {
+        format!("---\nsystem:\n  kind: dynamo_table\n  name: {name}\n---\n# {name}\n")
+    }
+
+    /// Helper: a well-formed dynamo_model doc with one access pattern.
+    fn dynamo_model_doc(entity: &str) -> String {
+        format!(
+            "---\nsystem:\n  kind: dynamo_model\n  name: {entity}\n  access_patterns:\n    - index: table\n      pk: \"USER#${{userId}}\"\n      sk: \"ORDER#${{orderId}}\"\n---\n# {entity}\n"
+        )
+    }
+
+    /// Well-formed model doc parses with physical_table derived from directory.
+    #[test]
+    fn model_doc_parses_with_physical_table_from_dir() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+        write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/Order.md",
+            &dynamo_model_doc("Order"),
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+
+        let order = ctx
+            .objects
+            .iter()
+            .find(|d| d.system.name == "Order")
+            .expect("Order not found");
+        assert_eq!(order.system.kind, "dynamo_model");
+        assert_eq!(order.system.physical_table.as_deref(), Some("AppTable"));
+
+        let aps = order.system.access_patterns.as_ref().expect("access_patterns missing");
+        assert_eq!(aps.len(), 1);
+        assert_eq!(aps[0].index, "table");
+        assert_eq!(aps[0].pk, "USER#${userId}");
+        assert_eq!(aps[0].sk.as_deref(), Some("ORDER#${orderId}"));
+    }
+
+    /// Multiple access patterns on the same index are all preserved.
+    #[test]
+    fn multiple_access_patterns_same_index_preserved() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+        write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/Order.md",
+            "---\nsystem:\n  kind: dynamo_model\n  name: Order\n  access_patterns:\n    - name: \"Orders by status\"\n      index: GSI1\n      pk: \"USER#${userId}\"\n      sk: \"STATUS#${status}\"\n    - name: \"Orders by date\"\n      index: GSI1\n      pk: \"USER#${userId}\"\n      sk: \"DATE#${createdAt}\"\n---\n# Order\n",
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        assert!(ctx.warnings.is_empty(), "unexpected warnings: {:?}", ctx.warnings);
+
+        let order = ctx
+            .objects
+            .iter()
+            .find(|d| d.system.name == "Order")
+            .expect("Order not found");
+        let aps = order.system.access_patterns.as_ref().unwrap();
+        assert_eq!(aps.len(), 2);
+        assert_eq!(aps[0].name.as_deref(), Some("Orders by status"));
+        assert_eq!(aps[1].name.as_deref(), Some("Orders by date"));
+        assert_eq!(aps[0].index, "GSI1");
+        assert_eq!(aps[1].index, "GSI1");
+    }
+
+    /// An unterminated `${` in a pk template produces a LoadWarning.
+    #[test]
+    fn unterminated_placeholder_in_pk_emits_warning() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+        write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/Bad.md",
+            "---\nsystem:\n  kind: dynamo_model\n  name: Bad\n  access_patterns:\n    - index: table\n      pk: \"USER#${unclosed\"\n---\n# Bad\n",
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        assert!(
+            ctx.warnings
+                .iter()
+                .any(|w| w.message.contains("unterminated")),
+            "expected unterminated warning, got: {:?}",
+            ctx.warnings,
+        );
+    }
+
+    /// An unterminated `${` in a sk template produces a LoadWarning.
+    #[test]
+    fn unterminated_placeholder_in_sk_emits_warning() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+        write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/Bad.md",
+            "---\nsystem:\n  kind: dynamo_model\n  name: Bad\n  access_patterns:\n    - index: table\n      pk: \"USER#${userId}\"\n      sk: \"ORDER#${unclosed\"\n---\n# Bad\n",
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        assert!(
+            ctx.warnings
+                .iter()
+                .any(|w| w.message.contains("unterminated")),
+            "expected unterminated warning, got: {:?}",
+            ctx.warnings,
+        );
+    }
+
+    /// An empty access_patterns list produces a LoadWarning.
+    #[test]
+    fn empty_access_patterns_emits_warning() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+        write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/Empty.md",
+            "---\nsystem:\n  kind: dynamo_model\n  name: Empty\n  access_patterns: []\n---\n# Empty\n",
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        assert!(
+            ctx.warnings
+                .iter()
+                .any(|w| w.message.contains("access_patterns")),
+            "expected access_patterns warning, got: {:?}",
+            ctx.warnings,
+        );
+    }
+
+    /// A model doc without access_patterns at all also produces a LoadWarning.
+    #[test]
+    fn missing_access_patterns_emits_warning() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+        write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/NoAp.md",
+            "---\nsystem:\n  kind: dynamo_model\n  name: NoAp\n---\n# NoAp\n",
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        assert!(
+            ctx.warnings
+                .iter()
+                .any(|w| w.message.contains("access_patterns")),
+            "expected access_patterns warning, got: {:?}",
+            ctx.warnings,
+        );
+    }
+
+    /// `tables/AppTable.md` (table doc) and `tables/AppTable/models/Order.md`
+    /// (model doc) coexist — both parsed, no shadowing.
+    #[test]
+    fn table_doc_and_model_doc_coexist() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+        write_file(
+            dir.path(),
+            "dynamo/tables/AppTable.md",
+            &dynamo_table_doc("AppTable"),
+        );
+        write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/Order.md",
+            &dynamo_model_doc("Order"),
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+
+        // Both objects present.
+        assert_eq!(ctx.objects.len(), 2, "expected 2 objects, got {:?}", ctx.objects.iter().map(|d| &d.system.name).collect::<Vec<_>>());
+
+        let table_doc = ctx.objects.iter().find(|d| d.system.kind == "dynamo_table")
+            .expect("dynamo_table doc missing");
+        assert_eq!(table_doc.system.name, "AppTable");
+
+        let model_doc = ctx.objects.iter().find(|d| d.system.kind == "dynamo_model")
+            .expect("dynamo_model doc missing");
+        assert_eq!(model_doc.system.name, "Order");
+        assert_eq!(model_doc.system.physical_table.as_deref(), Some("AppTable"));
+    }
+
+    /// A table without a `models/` subdirectory is unaffected (only the table
+    /// doc is emitted, no warnings about the missing directory).
+    #[test]
+    fn table_without_models_dir_is_unaffected() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+        write_file(
+            dir.path(),
+            "dynamo/tables/Events.md",
+            "---\nsystem:\n  kind: dynamo_table\n  name: Events\n---\n# Events\n",
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        assert_eq!(ctx.objects.len(), 1);
+        assert_eq!(ctx.objects[0].system.name, "Events");
+        assert!(ctx.warnings.is_empty(), "unexpected warnings: {:?}", ctx.warnings);
+    }
+
+    /// Two tables each with a model named `Order` — `physical_table` keeps them
+    /// distinct (no cross-table leakage).
+    #[test]
+    fn same_model_name_in_different_tables_no_shadowing() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+        write_file(
+            dir.path(),
+            "dynamo/tables/TableA/models/Order.md",
+            "---\nsystem:\n  kind: dynamo_model\n  name: Order\n  access_patterns:\n    - index: table\n      pk: \"A#${id}\"\n---\n# Order A\n",
+        );
+        write_file(
+            dir.path(),
+            "dynamo/tables/TableB/models/Order.md",
+            "---\nsystem:\n  kind: dynamo_model\n  name: Order\n  access_patterns:\n    - index: table\n      pk: \"B#${id}\"\n---\n# Order B\n",
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        assert_eq!(ctx.objects.len(), 2);
+
+        let order_a = ctx
+            .objects
+            .iter()
+            .find(|d| d.system.physical_table.as_deref() == Some("TableA"))
+            .expect("TableA Order not found");
+        assert_eq!(order_a.system.access_patterns.as_ref().unwrap()[0].pk, "A#${id}");
+
+        let order_b = ctx
+            .objects
+            .iter()
+            .find(|d| d.system.physical_table.as_deref() == Some("TableB"))
+            .expect("TableB Order not found");
+        assert_eq!(order_b.system.access_patterns.as_ref().unwrap()[0].pk, "B#${id}");
+    }
+
+    /// `has_unterminated_placeholder` unit tests.
+    #[test]
+    fn unterminated_placeholder_detection() {
+        assert!(!has_unterminated_placeholder("USER#${userId}"));
+        assert!(!has_unterminated_placeholder("literal"));
+        assert!(!has_unterminated_placeholder("a${x}b${y}c"));
+        assert!(!has_unterminated_placeholder("price$1"));  // $ not followed by {
+        assert!(has_unterminated_placeholder("USER#${unclosed"));
+        assert!(has_unterminated_placeholder("${a}${unclosed"));
+        assert!(has_unterminated_placeholder("${"));
     }
 }

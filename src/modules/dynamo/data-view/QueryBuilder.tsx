@@ -9,10 +9,11 @@
  * builder is in an invalid state (e.g., Query mode with no PK value).
  */
 
-import React, { useState, useRef, useImperativeHandle } from "react";
+import React, { useMemo, useState, useRef, useImperativeHandle } from "react";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
 import { compile } from "./builderCompiler";
-import type { BuilderState, FilterRow, TypedValue } from "./types";
+import { compileModel } from "./modelCompiler";
+import type { BuilderState, DynamoModel, FilterRow, TypedValue } from "./types";
 import { getFilterCombinator } from "./types";
 import {
   FilterBarShell,
@@ -55,6 +56,13 @@ export interface QueryBuilderProps {
   onApplyOnlyFilter?(transient: BuilderState): void;
   /** When true, all interactive controls are disabled (e.g. needs_credentials). */
   disabled?: boolean;
+  /**
+   * Model docs for this table. When non-empty the "By model" / "Raw (PK/SK)"
+   * builder-mode toggle is shown (STD table). Empty → toggle hidden (D2).
+   */
+  models?: DynamoModel[];
+  /** True when `models` is non-empty (STD table). */
+  isStd?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -553,6 +561,47 @@ function normalizeForDirty(builder: BuilderState): string {
 }
 
 // ---------------------------------------------------------------------------
+// Model mode helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse distinct `${param}` identifiers from a template in order of first
+ * appearance, deduplicating across pk + sk.
+ * E.g. "USER#${userId}" + "ORDER#${userId}#${orderId}" → ["userId", "orderId"]
+ */
+function extractParams(pk: string, sk?: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  const re = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+  for (const template of [pk, sk ?? ""]) {
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(template)) !== null) {
+      const ident = m[1]!;
+      if (!seen.has(ident)) {
+        seen.add(ident);
+        result.push(ident);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Derive a human-readable label for an access pattern when `name` is absent.
+ * Format: "<index> | pk=<pkTemplate>[, sk=<skTemplate>]"
+ * Ensures two patterns on the same index are disambiguated.
+ */
+function deriveAccessPatternLabel(
+  ap: DynamoModel["access_patterns"][number],
+): string {
+  if (ap.name) return ap.name;
+  const parts = [`pk=${ap.pk}`];
+  if (ap.sk) parts.push(`sk=${ap.sk}`);
+  return `${ap.index}: ${parts.join(", ")}`;
+}
+
+// ---------------------------------------------------------------------------
 // Main QueryBuilder
 // ---------------------------------------------------------------------------
 
@@ -568,6 +617,8 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
       onReset,
       onApplyOnlyFilter,
       disabled = false,
+      models = [],
+      isStd = false,
     }: QueryBuilderProps,
     ref,
   ) {
@@ -745,6 +796,27 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
   }
 
   function revalidate(next: BuilderState) {
+    // In model mode, the query is derived from modelSelection — validate that.
+    const effectiveMode: "model" | "raw" =
+      isStd && next.builderMode === "model" ? "model" : "raw";
+    if (effectiveMode === "model" && next.modelSelection && selectedAp) {
+      const modelResult = compileModel(selectedAp, next.modelSelection.params, describe);
+      if (modelResult.kind === "error") {
+        onValidityChange(false, modelResult.reason);
+        return;
+      }
+      // Also validate filters via builderCompiler
+      const fullResult = compile(
+        { ...next, indexName: modelResult.indexName, query: modelResult.query },
+        describe,
+      );
+      if (fullResult.kind === "error") {
+        onValidityChange(false, fullResult.reason);
+      } else {
+        onValidityChange(true);
+      }
+      return;
+    }
     const result = compile(next, describe);
     if (result.kind === "error") {
       onValidityChange(false, result.reason);
@@ -766,8 +838,163 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
     lastRunStateRef.current = null;
   }
 
+  // ── Model mode: derived state ──────────────────────────────────────────────
+  // The effective builder mode: force "raw" when not STD.
+  const effectiveBuilderMode: "model" | "raw" =
+    isStd && builder.builderMode === "model" ? "model" : "raw";
+
+  // The currently selected entity model (by name from modelSelection).
+  const selectedModel = useMemo(
+    () =>
+      builder.modelSelection?.entity
+        ? models.find((m) => m.name === builder.modelSelection!.entity) ?? null
+        : null,
+    [builder.modelSelection, models],
+  );
+
+  // The currently selected access pattern (by string label key, stored in
+  // modelSelection.accessPattern which is the derived label for the pattern).
+  const selectedAp = useMemo(() => {
+    if (!selectedModel || !builder.modelSelection?.accessPattern) return null;
+    return (
+      selectedModel.access_patterns.find(
+        (ap) => deriveAccessPatternLabel(ap) === builder.modelSelection!.accessPattern,
+      ) ?? null
+    );
+  }, [selectedModel, builder.modelSelection]);
+
+  // Params list for the selected access pattern (ordered, deduped).
+  const apParams = useMemo(
+    () => (selectedAp ? extractParams(selectedAp.pk, selectedAp.sk) : []),
+    [selectedAp],
+  );
+
+  // ── Model compile result (model mode only) ─────────────────────────────────
+  const modelCompileResult = useMemo(() => {
+    if (effectiveBuilderMode !== "model" || !selectedAp) return null;
+    const params = builder.modelSelection?.params ?? {};
+    return compileModel(selectedAp, params, describe);
+  }, [effectiveBuilderMode, selectedAp, builder.modelSelection, describe]);
+
+  // ── Model mode handlers ────────────────────────────────────────────────────
+
+  /** Switch builder mode between "model" and "raw". */
+  function setBuilderMode(mode: "model" | "raw") {
+    let next: BuilderState;
+    if (mode === "model") {
+      // Entering model mode: derive query from current modelSelection
+      next = { ...builder, builderMode: "model" };
+      if (builder.modelSelection) {
+        const ap = models
+          .find((m) => m.name === builder.modelSelection!.entity)
+          ?.access_patterns.find(
+            (p) => deriveAccessPatternLabel(p) === builder.modelSelection!.accessPattern,
+          );
+        if (ap) {
+          const result = compileModel(ap, builder.modelSelection.params, describe);
+          if (result.kind === "ok") {
+            next = { ...next, indexName: result.indexName, query: result.query };
+          }
+        }
+      }
+    } else {
+      // Switching to raw: keep the last compiled query seeded from model state
+      next = { ...builder, builderMode: "raw" };
+    }
+    onBuilderChange(next);
+    // Revalidate via builderCompiler (model-derived query satisfies it)
+    const result = compile(next, describe);
+    if (result.kind === "error") {
+      onValidityChange(false, result.reason);
+    } else {
+      onValidityChange(true);
+    }
+  }
+
+  /** Select an entity model. Resets access pattern and params. */
+  function setModelEntity(entityName: string) {
+    const model = models.find((m) => m.name === entityName);
+    if (!model) return;
+    // Pick first access pattern as default
+    const firstAp = model.access_patterns[0];
+    const apLabel = firstAp ? deriveAccessPatternLabel(firstAp) : "";
+    const next: BuilderState = {
+      ...builder,
+      builderMode: "model",
+      modelSelection: { entity: entityName, accessPattern: apLabel, params: {} },
+    };
+    // Compile immediately
+    if (firstAp) {
+      const result = compileModel(firstAp, {}, describe);
+      if (result.kind === "ok") {
+        onBuilderChange({ ...next, indexName: result.indexName, query: result.query });
+        onValidityChange(true);
+      } else {
+        onBuilderChange(next);
+        onValidityChange(false, result.reason);
+      }
+    } else {
+      onBuilderChange(next);
+      onValidityChange(false, "No access patterns defined for this entity");
+    }
+  }
+
+  /** Select an access pattern (by derived label). Resets params. */
+  function setModelAccessPattern(apLabel: string) {
+    if (!builder.modelSelection) return;
+    const model = models.find((m) => m.name === builder.modelSelection!.entity);
+    if (!model) return;
+    const ap = model.access_patterns.find((p) => deriveAccessPatternLabel(p) === apLabel);
+    if (!ap) return;
+    const next: BuilderState = {
+      ...builder,
+      modelSelection: { ...builder.modelSelection, accessPattern: apLabel, params: {} },
+    };
+    const result = compileModel(ap, {}, describe);
+    if (result.kind === "ok") {
+      onBuilderChange({ ...next, indexName: result.indexName, query: result.query });
+      onValidityChange(true);
+    } else {
+      onBuilderChange(next);
+      onValidityChange(false, result.reason);
+    }
+  }
+
+  /** Update a single param value in model mode. */
+  function setModelParam(paramName: string, value: string) {
+    if (!builder.modelSelection || !selectedAp) return;
+    const nextParams = { ...builder.modelSelection.params, [paramName]: value };
+    const next: BuilderState = {
+      ...builder,
+      modelSelection: { ...builder.modelSelection, params: nextParams },
+    };
+    const result = compileModel(selectedAp, nextParams, describe);
+    if (result.kind === "ok") {
+      onBuilderChange({ ...next, indexName: result.indexName, query: result.query });
+      onValidityChange(true);
+    } else {
+      onBuilderChange(next);
+      onValidityChange(false, result.reason);
+    }
+  }
+
   // ── Compute validity for inline hints ──────────────────────────────────────
-  const compileResult = compile(builder, describe);
+  // In model mode: use model compile result; in raw mode: use builderCompiler.
+  const compileResult = (() => {
+    if (effectiveBuilderMode === "model") {
+      if (modelCompileResult === null) {
+        // No AP selected yet — entity or AP missing
+        return { kind: "error" as const, reason: "Select an entity and access pattern", field: undefined };
+      }
+      if (modelCompileResult.kind === "error") {
+        return { kind: "error" as const, reason: modelCompileResult.reason, field: modelCompileResult.field };
+      }
+      // ok — run through builderCompiler for the preview/validity (it already validates key types etc.)
+      return compile({ ...builder, indexName: modelCompileResult.indexName, query: modelCompileResult.query }, describe);
+    }
+    return compile(builder, describe);
+  })();
+
   const isValid = compileResult.kind !== "error";
   const validityField = compileResult.kind === "error" ? compileResult.field : undefined;
   const validityReason = compileResult.kind === "error" ? compileResult.reason : undefined;
@@ -793,7 +1020,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
   return (
     <div ref={rootRef}>
     <FilterBarShell>
-      {/* ── Header: mode toggle + index ────────────────────────────────── */}
+      {/* ── Header: mode toggle + builder-mode toggle + index ──────────── */}
       <FilterBarHeader>
         {/* Scan/Query segmented control — custom tablist to preserve aria-pressed
             test assertions (data-testid="mode-scan/query" + aria-pressed). */}
@@ -820,29 +1047,141 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
           </button>
         </div>
 
-        {/* Index dropdown */}
-        <span className={styles.label}>Index</span>
-        <select
-          className={styles.select}
-          value={builder.indexName ?? ""}
-          onChange={(e) => {
-            const v = e.target.value;
-            setIndex(v === "" ? null : v);
-          }}
-          aria-label="Index"
-          disabled={disabled}
-          data-testid="index-select"
-        >
-          {indexOptions.map((opt) => (
-            <option key={opt.value ?? ""} value={opt.value ?? ""}>{opt.label}</option>
-          ))}
-        </select>
+        {/* Builder-mode toggle: "By model" / "Raw (PK/SK)" — STD tables only (D2) */}
+        {isStd && builder.mode === "query" && (
+          <div className={styles.modeGroup} role="group" aria-label="Builder mode" data-testid="builder-mode-group">
+            <button
+              type="button"
+              className={`${styles.modeBtn} ${effectiveBuilderMode === "model" ? styles.modeBtnActive : ""}`}
+              onClick={() => setBuilderMode("model")}
+              aria-pressed={effectiveBuilderMode === "model"}
+              disabled={disabled}
+              data-testid="builder-mode-model"
+            >
+              By model
+            </button>
+            <button
+              type="button"
+              className={`${styles.modeBtn} ${effectiveBuilderMode === "raw" ? styles.modeBtnActive : ""}`}
+              onClick={() => setBuilderMode("raw")}
+              aria-pressed={effectiveBuilderMode === "raw"}
+              disabled={disabled}
+              data-testid="builder-mode-raw"
+            >
+              Raw (PK/SK)
+            </button>
+          </div>
+        )}
+
+        {/* Index dropdown — hidden in model mode (index is derived from access pattern) */}
+        {effectiveBuilderMode === "raw" && (
+          <>
+            <span className={styles.label}>Index</span>
+            <select
+              className={styles.select}
+              value={builder.indexName ?? ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                setIndex(v === "" ? null : v);
+              }}
+              aria-label="Index"
+              disabled={disabled}
+              data-testid="index-select"
+            >
+              {indexOptions.map((opt) => (
+                <option key={opt.value ?? ""} value={opt.value ?? ""}>{opt.label}</option>
+              ))}
+            </select>
+          </>
+        )}
       </FilterBarHeader>
 
       {/* ── Body ───────────────────────────────────────────────────────── */}
       <FilterBarBody>
-        {/* Key section — Query mode only */}
-        {builder.mode === "query" && keySchema && (
+        {/* Model mode — entity + access pattern + param inputs */}
+        {effectiveBuilderMode === "model" && builder.mode === "query" && (
+          <div className={styles.keySection}>
+            {/* Entity selector */}
+            <div className={styles.keyRow}>
+              <span className={styles.keyLabel}>Entity</span>
+              <select
+                className={styles.select}
+                value={builder.modelSelection?.entity ?? ""}
+                onChange={(e) => setModelEntity(e.target.value)}
+                aria-label="Entity"
+                disabled={disabled}
+                data-testid="model-entity-select"
+              >
+                {!builder.modelSelection?.entity && (
+                  <option value="">— select entity —</option>
+                )}
+                {models.map((m) => (
+                  <option key={m.name} value={m.name}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Access pattern selector */}
+            {selectedModel && (
+              <div className={styles.keyRow}>
+                <span className={styles.keyLabel}>Access pattern</span>
+                <select
+                  className={styles.select}
+                  value={builder.modelSelection?.accessPattern ?? ""}
+                  onChange={(e) => setModelAccessPattern(e.target.value)}
+                  aria-label="Access pattern"
+                  disabled={disabled}
+                  data-testid="model-ap-select"
+                >
+                  {!builder.modelSelection?.accessPattern && (
+                    <option value="">— select pattern —</option>
+                  )}
+                  {selectedModel.access_patterns.map((ap) => {
+                    const label = deriveAccessPatternLabel(ap);
+                    return (
+                      <option key={label} value={label}>{label}</option>
+                    );
+                  })}
+                </select>
+              </div>
+            )}
+
+            {/* Parameter inputs — one per distinct ${param} in the chosen pattern */}
+            {selectedAp && apParams.map((param) => (
+              <div key={param} className={styles.keyRow}>
+                <span className={styles.keyLabel}>{param}</span>
+                <input
+                  type="text"
+                  className={`${styles.textInput} ${styles.keyValueInput}`}
+                  value={builder.modelSelection?.params[param] ?? ""}
+                  onChange={(e) => setModelParam(param, e.target.value)}
+                  placeholder={`value for ${param}`}
+                  aria-label={`Parameter ${param}`}
+                  data-testid={`model-param-${param}`}
+                  disabled={disabled}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                      e.preventDefault();
+                      handleRun();
+                    }
+                  }}
+                />
+              </div>
+            ))}
+
+            {/* Model compile error hint */}
+            {modelCompileResult?.kind === "error" && (
+              <div className={styles.keyRow}>
+                <span className={styles.hint} role="alert" data-testid="model-compile-error">
+                  {modelCompileResult.reason}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Key section — Raw Query mode only */}
+        {effectiveBuilderMode === "raw" && builder.mode === "query" && keySchema && (
           <div className={styles.keySection}>
             {/* Partition key */}
             <div className={styles.keyRow}>

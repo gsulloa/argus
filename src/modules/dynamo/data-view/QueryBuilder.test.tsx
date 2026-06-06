@@ -1,5 +1,5 @@
 /**
- * QueryBuilder tests — tasks 9.5
+ * QueryBuilder tests — tasks 9.5, 4.5
  *
  * Covers:
  *   - Switching modes: Scan → Query reveals partition-key picker; Query → Scan hides it
@@ -8,6 +8,7 @@
  *   - begins_with sort-key clause
  *   - Type-mismatch validation (N key + non-numeric value → invalid)
  *   - Preview reflects the compiled state
+ *   - (4.5) By-model mode: toggle, entity/AP selection, param inputs, round-trip
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -15,7 +16,7 @@ import { createRef } from "react";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { QueryBuilder } from "./QueryBuilder";
 import { compile } from "./builderCompiler";
-import type { BuilderState, FilterRow } from "./types";
+import type { BuilderState, DynamoModel, FilterRow } from "./types";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
 import type { FilterBarHandle } from "@/modules/shared/filter-bar";
 
@@ -71,6 +72,8 @@ interface RenderOptions {
   onValidityChangeFn?: (isValid: boolean, reason?: string) => void;
   onApplyOnlyFilter?: (transient: BuilderState) => void;
   ref?: React.Ref<FilterBarHandle>;
+  models?: DynamoModel[];
+  isStd?: boolean;
 }
 
 function renderQueryBuilder(
@@ -79,7 +82,7 @@ function renderQueryBuilder(
 ) {
   // Support legacy signature: renderQueryBuilder(builder, validityFn)
   const options: RenderOptions = typeof opts === "function" ? { onValidityChangeFn: opts } : opts;
-  const { onValidityChangeFn, onApplyOnlyFilter, ref } = options;
+  const { onValidityChangeFn, onApplyOnlyFilter, ref, models, isStd } = options;
 
   let currentBuilder = initialBuilder;
   const onValidityChange = onValidityChangeFn ?? vi.fn();
@@ -95,6 +98,8 @@ function renderQueryBuilder(
       onBuilderChange={onBuilderChange}
       onValidityChange={onValidityChange}
       onApplyOnlyFilter={onApplyOnlyFilter}
+      models={models}
+      isStd={isStd}
     />,
   );
 
@@ -107,6 +112,8 @@ function renderQueryBuilder(
         onBuilderChange={onBuilderChange}
         onValidityChange={onValidityChange}
         onApplyOnlyFilter={onApplyOnlyFilter}
+        models={models}
+        isStd={isStd}
       />,
     );
   }
@@ -737,6 +744,189 @@ describe("QueryBuilder", () => {
       ref.current?.focus();
 
       expect(focusSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ── 4.5 By-model mode ────────────────────────────────────────────────────
+
+  describe("By-model mode (task 4.5)", () => {
+    // Test fixture: STD table with one model doc that has two access patterns
+    const STD_MODELS: DynamoModel[] = [
+      {
+        name: "Order",
+        access_patterns: [
+          {
+            name: "By user",
+            index: "table",
+            pk: "USER#${userId}",
+            sk: "ORDER#${orderId}",
+          },
+          {
+            index: "table",
+            pk: "USER#${userId}",
+            sk: "ORDER#${orderId}#STATUS#${status}",
+          },
+        ],
+      },
+      {
+        name: "Product",
+        access_patterns: [
+          {
+            name: "By ID",
+            index: "table",
+            pk: "PRODUCT#${productId}",
+          },
+        ],
+      },
+    ];
+
+    const QUERY_BUILDER: BuilderState = {
+      ...INITIAL_BUILDER,
+      mode: "query",
+    };
+
+    it("toggle is NOT shown for non-STD tables (isStd=false)", () => {
+      renderQueryBuilder(QUERY_BUILDER);
+      expect(screen.queryByTestId("builder-mode-group")).toBeNull();
+      // Raw index selector still visible
+      expect(screen.getByTestId("index-select")).toBeTruthy();
+    });
+
+    it("toggle is NOT shown for STD tables in Scan mode", () => {
+      renderQueryBuilder(INITIAL_BUILDER, { models: STD_MODELS, isStd: true });
+      expect(screen.queryByTestId("builder-mode-group")).toBeNull();
+    });
+
+    it("toggle IS shown for STD tables in Query mode", () => {
+      renderQueryBuilder(QUERY_BUILDER, { models: STD_MODELS, isStd: true });
+      expect(screen.getByTestId("builder-mode-group")).toBeTruthy();
+      expect(screen.getByTestId("builder-mode-model")).toBeTruthy();
+      expect(screen.getByTestId("builder-mode-raw")).toBeTruthy();
+    });
+
+    it("defaults to Raw mode — index-select visible, model selectors absent", () => {
+      renderQueryBuilder(QUERY_BUILDER, { models: STD_MODELS, isStd: true });
+      expect(screen.getByTestId("index-select")).toBeTruthy();
+      expect(screen.queryByTestId("model-entity-select")).toBeNull();
+    });
+
+    it("switching to By model mode shows entity selector and hides index-select", () => {
+      const { rerenderWithLatest, onBuilderChange } = renderQueryBuilder(QUERY_BUILDER, {
+        models: STD_MODELS,
+        isStd: true,
+      });
+      fireEvent.click(screen.getByTestId("builder-mode-model"));
+      rerenderWithLatest();
+
+      expect(screen.queryByTestId("index-select")).toBeNull();
+      expect(screen.getByTestId("model-entity-select")).toBeTruthy();
+      // onBuilderChange emitted with builderMode: "model"
+      expect(onBuilderChange).toHaveBeenCalled();
+      const emitted = onBuilderChange.mock.calls[0]![0]!;
+      expect(emitted.builderMode).toBe("model");
+    });
+
+    it("selecting an entity shows access-pattern selector", () => {
+      const modelBuilder: BuilderState = {
+        ...QUERY_BUILDER,
+        builderMode: "model",
+      };
+      const { rerenderWithLatest, onBuilderChange } = renderQueryBuilder(modelBuilder, {
+        models: STD_MODELS,
+        isStd: true,
+      });
+
+      const entitySelect = screen.getByTestId("model-entity-select");
+      fireEvent.change(entitySelect, { target: { value: "Order" } });
+      rerenderWithLatest();
+
+      expect(screen.getByTestId("model-ap-select")).toBeTruthy();
+      expect(onBuilderChange).toHaveBeenCalled();
+    });
+
+    it("selecting an access pattern shows parameter inputs", () => {
+      const modelBuilder: BuilderState = {
+        ...QUERY_BUILDER,
+        builderMode: "model",
+        modelSelection: { entity: "Order", accessPattern: "By user", params: {} },
+      };
+      renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+      // "By user" pattern has params: userId, orderId
+      expect(screen.getByTestId("model-param-userId")).toBeTruthy();
+      expect(screen.getByTestId("model-param-orderId")).toBeTruthy();
+    });
+
+    it("(4.5 spec) fill params → switch to raw → switch back → entity/AP/params intact, compiled query unchanged", () => {
+      // Step 1: Start in model mode with Order / "By user" and fill userId
+      const modelBuilder: BuilderState = {
+        ...QUERY_BUILDER,
+        builderMode: "model",
+        modelSelection: { entity: "Order", accessPattern: "By user", params: { userId: "123", orderId: "456" } },
+        // Seeded compiled query from model
+        query: {
+          partitionKey: { name: "pk", value: { type: "S", value: "USER#123" } },
+          sortKey: { name: "sk", op: "=", value: { type: "S", value: "ORDER#456" } },
+        },
+      };
+      const { rerenderWithLatest, onBuilderChange } = renderQueryBuilder(modelBuilder, {
+        models: STD_MODELS,
+        isStd: true,
+      });
+
+      // Verify params are visible
+      expect((screen.getByTestId("model-param-userId") as HTMLInputElement).value).toBe("123");
+      expect((screen.getByTestId("model-param-orderId") as HTMLInputElement).value).toBe("456");
+
+      // Step 2: Switch to Raw mode
+      fireEvent.click(screen.getByTestId("builder-mode-raw"));
+      rerenderWithLatest();
+
+      // Raw mode: index-select visible, model selectors gone
+      expect(screen.getByTestId("index-select")).toBeTruthy();
+      expect(screen.queryByTestId("model-entity-select")).toBeNull();
+      // modelSelection is preserved on the builder
+      const rawBuilder = onBuilderChange.mock.calls[onBuilderChange.mock.calls.length - 1]![0]!;
+      expect(rawBuilder.builderMode).toBe("raw");
+      expect(rawBuilder.modelSelection?.entity).toBe("Order");
+      expect(rawBuilder.modelSelection?.params.userId).toBe("123");
+      expect(rawBuilder.modelSelection?.params.orderId).toBe("456");
+      // The raw query was seeded from the model compile (partition key preserved)
+      expect(rawBuilder.query?.partitionKey.value).toMatchObject({ type: "S", value: "USER#123" });
+
+      // Step 3: Switch back to model mode
+      fireEvent.click(screen.getByTestId("builder-mode-model"));
+      rerenderWithLatest();
+
+      // Model selectors re-appear
+      expect(screen.getByTestId("model-entity-select")).toBeTruthy();
+      const modelReentered = onBuilderChange.mock.calls[onBuilderChange.mock.calls.length - 1]![0]!;
+      expect(modelReentered.builderMode).toBe("model");
+      // modelSelection entity + params still intact
+      expect(modelReentered.modelSelection?.entity).toBe("Order");
+      expect(modelReentered.modelSelection?.params.userId).toBe("123");
+      expect(modelReentered.modelSelection?.params.orderId).toBe("456");
+    });
+
+    it("non-STD table shows no toggle (task 5.3 coverage)", () => {
+      // isStd=false (default): no builder-mode-group at all
+      renderQueryBuilder(QUERY_BUILDER);
+      expect(screen.queryByTestId("builder-mode-group")).toBeNull();
+      // raw PK/SK builder is intact
+      expect(screen.getByTestId("index-select")).toBeTruthy();
+    });
+
+    it("Product entity with pk-only AP renders only one param input", () => {
+      const modelBuilder: BuilderState = {
+        ...QUERY_BUILDER,
+        builderMode: "model",
+        modelSelection: { entity: "Product", accessPattern: "By ID", params: {} },
+      };
+      renderQueryBuilder(modelBuilder, { models: STD_MODELS, isStd: true });
+
+      expect(screen.getByTestId("model-param-productId")).toBeTruthy();
+      // No sk params
+      expect(screen.queryByTestId("model-param-orderId")).toBeNull();
     });
   });
 });

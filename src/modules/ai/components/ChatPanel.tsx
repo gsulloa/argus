@@ -19,6 +19,8 @@ import { useAiSettings, useResolvedProviderId } from "@/modules/ai/store";
 import { PROVIDER_LABELS, type ProviderId } from "@/modules/ai/types";
 import type { ChatTurn, ToolUseRecord } from "@/modules/ai/types";
 import { captureResult, type AttachedResult } from "@/modules/ai/attachments";
+import type { AiReadiness } from "@/modules/ai/useAiReadiness";
+import { CommandRegistry } from "@/platform/command-palette/CommandRegistry";
 
 import styles from "./ChatPanel.module.css";
 
@@ -31,6 +33,8 @@ export interface ChatPanelProps {
   onClose: () => void;
   connectionId: string;
   contextPath: string | null;
+  readiness: AiReadiness;
+  onLinkContext: () => void;
   editorRef: React.RefObject<QueryEditorHandle>;
   /** Live executed result from the surrounding QueryTab, available to attach as context. */
   result?: {
@@ -431,6 +435,88 @@ function AssistantTurn({
   );
 }
 
+// ---------------------------------------------------------------------------
+// SetupChecklist sub-component
+// ---------------------------------------------------------------------------
+
+interface SetupChecklistProps {
+  readiness: AiReadiness;
+  onConfigureProvider: () => void;
+  onLinkContext: () => void;
+}
+
+function SetupChecklist({
+  readiness,
+  onConfigureProvider,
+  onLinkContext,
+}: SetupChecklistProps) {
+  const providerOk = readiness.providerConfigured;
+  const contextOk = readiness.contextState === "available";
+  const contextMissing = readiness.contextState === "missing";
+
+  return (
+    <div className={styles.setup}>
+      <p className={styles.setupIntro}>
+        Two things are needed before you can chat about your data:
+      </p>
+      <ul className={styles.checklist}>
+        <li className={styles.checkItem}>
+          <span
+            className={providerOk ? styles.checkMarkOk : styles.checkMarkTodo}
+            aria-hidden="true"
+          >
+            {providerOk ? "✓" : "○"}
+          </span>
+          <div className={styles.checkBody}>
+            <span className={styles.checkLabel}>AI provider</span>
+            <span className={styles.checkHint}>
+              {providerOk
+                ? "Configured"
+                : "No AI provider is configured yet."}
+            </span>
+            {!providerOk && (
+              <button
+                type="button"
+                className={styles.checkCta}
+                onClick={onConfigureProvider}
+              >
+                Configure providers
+              </button>
+            )}
+          </div>
+        </li>
+        <li className={styles.checkItem}>
+          <span
+            className={contextOk ? styles.checkMarkOk : styles.checkMarkTodo}
+            aria-hidden="true"
+          >
+            {contextOk ? "✓" : "○"}
+          </span>
+          <div className={styles.checkBody}>
+            <span className={styles.checkLabel}>Context folder</span>
+            <span className={styles.checkHint}>
+              {contextOk
+                ? "Linked"
+                : contextMissing
+                  ? "The linked context folder is missing on disk."
+                  : "Link a context folder so AI can understand your schema."}
+            </span>
+            {!contextOk && (
+              <button
+                type="button"
+                className={styles.checkCta}
+                onClick={onLinkContext}
+              >
+                {contextMissing ? "Locate context folder" : "Link context folder"}
+              </button>
+            )}
+          </div>
+        </li>
+      </ul>
+    </div>
+  );
+}
+
 // Stable empty snapshot for when there is no session.
 import type { ChatSessionSnapshot } from "@/modules/ai/session";
 const EMPTY_SNAPSHOT: ChatSessionSnapshot = {
@@ -449,9 +535,12 @@ export function ChatPanel({
   onClose,
   connectionId,
   contextPath,
+  readiness,
+  onLinkContext,
   editorRef,
   result = null,
 }: ChatPanelProps) {
+  const ready = readiness.level === "ready";
   // Session stored in state so React can re-subscribe via useSyncExternalStore
   // when the session instance changes (connectionId change).
   const [session, setSession] = useState<ChatSession | null>(null);
@@ -502,7 +591,7 @@ export function ChatPanel({
   // Strict-Mode-safe: every effect-run owns the session it creates and closes
   // exactly that one in its cleanup. No external refs to go stale.
   useEffect(() => {
-    if (!open) return;
+    if (!open || !ready) return;
     const next = new ChatSession(connectionId);
     sessionBoundProvider.current = null;
     setSession(next);
@@ -510,7 +599,7 @@ export function ChatPanel({
       void next.close();
       setSession((prev) => (prev === next ? null : prev));
     };
-  }, [open, connectionId]);
+  }, [open, ready, connectionId]);
 
   // useSyncExternalStore — subscribe to session state reactively.
   const subscribe = useCallback(
@@ -645,13 +734,11 @@ export function ChatPanel({
     }
   }, [chatSnapshot.turns]);
 
-  // Context badge.
+  // Context badge (only shown in chat/ready mode; context is always linked here).
   const contextLabel = contextPath
     ? contextPath.split("/").filter(Boolean).pop() ?? contextPath
     : "No context folder";
-  const contextTooltip = contextPath
-    ? contextPath
-    : "No context folder — CLI providers will run from the system temp directory; API providers will receive an empty payload.";
+  const contextTooltip = contextPath ?? "";
 
   // Provider + model display.
   const displayProvider = sessionBoundProvider.current ?? currentResolved;
@@ -661,6 +748,35 @@ export function ChatPanel({
     : null;
 
   if (!open) return null;
+
+  if (!ready) {
+    return (
+      <aside className={styles.panel}>
+        <div className={styles.header}>
+          <div className={styles.headerTop}>
+            <span className={styles.headerTitle}>✨ AI chat</span>
+            <div className={styles.headerActions}>
+              <button
+                type="button"
+                className={styles.iconBtn}
+                onClick={onClose}
+                aria-label="Close AI chat"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        </div>
+        <SetupChecklist
+          readiness={readiness}
+          onConfigureProvider={() =>
+            CommandRegistry.get("ai.configureProviders")?.run()
+          }
+          onLinkContext={onLinkContext}
+        />
+      </aside>
+    );
+  }
 
   const streaming = chatSnapshot.state === "streaming";
   const sendDisabled = input.trim() === "" || streaming;

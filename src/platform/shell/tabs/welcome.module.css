@@ -14,6 +14,90 @@
   font-size: 14px;
   line-height: 1.55;
 }
+.gettingStarted {
+  max-width: 640px;
+  margin: 0 0 28px;
+}
+.sectionHeading {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.checkItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 5px);
+}
+.checkMarkOk {
+  color: var(--success);
+  font-size: 13px;
+  line-height: 1.4;
+  flex: 0 0 auto;
+}
+.checkMarkTodo {
+  color: var(--text-subtle);
+  font-size: 13px;
+  line-height: 1.4;
+  flex: 0 0 auto;
+}
+.checkBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.checkLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.checkHint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.checkCta {
+  align-self: flex-start;
+  margin-top: 4px;
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  padding: 4px 12px;
+  border-radius: var(--radius-md, 5px);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--duration-instant, 80ms) ease-out;
+}
+.checkCta:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.allSet {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
 .lore {
   max-width: 640px;
   margin: 0 0 28px;

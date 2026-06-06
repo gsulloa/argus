@@ -19,7 +19,7 @@ use super::introspect_adapters::{introspector_for, IntrospectorPools};
 use super::parser::parse_manifest;
 use super::registry::ContextRegistry;
 use super::sync::execute_sync;
-use super::types::{AiPayload, ContextManifest, ObjectDoc, QueryDoc, QueryParam, SyncReport};
+use super::types::{AccessPattern, AiPayload, ContextManifest, ObjectDoc, QueryDoc, QueryParam, SyncReport};
 
 // ---- Response types ----
 
@@ -256,6 +256,51 @@ pub fn context_get_object(
         .objects
         .into_iter()
         .find(|doc| identity(doc) == identity_str))
+}
+
+// ---- 5.5b: context_list_models ----
+
+/// Response item for `context_list_models`.
+#[derive(Serialize)]
+pub struct ModelListItem {
+    pub name: String,
+    pub access_patterns: Vec<AccessPattern>,
+}
+
+/// Return all `dynamo_model` objects whose `physical_table` matches `table`.
+///
+/// Returns an empty `Vec` (not an error) when the connection has no linked
+/// context folder or when no models exist for the given table.
+///
+/// Mirrors `context_list_objects` in registry access style.
+#[tauri::command]
+pub fn context_list_models(
+    registry: State<'_, Arc<ContextRegistry>>,
+    connection_id: String,
+    table: String,
+) -> AppResult<Vec<ModelListItem>> {
+    let conn_id = parse_conn_id(&connection_id)?;
+
+    let parsed = registry.get(conn_id)?;
+    let parsed = match parsed {
+        Some(p) => p,
+        None => return Ok(vec![]),
+    };
+
+    let items = parsed
+        .objects
+        .into_iter()
+        .filter(|doc| {
+            doc.system.kind == "dynamo_model"
+                && doc.system.physical_table.as_deref() == Some(table.as_str())
+        })
+        .map(|doc| ModelListItem {
+            name: doc.system.name.clone(),
+            access_patterns: doc.system.access_patterns.unwrap_or_default(),
+        })
+        .collect();
+
+    Ok(items)
 }
 
 // ---- 5.6: context_list_queries ----
