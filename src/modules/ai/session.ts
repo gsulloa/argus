@@ -10,7 +10,7 @@
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { aiApi } from "./api";
-import type { ChatDelta, ChatRole, ChatTurn, ToolUseRecord } from "./types";
+import type { AttachedResult, ChatDelta, ChatRole, ChatTurn, ToolUseRecord } from "./types";
 
 // Suppress TS unused warning — ChatRole is used as a type in the interface.
 void (undefined as unknown as ChatRole);
@@ -90,7 +90,7 @@ export class ChatSession {
    * subscribes to the backend event channel, then resolves when Done or rejects
    * on Error.
    */
-  async send(prompt: string): Promise<void> {
+  async send(prompt: string, attachedResults: AttachedResult[] = []): Promise<void> {
     // Append User turn locally.
     this.turns = [...this.turns, { role: "User", content: prompt, tool_uses: [] }];
     // Append empty Assistant placeholder.
@@ -119,6 +119,7 @@ export class ChatSession {
         sessionId: this.sessionId,
         prompt,
         connectionId: this.connectionId,
+        attachedResults,
       });
     } catch (e) {
       this.state = "error";

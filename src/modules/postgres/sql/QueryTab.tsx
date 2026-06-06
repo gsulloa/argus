@@ -338,6 +338,19 @@ function QueryTab({ tabId, payload }: InnerProps) {
   const contextPath =
     allConnections.find((c) => c.id === currentConnectionId)?.context_path ?? null;
 
+  // Live executed result available to attach into the AI chat as context.
+  const chatAttachableResult =
+    runner.state.status === "done" &&
+    runner.state.mode === "single" &&
+    runner.state.result?.kind === "rows" &&
+    runner.state.result.rows.length > 0
+      ? {
+          columns: runner.state.result.columns.map((c) => c.name),
+          rows: runner.state.result.rows,
+          truncated: runner.state.result.truncated,
+        }
+      : null;
+
   // Panel width — persisted to localStorage, clamped to [280, 800].
   const [panelWidth, setPanelWidth] = useState<number>(() => {
     const stored = localStorage.getItem("argus.ai.panelWidth");
@@ -693,6 +706,7 @@ function QueryTab({ tabId, payload }: InnerProps) {
                   connectionId={currentConnectionId}
                   contextPath={contextPath}
                   editorRef={editorRef}
+                  result={chatAttachableResult}
                 />
               </div>
             </>

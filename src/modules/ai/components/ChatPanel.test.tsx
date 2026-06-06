@@ -114,6 +114,7 @@ function renderPanel({
   connectionId = "c1",
   contextPath = null as string | null,
   editorRef = makeEditorRef() as EditorRef,
+  result = null as import("../../../modules/ai/components/ChatPanel").ChatPanelProps["result"],
 } = {}) {
   return {
     editorRef,
@@ -124,6 +125,7 @@ function renderPanel({
         connectionId={connectionId}
         contextPath={contextPath}
         editorRef={editorRef as React.RefObject<typeof baseEditor>}
+        result={result}
       />,
     ),
   };
@@ -263,7 +265,7 @@ describe("ChatPanel — sending a prompt", () => {
       fireEvent.click(screen.getByTestId("btn-send"));
     });
 
-    expect(mockSend).toHaveBeenCalledWith("top customers");
+    expect(mockSend).toHaveBeenCalledWith("top customers", []);
   });
 
   it("pressing Enter sends the message", async () => {
@@ -277,7 +279,7 @@ describe("ChatPanel — sending a prompt", () => {
       fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
     });
 
-    expect(mockSend).toHaveBeenCalledWith("hello");
+    expect(mockSend).toHaveBeenCalledWith("hello", []);
   });
 
   it("Shift+Enter does not send", async () => {
@@ -699,5 +701,99 @@ describe("ChatPanel — auto-apply toggle persists", () => {
     });
 
     expect(localStorage.getItem("argus.ai.autoApply")).toBe("0");
+  });
+});
+
+describe("ChatPanel — attachment UI", () => {
+  beforeEach(() => {
+    mockSubscribe.mockReset();
+    mockGetSnapshot.mockReset();
+    mockSend.mockReset();
+    mockCancel.mockReset();
+    mockClose.mockReset();
+    mockUseAiSettings.mockReturnValue({
+      settings: DEFAULT_SETTINGS,
+      providers: [],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+  });
+
+  const sampleResult = {
+    columns: ["id", "name"],
+    rows: [["1", "Alice"], ["2", "Bob"]],
+    truncated: false,
+  };
+
+  it("shows attach button when result has rows", () => {
+    setupSession();
+    renderPanel({ open: true, result: sampleResult });
+    expect(screen.getByTestId("btn-attach-result")).toBeTruthy();
+  });
+
+  it("does not show attach button when result is null", () => {
+    setupSession();
+    renderPanel({ open: true, result: null });
+    expect(screen.queryByTestId("btn-attach-result")).toBeNull();
+  });
+
+  it("clicking attach button adds a chip", async () => {
+    setupSession();
+    renderPanel({ open: true, result: sampleResult });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("btn-attach-result"));
+    });
+
+    expect(screen.getByTestId("attachment-chip")).toBeTruthy();
+    expect(screen.getAllByText(/2 rows/i).length).toBeGreaterThan(0);
+  });
+
+  it("clicking remove button removes the chip", async () => {
+    setupSession();
+    renderPanel({ open: true, result: sampleResult });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("btn-attach-result"));
+    });
+
+    expect(screen.getByTestId("attachment-chip")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("attachment-remove"));
+    });
+
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
+  });
+
+  it("sends attachments with prompt and clears chips after send", async () => {
+    setupSession();
+    renderPanel({ open: true, result: sampleResult });
+
+    // Attach the result.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("btn-attach-result"));
+    });
+
+    expect(screen.getByTestId("attachment-chip")).toBeTruthy();
+
+    // Type a prompt and send.
+    const textarea = screen.getByRole("textbox");
+    fireEvent.change(textarea, { target: { value: "analyze this" } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("btn-send"));
+    });
+
+    // mockSend should have been called with prompt and a non-empty attachments array.
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const [promptArg, attachmentsArg] = mockSend.mock.calls[0] as [string, unknown[]];
+    expect(promptArg).toBe("analyze this");
+    expect(Array.isArray(attachmentsArg)).toBe(true);
+    expect((attachmentsArg as unknown[]).length).toBeGreaterThan(0);
+
+    // Chip should be cleared after send.
+    expect(screen.queryByTestId("attachment-chip")).toBeNull();
   });
 });

@@ -124,3 +124,5 @@ export type ChatDelta =
   | { kind: "Status"; data: string }
   | { kind: "Done"; data: { finish_reason: string | null } }
   | { kind: "Error"; data: string };
+
+export type { AttachedResult } from "./attachments";
