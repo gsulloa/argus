@@ -13,7 +13,6 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import type { QueryEditorHandle } from "@/modules/postgres/sql/QueryEditor";
 import { ChatSession } from "@/modules/ai/session";
 import { useAiSettings, useResolvedProviderId } from "@/modules/ai/store";
 import { PROVIDER_LABELS, type ProviderId } from "@/modules/ai/types";
@@ -28,6 +27,18 @@ import styles from "./ChatPanel.module.css";
 // Props
 // ---------------------------------------------------------------------------
 
+/**
+ * Minimal editor surface the chat panel drives. Engine-agnostic so the panel
+ * can be mounted from any SQL editor (Postgres, MSSQL, MySQL, …) — every
+ * engine's `QueryEditorHandle` structurally satisfies this subset.
+ */
+export interface ChatEditorHandle {
+  getSql(): string;
+  getCursor(): number;
+  setCursor(offset: number): void;
+  replaceBody(text: string): void;
+}
+
 export interface ChatPanelProps {
   open: boolean;
   onClose: () => void;
@@ -35,7 +46,7 @@ export interface ChatPanelProps {
   contextPath: string | null;
   readiness: AiReadiness;
   onLinkContext: () => void;
-  editorRef: React.RefObject<QueryEditorHandle>;
+  editorRef: React.RefObject<ChatEditorHandle>;
   /** Live executed result from the surrounding QueryTab, available to attach as context. */
   result?: {
     columns: string[];
@@ -115,7 +126,7 @@ function getModelForProvider(
 interface CodeBlockProps {
   code: string;
   lang: string | null;
-  editorRef: React.RefObject<QueryEditorHandle>;
+  editorRef: React.RefObject<ChatEditorHandle>;
   applied?: boolean;
   onApply?: () => void;
 }
@@ -371,7 +382,7 @@ function ToolCard({ tool }: ToolCardProps) {
 
 interface AssistantTurnProps {
   turn: ChatTurn;
-  editorRef: React.RefObject<QueryEditorHandle>;
+  editorRef: React.RefObject<ChatEditorHandle>;
   isLast: boolean;
   autoAppliedBlock?: number | null; // index of block that was auto-applied
   editorChanged?: boolean;

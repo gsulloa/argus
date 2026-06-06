@@ -30,6 +30,10 @@ import { ResultPanel } from "./ResultPanel";
 import { useQueryRun } from "./useQueryRun";
 import { ExportMenu } from "./export/ExportMenu";
 import type { CellValue } from "../data/types";
+import { useAiReadiness } from "@/modules/ai/useAiReadiness";
+import { ChatPanel } from "@/modules/ai/components/ChatPanel";
+import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useMssqlForm } from "../FormController";
 import styles from "./QueryTab.module.css";
 
 export const MSSQL_QUERY_KIND = "mssql-query";
@@ -341,6 +345,94 @@ function MssqlQueryTab({ tabId, payload }: InnerProps) {
   );
 
   // -------------------------------------------------------------------------
+  // AI chat panel state.
+  // Mirrors the Postgres QueryTab wiring; the AI backend is engine-agnostic
+  // (it works off the cross-engine context folder), so the only engine-specific
+  // piece is sourcing connectionId/context_path here.
+  // -------------------------------------------------------------------------
+  const { items: allConnections } = useConnections();
+  const { openEdit } = useMssqlForm();
+
+  // Single derived readiness state (provider + context folder) driving the
+  // button dot, the panel mode, and chat gating.
+  const readiness = useAiReadiness(connectionId);
+
+  // Resolve the active connection + its context_path.
+  const currentConnection =
+    allConnections.find((c) => c.id === connectionId) ?? null;
+  const contextPath = currentConnection?.context_path ?? null;
+
+  // Open the connection form so the user can link/locate a context folder.
+  const handleLinkContext = useCallback(() => {
+    if (currentConnection) openEdit(currentConnection);
+  }, [openEdit, currentConnection]);
+
+  // Live executed result available to attach into the AI chat as context.
+  const chatAttachableResult =
+    runner.state.status === "done" &&
+    runner.state.mode === "single" &&
+    runner.state.result?.kind === "rows" &&
+    runner.state.result.rows.length > 0
+      ? {
+          columns: runner.state.result.columns.map((c) => c.name),
+          rows: runner.state.result.rows as CellValue[][],
+          truncated: runner.state.result.truncated,
+        }
+      : null;
+
+  // Panel width — persisted to localStorage, clamped to [280, 800].
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    const stored = localStorage.getItem("argus.ai.panelWidth");
+    const n = stored ? parseInt(stored, 10) : 360;
+    return Number.isFinite(n) ? Math.min(800, Math.max(280, n)) : 360;
+  });
+
+  // Panel open state — persisted to localStorage (shared with other SQL editors).
+  const [panelOpen, setPanelOpen] = useState<boolean>(() => {
+    const stored = localStorage.getItem("argus.ai.panelOpen");
+    return stored === "1";
+  });
+
+  // Listen for the ai.focusChatPanel palette command — always opens the panel.
+  useEffect(() => {
+    function onFocusPanel() {
+      setPanelOpen(true);
+    }
+    window.addEventListener("argus:ai:openPanel", onFocusPanel as EventListener);
+    return () => window.removeEventListener("argus:ai:openPanel", onFocusPanel as EventListener);
+  }, []);
+
+  // Persist panelOpen to localStorage.
+  useEffect(() => {
+    localStorage.setItem("argus.ai.panelOpen", panelOpen ? "1" : "0");
+  }, [panelOpen]);
+
+  // Splitter drag logic.
+  const latestWidthRef = useRef(panelWidth);
+  latestWidthRef.current = panelWidth;
+  const dragStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const handleSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+    dragStartRef.current = { startX: e.clientX, startWidth: latestWidthRef.current };
+    e.preventDefault();
+    function onMove(ev: MouseEvent) {
+      const d = dragStartRef.current;
+      if (!d) return;
+      // Dragging left increases panel width (panel is on the right).
+      const dx = d.startX - ev.clientX;
+      const next = Math.min(800, Math.max(280, d.startWidth + dx));
+      setPanelWidth(next);
+    }
+    function onUp() {
+      dragStartRef.current = null;
+      localStorage.setItem("argus.ai.panelWidth", String(latestWidthRef.current));
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+
+  // -------------------------------------------------------------------------
   // Resizable result panel (persisted per tab).
   // -------------------------------------------------------------------------
   const [resultHeight, setResultHeight] = useState(280);
@@ -461,6 +553,31 @@ function MssqlQueryTab({ tabId, payload }: InnerProps) {
             <Save size={11} />
             Save
           </button>
+          <span className={styles.toolbarDivider} aria-hidden="true" />
+          {/* Generate button — always rendered; status dot reflects readiness */}
+          <button
+            type="button"
+            className={`${styles.toolbarButton} ${styles.aiButton}`}
+            onClick={() => setPanelOpen((prev) => !prev)}
+            title={
+              readiness.level === "ready"
+                ? "Open AI chat panel"
+                : readiness.level === "not-configured"
+                  ? "Set up AI to start chatting"
+                  : "Link a context folder to use AI"
+            }
+            aria-label="Open AI chat panel"
+            aria-pressed={panelOpen}
+          >
+            <span>✨</span>
+            <span>Generate</span>
+            <span
+              className={`${styles.aiDot} ${
+                readiness.level === "ready" ? styles.aiDotReady : styles.aiDotSetup
+              }`}
+              aria-hidden="true"
+            />
+          </button>
         </div>
 
         {payload.contextQuery && payload.contextQuery.params.length > 0 && (
@@ -473,15 +590,41 @@ function MssqlQueryTab({ tabId, payload }: InnerProps) {
           />
         )}
 
-        <QueryEditor
-          ref={editorRef}
-          connectionId={connectionId}
-          initialSql={initialSql}
-          onChange={() => {}}
-          onRun={onRun}
-          onRunAll={onRunAll}
-          onFormat={onFormat}
-        />
+        <div className={styles.editorRow}>
+          <div className={styles.editorWrap}>
+            <QueryEditor
+              ref={editorRef}
+              connectionId={connectionId}
+              initialSql={initialSql}
+              onChange={() => {}}
+              onRun={onRun}
+              onRunAll={onRunAll}
+              onFormat={onFormat}
+            />
+          </div>
+          {panelOpen ? (
+            <>
+              <div
+                className={styles.splitter}
+                role="separator"
+                aria-orientation="vertical"
+                onMouseDown={handleSplitterMouseDown}
+              />
+              <div className={styles.chatHost} style={{ width: panelWidth }}>
+                <ChatPanel
+                  open={true}
+                  onClose={() => setPanelOpen(false)}
+                  connectionId={connectionId}
+                  contextPath={contextPath}
+                  readiness={readiness}
+                  onLinkContext={handleLinkContext}
+                  editorRef={editorRef}
+                  result={chatAttachableResult}
+                />
+              </div>
+            </>
+          ) : null}
+        </div>
       </div>
 
       <button
