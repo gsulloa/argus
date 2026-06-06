@@ -20,7 +20,8 @@ use tokio_stream::wrappers::LinesStream;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::ai::caps::{CODEX_CLI_DEFAULT_MODEL, CODEX_CLI_MODELS};
-use crate::modules::ai::claude_cli::{build_cli_prompt, flatten_history_for_cli, resolve_model};
+use crate::modules::ai::claude_cli::{flatten_history_for_cli, resolve_model};
+use crate::modules::ai::types::build_cli_system_prompt;
 use crate::modules::ai::provider::AiProvider;
 
 /// Return the `codex` binary path to use.
@@ -85,7 +86,9 @@ impl AiProvider for CodexCli {
         )?;
 
         let cwd = req.context_path.clone().unwrap_or_else(std::env::temp_dir);
-        let prompt = build_cli_prompt(&req.prompt);
+        let system = build_cli_system_prompt(&cwd);
+        // codex exec has no --system-prompt flag; prepend the system prompt to the user prompt.
+        let prompt = format!("{system}\n\n{}", req.prompt);
 
         let mut cmd = Command::new(codex_bin());
         cmd.arg("exec");
@@ -121,8 +124,11 @@ impl AiProvider for CodexCli {
         )?;
 
         let cwd = req.context_path.clone().unwrap_or_else(std::env::temp_dir);
-        // Flatten full conversation history into the prompt (codex has no --resume).
-        let prompt = flatten_history_for_cli(&req.turns);
+        // codex exec has no --system-prompt flag; prepend the system prompt to the
+        // flattened history so it is always the first thing the agent reads.
+        let system = build_cli_system_prompt(&cwd);
+        let history = flatten_history_for_cli(&req.turns);
+        let prompt = format!("{system}\n\n{history}");
 
         let warning_shown = req.provider_state.get("codex_warning_shown").is_some();
 
@@ -334,6 +340,27 @@ mod tests {
         }];
         let result = flatten_history_for_cli(&turns);
         assert_eq!(result, "list tables");
+    }
+
+    #[test]
+    fn chat_prompt_system_precedes_history() {
+        // Verify the built chat prompt has the system prompt before the flattened history.
+        let cwd = std::env::temp_dir();
+        let system = build_cli_system_prompt(&cwd);
+        let turns = vec![
+            ChatTurn { role: ChatRole::User, content: "show tables".into(), tool_uses: vec![] },
+            ChatTurn { role: ChatRole::Assistant, content: "users, orders".into(), tool_uses: vec![] },
+            ChatTurn { role: ChatRole::User, content: "count users".into(), tool_uses: vec![] },
+        ];
+        let history = flatten_history_for_cli(&turns);
+        let prompt = format!("{system}\n\n{history}");
+
+        let system_pos = prompt.find("Role and restrictions").expect("system prompt header not found");
+        let history_pos = prompt.find("User: show tables").expect("history content not found");
+        assert!(
+            system_pos < history_pos,
+            "system prompt (pos {system_pos}) must precede history (pos {history_pos})"
+        );
     }
 
     #[test]
