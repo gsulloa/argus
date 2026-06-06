@@ -50,6 +50,7 @@ import { useDynamoItems } from "./useDynamoItems";
 import { useDynamoSort } from "./useDynamoSort";
 import { useDynamoInspectorWidth } from "./useInspectorWidth";
 import { useCount } from "./useCount";
+import { useTableModels } from "./useTableModels";
 import type { BuilderState, AttributeMap, AttributeValue } from "./types";
 import { Toolbar, type ViewMode } from "./Toolbar";
 import { MetadataView } from "./MetadataView";
@@ -346,6 +347,11 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
   const [useConditionExpression, setUseConditionExpression] = useState(false);
   const [lockingDialogOpen, setLockingDialogOpen] = useState(false);
 
+  // ── Table models (STD detection — D2 / D8) ────────────────────────────────
+  // Loads dynamo_model docs for this table from the context folder.
+  // `isStd` is true when at least one model doc exists.
+  const { models, isStd } = useTableModels(connectionId, tableName, contextPath);
+
   // ── Builder state ──────────────────────────────────────────────────────────
   const [builder, setBuilder] = useState<BuilderState>(() => ({
     mode: "scan",
@@ -355,6 +361,25 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
     scanIndexForward: true,
     filters: [],
   }));
+
+  // ── D10 live fallback: when isStd flips false while in model mode, ─────────
+  // switch back to raw, preserving the last compiled query.
+  const prevIsStdRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (prevIsStdRef.current === null) {
+      prevIsStdRef.current = isStd;
+      return;
+    }
+    const wasStd = prevIsStdRef.current;
+    prevIsStdRef.current = isStd;
+    if (wasStd && !isStd) {
+      // Table just lost its model docs — force raw mode
+      setBuilder((prev) => {
+        if (prev.builderMode !== "model") return prev;
+        return { ...prev, builderMode: "raw" };
+      });
+    }
+  }, [isStd]);
 
   // ── Builder validity (used to disable Run in Toolbar) ─────────────────────
   // Scan mode is always valid; Query mode becomes invalid until PK is filled.
@@ -886,6 +911,8 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
                 onReset={handleReset}
                 onApplyOnlyFilter={handleApplyOnlyFilter}
                 disabled={needsCredentials}
+                models={models}
+                isStd={isStd}
               />
             )}
 

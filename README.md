@@ -29,7 +29,13 @@ Layout (engine-segregated under a neutral root):
 │   └── queries/
 │       ├── top-customers.sql
 │       └── top-customers.meta.yaml
-├── dynamo/tables/...
+├── dynamo/
+│   └── tables/
+│       ├── AppTable.md          # physical-table doc (kind: dynamo_table)
+│       └── AppTable/
+│           └── models/
+│               ├── Order.md    # entity doc (kind: dynamo_model)
+│               └── User.md
 ├── cloudwatch/groups/...
 └── ai/{overview.md,glossary.md}
 ```
@@ -40,6 +46,50 @@ body that the tool never touches. Sharing a folder across connections costs
 one filesystem watcher (path-keyed registry); edits in your editor refresh
 the UI within ~250 ms. Postgres, MySQL, MSSQL, and DynamoDB ship with full sync support;
 CloudWatch is on the roadmap (same folder format).
+
+### DynamoDB model docs (Single-Table Design)
+
+For Single-Table Design tables, you can add **model docs** that describe the
+logical entities stored in the table and how to query them. Model docs live at
+`dynamo/tables/<table>/models/<Model>.md`, alongside (not replacing) the
+physical-table doc at `dynamo/tables/<table>.md`.
+
+A model doc is hand-authored. Its `system:` block must contain:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `kind` | yes | `dynamo_model` |
+| `name` | yes | Entity name (e.g. `Order`) |
+| `access_patterns` | yes (non-empty) | List of access patterns — see below |
+
+`physical_table` is **not** authored in frontmatter; Argus derives it from the
+parent directory name (the `<table>` path segment) so it can never drift from
+the file's location.
+
+Each access pattern:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `index` | yes | `"table"` for the primary key, or the GSI/LSI name |
+| `pk` | yes | Partition-key value template |
+| `sk` | no | Sort-key value template |
+| `name` | no | Human label shown in the UI (recommended when two patterns share an index) |
+
+**Template syntax:** literal text with zero or more `${ident}` placeholders,
+where `ident` matches `[A-Za-z_][A-Za-z0-9_]*`. A `$` not followed by `{`
+is literal. An unterminated `${` is malformed and surfaces a load warning.
+
+**How filtering works:** selecting an entity and access pattern in the
+data-view exposes one input per distinct `${param}` across the pattern's `pk`
+and `sk` templates. Filling all inputs produces an equality query. Leaving a
+**trailing** parameter empty produces a `begins_with` prefix scan on string
+(`S`) keys. Leaving the sort-key empty altogether (or supplying no `sk`) runs
+a partition-only query. Numeric (`N`) keys do not support prefix matching;
+a partially-filled numeric template is an error. Tables with no model docs
+show only the raw query builder, unchanged.
+
+A worked example lives in
+`docs/context-folder-example/dynamo/tables/events/models/`.
 
 A minimal example folder lives in `docs/context-folder-example/`.
 

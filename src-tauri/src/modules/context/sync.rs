@@ -196,6 +196,8 @@ fn shape_to_system(shape: &ObjectShape) -> ObjectSystem {
         ),
         last_synced: Some(Utc::now()),
         deleted_in_db: Some(false),
+        access_patterns: None,
+        physical_table: None,
         extras: Default::default(),
     }
 }

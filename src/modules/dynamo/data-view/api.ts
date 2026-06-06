@@ -18,6 +18,7 @@ import type {
   CountResponse,
   DeleteItemRequest,
   DeleteItemResponse,
+  DynamoModel,
   Origin,
   PutItemRequest,
   PutItemResponse,
@@ -112,6 +113,23 @@ export function dynamoUpdateItem(
     origin,
   };
   return call<UpdateItemResponse>("dynamo_update_item", { req });
+}
+
+/**
+ * Fetches all dynamo_model docs whose physical_table matches `tableName`.
+ * Returns an empty array when no context folder is linked or when the table
+ * has no model docs.
+ *
+ * Wraps the `context_list_models(connection_id, table)` Tauri command.
+ */
+export function listModels(
+  connectionId: string,
+  tableName: string,
+): Promise<DynamoModel[]> {
+  return call<DynamoModel[]>("context_list_models", {
+    connectionId,
+    table: tableName,
+  });
 }
 
 export function dynamoDeleteItem(

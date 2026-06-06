@@ -199,6 +199,8 @@ mod tests {
             columns: None,
             last_synced: None,
             deleted_in_db: None,
+            access_patterns: None,
+            physical_table: None,
             extras: HashMap::new(),
         }
     }
