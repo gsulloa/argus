@@ -1,0 +1,79 @@
+## ADDED Requirements
+
+### Requirement: Agent emits SQL, never executes it
+
+Every AI provider SHALL instruct the agent to respond with SQL only, inside a fenced ` ```sql ` code block, for Argus to execute. The agent MUST be told it is forbidden from executing SQL itself via any shell, Bash, MCP, or database tool (`psql`, `mysql`, `mariadb`, `sqlcmd`, `aws dynamodb`, `aws logs`, or equivalents).
+
+#### Scenario: SQL-only clause present on every provider's system prompt
+
+- **WHEN** the system prompt is built for any provider (claude-cli, codex-cli, anthropic-api, openai-api)
+- **THEN** it contains an instruction to emit SQL inside a fenced ` ```sql ` block
+- **AND** it contains an explicit instruction NOT to execute SQL or run database CLIs
+
+#### Scenario: claude is tool-restricted so it cannot execute SQL
+
+- **WHEN** the claude CLI is spawned for `generate_sql` or `chat`
+- **THEN** the constructed argv restricts available tools to read-only ones (`--tools "Read Glob Grep"`)
+- **AND** the argv passes `--strict-mcp-config` (with no `--mcp-config`), so no user/project MCP server is loaded
+- **AND** Bash, command-execution tools, and external MCP tools are all unavailable, so the agent cannot run a database CLI or reach a DB MCP server even if instructed to
+- **AND** the positional prompt is preceded by a `--` option terminator so the variadic `--tools` flag does not consume it
+
+### Requirement: Agent treats the context folder as the primary source
+
+The CLI system prompt SHALL name the working directory (the connection's context folder) as the primary, authoritative source of information, directing the agent to read `manifest.json`, `overview.md`, `glossary.md`, `objects/`, and `queries/` before answering. The API system prompt, which receives the context as a serialized payload rather than files, SHALL reference that embedded payload as authoritative and SHALL NOT instruct the agent to read files from disk.
+
+#### Scenario: CLI prompt points at the context folder
+
+- **WHEN** `build_cli_system_prompt(context_path)` is built
+- **THEN** the prompt references the context folder as the primary information source
+- **AND** it names the on-disk artifacts (`manifest.json`, `overview.md`, `glossary.md`, `objects/`, `queries/`) to read first
+
+#### Scenario: API prompt uses the embedded payload, not filesystem language
+
+- **WHEN** `build_api_system_prompt(payload)` is built
+- **THEN** the prompt embeds the serialized context payload as the authoritative source
+- **AND** the prompt contains no instruction to read files or directories from disk
+
+### Requirement: Agent consults parent-directory cross-connection docs
+
+The CLI system prompt SHALL direct the agent to consult the parent directory (`../` of the context folder) as a secondary source for cross-connection skills and project-level documentation.
+
+#### Scenario: CLI prompt references the parent directory
+
+- **WHEN** `build_cli_system_prompt(context_path)` is built
+- **THEN** the prompt references `../` (the parent of the context folder) as a secondary source for cross-connection/project-level docs
+
+### Requirement: API system prompt is assembled in a stable section order
+
+`build_api_system_prompt` SHALL assemble its output as ordered, delimited sections in a fixed order: (1) role and hard SQL-only restrictions, then (2) the context payload. The role/restriction section SHALL precede the context section, and the context section SHALL be the final section produced by this change, leaving the trailing position available for content appended by later changes. The token count used for context-window trimming SHALL be measured over the builder's complete output string, not estimated per-section.
+
+#### Scenario: Role section precedes context section
+
+- **WHEN** `build_api_system_prompt(payload)` is built
+- **THEN** the SQL-only role/restriction section appears before the serialized context payload section
+- **AND** the sections are separated by clear delimiters
+
+#### Scenario: Token count reflects the full composed prompt
+
+- **WHEN** context-window trimming computes `system_chars`
+- **THEN** it uses the length of the complete system-prompt string returned by the builder, not a per-section estimate
+
+### Requirement: System prompt is applied on every turn for every provider
+
+The system prompt SHALL be applied to every turn of both `generate_sql` and `chat`, for all four providers. For claude this includes both the `--resume` path and the full-history-replay fallback path. For codex, which has no system-prompt flag, the system prompt SHALL be prepended to the flattened conversation history.
+
+#### Scenario: claude applies the system prompt on the resume path
+
+- **WHEN** claude `chat()` runs with a stored resume id
+- **THEN** the spawned argv includes the SQL-only system prompt
+- **AND** the same is true on the full-history fallback path when resume is unavailable
+
+#### Scenario: codex prepends the system prompt to history
+
+- **WHEN** codex `chat()` flattens conversation history into a prompt
+- **THEN** the final prompt is `"{system}\n\n{flattened_history}"` with the SQL-only system prompt first
+
+#### Scenario: API providers apply the system prompt on both paths
+
+- **WHEN** an API provider runs either `generate_sql` or `chat`
+- **THEN** the request's system prompt is produced by `build_api_system_prompt`
