@@ -13,11 +13,11 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import type { QueryEditorHandle } from "@/modules/postgres/sql/QueryEditor";
 import { ChatSession } from "@/modules/ai/session";
 import { useAiSettings, useResolvedProviderId } from "@/modules/ai/store";
 import { PROVIDER_LABELS, type ProviderId } from "@/modules/ai/types";
 import type { ChatTurn, ToolUseRecord } from "@/modules/ai/types";
+import { captureResult, type AttachedResult } from "@/modules/ai/attachments";
 import type { AiReadiness } from "@/modules/ai/useAiReadiness";
 import { CommandRegistry } from "@/platform/command-palette/CommandRegistry";
 
@@ -27,6 +27,18 @@ import styles from "./ChatPanel.module.css";
 // Props
 // ---------------------------------------------------------------------------
 
+/**
+ * Minimal editor surface the chat panel drives. Engine-agnostic so the panel
+ * can be mounted from any SQL editor (Postgres, MSSQL, MySQL, …) — every
+ * engine's `QueryEditorHandle` structurally satisfies this subset.
+ */
+export interface ChatEditorHandle {
+  getSql(): string;
+  getCursor(): number;
+  setCursor(offset: number): void;
+  replaceBody(text: string): void;
+}
+
 export interface ChatPanelProps {
   open: boolean;
   onClose: () => void;
@@ -34,7 +46,13 @@ export interface ChatPanelProps {
   contextPath: string | null;
   readiness: AiReadiness;
   onLinkContext: () => void;
-  editorRef: React.RefObject<QueryEditorHandle>;
+  editorRef: React.RefObject<ChatEditorHandle>;
+  /** Live executed result from the surrounding QueryTab, available to attach as context. */
+  result?: {
+    columns: string[];
+    rows: import("@/modules/postgres/data/types").CellValue[][];
+    truncated: boolean;
+  } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +126,7 @@ function getModelForProvider(
 interface CodeBlockProps {
   code: string;
   lang: string | null;
-  editorRef: React.RefObject<QueryEditorHandle>;
+  editorRef: React.RefObject<ChatEditorHandle>;
   applied?: boolean;
   onApply?: () => void;
 }
@@ -364,7 +382,7 @@ function ToolCard({ tool }: ToolCardProps) {
 
 interface AssistantTurnProps {
   turn: ChatTurn;
-  editorRef: React.RefObject<QueryEditorHandle>;
+  editorRef: React.RefObject<ChatEditorHandle>;
   isLast: boolean;
   autoAppliedBlock?: number | null; // index of block that was auto-applied
   editorChanged?: boolean;
@@ -531,6 +549,7 @@ export function ChatPanel({
   readiness,
   onLinkContext,
   editorRef,
+  result = null,
 }: ChatPanelProps) {
   const ready = readiness.level === "ready";
   // Session stored in state so React can re-subscribe via useSyncExternalStore
@@ -553,6 +572,20 @@ export function ChatPanel({
   // Textarea input.
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Attachment state.
+  const [attachments, setAttachments] = useState<AttachedResult[]>([]);
+  const canAttach = !!result && result.rows.length > 0;
+  const handleAttach = useCallback(() => {
+    if (!result || result.rows.length === 0) return;
+    setAttachments((prev) => [
+      ...prev,
+      captureResult(result.columns, result.rows, result.truncated),
+    ]);
+  }, [result]);
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }, []);
 
   // Track editor snapshot at turn start for auto-apply detection.
   const editorSnapshotRef = useRef<string | null>(null);
@@ -670,8 +703,9 @@ export function ChatPanel({
     setEditorChangedNotice(false);
 
     setInput("");
-    void session.send(trimmed);
-  }, [input, chatSnapshot.state, currentResolved, editorRef, session]);
+    void session.send(trimmed, attachments);
+    setAttachments([]);
+  }, [input, chatSnapshot.state, currentResolved, editorRef, session, attachments]);
 
   // Re-focus textarea after streaming ends.
   useEffect(() => {
@@ -860,6 +894,37 @@ export function ChatPanel({
 
       {/* Input area */}
       <div className={styles.inputArea}>
+        {(attachments.length > 0 || canAttach) && (
+          <div className={styles.attachmentBar}>
+            {attachments.map((a) => (
+              <span key={a.id} className={styles.attachmentChip} data-testid="attachment-chip">
+                <span className={styles.attachmentChipLabel}>
+                  {a.row_count} row{a.row_count === 1 ? "" : "s"}
+                  {a.truncated ? " (truncated)" : ""}
+                </span>
+                <button
+                  type="button"
+                  className={styles.attachmentChipRemove}
+                  onClick={() => handleRemoveAttachment(a.id)}
+                  aria-label="Remove attachment"
+                  data-testid="attachment-remove"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {canAttach && result && (
+              <button
+                type="button"
+                className={styles.attachBtn}
+                onClick={handleAttach}
+                data-testid="btn-attach-result"
+              >
+                + Attach result ({result.rows.length} row{result.rows.length === 1 ? "" : "s"})
+              </button>
+            )}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           className={styles.textarea}

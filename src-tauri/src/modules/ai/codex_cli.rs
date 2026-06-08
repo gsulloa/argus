@@ -162,7 +162,7 @@ impl AiProvider for CodexCli {
         // codex exec has no --system-prompt flag; prepend the system prompt to the
         // flattened history so it is always the first thing the agent reads.
         let system = build_cli_system_prompt(&cwd);
-        let history = flatten_history_for_cli(&req.turns);
+        let history = flatten_history_for_cli(&req.turns, &req.attached_results);
         let prompt = format!("{system}\n\n{history}");
 
         let warning_shown = req.provider_state.get("codex_warning_shown").is_some();
@@ -373,7 +373,7 @@ mod tests {
             content: "list tables".into(),
             tool_uses: vec![],
         }];
-        let result = flatten_history_for_cli(&turns);
+        let result = flatten_history_for_cli(&turns, &[]);
         assert_eq!(result, "list tables");
     }
 
@@ -387,7 +387,7 @@ mod tests {
             ChatTurn { role: ChatRole::Assistant, content: "users, orders".into(), tool_uses: vec![] },
             ChatTurn { role: ChatRole::User, content: "count users".into(), tool_uses: vec![] },
         ];
-        let history = flatten_history_for_cli(&turns);
+        let history = flatten_history_for_cli(&turns, &[]);
         let prompt = format!("{system}\n\n{history}");
 
         let system_pos = prompt.find("Role and restrictions").expect("system prompt header not found");
@@ -405,7 +405,7 @@ mod tests {
             ChatTurn { role: ChatRole::Assistant, content: "users, orders".into(), tool_uses: vec![] },
             ChatTurn { role: ChatRole::User, content: "count users".into(), tool_uses: vec![] },
         ];
-        let result = flatten_history_for_cli(&turns);
+        let result = flatten_history_for_cli(&turns, &[]);
         assert!(result.contains("User: show tables"));
         assert!(result.contains("Assistant: users, orders"));
         assert!(result.contains("User's new request: count users"));

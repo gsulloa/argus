@@ -154,3 +154,67 @@
   display: flex;
   flex-direction: column;
 }
+
+/* Editor + docked AI chat panel layout */
+.editorRow {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.editorWrap {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.splitter {
+  width: 4px;
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 120ms;
+  user-select: none;
+}
+
+.splitter:hover {
+  background: var(--accent-soft, rgba(168, 85, 247, 0.15));
+}
+
+.chatHost {
+  flex: 0 0 auto;
+  min-width: 280px;
+  max-width: 800px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+}
+
+/* AI ✨ button + readiness status dot */
+.aiButton {
+  position: relative;
+}
+
+.aiDot {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full, 999px);
+  border: 1px solid var(--bg);
+  box-sizing: border-box;
+}
+
+.aiDotReady {
+  background: var(--success);
+}
+
+.aiDotSetup {
+  background: var(--warning);
+}

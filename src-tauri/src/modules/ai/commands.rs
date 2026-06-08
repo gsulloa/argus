@@ -15,9 +15,9 @@ use crate::modules::ai::settings::{
     AiSettingsInput as RawAiSettingsInput,
 };
 use crate::modules::ai::types::{
-    AiConnectionOverrideView, AiSettingsView, ChatDelta, ChatRequest, ChatStream, ChatTurn,
-    GenerateDelta, InspectDelta, InspectRequest, KeyPresence, ProviderId, ProviderListEntry,
-    ToolUseRecord, ValidationResult,
+    AiConnectionOverrideView, AiSettingsView, AttachedResult, ChatDelta, ChatRequest, ChatStream,
+    ChatTurn, GenerateDelta, InspectDelta, InspectRequest, KeyPresence, ProviderId,
+    ProviderListEntry, ToolUseRecord, ValidationResult,
 };
 use crate::modules::dynamo::client::DynamoClientRegistry;
 use crate::modules::ai::validation_cache::ValidationCache;
@@ -395,6 +395,7 @@ pub async fn ai_chat_send(
     session_id: String,
     prompt: String,
     connection_id: Option<String>,
+    attached_results: Vec<AttachedResult>,
     db: State<'_, DbState>,
     registry: State<'_, ChatSessionRegistry>,
     app: AppHandle,
@@ -457,6 +458,7 @@ pub async fn ai_chat_send(
         model: None,
         session_id: session_id.clone(),
         provider_state,
+        attached_results,
     };
 
     let provider = factory::build(&db, provider_id)?;

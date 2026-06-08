@@ -4,6 +4,7 @@ import { toAppError } from "@/platform/errors/AppError";
 import type {
   AiSettingsInput,
   AiSettingsView,
+  AttachedResult,
   ChatTurn,
   ProviderId,
   ProviderListEntry,
@@ -64,6 +65,7 @@ export const aiApi = {
     sessionId: string;
     prompt: string;
     connectionId: string | null;
+    attachedResults: AttachedResult[];
   }) => call<void>("ai_chat_send", args),
 
   /**

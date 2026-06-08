@@ -44,9 +44,9 @@ fn claude_bin() -> String {
         .unwrap_or_else(|| "claude".to_string())
 }
 use crate::modules::ai::types::{
-    build_cli_system_prompt, build_inspector_system_prompt, Capabilities, ChatDelta, ChatRequest,
-    ChatRole, ChatStream, GenerateDelta, GenerateRequest, GenerateStream, InspectRequest,
-    ProviderId, ValidationResult,
+    build_cli_system_prompt, build_inspector_system_prompt, render_attachments_prefix,
+    Capabilities, ChatDelta, ChatRequest, ChatRole, ChatStream, GenerateDelta, GenerateRequest,
+    GenerateStream, InspectRequest, ProviderId, ValidationResult,
 };
 
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(3);
@@ -168,10 +168,11 @@ impl AiProvider for ClaudeCli {
         // If that fails quickly (non-zero exit within RESUME_FAIL_TIMEOUT), retry without.
         if let Some(ref rid) = resume_id {
             // With --resume, we only need the latest user message.
-            let latest_prompt = req.turns.last()
-                .map(|t| t.content.as_str())
-                .unwrap_or("")
-                .to_string();
+            let latest_prompt = format!(
+                "{}{}",
+                render_attachments_prefix(&req.attached_results),
+                req.turns.last().map(|t| t.content.as_str()).unwrap_or("")
+            );
 
             match spawn_claude_stream_json(
                 &latest_prompt,
@@ -192,7 +193,7 @@ impl AiProvider for ClaudeCli {
         }
 
         // Either no resume_id, or spawn with resume failed — flatten full history.
-        let prompt = flatten_history_for_cli(&req.turns);
+        let prompt = flatten_history_for_cli(&req.turns, &req.attached_results);
 
         let (child, stdout, stderr) = spawn_claude_stream_json(
             &prompt,
@@ -311,10 +312,15 @@ fn spawn_claude_stream_json(
 
 /// Flatten a multi-turn conversation into a single prompt string for the CLI.
 /// Used when there is no --resume id (first turn or resume unavailable).
-pub(crate) fn flatten_history_for_cli(turns: &[crate::modules::ai::types::ChatTurn]) -> String {
+pub(crate) fn flatten_history_for_cli(
+    turns: &[crate::modules::ai::types::ChatTurn],
+    attachments: &[crate::modules::ai::types::AttachedResult],
+) -> String {
     if turns.is_empty() {
         return String::new();
     }
+
+    let attachment_prefix = render_attachments_prefix(attachments);
 
     let all_but_last = &turns[..turns.len() - 1];
     let last = &turns[turns.len() - 1];
@@ -335,18 +341,17 @@ pub(crate) fn flatten_history_for_cli(turns: &[crate::modules::ai::types::ChatTu
             .join("\n");
         parts.push(history);
         // ── #62 insertion point ──────────────────────────────────────────────
-        // Change #62 (`attach query results to chat`) will prepend a markdown
-        // result table to `last.content` here, before it is formatted into the
-        // "User's new request:" line. The table prefix must appear BEFORE the
-        // user's natural-language question so the agent sees the data first.
-        // Planned prefix format: "\n\n<result-table-markdown>\n\n{last.content}"
-        parts.push(format!("User's new request: {}", last.content));
+        // Prepend the markdown result table to `last.content` before formatting
+        // into the "User's new request:" line. The table prefix appears BEFORE
+        // the user's natural-language question so the agent sees the data first.
+        // When attachments is empty, attachment_prefix is "" → byte-identical output.
+        parts.push(format!("User's new request: {attachment_prefix}{}", last.content));
     } else {
         // First turn — just the content directly.
         // ── #62 insertion point ──────────────────────────────────────────────
-        // Change #62 will prepend a markdown result table to `last.content` here
-        // for single-turn (first) requests, same as the multi-turn case above.
-        parts.push(last.content.clone());
+        // Prepend the markdown result table for single-turn (first) requests,
+        // same as the multi-turn case above.
+        parts.push(format!("{attachment_prefix}{}", last.content));
     }
 
     parts.join("\n\n")
@@ -922,7 +927,7 @@ mod tests {
             content: "hello world".into(),
             tool_uses: vec![],
         }];
-        let result = flatten_history_for_cli(&turns);
+        let result = flatten_history_for_cli(&turns, &[]);
         assert_eq!(result, "hello world");
     }
 
@@ -934,10 +939,32 @@ mod tests {
             ChatTurn { role: ChatRole::Assistant, content: "reply".into(), tool_uses: vec![] },
             ChatTurn { role: ChatRole::User, content: "follow up".into(), tool_uses: vec![] },
         ];
-        let result = flatten_history_for_cli(&turns);
+        let result = flatten_history_for_cli(&turns, &[]);
         assert!(result.contains("User: first"), "should contain prior user turn");
         assert!(result.contains("Assistant: reply"), "should contain assistant turn");
         assert!(result.contains("User's new request: follow up"), "should contain new request");
+    }
+
+    #[test]
+    fn flatten_history_prepends_attachment_table() {
+        use crate::modules::ai::types::{AttachedResult, ChatRole, ChatTurn};
+        let turns = vec![ChatTurn {
+            role: ChatRole::User,
+            content: "summarise this".into(),
+            tool_uses: vec![],
+        }];
+        let att = AttachedResult {
+            id: "a1".into(),
+            columns: vec!["name".into()],
+            rows: vec![vec!["alice".into()]],
+            truncated: false,
+            row_count: 1,
+        };
+        let result = flatten_history_for_cli(&turns, &[att]);
+        let table_pos = result.find("# Attached result").expect("table header present");
+        let q_pos = result.find("summarise this").expect("question present");
+        assert!(table_pos < q_pos, "table must precede the user question");
+        assert!(result.contains("| alice |"));
     }
 
     #[test]

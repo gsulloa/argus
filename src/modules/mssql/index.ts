@@ -22,6 +22,10 @@ export type { MssqlTableDataPayload } from "./data/TableViewerTab";
 
 // Phase F3 — SQL editor (§20)
 export type { MssqlQueryPayload } from "./sql/QueryTab";
+// Register the mssql-query tab kind (side-effect import). The type-only re-export
+// above is erased at compile time and never evaluates the module, so without this
+// the TabRegistry.register call in QueryTab.tsx never runs.
+import "./sql/QueryTab";
 
 // Phase F3 — table structure (§21)
 export { StructureSubtab as MssqlStructureSubtab } from "./structure/StructureSubtab";
