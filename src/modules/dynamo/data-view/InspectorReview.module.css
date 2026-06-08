@@ -173,6 +173,10 @@
   border: 1px solid var(--border, #23232c);
   border-radius: var(--radius-md, 5px);
   overflow: hidden;
+  /* Don't let cards shrink to fit the flex column — they must keep their
+     natural height so the body overflows and scrolls (otherwise each card
+     compresses to its header and the Save/Edit/Discard footer is clipped). */
+  flex-shrink: 0;
 }
 
 .proposalHeader {
