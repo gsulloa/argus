@@ -42,6 +42,7 @@ tokio-postgres-rustls = "0.13"
 webpki-roots = "0.26"
 rustls-pki-types = "1"
 url = "2"
+regex = "1"
 percent-encoding = "2"
 time = { version = "0.3", features = ["formatting", "macros", "serde"] }
 async-trait = "0.1"

@@ -551,6 +551,7 @@ mod tests {
             endpoint_url: None,
             read_only: false,
             needs_credentials: None,
+            table_match: None,
         };
         let err = AppError::aws("ExpiredToken", "token expired", false);
         // We can't easily call the async function directly in a sync test,
@@ -660,6 +661,7 @@ mod tests {
             endpoint_url: Some("http://localhost:8000".into()),
             read_only: false,
             needs_credentials: None,
+            table_match: None,
         };
         let secret =
             r#"{"access_key_id":"fakeAccessKeyId","secret_access_key":"fakeSecretAccessKey"}"#;

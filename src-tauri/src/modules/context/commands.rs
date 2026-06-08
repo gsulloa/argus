@@ -13,9 +13,12 @@ use crate::modules::postgres::pool::PgPoolRegistry;
 use crate::platform::connections::{self, ConnectionUpdate};
 use crate::platform::DbState;
 
+use crate::modules::dynamo::params::TableMatch;
+
 use super::ai::{build_empty_payload, build_payload};
 use super::engine::EngineKind;
 use super::introspect_adapters::{introspector_for, IntrospectorPools};
+use super::normalize::normalize;
 use super::parser::parse_manifest;
 use super::registry::ContextRegistry;
 use super::sync::{atomic_write, build_fresh_doc, execute_sync, rewrite_file_with_system_yaml};
@@ -159,6 +162,51 @@ fn identity(doc: &ObjectDoc) -> String {
         Some(s) => format!("{}.{}", s, doc.system.name),
         None => doc.system.name.clone(),
     }
+}
+
+/// Load the Dynamo table-name normalization rule for a connection from its
+/// persisted `params` JSON. Returns `None` for non-Dynamo connections, a
+/// missing connection, or an absent rule. Reuses the existing params column
+/// (the `connection-registry` treats params as opaque JSON).
+fn load_table_match(db: &State<'_, DbState>, conn_id: Uuid) -> AppResult<Option<TableMatch>> {
+    let lock = db.0.lock().expect("db poisoned");
+    let conns = connections::list(&lock)?;
+    let conn = match conns.into_iter().find(|c| c.id == conn_id) {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    if EngineKind::from_connection_kind(&conn.kind) != Some(EngineKind::Dynamo) {
+        return Ok(None);
+    }
+    match conn.params.get("table_match") {
+        Some(v) if !v.is_null() => {
+            let tm: TableMatch = serde_json::from_value(v.clone())
+                .map_err(|e| AppError::Validation(format!("invalid table_match: {e}")))?;
+            if tm.is_effectively_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(tm))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Collect `dynamo_model` docs whose derived `physical_table` equals
+/// `physical_table` (already normalized). Pure helper for testability.
+fn collect_models(objects: &[ObjectDoc], physical_table: &str) -> Vec<ModelListItem> {
+    objects
+        .iter()
+        .filter(|doc| {
+            doc.system.kind == "dynamo_model"
+                && doc.system.physical_table.as_deref() == Some(physical_table)
+        })
+        .map(|doc| ModelListItem {
+            name: doc.system.name.clone(),
+            access_patterns: doc.system.access_patterns.clone().unwrap_or_default(),
+            body: doc.body.clone(),
+        })
+        .collect()
 }
 
 // ---- 5.1: context_create_folder ----
@@ -334,10 +382,16 @@ pub fn context_get_object(
         None => return Ok(None),
     };
 
+    // For Dynamo connections, fold the incoming identity through the
+    // normalization rule before comparison so a CDK-named live table resolves
+    // to its logical doc. Non-Dynamo connections load no rule → unchanged.
+    let rule = load_table_match(&db, conn_id)?;
+    let needle = normalize(&identity_str, rule.as_ref());
+
     Ok(parsed
         .objects
         .into_iter()
-        .find(|doc| identity(doc) == identity_str))
+        .find(|doc| identity(doc) == needle))
 }
 
 // ---- 5.5b: context_list_models ----
@@ -367,6 +421,11 @@ pub fn context_list_models(
 ) -> AppResult<Vec<ModelListItem>> {
     let conn_id = parse_conn_id(&connection_id)?;
 
+    // Load the connection's normalization rule (None for non-Dynamo / unset),
+    // then match the model's logical `physical_table` against the normalized
+    // form of the incoming live table name.
+    let rule = load_table_match(&db, conn_id)?;
+
     let parsed = get_or_subscribe(&db, &registry, conn_id)?;
     let parsed = match parsed {
         Some(p) => p,
@@ -380,22 +439,12 @@ pub fn context_list_models(
         .filter(|d| d.system.kind == "dynamo_model")
         .count();
 
-    let items: Vec<ModelListItem> = parsed
-        .objects
-        .into_iter()
-        .filter(|doc| {
-            doc.system.kind == "dynamo_model"
-                && doc.system.physical_table.as_deref() == Some(table.as_str())
-        })
-        .map(|doc| ModelListItem {
-            name: doc.system.name.clone(),
-            access_patterns: doc.system.access_patterns.clone().unwrap_or_default(),
-            body: doc.body.clone(),
-        })
-        .collect();
+    let normalized = normalize(&table, rule.as_ref());
+    let items = collect_models(&parsed.objects, &normalized);
 
     tracing::info!(
         table = %table,
+        normalized = %normalized,
         total_objects,
         model_docs,
         matched = items.len(),
@@ -491,8 +540,18 @@ pub async fn context_sync_schema(
     let introspector = introspector_for(engine, pools);
     let shapes = introspector.introspect_for_context(conn_id).await?;
 
-    // Execute sync (engine-agnostic).
-    let report = execute_sync(std::path::Path::new(&context_path), engine, shapes).await?;
+    // Load the Dynamo normalization rule (None for other engines / unset) so
+    // sync writes files under logical names and dedups colliding live tables.
+    let rule = load_table_match(&db, conn_id)?;
+
+    // Execute sync (engine-agnostic; rule applied only for Dynamo).
+    let report = execute_sync(
+        std::path::Path::new(&context_path),
+        engine,
+        shapes,
+        rule.as_ref(),
+    )
+    .await?;
 
     // The filesystem watcher will pick up the written files and emit
     // `context://changed` within the debounce window. No explicit reload needed.
@@ -617,6 +676,10 @@ pub struct SaveModelResult {
 /// Create or update a Dynamo model doc at
 /// `<context_root>/dynamo/tables/<table>/models/<slug>.md`.
 ///
+/// The incoming `table` is the live (physical) name; it is folded through the
+/// connection's normalization rule so models written from a CDK-named live table
+/// land under the logical folder (matching the read path and schema-sync).
+///
 /// On create: writes a fresh doc with the given access patterns and optional body.
 /// On update: splices the new system YAML in, optionally replacing the body.
 /// Collision guard: if the file exists but its `name` differs from `draft.name`,
@@ -635,6 +698,10 @@ pub fn context_save_model(
             "connection {conn_id} has no linked context folder"
         ))
     })?;
+
+    // Fold the live table name to its logical name (identity when no rule).
+    let rule = load_table_match(&db, conn_id)?;
+    let table = normalize(&table, rule.as_ref());
 
     // Validate at least one access pattern.
     if draft.access_patterns.is_empty() {
@@ -764,6 +831,10 @@ pub fn context_delete_model(
         ))
     })?;
 
+    // Fold the live table name to its logical name (identity when no rule).
+    let rule = load_table_match(&db, conn_id)?;
+    let table = normalize(&table, rule.as_ref());
+
     let slug = slug_for_model_name(&model_name)?;
     let target = Path::new(&root)
         .join("dynamo")
@@ -886,5 +957,125 @@ mod tests {
 
         let result = read_project_source_path(dir.path()).unwrap();
         assert_eq!(result, None);
+    }
+
+    // ---- read-path matching with normalization (task 3.3) ----
+
+    use crate::modules::context::parser::load_folder;
+    use crate::modules::dynamo::params::TableMatch;
+
+    /// Write a `dynamo_model` doc under `dynamo/tables/<table>/models/<name>.md`.
+    fn write_model(root: &std::path::Path, table: &str, name: &str) {
+        let rel = format!("dynamo/tables/{table}/models/{name}.md");
+        let content = format!(
+            "---\nsystem:\n  kind: dynamo_model\n  name: {name}\n  access_patterns:\n    - index: table\n      pk: \"PK#${{id}}\"\nhuman: {{}}\n---\n# {name}\n"
+        );
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+
+    fn cdk_prefix_rule(prefix: &str) -> TableMatch {
+        TableMatch {
+            prefix: Some(prefix.to_string()),
+            suffix_pattern: Some("-[A-Z0-9]+$".to_string()),
+            regex: None,
+        }
+    }
+
+    // 3.3 — CDK-named live table matches logical model docs.
+    #[test]
+    fn cdk_named_table_matches_logical_models() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("context.yaml"), "schema_version: 1\nname: T\n").unwrap();
+        write_model(dir.path(), "EventsTable", "Event");
+        write_model(dir.path(), "EventsTable", "Attendee");
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        let rule = cdk_prefix_rule("MyApp-prod-");
+        let normalized = normalize("MyApp-prod-EventsTable-3M4N5O6P7Q8R", Some(&rule));
+        assert_eq!(normalized, "EventsTable");
+
+        let items = collect_models(&ctx.objects, &normalized);
+        let mut names: Vec<_> = items.iter().map(|m| m.name.clone()).collect();
+        names.sort();
+        assert_eq!(names, vec!["Attendee".to_string(), "Event".to_string()]);
+    }
+
+    // 3.3 — same folder reused across two connections with different prefixes.
+    #[test]
+    fn same_folder_reused_across_environments() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("context.yaml"), "schema_version: 1\nname: T\n").unwrap();
+        write_model(dir.path(), "EventsTable", "Event");
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+
+        let dev = cdk_prefix_rule("MyApp-dev-");
+        let prod = cdk_prefix_rule("MyApp-prod-");
+
+        let dev_items = collect_models(
+            &ctx.objects,
+            &normalize("MyApp-dev-EventsTable-AAAA1111", Some(&dev)),
+        );
+        let prod_items = collect_models(
+            &ctx.objects,
+            &normalize("MyApp-prod-EventsTable-BBBB2222", Some(&prod)),
+        );
+
+        assert_eq!(dev_items.len(), 1);
+        assert_eq!(prod_items.len(), 1);
+        assert_eq!(dev_items[0].name, "Event");
+        assert_eq!(prod_items[0].name, "Event");
+    }
+
+    // 3.4 — models written under the logical folder are found by the read path
+    // when querying with the live (suffixed) name. Regression for the AI
+    // extraction landing models under the physical-named folder.
+    #[test]
+    fn model_written_under_logical_folder_is_found_via_live_name() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("context.yaml"), "schema_version: 1\nname: T\n").unwrap();
+
+        // Rule strips a lowercase-hex CDK suffix.
+        let rule = TableMatch {
+            prefix: None,
+            suffix_pattern: Some("-[0-9a-f]+$".to_string()),
+            regex: None,
+        };
+        let live = "InventoryTable-0a12ed4ec6bf";
+        let logical = normalize(live, Some(&rule));
+        assert_eq!(logical, "InventoryTable");
+
+        // context_save_model normalizes `table` before building the path, so the
+        // model lands under the logical folder.
+        write_model(dir.path(), &logical, "Slot");
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        // Reading with the live name normalizes to the same logical name.
+        let items = collect_models(&ctx.objects, &normalize(live, Some(&rule)));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Slot");
+    }
+
+    // 3.3 — unconfigured connection still matches exactly.
+    #[test]
+    fn unconfigured_connection_matches_exactly() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("context.yaml"), "schema_version: 1\nname: T\n").unwrap();
+        write_model(dir.path(), "AppTable", "Order");
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+
+        // No rule → exact match.
+        let exact = collect_models(&ctx.objects, &normalize("AppTable", None));
+        assert_eq!(exact.len(), 1);
+
+        // A suffixed live name without a rule does NOT match.
+        let suffixed = collect_models(
+            &ctx.objects,
+            &normalize("MyApp-prod-AppTable-XYZ", None),
+        );
+        assert!(suffixed.is_empty());
     }
 }

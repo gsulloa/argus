@@ -104,6 +104,47 @@ show only the raw query builder, unchanged.
 A worked example lives in
 `docs/context-folder-example/dynamo/tables/events/models/`.
 
+### DynamoDB logical-name matching (CDK / per-environment tables)
+
+By default Argus matches a DynamoDB context doc to a live table by **exact table
+name**. That breaks when a tool like the AWS CDK gives the same logical table an
+environment-specific stack prefix and a random per-deploy suffix
+(`MyApp-dev-EventsTable-1A2B3C…`, `MyApp-prod-EventsTable-3M4N…`): one shared
+context folder can't match across environments, and every deploy's new suffix
+makes schema-sync create a brand-new file.
+
+To fix this, a DynamoDB connection can carry an optional **table-name
+normalization rule** that folds a live physical name to a stable **logical
+name** before any context lookup. Configure it in the connection form under
+**Table name matching** (collapsed by default; empty = today's exact match).
+Two mutually-exclusive forms:
+
+- **Simple** — a literal `prefix` to strip plus a regex `suffix_pattern` to strip
+  from the end. For the CDK example: prefix `MyApp-prod-`, suffix pattern
+  `-[A-Z0-9]+$` folds `MyApp-prod-EventsTable-3M4N…` → `EventsTable`.
+- **Advanced** — a single `regex` containing a named capture group `logical`,
+  e.g. `^MyApp-prod-(?<logical>.+?)-[A-Z0-9]+$`.
+
+The rule lives **on the connection**, not in the shared folder, because the
+prefix is environment-specific — so the same folder
+(`dynamo/tables/EventsTable.md`, its `models/`, etc.) is reused by `dev`,
+`staging`, and `prod` connections, each with its own prefix. A malformed regex
+(or an advanced rule missing the `logical` group) is rejected when you test/save
+the connection. A rule that doesn't match a given name degrades to exact match,
+so a misconfiguration never hides every doc.
+
+Normalization applies to every Dynamo context touch-point: the `📄` documented
+badge in the schema tree, model listing (**By model** filtering), and
+schema-sync (which writes `dynamo/tables/<logical>.md`, so a re-deploy with a new
+suffix updates the same file instead of creating a duplicate). If two live tables
+fold to the same logical name during one sync, the first wins and the rest are
+skipped (surfaced in the sync report) rather than aborting the sync.
+
+**Migration note:** enabling a rule does not rename files already on disk.
+Folders synced before configuring a rule keep their old suffix-named files
+(`MyApp-prod-EventsTable-XXXX.md`); remove those by hand after the first
+logical-name re-sync.
+
 A minimal example folder lives in `docs/context-folder-example/`.
 
 ## AI providers

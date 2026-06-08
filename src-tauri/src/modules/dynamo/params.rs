@@ -1,3 +1,4 @@
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use url::Url;
@@ -58,6 +59,83 @@ pub enum DynamoAuth {
 }
 
 // ---------------------------------------------------------------------------
+// Table-name normalization rule (dynamo-table-name-normalization)
+// ---------------------------------------------------------------------------
+
+/// Per-connection rule that folds a live physical DynamoDB table name into a
+/// stable logical name. Two mutually-exclusive authoring forms:
+///
+/// * **Simple** — optional literal `prefix` and optional regex `suffix_pattern`.
+/// * **Advanced** — a single `regex` with a named capture group `logical`.
+///
+/// All fields absent/empty ⇒ identity transform. The fields round-trip through
+/// the opaque connection `params` JSON column.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TableMatch {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub suffix_pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub regex: Option<String>,
+}
+
+impl TableMatch {
+    /// True when no field carries a non-empty value (≡ identity transform).
+    pub fn is_effectively_empty(&self) -> bool {
+        let empty = |o: &Option<String>| o.as_deref().map_or(true, str::is_empty);
+        empty(&self.prefix) && empty(&self.suffix_pattern) && empty(&self.regex)
+    }
+
+    /// True when the advanced (`regex`) form carries a non-empty value.
+    pub fn has_advanced(&self) -> bool {
+        self.regex.as_deref().map_or(false, |s| !s.is_empty())
+    }
+
+    /// True when the simple (`prefix`/`suffix_pattern`) form carries a value.
+    pub fn has_simple(&self) -> bool {
+        self.prefix.as_deref().map_or(false, |s| !s.is_empty())
+            || self.suffix_pattern.as_deref().map_or(false, |s| !s.is_empty())
+    }
+
+    /// Validate the rule:
+    /// * absent/empty ⇒ Ok (identity).
+    /// * the two forms are mutually exclusive.
+    /// * `suffix_pattern` and `regex` must compile.
+    /// * advanced-form `regex` must contain a named capture group `logical`.
+    pub fn validate(&self) -> AppResult<()> {
+        if self.is_effectively_empty() {
+            return Ok(());
+        }
+
+        if self.has_advanced() && self.has_simple() {
+            return Err(AppError::Validation(
+                "table_match: use either prefix/suffix_pattern or regex, not both".into(),
+            ));
+        }
+
+        if let Some(re_str) = self.regex.as_deref().filter(|s| !s.is_empty()) {
+            let re = Regex::new(re_str).map_err(|e| {
+                AppError::Validation(format!("table_match.regex does not compile: {e}"))
+            })?;
+            if !re.capture_names().flatten().any(|n| n == "logical") {
+                return Err(AppError::Validation(
+                    "table_match.regex must contain a named capture group `logical`".into(),
+                ));
+            }
+        }
+
+        if let Some(suffix) = self.suffix_pattern.as_deref().filter(|s| !s.is_empty()) {
+            Regex::new(suffix).map_err(|e| {
+                AppError::Validation(format!("table_match.suffix_pattern does not compile: {e}"))
+            })?;
+        }
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DynamoParams struct (§2.1)
 // ---------------------------------------------------------------------------
 
@@ -76,6 +154,10 @@ pub struct DynamoParams {
     // TODO chunk E: call DynamoParams::sanitized at create/update boundary
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub needs_credentials: Option<bool>,
+    /// Optional table-name normalization rule (see `TableMatch`). Used by the
+    /// context system to fold CDK-style physical table names to logical names.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub table_match: Option<TableMatch>,
 }
 
 impl DynamoParams {
@@ -129,6 +211,11 @@ impl DynamoParams {
         if let Some(url_str) = &self.endpoint_url {
             Url::parse(url_str)
                 .map_err(|_| AppError::Validation("endpoint_url is not a valid URL".into()))?;
+        }
+
+        // --- Universal: table_match normalization rule ---
+        if let Some(tm) = &self.table_match {
+            tm.validate()?;
         }
 
         // --- Auth-mode specific ---
@@ -201,6 +288,7 @@ mod tests {
             endpoint_url: None,
             read_only: false,
             needs_credentials: None,
+            table_match: None,
         }
     }
 
@@ -212,6 +300,7 @@ mod tests {
             endpoint_url: None,
             read_only: false,
             needs_credentials: None,
+            table_match: None,
         }
     }
 
@@ -344,5 +433,96 @@ mod tests {
         p.needs_credentials = Some(true);
         let p2 = p.sanitized();
         assert_eq!(p2.needs_credentials, None);
+    }
+
+    // ---- table_match validation (§2.4) ----
+
+    // 2.4.14 — valid table_match round-trips through JSON + validate
+    #[test]
+    fn valid_table_match_round_trip() {
+        let mut p = access_keys_params();
+        p.table_match = Some(TableMatch {
+            prefix: Some("MyApp-prod-".into()),
+            suffix_pattern: Some("-[A-Z0-9]+$".into()),
+            regex: None,
+        });
+        let json = p.to_json().unwrap();
+        let p2 = DynamoParams::from_json(&json).unwrap();
+        assert_eq!(p2.table_match, p.table_match);
+        p2.validate(Some(valid_secret())).unwrap();
+    }
+
+    // 2.4.15 — malformed suffix_pattern regex rejected
+    #[test]
+    fn rejects_malformed_table_match_regex() {
+        let mut p = access_keys_params();
+        p.table_match = Some(TableMatch {
+            prefix: None,
+            suffix_pattern: Some("-[A-Z0-9".into()), // unbalanced
+            regex: None,
+        });
+        assert!(matches!(
+            p.validate(Some(valid_secret())),
+            Err(AppError::Validation(_))
+        ));
+    }
+
+    // 2.4.16 — advanced-form regex without `logical` group rejected
+    #[test]
+    fn rejects_advanced_regex_without_logical_group() {
+        let mut p = access_keys_params();
+        p.table_match = Some(TableMatch {
+            prefix: None,
+            suffix_pattern: None,
+            regex: Some("^MyApp-prod-.+$".into()),
+        });
+        let err = p.validate(Some(valid_secret())).unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("logical")),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    // 2.4.17 — absent table_match is valid
+    #[test]
+    fn absent_table_match_is_valid() {
+        let p = access_keys_params();
+        assert!(p.table_match.is_none());
+        p.validate(Some(valid_secret())).unwrap();
+    }
+
+    // 2.4.18 — empty table_match (all fields absent) is valid identity
+    #[test]
+    fn empty_table_match_is_valid() {
+        let mut p = access_keys_params();
+        p.table_match = Some(TableMatch::default());
+        p.validate(Some(valid_secret())).unwrap();
+    }
+
+    // 2.4.19 — valid advanced regex with `logical` group accepted
+    #[test]
+    fn valid_advanced_regex_accepted() {
+        let mut p = access_keys_params();
+        p.table_match = Some(TableMatch {
+            prefix: None,
+            suffix_pattern: None,
+            regex: Some("^MyApp-prod-(?<logical>.+?)-[A-Z0-9]+$".into()),
+        });
+        p.validate(Some(valid_secret())).unwrap();
+    }
+
+    // 2.4.20 — mixing simple and advanced forms rejected
+    #[test]
+    fn rejects_mixing_simple_and_advanced() {
+        let mut p = access_keys_params();
+        p.table_match = Some(TableMatch {
+            prefix: Some("MyApp-".into()),
+            suffix_pattern: None,
+            regex: Some("^(?<logical>.+)$".into()),
+        });
+        assert!(matches!(
+            p.validate(Some(valid_secret())),
+            Err(AppError::Validation(_))
+        ));
     }
 }

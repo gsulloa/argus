@@ -19,6 +19,11 @@ shareable across connections (one filesystem watcher per canonical path).
 Full layout, format, and behaviour: see `README.md` "Context folders" and
 `docs/context-folder-example/`. Schema-sync ships for Postgres, MySQL, MSSQL,
 and DynamoDB (`introspect_adapters.rs`); CloudWatch is on the roadmap.
+DynamoDB connections may carry an optional per-connection **table-name
+normalization rule** (`DynamoParams.table_match`, applied via
+`context/normalize.rs`) that folds CDK-style physical names
+(`MyApp-prod-EventsTable-3M4N…`) to a logical name (`EventsTable`) before every
+context match and sync write, so one shared folder serves all environments.
 
 ## AI providers (cross-engine)
 

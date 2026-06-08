@@ -27,6 +27,7 @@ import { useContextObjects } from "@/modules/context/hooks";
 import { DocBadge } from "@/modules/context/components/DocBadge";
 import { ContextFolderBanner } from "@/modules/context/components/ContextFolderBanner";
 import { useActiveDynamoConnections } from "@/modules/dynamo/useActiveConnections";
+import { normalizeTableName, type TableMatch } from "@/modules/dynamo/tableMatch";
 import { useDynamoTableCache } from "./CacheProvider";
 import type { DescribeSlot } from "./CacheProvider";
 import { TableSearchInput } from "./TableSearchInput";
@@ -72,12 +73,19 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
 
   // ── Context folder integration ─────────────────────────────────────────────
   const { items: connections } = useConnections();
-  const contextPath = useMemo(
-    () => connections.find((c) => c.id === connectionId)?.context_path ?? null,
+  const connection = useMemo(
+    () => connections.find((c) => c.id === connectionId) ?? null,
     [connections, connectionId],
   );
+  const contextPath = connection?.context_path ?? null;
+  // Per-connection table-name normalization rule (CDK logical-name matching).
+  const tableMatch = useMemo<TableMatch | null>(
+    () => (connection?.params as { table_match?: TableMatch } | undefined)?.table_match ?? null,
+    [connection],
+  );
   const { data: contextObjectsList } = useContextObjects(connectionId, contextPath);
-  // Dynamo: identity = table name (no schema prefix)
+  // Dynamo: identity = table name (no schema prefix). Docs are keyed by their
+  // logical name; live leaf names are normalized before lookup.
   const documentedTablesMap = useMemo(() => {
     const m = new Map<string, { deleted_in_db: boolean }>();
     for (const item of contextObjectsList) {
@@ -204,7 +212,7 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
       const data = node.data as LeafData;
       const describeSlot: DescribeSlot | undefined = describe.get(data.tableName);
       const docEntry = contextPath
-        ? documentedTablesMap.get(data.tableName)
+        ? documentedTablesMap.get(normalizeTableName(data.tableName, tableMatch))
         : undefined;
       return (
         <>
@@ -217,7 +225,7 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
         </>
       );
     },
-    [describe, retryDescribe, contextPath, documentedTablesMap],
+    [describe, retryDescribe, contextPath, documentedTablesMap, tableMatch],
   );
 
   // onActivate: open or focus placeholder tab.

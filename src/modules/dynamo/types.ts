@@ -1,4 +1,5 @@
 import type { AppError } from "@/platform/errors/AppError";
+import type { TableMatch } from "./tableMatch";
 
 export const DYNAMO_KIND = "dynamodb" as const;
 
@@ -11,7 +12,11 @@ export interface DynamoParams {
   endpoint_url?: string;
   read_only: boolean;
   needs_credentials?: boolean;
+  /** Optional table-name normalization rule (logical-name matching). */
+  table_match?: TableMatch;
 }
+
+export type { TableMatch };
 
 export interface AwsCredentials {
   access_key_id: string;

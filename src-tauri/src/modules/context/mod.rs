@@ -4,6 +4,7 @@ pub mod commands;
 pub mod engine;
 pub mod introspect;
 pub mod introspect_adapters;
+pub mod normalize;
 pub mod parser;
 pub mod registry;
 pub mod sync;
