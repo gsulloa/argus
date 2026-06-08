@@ -8,27 +8,30 @@
 ///
 /// Safety: never panics, never blocks for more than 2 seconds.
 
+use crate::modules::ai::cli_detect::{record_enrichment_outcome, EnrichmentOutcome};
+
 #[cfg(not(target_os = "macos"))]
 pub fn fix_macos_path() {
-    // No-op on non-macOS.
+    // No-op on non-macOS — but record the outcome so detection diagnostics can
+    // explain that no shell-PATH enrichment was attempted.
+    record_enrichment_outcome(EnrichmentOutcome::NotMacos);
 }
 
 #[cfg(target_os = "macos")]
 pub fn fix_macos_path() {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let (program, args) = shell_probe_command(&shell);
 
-    // Spawn the login shell in a background thread. We communicate the result
-    // back via an mpsc channel, then recv_timeout for 2 seconds.
+    // Spawn the interactive login shell in a background thread. We communicate
+    // the result back via an mpsc channel, then recv_timeout below.
     let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<std::process::Output>>();
 
-    let shell_clone = shell.clone();
     std::thread::spawn(move || {
-        let result = std::process::Command::new(&shell_clone)
-            .args([
-                "-l",
-                "-c",
-                "echo -n __ARGUS_PATH_START__:$PATH:__ARGUS_PATH_END__",
-            ])
+        let result = std::process::Command::new(&program)
+            .args(&args)
+            // Redirect stdin from /dev/null so an interactive shell never blocks
+            // waiting on input at startup.
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output();
@@ -36,16 +39,20 @@ pub fn fix_macos_path() {
         let _ = tx.send(result);
     });
 
-    let output = match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+    // Interactive shells (oh-my-zsh, nvm/fnm lazy-load) can take several seconds
+    // to initialise, so allow up to 5s.
+    let output = match rx.recv_timeout(std::time::Duration::from_secs(5)) {
         Ok(Ok(out)) => out,
         Ok(Err(e)) => {
             tracing::warn!("fix_macos_path: failed to run login shell `{shell}`: {e}");
+            record_enrichment_outcome(EnrichmentOutcome::SkippedShellError);
             return;
         }
         Err(_) => {
             tracing::warn!(
-                "fix_macos_path: login shell `{shell} -l` timed out after 2s — skipping PATH merge"
+                "fix_macos_path: login shell `{shell}` timed out after 5s — skipping PATH merge"
             );
+            record_enrichment_outcome(EnrichmentOutcome::SkippedTimeout);
             return;
         }
     };
@@ -67,6 +74,7 @@ pub fn fix_macos_path() {
             tracing::warn!(
                 "fix_macos_path: could not parse PATH markers from login shell output"
             );
+            record_enrichment_outcome(EnrichmentOutcome::SkippedNoEntries);
             return;
         }
     };
@@ -79,6 +87,7 @@ pub fn fix_macos_path() {
         tracing::warn!(
             "fix_macos_path: no existing paths found in login shell PATH — skipping"
         );
+        record_enrichment_outcome(EnrichmentOutcome::SkippedNoEntries);
         return;
     }
 
@@ -94,6 +103,7 @@ pub fn fix_macos_path() {
 
     if new_entries.is_empty() {
         tracing::info!("fix_macos_path: PATH already includes all login shell entries");
+        record_enrichment_outcome(EnrichmentOutcome::Succeeded);
         return;
     }
 
@@ -112,6 +122,35 @@ pub fn fix_macos_path() {
         new_entries.len(),
         new_entries
     );
+    record_enrichment_outcome(EnrichmentOutcome::Succeeded);
+}
+
+/// Build the `(program, args)` for the shell PATH probe.
+///
+/// The shell is run as an **interactive login** shell (`-i -l -c`) so that PATH
+/// entries set in interactive startup files (`~/.zshrc`, `~/.bashrc` — where
+/// nvm/fnm/asdf/Volta and npm-global setups overwhelmingly live) are captured,
+/// not only those in login files (`~/.zprofile`, `~/.zlogin`).
+///
+/// `fish` represents `$PATH` as a space-separated list, so its colon-delimited
+/// form must be produced explicitly with `string join`. Every other (POSIX)
+/// shell expands `$PATH` colon-delimited already.
+fn shell_probe_command(shell: &str) -> (String, Vec<String>) {
+    let base = std::path::Path::new(shell)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+
+    let body = if base == "fish" {
+        "echo -n __ARGUS_PATH_START__:(string join : $PATH):__ARGUS_PATH_END__".to_string()
+    } else {
+        "echo -n __ARGUS_PATH_START__:$PATH:__ARGUS_PATH_END__".to_string()
+    };
+
+    (
+        shell.to_string(),
+        vec!["-i".into(), "-l".into(), "-c".into(), body],
+    )
 }
 
 /// Extract PATH entries from the output of:
@@ -181,6 +220,49 @@ mod tests {
         let stdout = "__ARGUS_PATH_START__:/opt/homebrew/bin:__ARGUS_PATH_END__";
         let result = parse_shell_path(stdout).unwrap();
         assert_eq!(result, vec!["/opt/homebrew/bin"]);
+    }
+
+    // ── shell_probe_command tests ─────────────────────────────────────────────
+
+    #[test]
+    fn probe_uses_interactive_login_shell() {
+        let (program, args) = shell_probe_command("/bin/zsh");
+        assert_eq!(program, "/bin/zsh");
+        // Interactive (-i) and login (-l) flags must both be present so that
+        // both ~/.zshrc and ~/.zprofile are sourced.
+        assert!(args.iter().any(|a| a == "-i"), "missing -i: {args:?}");
+        assert!(args.iter().any(|a| a == "-l"), "missing -l: {args:?}");
+        assert!(args.iter().any(|a| a == "-c"), "missing -c: {args:?}");
+    }
+
+    #[test]
+    fn probe_posix_shell_uses_dollar_path() {
+        let (_, args) = shell_probe_command("/bin/bash");
+        let body = args.last().unwrap();
+        assert!(body.contains("$PATH"), "posix body should expand $PATH: {body}");
+        assert!(!body.contains("string join"));
+        assert!(body.contains("__ARGUS_PATH_START__"));
+        assert!(body.contains("__ARGUS_PATH_END__"));
+    }
+
+    #[test]
+    fn probe_fish_shell_uses_string_join() {
+        // fish's $PATH is space-separated, so the probe must colon-join it
+        // explicitly or parse_shell_path would collapse it to one entry.
+        let (program, args) = shell_probe_command("/opt/homebrew/bin/fish");
+        assert_eq!(program, "/opt/homebrew/bin/fish");
+        let body = args.last().unwrap();
+        assert!(body.contains("string join : $PATH"), "fish body: {body}");
+        assert!(body.contains("__ARGUS_PATH_START__"));
+        assert!(body.contains("__ARGUS_PATH_END__"));
+    }
+
+    #[test]
+    fn fish_style_colon_joined_output_parses() {
+        // What the fish branch emits (already colon-joined) must parse cleanly.
+        let stdout = "__ARGUS_PATH_START__:/opt/homebrew/bin:/usr/bin:__ARGUS_PATH_END__";
+        let result = parse_shell_path(stdout).unwrap();
+        assert_eq!(result, vec!["/opt/homebrew/bin", "/usr/bin"]);
     }
 
     // ── no-op test on non-macOS ───────────────────────────────────────────────

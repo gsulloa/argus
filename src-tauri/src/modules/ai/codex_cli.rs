@@ -9,36 +9,30 @@
 //   and suppress the warning on subsequent turns.
 
 use std::process::Stdio;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::{self, StreamExt as _};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::time::timeout;
 use tokio_stream::wrappers::LinesStream;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::ai::caps::{CODEX_CLI_DEFAULT_MODEL, CODEX_CLI_MODELS};
 use crate::modules::ai::claude_cli::{flatten_history_for_cli, resolve_model};
+use crate::modules::ai::cli_detect;
 use crate::modules::ai::types::{build_cli_system_prompt, build_inspector_system_prompt};
 use crate::modules::ai::provider::AiProvider;
 
-/// Return the `codex` binary path to use.
-/// Respects the `ARGUS_CODEX_BIN` environment variable as an escape hatch
-/// for users whose `codex` is not on the inherited PATH.
-fn codex_bin() -> String {
-    std::env::var("ARGUS_CODEX_BIN")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "codex".to_string())
+/// Resolve the `codex` binary path to use for validation and spawning.
+/// Honours `ARGUS_CODEX_BIN`, then the enriched PATH, then well-known install
+/// locations (see `cli_detect::resolve_cli_bin`).
+fn codex_bin() -> std::path::PathBuf {
+    cli_detect::resolve_cli_bin("codex", "ARGUS_CODEX_BIN")
 }
 use crate::modules::ai::types::{
     Capabilities, ChatDelta, ChatRequest, ChatStream, GenerateDelta, GenerateRequest, GenerateStream,
     InspectRequest, ProviderId, ValidationResult,
 };
-
-const VALIDATION_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct CodexCli {
     /// Model override resolved from settings at construction time.
@@ -68,13 +62,7 @@ impl AiProvider for CodexCli {
     }
 
     async fn validate(&self) -> ValidationResult {
-        match timeout(VALIDATION_TIMEOUT, run_version_probe(&codex_bin())).await {
-            Ok(Ok(_)) => ValidationResult::Ready,
-            Ok(Err(msg)) => ValidationResult::Missing { hint: msg },
-            Err(_) => ValidationResult::Missing {
-                hint: "codex command did not respond within 3 seconds".into(),
-            },
-        }
+        cli_detect::validate_cli("codex", "ARGUS_CODEX_BIN").await
     }
 
     async fn generate_sql(&self, req: GenerateRequest) -> AppResult<GenerateStream> {
@@ -246,30 +234,6 @@ fn build_chat_stream(
     Box::pin(mapped.chain(stream::once(tail)))
 }
 
-async fn run_version_probe(cmd: &str) -> Result<(), String> {
-    let out = Command::new(cmd)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .status()
-        .await
-        .map_err(|e| format!(
-        "could not find `{cmd}` on PATH ({e}). Argus tried to inherit your shell PATH at startup \
-but couldn't find the binary. Either (a) ensure `codex` is in PATH for your login shell \
-(e.g. ~/.zprofile), (b) symlink it to /usr/local/bin, or (c) set the ARGUS_CODEX_BIN env var \
-to the absolute path of the binary."
-    ))?;
-    if out.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "`{cmd} --version` exited with code {:?}",
-            out.code()
-        ))
-    }
-}
-
 fn map_spawn_err(name: &str, e: std::io::Error) -> AppError {
     if e.kind() == std::io::ErrorKind::NotFound {
         AppError::Internal(format!(
@@ -335,17 +299,7 @@ mod tests {
         // This test is kept simple intentionally; if flakiness is observed in CI,
         // wrap with a Mutex or add `serial_test` crate.
         std::env::set_var("ARGUS_CODEX_BIN", "/custom/path/codex");
-        assert_eq!(codex_bin(), "/custom/path/codex");
-        std::env::remove_var("ARGUS_CODEX_BIN");
-        assert_eq!(codex_bin(), "codex");
-    }
-
-    #[test]
-    fn codex_bin_ignores_empty_env_var() {
-        // Remove first to avoid interference from parallel tests setting the var.
-        std::env::remove_var("ARGUS_CODEX_BIN");
-        std::env::set_var("ARGUS_CODEX_BIN", "");
-        assert_eq!(codex_bin(), "codex");
+        assert_eq!(codex_bin(), std::path::PathBuf::from("/custom/path/codex"));
         std::env::remove_var("ARGUS_CODEX_BIN");
     }
 

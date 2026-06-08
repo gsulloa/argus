@@ -20,36 +20,30 @@
 // so the next turn can pass --resume <id>.
 
 use std::process::Stdio;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::{self, StreamExt as _};
 use serde_json::Value as JsonValue;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::time::timeout;
 use tokio_stream::wrappers::LinesStream;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::ai::caps::{CLAUDE_CLI_DEFAULT_MODEL, CLAUDE_CLI_MODELS};
+use crate::modules::ai::cli_detect;
 use crate::modules::ai::provider::AiProvider;
 
-/// Return the `claude` binary path to use.
-/// Respects the `ARGUS_CLAUDE_BIN` environment variable as an escape hatch
-/// for users whose `claude` is not on the inherited PATH.
-fn claude_bin() -> String {
-    std::env::var("ARGUS_CLAUDE_BIN")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "claude".to_string())
+/// Resolve the `claude` binary path to use for validation and spawning.
+/// Honours `ARGUS_CLAUDE_BIN`, then the enriched PATH, then well-known install
+/// locations (see `cli_detect::resolve_cli_bin`).
+fn claude_bin() -> std::path::PathBuf {
+    cli_detect::resolve_cli_bin("claude", "ARGUS_CLAUDE_BIN")
 }
 use crate::modules::ai::types::{
     build_cli_system_prompt, build_inspector_system_prompt, render_attachments_prefix,
     Capabilities, ChatDelta, ChatRequest, ChatRole, ChatStream, GenerateDelta, GenerateRequest,
     GenerateStream, InspectRequest, ProviderId, ValidationResult,
 };
-
-const VALIDATION_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct ClaudeCli {
     /// Model override resolved from settings at construction time.
@@ -79,13 +73,7 @@ impl AiProvider for ClaudeCli {
     }
 
     async fn validate(&self) -> ValidationResult {
-        match timeout(VALIDATION_TIMEOUT, run_version_probe(&claude_bin())).await {
-            Ok(Ok(_)) => ValidationResult::Ready,
-            Ok(Err(msg)) => ValidationResult::Missing { hint: msg },
-            Err(_) => ValidationResult::Missing {
-                hint: "claude command did not respond within 3 seconds".into(),
-            },
-        }
+        cli_detect::validate_cli("claude", "ARGUS_CLAUDE_BIN").await
     }
 
     async fn generate_sql(&self, req: GenerateRequest) -> AppResult<GenerateStream> {
@@ -618,30 +606,6 @@ pub(crate) fn parse_stream_json_line(line: &str) -> Vec<AppResult<ChatDelta>> {
     out
 }
 
-async fn run_version_probe(cmd: &str) -> Result<(), String> {
-    let out = Command::new(cmd)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .status()
-        .await
-        .map_err(|e| format!(
-        "could not find `{cmd}` on PATH ({e}). Argus tried to inherit your shell PATH at startup \
-but couldn't find the binary. Either (a) ensure `claude` is in PATH for your login shell \
-(e.g. ~/.zprofile), (b) symlink it to /usr/local/bin, or (c) set the ARGUS_CLAUDE_BIN env var \
-to the absolute path of the binary."
-    ))?;
-    if out.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "`{cmd} --version` exited with code {:?}",
-            out.code()
-        ))
-    }
-}
-
 fn map_spawn_err(name: &str, e: std::io::Error) -> AppError {
     if e.kind() == std::io::ErrorKind::NotFound {
         AppError::Internal(format!(
@@ -725,20 +689,7 @@ mod tests {
         // This test is kept simple intentionally; if flakiness is observed in CI,
         // wrap with a Mutex or add `serial_test` crate.
         std::env::set_var("ARGUS_CLAUDE_BIN", "/custom/path/claude");
-        assert_eq!(claude_bin(), "/custom/path/claude");
-        std::env::remove_var("ARGUS_CLAUDE_BIN");
-        assert_eq!(claude_bin(), "claude");
-    }
-
-    #[test]
-    fn claude_bin_ignores_empty_env_var() {
-        // This test reads env state potentially set by a parallel test.
-        // We only verify the invariant when the var is explicitly empty.
-        // The remove+set sequence is still racy; in CI, parallel test runs
-        // may interleave. Use `serial_test` crate if this becomes flaky.
-        std::env::remove_var("ARGUS_CLAUDE_BIN");
-        std::env::set_var("ARGUS_CLAUDE_BIN", "");
-        assert_eq!(claude_bin(), "claude");
+        assert_eq!(claude_bin(), std::path::PathBuf::from("/custom/path/claude"));
         std::env::remove_var("ARGUS_CLAUDE_BIN");
     }
 
