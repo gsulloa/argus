@@ -163,12 +163,27 @@ pub struct OrphanedNote {
     pub key: String,
 }
 
+/// A live table skipped during sync because it normalized to the same logical
+/// name as a table already written in this run (first wins, rest skipped).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkippedTable {
+    /// The live (physical) table name that was skipped.
+    pub live_name: String,
+    /// The logical name both tables folded to.
+    pub logical: String,
+    /// The live table name that was kept (written) for this logical name.
+    pub kept: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncReport {
     pub created: Vec<PathBuf>,
     pub updated: Vec<PathBuf>,
     pub marked_deleted: Vec<PathBuf>,
     pub orphaned_notes: Vec<OrphanedNote>,
+    /// Live tables skipped due to a logical-name collision (Dynamo only).
+    #[serde(default)]
+    pub skipped: Vec<SkippedTable>,
 }
 
 // ---- AI payload ----

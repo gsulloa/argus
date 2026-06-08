@@ -16,6 +16,10 @@ import {
   type ProfileInfo,
   type TestConnectionResult,
 } from "./types";
+import {
+  validateTableMatch,
+  type TableMatch,
+} from "./tableMatch";
 import overlayStyles from "@/platform/shell/Dialog.module.css";
 import styles from "./ConnectionForm.module.css";
 
@@ -45,6 +49,11 @@ interface FormState {
   accessKeyId: string;
   secretAccessKey: string;
   sessionToken: string;
+  // Table-name matching (logical-name normalization)
+  matchAdvanced: boolean;
+  matchPrefix: string;
+  matchSuffix: string;
+  matchRegex: string;
 }
 
 function emptyForm(): FormState {
@@ -58,11 +67,16 @@ function emptyForm(): FormState {
     accessKeyId: "",
     secretAccessKey: "",
     sessionToken: "",
+    matchAdvanced: false,
+    matchPrefix: "",
+    matchSuffix: "",
+    matchRegex: "",
   };
 }
 
 function fromConnection(c: Connection, modeKind: FormMode["kind"]): FormState {
   const p = c.params as Partial<DynamoParams> & Record<string, unknown>;
+  const tm = (p.table_match ?? undefined) as TableMatch | undefined;
   return {
     name: modeKind === "duplicate" ? `${c.name} (copy)` : c.name,
     auth: (p.auth as DynamoAuth | undefined) ?? "access_keys",
@@ -74,7 +88,26 @@ function fromConnection(c: Connection, modeKind: FormMode["kind"]): FormState {
     accessKeyId: "",
     secretAccessKey: "",
     sessionToken: "",
+    matchAdvanced: Boolean(tm?.regex),
+    matchPrefix: tm?.prefix ?? "",
+    matchSuffix: tm?.suffix_pattern ?? "",
+    matchRegex: tm?.regex ?? "",
   };
+}
+
+/** Build a `TableMatch` (or `undefined`) from the form's matching fields. */
+function buildTableMatch(form: FormState): TableMatch | undefined {
+  if (form.matchAdvanced) {
+    const regex = form.matchRegex.trim();
+    return regex ? { regex } : undefined;
+  }
+  const prefix = form.matchPrefix.trim();
+  const suffix = form.matchSuffix.trim();
+  if (!prefix && !suffix) return undefined;
+  const tm: TableMatch = {};
+  if (prefix) tm.prefix = prefix;
+  if (suffix) tm.suffix_pattern = suffix;
+  return tm;
 }
 
 type TestState =
@@ -114,6 +147,7 @@ export function DynamoConnectionForm({
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
+  const [showMatching, setShowMatching] = useState(false);
   const sessionTokenRef = useRef<HTMLInputElement>(null);
 
   const isCredentialsOnly = mode.kind === "credentials-only";
@@ -129,11 +163,17 @@ export function DynamoConnectionForm({
 
     if (mode.kind === "create") {
       setForm(emptyForm());
+      setShowMatching(false);
       return;
     }
 
     if (mode.kind === "edit" || mode.kind === "duplicate") {
-      setForm(fromConnection(mode.connection, mode.kind));
+      const next = fromConnection(mode.connection, mode.kind);
+      setForm(next);
+      // Auto-expand the matching section when a rule already exists.
+      setShowMatching(
+        Boolean(next.matchPrefix || next.matchSuffix || next.matchRegex),
+      );
       return;
     }
 
@@ -221,12 +261,17 @@ export function DynamoConnectionForm({
     setTest({ kind: "idle" });
   }
 
+  const tableMatchError = isCredentialsOnly
+    ? null
+    : validateTableMatch(buildTableMatch(form));
+
   function isFormValid(): boolean {
     if (isCredentialsOnly) {
       return Boolean(form.accessKeyId.trim() && form.secretAccessKey.trim());
     }
     if (!form.name.trim()) return false;
     if (!form.region) return false;
+    if (tableMatchError) return false;
     if (form.auth === "access_keys") {
       return Boolean(form.accessKeyId.trim() && form.secretAccessKey.trim());
     }
@@ -256,6 +301,7 @@ export function DynamoConnectionForm({
         endpoint_url: form.endpointUrl.trim() || undefined,
         read_only: form.readOnly,
         profile: form.auth === "profile" ? form.profile : undefined,
+        table_match: buildTableMatch(form),
       };
 
       let secret: string | undefined;
@@ -304,6 +350,7 @@ export function DynamoConnectionForm({
         endpoint_url: form.endpointUrl.trim() || undefined,
         read_only: form.readOnly,
         profile: form.auth === "profile" ? form.profile : undefined,
+        table_match: buildTableMatch(form),
       };
 
       let saved: Connection | null = null;
@@ -543,6 +590,94 @@ export function DynamoConnectionForm({
                 />
                 <span>Read-only — block all writes from this connection</span>
               </label>
+            )}
+
+            {/* Table name matching — optional, collapsed by default */}
+            {!isCredentialsOnly && (
+              <div className={`${styles.field} ${styles.fieldFull}`}>
+                <button
+                  type="button"
+                  className={styles.disclosureToggle}
+                  aria-expanded={showMatching}
+                  onClick={() => setShowMatching((s) => !s)}
+                >
+                  {showMatching ? "▾" : "▸"} Table name matching{" "}
+                  <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional)</span>
+                </button>
+                {showMatching && (
+                  <div className={styles.matchingBody}>
+                    <p className={styles.hint} style={{ marginTop: 0 }}>
+                      Fold CDK-style live table names (e.g.{" "}
+                      <code>MyApp-prod-EventsTable-3M4N…</code>) to a logical name
+                      (<code>EventsTable</code>) so one context folder matches
+                      every environment. Leave blank to match exactly.
+                    </p>
+                    <label className={styles.toggleRow}>
+                      <input
+                        type="checkbox"
+                        checked={form.matchAdvanced}
+                        onChange={(e) =>
+                          setField("matchAdvanced", e.target.checked)
+                        }
+                      />
+                      <span>Advanced (regex)</span>
+                    </label>
+                    {form.matchAdvanced ? (
+                      <div className={styles.field}>
+                        <label className={styles.label}>
+                          Regex{" "}
+                          <span style={{ fontWeight: 400, opacity: 0.7 }}>
+                            (must contain a <code>logical</code> group)
+                          </span>
+                        </label>
+                        <input
+                          className={styles.input}
+                          data-error={tableMatchError ? "true" : undefined}
+                          value={form.matchRegex}
+                          onChange={(e) => setField("matchRegex", e.target.value)}
+                          placeholder="^MyApp-prod-(?<logical>.+?)-[A-Z0-9]+$"
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div className={styles.field}>
+                          <label className={styles.label}>Prefix to strip</label>
+                          <input
+                            className={styles.input}
+                            value={form.matchPrefix}
+                            onChange={(e) => setField("matchPrefix", e.target.value)}
+                            placeholder="MyApp-prod-"
+                            autoComplete="off"
+                            spellCheck={false}
+                          />
+                        </div>
+                        <div className={styles.field}>
+                          <label className={styles.label}>
+                            Suffix pattern{" "}
+                            <span style={{ fontWeight: 400, opacity: 0.7 }}>
+                              (regex)
+                            </span>
+                          </label>
+                          <input
+                            className={styles.input}
+                            data-error={tableMatchError ? "true" : undefined}
+                            value={form.matchSuffix}
+                            onChange={(e) => setField("matchSuffix", e.target.value)}
+                            placeholder="-[A-Z0-9]+$"
+                            autoComplete="off"
+                            spellCheck={false}
+                          />
+                        </div>
+                      </>
+                    )}
+                    {tableMatchError && (
+                      <div className={styles.error}>{tableMatchError}</div>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Context folder row — edit mode only */}

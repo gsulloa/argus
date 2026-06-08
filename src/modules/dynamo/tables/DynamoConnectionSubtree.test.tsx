@@ -68,10 +68,18 @@ vi.mock("@/modules/dynamo/useActiveConnections", () => ({
 
 // Controllable context objects list for the DocBadge test.
 let mockContextObjects: Array<{ name: string; deleted_in_db: boolean }> = [];
+// Controllable params on the mocked connection (e.g. table_match rule).
+let mockConnectionParams: Record<string, unknown> = {};
 
 vi.mock("@/platform/connection-registry/useConnections", () => ({
   useConnections: () => ({
-    items: [{ id: "test-conn", context_path: "/fake/path" }],
+    items: [
+      {
+        id: "test-conn",
+        context_path: "/fake/path",
+        params: mockConnectionParams,
+      },
+    ],
     loading: false,
     error: null,
     refresh: vi.fn(),
@@ -245,6 +253,7 @@ describe("DynamoConnectionSubtree — §12.6: DocBadge for documented tables", (
   beforeEach(() => {
     vi.clearAllMocks();
     mockContextObjects = [];
+    mockConnectionParams = {};
   });
 
   it("renders a DocBadge (title=Documented) next to a documented table", async () => {
@@ -293,5 +302,40 @@ describe("DynamoConnectionSubtree — §12.6: DocBadge for documented tables", (
       const badges = screen.queryAllByTitle("Documented, no DB match");
       expect(badges.length).toBeGreaterThanOrEqual(1);
     });
+  });
+
+  it("renders a DocBadge on a CDK-named leaf via the normalized logical name", async () => {
+    mockTablesSlot = {
+      status: "ready",
+      names: ["MyApp-prod-EventsTable-3M4N5O6P7Q8R"],
+      truncated: false,
+    };
+    // The doc is keyed by the logical name.
+    mockContextObjects = [{ name: "EventsTable", deleted_in_db: false }];
+    // The connection's rule strips the prefix and random suffix.
+    mockConnectionParams = {
+      table_match: { prefix: "MyApp-prod-", suffix_pattern: "-[A-Z0-9]+$" },
+    };
+
+    renderSubtree();
+
+    await waitFor(() => {
+      const badges = screen.queryAllByTitle("Documented");
+      expect(badges.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("does NOT render a DocBadge for a CDK-named leaf when no rule is configured", () => {
+    mockTablesSlot = {
+      status: "ready",
+      names: ["MyApp-prod-EventsTable-3M4N5O6P7Q8R"],
+      truncated: false,
+    };
+    mockContextObjects = [{ name: "EventsTable", deleted_in_db: false }];
+    mockConnectionParams = {}; // no table_match → exact match only
+
+    renderSubtree();
+
+    expect(screen.queryAllByTitle("Documented").length).toBe(0);
   });
 });

@@ -31,9 +31,11 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::modules::context::engine::EngineKind;
 use crate::modules::context::introspect::ObjectShape;
+use crate::modules::context::normalize::normalize;
 use crate::modules::context::types::{
-    ObjectColumn, ObjectHuman, ObjectSystem, OrphanedNote, SyncReport,
+    ObjectColumn, ObjectHuman, ObjectSystem, OrphanedNote, SkippedTable, SyncReport,
 };
+use crate::modules::dynamo::params::TableMatch;
 
 // ---- Target-path computation ----
 
@@ -543,7 +545,37 @@ pub async fn execute_sync(
     folder_root: &Path,
     engine: EngineKind,
     shapes: Vec<ObjectShape>,
+    rule: Option<&TableMatch>,
 ) -> AppResult<SyncReport> {
+    // For Dynamo, fold each live (physical) table name to its logical name via
+    // the connection's normalization rule, so files land under the logical name
+    // and re-deploys with a new suffix update the same file. When two live
+    // tables normalize to the same logical name, the first wins and the rest are
+    // skipped (surfaced in the report). No rule → identity → unchanged behavior.
+    let mut skipped: Vec<SkippedTable> = Vec::new();
+    let shapes: Vec<ObjectShape> = if engine == EngineKind::Dynamo {
+        let mut seen: HashMap<String, String> = HashMap::new(); // logical → first live name
+        let mut folded: Vec<ObjectShape> = Vec::new();
+        for mut shape in shapes {
+            let live_name = shape.name.clone();
+            let logical = normalize(&live_name, rule);
+            if let Some(kept) = seen.get(&logical) {
+                skipped.push(SkippedTable {
+                    live_name,
+                    logical,
+                    kept: kept.clone(),
+                });
+                continue;
+            }
+            seen.insert(logical.clone(), live_name);
+            shape.name = logical;
+            folded.push(shape);
+        }
+        folded
+    } else {
+        shapes
+    };
+
     // Build lookup: target_path → shape.
     let mut shape_map: HashMap<PathBuf, ObjectShape> = HashMap::new();
     for shape in shapes {
@@ -678,6 +710,7 @@ pub async fn execute_sync(
         updated,
         marked_deleted,
         orphaned_notes,
+        skipped,
     })
 }
 
@@ -764,7 +797,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         manifest(dir.path());
         let shape = simple_shape("public", "invoices");
-        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape])
+        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape], None)
             .await
             .unwrap();
 
@@ -819,7 +852,7 @@ mod tests {
                 },
             ],
         };
-        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape])
+        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape], None)
             .await
             .unwrap();
 
@@ -886,7 +919,7 @@ mod tests {
                 },
             ],
         };
-        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape])
+        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape], None)
             .await
             .unwrap();
         assert_eq!(report.updated.len(), 1);
@@ -907,7 +940,7 @@ mod tests {
         write_file(dir.path(), "postgres/public/old_audit.md", original);
 
         // Sync with empty shapes.
-        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![])
+        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![], None)
             .await
             .unwrap();
 
@@ -955,7 +988,7 @@ mod tests {
                 ty: "integer".to_string(),
             }],
         };
-        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape])
+        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape], None)
             .await
             .unwrap();
 
@@ -982,7 +1015,7 @@ mod tests {
         fs::write(parent.join(stale_name), b"stale").unwrap();
 
         let shape = simple_shape("public", "users");
-        let _report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape])
+        let _report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape], None)
             .await
             .unwrap();
 
@@ -1030,7 +1063,7 @@ mod tests {
         );
 
         let shape = simple_shape("public", "crlf_tbl");
-        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape])
+        let report = execute_sync(dir.path(), EngineKind::Postgres, vec![shape], None)
             .await
             .unwrap();
         assert_eq!(report.updated.len(), 1);
@@ -1200,5 +1233,145 @@ mod tests {
         let body_start = find_body_start_in_raw(&new_bytes).unwrap();
         let new_body = &new_bytes[body_start..];
         assert_eq!(new_body, b"# New body\n");
+    }
+
+    // ---- Dynamo normalization in sync (task 4.3) ----
+
+    fn dynamo_shape(name: &str) -> ObjectShape {
+        ObjectShape {
+            kind: "dynamo_table".to_string(),
+            schema: None,
+            name: name.to_string(),
+            primary_key: vec!["pk".to_string()],
+            columns: vec![ObjectShapeColumn {
+                name: "pk".to_string(),
+                ty: "S".to_string(),
+            }],
+        }
+    }
+
+    fn cdk_rule() -> TableMatch {
+        TableMatch {
+            prefix: Some("MyApp-prod-".to_string()),
+            suffix_pattern: Some("-[A-Z0-9]+$".to_string()),
+            regex: None,
+        }
+    }
+
+    /// A rule folds the live suffixed name to the logical filename.
+    #[tokio::test]
+    async fn dynamo_sync_writes_logical_filename_under_rule() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+        let rule = cdk_rule();
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape("MyApp-prod-EventsTable-3M4N5O6P7Q8R")],
+            Some(&rule),
+        )
+        .await
+        .unwrap();
+
+        let expected = dir.path().join("dynamo/tables/EventsTable.md");
+        assert_eq!(report.created, vec![expected.clone()]);
+        assert!(expected.exists());
+        // system.name is the logical name, not the suffixed live name.
+        let content = fs::read_to_string(&expected).unwrap();
+        assert!(content.contains("name: EventsTable"));
+        assert!(!content.contains("3M4N5O6P7Q8R"));
+    }
+
+    /// Re-deploy with a new random suffix updates the same logical file and
+    /// preserves the human block and body.
+    #[tokio::test]
+    async fn dynamo_resync_new_suffix_updates_same_file() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+        let rule = cdk_rule();
+
+        // Existing logical file with a hand-edited human block + body.
+        let original = "---\nsystem:\n  kind: dynamo_table\n  name: EventsTable\nhuman:\n  tags:\n    - audited\n---\n# EventsTable\n\nNotes about events.\n";
+        write_file(dir.path(), "dynamo/tables/EventsTable.md", original);
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape("MyApp-prod-EventsTable-9Z8Y7X6W5V4U")],
+            Some(&rule),
+        )
+        .await
+        .unwrap();
+
+        assert!(report.created.is_empty(), "should update, not create");
+        assert_eq!(report.updated.len(), 1);
+        // No new suffixed file.
+        let suffixed = dir
+            .path()
+            .join("dynamo/tables/MyApp-prod-EventsTable-9Z8Y7X6W5V4U.md");
+        assert!(!suffixed.exists());
+
+        let content =
+            fs::read_to_string(dir.path().join("dynamo/tables/EventsTable.md")).unwrap();
+        assert!(content.contains("audited"), "human block preserved");
+        assert!(content.contains("Notes about events."), "body preserved");
+    }
+
+    /// Two live tables that normalize to the same logical name: first wins, the
+    /// rest are skipped and surfaced in the report.
+    #[tokio::test]
+    async fn dynamo_sync_colliding_tables_skipped() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+        // Over-broad rule: strip prefix + any trailing -XXXX.
+        let rule = TableMatch {
+            prefix: Some("MyApp-prod-".to_string()),
+            suffix_pattern: Some("-[A-Z0-9]+$".to_string()),
+            regex: None,
+        };
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![
+                dynamo_shape("MyApp-prod-Events-AAAA"),
+                dynamo_shape("MyApp-prod-Events-BBBB"),
+            ],
+            Some(&rule),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.created.len(), 1);
+        assert_eq!(report.created[0], dir.path().join("dynamo/tables/Events.md"));
+        assert_eq!(report.skipped.len(), 1, "one collision skipped");
+        let s = &report.skipped[0];
+        assert_eq!(s.logical, "Events");
+        assert_eq!(s.live_name, "MyApp-prod-Events-BBBB");
+        assert_eq!(s.kept, "MyApp-prod-Events-AAAA");
+    }
+
+    /// No rule → live names are used unchanged (retrocompat).
+    #[tokio::test]
+    async fn dynamo_sync_no_rule_uses_live_name() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape("MyApp-prod-EventsTable-3M4N5O6P7Q8R")],
+            None,
+        )
+        .await
+        .unwrap();
+
+        let expected = dir
+            .path()
+            .join("dynamo/tables/MyApp-prod-EventsTable-3M4N5O6P7Q8R.md");
+        assert_eq!(report.created, vec![expected.clone()]);
+        assert!(expected.exists());
+        assert!(report.skipped.is_empty());
     }
 }

@@ -253,6 +253,34 @@
   opacity: 1;
 }
 
+.disclosureToggle {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.disclosureToggle:hover {
+  color: var(--text);
+}
+
+.matchingBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2);
+}
+
 .credentialsOnlyBanner {
   margin-bottom: 12px;
   padding: 8px 10px;

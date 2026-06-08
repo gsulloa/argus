@@ -1,8 +1,5 @@
-# connection-context-folders Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change context-folders-other-engines. Update Purpose after archive.
-## Requirements
 ### Requirement: Schema sync supports MySQL, MSSQL, and Dynamo
 
 The `context_sync_schema` command SHALL produce a valid `SyncReport` for connections of kind `mysql`, `mssql`, and `dynamo` in addition to `postgres`. The command introspects the live source via the engine's existing pool/client registry and writes `ObjectShape`-derived `system:` blocks to the linked context folder using the same atomic, body-preserving rules already specified for Postgres. For Dynamo connections, the target file path SHALL be derived from the **logical** (normalized) table name — the live table name folded through the connection's table-name normalization rule (see `dynamo-table-name-normalization`) — so re-deploys that change the random suffix update the same `dynamo/tables/<logical>.md` file instead of creating a new one. When no rule is configured the logical name equals the live name, preserving prior behavior. When two or more distinct live tables normalize to the same logical name within one sync, the **first SHALL win and the rest SHALL be skipped**, and each skipped collision SHALL be surfaced in the `SyncReport` (e.g. via its warnings/skipped channel) rather than aborting the sync.
@@ -45,18 +42,3 @@ The `context_sync_schema` command SHALL produce a valid `SyncReport` for connect
 - **WHEN** a MySQL/MSSQL/Dynamo connection re-runs `context_sync_schema` on a folder where some object files already exist with hand-edited `human:` blocks and Markdown bodies
 - **THEN** every existing file's `human:` block and body are preserved byte-for-byte
 - **AND** the `system:` block is replaced to reflect the current source schema
-
-### Requirement: Introspector pools bundle
-
-The internal `introspector_for(engine, pools)` dispatcher SHALL accept an `IntrospectorPools` struct containing references to all four engine registries (`PgPoolRegistry`, `MysqlPoolRegistry`, `MssqlPoolRegistry`, `DynamoClientRegistry`). The `context_sync_schema` Tauri command SHALL receive each registry as a `State<>` parameter, assemble the bundle, and pass it to the dispatcher. Engines not yet wired (CloudWatch) continue to dispatch to `NotImplementedIntrospector`.
-
-#### Scenario: CloudWatch still returns NotImplemented
-
-- **WHEN** `context_sync_schema` is invoked on a connection whose `kind` is `cloudwatch`
-- **THEN** the command returns `AppError::Internal` with a message identifying the engine as not yet wired
-
-#### Scenario: Postgres path is unchanged
-
-- **WHEN** `context_sync_schema` is invoked on a Postgres connection
-- **THEN** the command returns the same `SyncReport` shape and behaviour as before this change
-
