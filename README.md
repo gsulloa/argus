@@ -54,7 +54,20 @@ logical entities stored in the table and how to query them. Model docs live at
 `dynamo/tables/<table>/models/<Model>.md`, alongside (not replacing) the
 physical-table doc at `dynamo/tables/<table>.md`.
 
-A model doc is hand-authored. Its `system:` block must contain:
+Model docs can be created and edited two ways: **in-app** — open a Single-Table
+Design table in the data-view, switch the query builder to **By model**, and use
+the **＋ New** / **Edit** affordance next to the entity selector (on a table with
+no models yet, a **Define a model** button bootstraps the first one). The editor
+lets you name the entity, add/remove/reorder access patterns (index dropdown
+sourced from the live table, `pk`/`sk` template inputs), edit a Markdown body,
+and shows a compiled-key preview plus inline validation against the live table
+schema before it writes — or **by hand**, editing the Markdown directly. Saving
+from the editor preserves any hand-written `human:` block and Markdown body
+byte-for-byte; if the connection has no linked context folder, the editor first
+guides you to link or create one. When the table is offline, the editor falls
+back to template-syntax checks only and warns that schema checks were skipped.
+
+A model doc's `system:` block must contain:
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -117,6 +130,8 @@ The panel supports multi-turn conversation; CLI providers (Claude Code, Codex) s
 **Attach query results:** after running a query, the chat composer offers an "Attach result" chip that hands the executed result rows (first 100 rows / 50 KB, larger results marked truncated) to the next message as context — useful for drill-down follow-ups. Multiple results can be attached and removed individually; attachments live only in the current chat session and are never written to disk.
 
 Current scope: the ✨ button is wired into the Postgres editor only. MySQL, MSSQL, DynamoDB, and CloudWatch editors follow in a subsequent change.
+
+**DynamoDB AI model inspector:** CLI providers (Claude Code and Codex) can scan an application source repository and propose `dynamo_model` drafts automatically. This is separate from the context folder — it reads a `project_source_path` key stored in `context.yaml`, pointing to the root of your application repo (e.g. `~/code/my-service`). Set it via `context_set_project_source` (exposed in the UI as a field in the context-folder settings). When triggered, the agent Reads/Globs/Greps the repo for DynamoDB entity definitions — classes with `PK()`/`SK()` key-composition methods, ElectroDB entity schemas, dynamodb-toolbox schemas — and returns a JSON block of model proposals. The proposals are streamed to the frontend on the `ai-inspect-delta:<session_id>` channel as `InspectDelta` events and displayed in the model editor for review before any save; nothing is written automatically. API providers (Anthropic API, OpenAI API) cannot use this feature because they have no filesystem access.
 
 **Troubleshooting `claude`/`codex` not found:** macOS does not pass your shell `PATH` to apps launched from Finder, the Dock, or the auto-updater — only `/usr/bin:/bin:/usr/sbin:/sbin` is available. Argus automatically inherits the login-shell PATH at startup by running `$SHELL -l`, so any `export PATH=…` in your `~/.zprofile` or `~/.bash_profile` will be picked up. If your CLI is only exported from an interactive `.zshrc`, move the `export` to `.zprofile` (or create a symlink in `/usr/local/bin`). As a last resort, launch the app with the binary path set explicitly: `ARGUS_CLAUDE_BIN=/abs/path/to/claude open -a Argus` (likewise `ARGUS_CODEX_BIN` for Codex).
 

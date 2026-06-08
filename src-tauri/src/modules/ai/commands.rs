@@ -16,9 +16,10 @@ use crate::modules::ai::settings::{
 };
 use crate::modules::ai::types::{
     AiConnectionOverrideView, AiSettingsView, AttachedResult, ChatDelta, ChatRequest, ChatStream,
-    ChatTurn, GenerateDelta, KeyPresence, ProviderId, ProviderListEntry, ToolUseRecord,
-    ValidationResult,
+    ChatTurn, GenerateDelta, InspectDelta, InspectRequest, KeyPresence, ProviderId,
+    ProviderListEntry, ToolUseRecord, ValidationResult,
 };
+use crate::modules::dynamo::client::DynamoClientRegistry;
 use crate::modules::ai::validation_cache::ValidationCache;
 use crate::modules::context::registry::ContextRegistry;
 use crate::modules::context::types::AiPayload;
@@ -518,4 +519,124 @@ pub fn ai_chat_history(
     registry: State<'_, ChatSessionRegistry>,
 ) -> AppResult<Vec<ChatTurn>> {
     registry.snapshot_turns(&session_id)
+}
+
+// ---- 7.x: ai_inspect_models ----
+
+/// Drive an inspect stream without session persistence. Collects all text, parses
+/// the trailing JSON block, and emits proposals (or an error) followed by Done.
+async fn drive_inspect_stream(mut stream: ChatStream, channel: &str, app: &AppHandle) {
+    use futures::StreamExt;
+    let mut text = String::new();
+    let mut errored = false;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ChatDelta::Text(t)) => text.push_str(&t),
+            Ok(ChatDelta::Status(s)) => {
+                if !s.starts_with("__") {
+                    let _ = app.emit(channel, InspectDelta::Status(s));
+                }
+            }
+            Ok(ChatDelta::ToolCallStarted { name, .. }) => {
+                let _ = app.emit(channel, InspectDelta::Status(format!("Reading repo ({name})…")));
+            }
+            Ok(ChatDelta::Error(e)) => {
+                errored = true;
+                let _ = app.emit(channel, InspectDelta::Error(e));
+            }
+            Ok(_) => {} // ToolCallFinished, Done — ignore; we parse on stream end
+            Err(e) => {
+                errored = true;
+                let _ = app.emit(channel, InspectDelta::Error(format!("{e:?}")));
+            }
+        }
+    }
+    if errored {
+        let _ = app.emit(channel, InspectDelta::Done);
+        return;
+    }
+    match crate::modules::ai::types::parse_proposals(&text) {
+        Ok(models) => {
+            let _ = app.emit(channel, InspectDelta::Proposals(models));
+        }
+        Err(e) => {
+            let _ = app.emit(channel, InspectDelta::Error(format!("{e:?}")));
+        }
+    }
+    let _ = app.emit(channel, InspectDelta::Done);
+}
+
+#[tauri::command]
+pub async fn ai_inspect_models(
+    session_id: String,
+    connection_id: String,
+    table: String,
+    db: State<'_, DbState>,
+    dynamo_registry: State<'_, DynamoClientRegistry>,
+    app: AppHandle,
+) -> AppResult<()> {
+    // 1. Parse connection_id.
+    let conn_uuid = Uuid::parse_str(&connection_id)
+        .map_err(|e| AppError::Validation(format!("invalid connection id: {e}")))?;
+
+    // 2. Resolve provider.
+    let resolved = crate::modules::ai::settings::AiSettings::resolve(&db, Some(conn_uuid))?;
+    let provider_id = ProviderId::from_kebab(&resolved.provider_id).ok_or_else(|| {
+        AppError::Internal(format!(
+            "unknown provider in settings: {}",
+            resolved.provider_id
+        ))
+    })?;
+    let provider = factory::build(&db, provider_id)?;
+
+    // 3. Gate: provider must be able to read files.
+    if !provider.capabilities().can_read_files {
+        return Err(AppError::Validation(format!(
+            "the active provider ({}) cannot read files; switch to a CLI provider (Claude Code or Codex) to generate models with AI",
+            provider_id.as_kebab()
+        )));
+    }
+
+    // 4. Resolve project source path.
+    let (_kind, context_path) = crate::modules::context::commands::get_conn_kind_and_path(&db, conn_uuid)?;
+    let root = context_path.ok_or_else(|| {
+        AppError::Validation("connection has no linked context folder".into())
+    })?;
+    let project_source_path_str =
+        crate::modules::context::commands::read_project_source_path(std::path::Path::new(&root))?
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "project source path is not configured for this context folder".into(),
+                )
+            })?;
+
+    // 5. Fetch the table description.
+    let client = dynamo_registry.acquire(&conn_uuid).await?;
+    let desc = crate::modules::dynamo::tables::describe::describe_table(&client, &table).await?;
+    let table_description_json = serde_json::to_string(&desc)
+        .map_err(|e| AppError::Internal(format!("serialise table description: {e}")))?;
+
+    // 6. Build InspectRequest.
+    let req = InspectRequest {
+        project_source_path: std::path::PathBuf::from(project_source_path_str),
+        table_description_json,
+        model: None,
+    };
+
+    // 7. Spawn the streaming task.
+    let channel = format!("ai-inspect-delta:{session_id}");
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        match provider.inspect(req).await {
+            Ok(stream) => {
+                drive_inspect_stream(stream, &channel, &app_clone).await;
+            }
+            Err(e) => {
+                let _ = app_clone.emit(&channel, InspectDelta::Error(format!("{e:?}")));
+                let _ = app_clone.emit(&channel, InspectDelta::Done);
+            }
+        }
+    });
+
+    Ok(())
 }

@@ -44,9 +44,9 @@ fn claude_bin() -> String {
         .unwrap_or_else(|| "claude".to_string())
 }
 use crate::modules::ai::types::{
-    build_cli_system_prompt, render_attachments_prefix, Capabilities, ChatDelta, ChatRequest,
-    ChatRole, ChatStream, GenerateDelta, GenerateRequest, GenerateStream, ProviderId,
-    ValidationResult,
+    build_cli_system_prompt, build_inspector_system_prompt, render_attachments_prefix,
+    Capabilities, ChatDelta, ChatRequest, ChatRole, ChatStream, GenerateDelta, GenerateRequest,
+    GenerateStream, InspectRequest, ProviderId, ValidationResult,
 };
 
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(3);
@@ -130,6 +130,26 @@ impl AiProvider for ClaudeCli {
             .ok_or_else(|| AppError::Internal("claude: no stderr".into()))?;
 
         Ok(build_generate_stream(child, stdout, stderr))
+    }
+
+    async fn inspect(&self, req: InspectRequest) -> AppResult<ChatStream> {
+        let model = resolve_model(
+            &req.model,
+            &self.configured_model,
+            CLAUDE_CLI_MODELS,
+            CLAUDE_CLI_DEFAULT_MODEL,
+        )?;
+        let system_prompt = build_inspector_system_prompt(&req.table_description_json);
+        let prompt = "Inspect this repository's source code and propose DynamoDB models for the table described in your instructions. Reply with only the JSON code block.";
+        let (child, stdout, stderr) = spawn_claude_stream_json(
+            prompt,
+            model.as_deref(),
+            None,
+            &system_prompt,
+            "Read Glob Grep",
+            &req.project_source_path,
+        )?;
+        Ok(build_chat_stream(child, stdout, stderr))
     }
 
     async fn chat(&self, req: ChatRequest) -> AppResult<ChatStream> {

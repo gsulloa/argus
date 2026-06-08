@@ -1,0 +1,481 @@
+/* ModelEditor — modal for creating / editing a DynamoDB entity model.
+   Follows DESIGN.md: Geist font, single accent (#A855F7), thin borders,
+   compact spacing, no gradients, no bubbly radii. */
+
+/* ── Overlay ─────────────────────────────────────────────────────── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn var(--duration-medium, 180ms) ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Modal container ─────────────────────────────────────────────── */
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 301;
+  width: 620px;
+  max-width: 95vw;
+  max-height: 88vh;
+  background: var(--elevated, #15151b);
+  border: 1px solid var(--border-strong, #2e2f3a);
+  border-radius: var(--radius-xl, 12px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Header ──────────────────────────────────────────────────────── */
+
+.header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #23232c);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: var(--text-lg, 14px);
+  font-weight: 600;
+  color: var(--text, #f2f3f7);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Body / scroll area ──────────────────────────────────────────── */
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-md, 16px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md, 16px);
+}
+
+/* ── Form field ──────────────────────────────────────────────────── */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-subtle, #6b6e7b);
+  font-family: inherit;
+}
+
+.input {
+  padding: 6px 10px;
+  font-size: var(--text-sm, 12px);
+  font-family: inherit;
+  background: var(--canvas, #0b0b0f);
+  border: 1px solid var(--border-strong, #2e2f3a);
+  border-radius: var(--radius-md, 5px);
+  color: var(--text, #f2f3f7);
+  outline: none;
+  transition: border-color var(--duration-instant, 80ms),
+              box-shadow var(--duration-instant, 80ms);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.input:focus-visible {
+  border-color: var(--accent, #a855f7);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(168, 85, 247, 0.18));
+}
+
+.inputError {
+  border-color: var(--danger, #f87171);
+}
+
+.inputError:focus-visible {
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.18);
+}
+
+.fieldError {
+  font-size: 11px;
+  color: var(--danger, #f87171);
+}
+
+/* ── Access-patterns section ─────────────────────────────────────── */
+
+.apSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs, 8px);
+}
+
+.apSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.apSectionLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-subtle, #6b6e7b);
+}
+
+/* ── Single access-pattern card ──────────────────────────────────── */
+
+.apCard {
+  border: 1px solid var(--border, #23232c);
+  border-radius: var(--radius-md, 5px);
+  overflow: hidden;
+}
+
+.apCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface, #1c1c24);
+  border-bottom: 1px solid var(--border, #23232c);
+}
+
+.apCardBody {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  background: var(--canvas, #0b0b0f);
+}
+
+.apRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.apRowLabel {
+  font-size: 11px;
+  color: var(--text-subtle, #6b6e7b);
+  flex-shrink: 0;
+  min-width: 30px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.apInput {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: var(--text-sm, 12px);
+  font-family: var(--font-mono, monospace);
+  background: var(--surface, #1c1c24);
+  border: 1px solid var(--border-strong, #2e2f3a);
+  border-radius: var(--radius-md, 5px);
+  color: var(--text, #f2f3f7);
+  outline: none;
+  transition: border-color var(--duration-instant, 80ms),
+              box-shadow var(--duration-instant, 80ms);
+}
+
+.apInput:focus-visible {
+  border-color: var(--accent, #a855f7);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(168, 85, 247, 0.18));
+}
+
+.apInputError {
+  border-color: var(--danger, #f87171);
+}
+
+.apInputError:focus-visible {
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.18);
+}
+
+.apSelect {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: var(--text-sm, 12px);
+  font-family: inherit;
+  background: var(--surface, #1c1c24);
+  border: 1px solid var(--border-strong, #2e2f3a);
+  border-radius: var(--radius-md, 5px);
+  color: var(--text, #f2f3f7);
+  outline: none;
+  cursor: pointer;
+  transition: border-color var(--duration-instant, 80ms);
+}
+
+.apSelect:focus-visible {
+  border-color: var(--accent, #a855f7);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(168, 85, 247, 0.18));
+}
+
+.apSelectError {
+  border-color: var(--danger, #f87171);
+}
+
+.apNameInput {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: var(--text-sm, 12px);
+  font-family: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md, 5px);
+  color: var(--text-muted, #a0a2ad);
+  outline: none;
+  transition: border-color var(--duration-instant, 80ms),
+              background var(--duration-instant, 80ms);
+  min-width: 0;
+}
+
+.apNameInput:focus-visible,
+.apNameInput:hover {
+  background: var(--surface, #1c1c24);
+  border-color: var(--border-strong, #2e2f3a);
+  color: var(--text, #f2f3f7);
+}
+
+.apNameInput:focus-visible {
+  border-color: var(--accent, #a855f7);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(168, 85, 247, 0.18));
+}
+
+/* ── Reorder / remove buttons ────────────────────────────────────── */
+
+.iconBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  background: transparent;
+  color: var(--text-subtle, #6b6e7b);
+  border: 1px solid var(--border-strong, #2e2f3a);
+  border-radius: var(--radius-sm, 3px);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--duration-instant, 80ms),
+              color var(--duration-instant, 80ms);
+}
+
+.iconBtn:hover {
+  background: var(--surface-2, #23232c);
+  color: var(--text, #f2f3f7);
+}
+
+.iconBtnDanger:hover {
+  color: var(--danger, #f87171);
+  border-color: var(--danger, #f87171);
+}
+
+.iconBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ── AP preview line ─────────────────────────────────────────────── */
+
+.apPreview {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-subtle, #6b6e7b);
+  padding: 3px 8px 0;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.apPreviewError {
+  color: var(--danger, #f87171);
+}
+
+/* ── Row-level error ─────────────────────────────────────────────── */
+
+.apRowError {
+  font-size: 11px;
+  color: var(--danger, #f87171);
+  padding: 0 10px 4px;
+}
+
+/* ── Add-pattern button ──────────────────────────────────────────── */
+
+.addApBtn {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  background: transparent;
+  border: 1px dashed var(--border-strong, #2e2f3a);
+  border-radius: var(--radius-md, 5px);
+  color: var(--text-muted, #a0a2ad);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--duration-instant, 80ms),
+              border-color var(--duration-instant, 80ms),
+              color var(--duration-instant, 80ms);
+  align-self: flex-start;
+}
+
+.addApBtn:hover {
+  background: var(--surface-2, #23232c);
+  border-color: var(--accent, #a855f7);
+  color: var(--accent, #a855f7);
+}
+
+/* ── Body textarea ───────────────────────────────────────────────── */
+
+.textarea {
+  padding: 6px 10px;
+  font-size: var(--text-sm, 12px);
+  font-family: var(--font-mono, monospace);
+  background: var(--canvas, #0b0b0f);
+  border: 1px solid var(--border-strong, #2e2f3a);
+  border-radius: var(--radius-md, 5px);
+  color: var(--text, #f2f3f7);
+  outline: none;
+  resize: vertical;
+  min-height: 80px;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color var(--duration-instant, 80ms),
+              box-shadow var(--duration-instant, 80ms);
+  line-height: 1.5;
+}
+
+.textarea:focus-visible {
+  border-color: var(--accent, #a855f7);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(168, 85, 247, 0.18));
+}
+
+/* ── Schema-skipped warning banner ──────────────────────────────── */
+
+.skippedWarning {
+  padding: 7px 10px;
+  font-size: 11px;
+  color: var(--warning, #fbbf24);
+  background: rgba(251, 191, 36, 0.07);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: var(--radius-md, 5px);
+}
+
+/* ── Footer ──────────────────────────────────────────────────────── */
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border, #23232c);
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.footerRight {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────── */
+
+.btn {
+  padding: 6px 12px;
+  font-size: var(--text-sm, 12px);
+  font-family: inherit;
+  border-radius: var(--radius-md, 5px);
+  cursor: pointer;
+  transition: background var(--duration-instant, 80ms),
+              color var(--duration-instant, 80ms),
+              border-color var(--duration-instant, 80ms);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.btnSecondary {
+  background: transparent;
+  border: 1px solid var(--border-strong, #2e2f3a);
+  color: var(--text-muted, #a0a2ad);
+}
+
+.btnSecondary:hover:not(:disabled) {
+  background: var(--surface-2, #23232c);
+  color: var(--text, #f2f3f7);
+}
+
+.btnPrimary {
+  background: var(--accent, #a855f7);
+  border: none;
+  color: #fff;
+  font-weight: 500;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--accent-hover, #c084fc);
+}
+
+.btnPrimary:disabled {
+  background: rgba(168, 85, 247, 0.4);
+  cursor: default;
+}
+
+.btnDanger {
+  background: transparent;
+  border: 1px solid var(--border-strong, #2e2f3a);
+  color: var(--danger, #f87171);
+}
+
+.btnDanger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.07);
+  border-color: var(--danger, #f87171);
+}
+
+/* ── Delete confirm inline step ──────────────────────────────────── */
+
+.deleteConfirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted, #a0a2ad);
+}
+
+.deleteConfirmLabel {
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay,
+  .input,
+  .apInput,
+  .apSelect,
+  .apNameInput,
+  .iconBtn,
+  .addApBtn,
+  .textarea,
+  .btn {
+    transition: none;
+    animation: none;
+  }
+}

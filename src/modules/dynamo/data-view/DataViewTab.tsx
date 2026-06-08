@@ -68,6 +68,14 @@ import { OptimisticLockingDialog } from "./edit/OptimisticLockingDialog";
 import { buildLockingCondition } from "./edit/lockingCondition";
 import { useUnsavedDraft } from "./edit/useUnsavedDraft";
 import { DiscardChangesDialog } from "./edit/DiscardChangesDialog";
+import { ModelEditor } from "./ModelEditor";
+import { LinkFolderPrompt } from "./LinkFolderPrompt";
+import { InspectorReview } from "./InspectorReview";
+import { saveModel, deleteModel, getProjectSource, setProjectSource } from "./api";
+import { useModelInspector } from "./useModelInspector";
+import { useResolvedProviderId, useAiSettings } from "@/modules/ai/store";
+import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
+import type { DynamoModel, ModelDraft } from "./types";
 import styles from "./DataViewTab.module.css";
 
 // ---------------------------------------------------------------------------
@@ -350,7 +358,137 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
   // ── Table models (STD detection — D2 / D8) ────────────────────────────────
   // Loads dynamo_model docs for this table from the context folder.
   // `isStd` is true when at least one model doc exists.
-  const { models, isStd } = useTableModels(connectionId, tableName, contextPath);
+  const { models, isStd, applyOptimisticSave, applyOptimisticDelete } = useTableModels(
+    connectionId,
+    tableName,
+    contextPath,
+  );
+
+  // ── Model editor state (task 4.6) ──────────────────────────────────────────
+  const [editorState, setEditorState] = useState<{ open: boolean; initial: DynamoModel | null }>({
+    open: false,
+    initial: null,
+  });
+  const [linkPromptOpen, setLinkPromptOpen] = useState(false);
+  const [savingModel, setSavingModel] = useState(false);
+
+  const handleNewModel = useCallback(() => {
+    if (!contextPath) {
+      setLinkPromptOpen(true);
+    } else {
+      setEditorState({ open: true, initial: null });
+    }
+  }, [contextPath]);
+
+  const handleEditModel = useCallback(
+    (entityName: string) => {
+      if (!contextPath) {
+        setLinkPromptOpen(true);
+        return;
+      }
+      const model = models.find((m) => m.name === entityName) ?? null;
+      setEditorState({ open: true, initial: model });
+    },
+    [contextPath, models],
+  );
+
+  const handleSaveModel = useCallback(
+    async (draft: ModelDraft, opts: { isEdit: boolean; previousName?: string }) => {
+      setSavingModel(true);
+      try {
+        await saveModel(connectionId, tableName, draft);
+        applyOptimisticSave({
+          name: draft.name,
+          physical_table: tableName,
+          access_patterns: draft.access_patterns,
+          body: draft.body,
+        });
+        // Rename: if the name changed, delete the old model doc too.
+        if (opts.isEdit && opts.previousName && opts.previousName !== draft.name) {
+          await deleteModel(connectionId, tableName, opts.previousName);
+          applyOptimisticDelete(opts.previousName);
+        }
+        setEditorState({ open: false, initial: null });
+        toast.show("Model saved", "success");
+      } catch (e) {
+        const msg = (e as { message?: string }).message ?? "Save failed";
+        toast.show(msg, "error");
+      } finally {
+        setSavingModel(false);
+      }
+    },
+    [connectionId, tableName, applyOptimisticSave, applyOptimisticDelete, toast],
+  );
+
+  // ── AI Inspector — capability gating ──────────────────────────────────────
+  const activeProvider = useResolvedProviderId(connectionId);
+  const { providers } = useAiSettings();
+  const canInspect = !!providers.find((p) => p.id === activeProvider)?.capabilities.can_read_files;
+  const inspectDisabledReason = canInspect
+    ? undefined
+    : "Switch to a CLI provider (Claude Code or Codex) to generate models with AI — API providers can't read your repo.";
+
+  // ── AI Inspector — hook + open state ──────────────────────────────────────
+  const inspector = useModelInspector(connectionId, tableName);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+
+  const handleInspectModels = useCallback(async () => {
+    if (!contextPath) {
+      setLinkPromptOpen(true);
+      return;
+    }
+    const src = await getProjectSource(connectionId);
+    if (!src) {
+      const picked = await dialogOpen({
+        directory: true,
+        multiple: false,
+        title: "Select your application source repo",
+      });
+      if (typeof picked !== "string") return;
+      await setProjectSource(connectionId, picked);
+    }
+    inspector.reset();
+    setInspectorOpen(true);
+    await inspector.start();
+  }, [contextPath, connectionId, inspector]);
+
+  const handleAcceptProposal = useCallback(
+    async (draft: ModelDraft) => {
+      await handleSaveModel(draft, { isEdit: false });
+      inspector.removeProposal(draft.name);
+    },
+    [handleSaveModel, inspector],
+  );
+
+  const handleEditProposal = useCallback(
+    (model: import("./types").InspectedModel) => {
+      setEditorState({
+        open: true,
+        initial: {
+          name: model.name,
+          physical_table: tableName,
+          access_patterns: model.access_patterns,
+          body: model.body ?? undefined,
+        },
+      });
+    },
+    [tableName],
+  );
+
+  const handleDeleteModel = useCallback(
+    async (name: string) => {
+      try {
+        await deleteModel(connectionId, tableName, name);
+        applyOptimisticDelete(name);
+        setEditorState({ open: false, initial: null });
+        toast.show("Model deleted", "success");
+      } catch (e) {
+        const msg = (e as { message?: string }).message ?? "Delete failed";
+        toast.show(msg, "error");
+      }
+    },
+    [connectionId, tableName, applyOptimisticDelete, toast],
+  );
 
   // ── Builder state ──────────────────────────────────────────────────────────
   const [builder, setBuilder] = useState<BuilderState>(() => ({
@@ -913,6 +1051,12 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
                 disabled={needsCredentials}
                 models={models}
                 isStd={isStd}
+                canEditModels={true}
+                onNewModel={handleNewModel}
+                onEditModel={handleEditModel}
+                onInspectModels={() => { void handleInspectModels(); }}
+                canInspect={canInspect}
+                inspectDisabledReason={inspectDisabledReason}
               />
             )}
 
@@ -1064,6 +1208,47 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
         versionAttr={versionAttr}
         onChange={setVersionAttr}
         onClose={() => setLockingDialogOpen(false)}
+      />
+
+      {/* Model editor — task 4.6 */}
+      <ModelEditor
+        open={editorState.open}
+        describe={describe}
+        initial={editorState.initial}
+        existingNames={models
+          .map((m) => m.name)
+          .filter((n) => n !== editorState.initial?.name)}
+        onClose={() => setEditorState({ open: false, initial: null })}
+        onSave={(draft, opts) => void handleSaveModel(draft, opts)}
+        onDelete={(name) => void handleDeleteModel(name)}
+        saving={savingModel}
+      />
+
+      {/* Link folder prompt — task 4.5 */}
+      <LinkFolderPrompt
+        open={linkPromptOpen}
+        connectionId={connectionId}
+        onClose={() => setLinkPromptOpen(false)}
+        onLinked={() => {
+          setLinkPromptOpen(false);
+          setEditorState({ open: true, initial: null });
+        }}
+      />
+
+      {/* AI Inspector Review */}
+      <InspectorReview
+        open={inspectorOpen}
+        describe={describe}
+        status={inspector.status}
+        statusMessage={inspector.statusMessage}
+        proposals={inspector.proposals}
+        error={inspector.error}
+        existingNames={models.map((m) => m.name)}
+        saving={savingModel}
+        onClose={() => setInspectorOpen(false)}
+        onEdit={handleEditProposal}
+        onAccept={(draft) => void handleAcceptProposal(draft)}
+        onDiscard={inspector.removeProposal}
       />
 
       {/* Unsaved-draft guard dialog — task 11.2 */}

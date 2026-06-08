@@ -21,7 +21,7 @@ use tokio_stream::wrappers::LinesStream;
 use crate::error::{AppError, AppResult};
 use crate::modules::ai::caps::{CODEX_CLI_DEFAULT_MODEL, CODEX_CLI_MODELS};
 use crate::modules::ai::claude_cli::{flatten_history_for_cli, resolve_model};
-use crate::modules::ai::types::build_cli_system_prompt;
+use crate::modules::ai::types::{build_cli_system_prompt, build_inspector_system_prompt};
 use crate::modules::ai::provider::AiProvider;
 
 /// Return the `codex` binary path to use.
@@ -35,7 +35,7 @@ fn codex_bin() -> String {
 }
 use crate::modules::ai::types::{
     Capabilities, ChatDelta, ChatRequest, ChatStream, GenerateDelta, GenerateRequest, GenerateStream,
-    ProviderId, ValidationResult,
+    InspectRequest, ProviderId, ValidationResult,
 };
 
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(3);
@@ -113,6 +113,41 @@ impl AiProvider for CodexCli {
             .ok_or_else(|| AppError::Internal("codex: no stderr".into()))?;
 
         Ok(build_generate_stream(child, stdout, stderr))
+    }
+
+    async fn inspect(&self, req: InspectRequest) -> AppResult<ChatStream> {
+        let model = resolve_model(
+            &req.model,
+            &self.configured_model,
+            CODEX_CLI_MODELS,
+            CODEX_CLI_DEFAULT_MODEL,
+        )?;
+        let system = build_inspector_system_prompt(&req.table_description_json);
+        let user_prompt = "Inspect this repository's source code and propose DynamoDB models for the table described in your instructions. Reply with only the JSON code block.";
+        let prompt = format!("{system}\n\n{user_prompt}");
+
+        let mut cmd = Command::new(codex_bin());
+        cmd.arg("exec");
+        if let Some(m) = model.as_deref() {
+            cmd.args(["-m", m]);
+        }
+        cmd.arg(&prompt);
+        cmd.current_dir(&req.project_source_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        let mut child = cmd.spawn().map_err(|e| map_spawn_err("codex", e))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AppError::Internal("codex: no stdout".into()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| AppError::Internal("codex: no stderr".into()))?;
+
+        Ok(build_chat_stream(child, stdout, stderr))
     }
 
     async fn chat(&self, req: ChatRequest) -> AppResult<ChatStream> {

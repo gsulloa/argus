@@ -572,6 +572,169 @@ describe("modelCompiler — template parser edge cases", () => {
 });
 
 // ---------------------------------------------------------------------------
+// §2.4 — Explicit skOp tests
+// ---------------------------------------------------------------------------
+
+// Table with primary pk(S)/sk(S) and a GSI with string PK + numeric SK
+const DESC_WITH_NUMERIC_GSI_SK = makeDescribe({
+  pk: { name: "pk", type: "S" },
+  sk: { name: "sk", type: "S" },
+  gsi: [
+    {
+      index_name: "GSI1",
+      pk: { name: "gsi1pk", type: "S" },
+      sk: { name: "gsi1sk", type: "N" },
+    },
+  ],
+});
+
+describe("modelCompiler — explicit skOp", () => {
+  it("explicit >= on sk:\"ORDER#${orderId}\" with orderId filled → sortKey op >= with S value", () => {
+    const ap: AccessPattern = {
+      index: "table",
+      pk: "USER#${userId}",
+      sk: "ORDER#${orderId}",
+    };
+    const result = compileModel(
+      ap,
+      { userId: "u1", orderId: "456" },
+      DESC_BASE,
+      { skOp: ">=" },
+    );
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.query.sortKey).toEqual({
+      name: "sk",
+      op: ">=",
+      value: { type: "S", value: "ORDER#456" },
+    });
+  });
+
+  it("explicit between with day params → sortKey op between with { min, max }", () => {
+    const ap: AccessPattern = {
+      index: "table",
+      pk: "USER#${userId}",
+      sk: "DATE#${day}",
+    };
+    const result = compileModel(
+      ap,
+      { userId: "u1", day: "2025-01-01" },
+      DESC_BASE,
+      { skOp: "between", skMaxParams: { day: "2025-12-31" } },
+    );
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.query.sortKey?.op).toBe("between");
+    const val = result.query.sortKey?.value;
+    expect(val).toEqual({
+      min: { type: "S", value: "DATE#2025-01-01" },
+      max: { type: "S", value: "DATE#2025-12-31" },
+    });
+  });
+
+  it("explicit begins_with on N-typed gsi1sk → error (field sk)", () => {
+    const ap: AccessPattern = {
+      index: "GSI1",
+      pk: "${gsi1pk}",
+      sk: "${gsi1sk}",
+    };
+    const result = compileModel(
+      ap,
+      { gsi1pk: "p1", gsi1sk: "42" },
+      DESC_WITH_NUMERIC_GSI_SK,
+      { skOp: "begins_with" },
+    );
+    expect(result.kind).toBe("error");
+    if (result.kind !== "error") return;
+    expect(result.field).toBe("sk");
+    expect(result.reason).toMatch(/begins_with|string|S/i);
+  });
+
+  it("explicit = with empty sk param → error naming the param", () => {
+    const ap: AccessPattern = {
+      index: "table",
+      pk: "USER#${userId}",
+      sk: "ORDER#${orderId}",
+    };
+    const result = compileModel(
+      ap,
+      { userId: "u1", orderId: "" },
+      DESC_BASE,
+      { skOp: "=" },
+    );
+    expect(result.kind).toBe("error");
+    if (result.kind !== "error") return;
+    expect(result.field).toBe("sk");
+    expect(result.reason).toMatch(/orderId/);
+  });
+
+  it("skOp undefined → equality result is exactly as fill-rule path (no regression)", () => {
+    const ap: AccessPattern = {
+      index: "table",
+      pk: "USER#${userId}",
+      sk: "ORDER#${orderId}",
+    };
+    // With skOp undefined: fully filled → equality (same as existing tests)
+    const resultAuto = compileModel(ap, { userId: "123", orderId: "456" }, DESC_BASE, undefined);
+    const resultNoOpts = compileModel(ap, { userId: "123", orderId: "456" }, DESC_BASE);
+    expect(resultAuto.kind).toBe("ok");
+    expect(resultNoOpts.kind).toBe("ok");
+    if (resultAuto.kind !== "ok" || resultNoOpts.kind !== "ok") return;
+    expect(resultAuto.query.sortKey).toEqual(resultNoOpts.query.sortKey);
+    expect(resultAuto.query.sortKey?.op).toBe("=");
+    expect(resultAuto.query.sortKey?.value).toEqual({ type: "S", value: "ORDER#456" });
+  });
+
+  it("skOp undefined → begins_with result matches fill-rule path (no regression)", () => {
+    const ap: AccessPattern = {
+      index: "table",
+      pk: "USER#${userId}",
+      sk: "ORDER#${orderId}",
+    };
+    const resultAuto = compileModel(ap, { userId: "123", orderId: "" }, DESC_BASE, undefined);
+    const resultNoOpts = compileModel(ap, { userId: "123", orderId: "" }, DESC_BASE);
+    expect(resultAuto.kind).toBe("ok");
+    expect(resultNoOpts.kind).toBe("ok");
+    if (resultAuto.kind !== "ok" || resultNoOpts.kind !== "ok") return;
+    expect(resultAuto.query.sortKey?.op).toBe("begins_with");
+    expect(resultAuto.query.sortKey).toEqual(resultNoOpts.query.sortKey);
+  });
+
+  it("skOp undefined → partition-only result matches fill-rule path (no regression)", () => {
+    const ap: AccessPattern = {
+      index: "table",
+      pk: "USER#${userId}",
+      sk: "${cursor}",
+    };
+    const resultAuto = compileModel(ap, { userId: "123", cursor: "" }, DESC_BASE, undefined);
+    const resultNoOpts = compileModel(ap, { userId: "123", cursor: "" }, DESC_BASE);
+    expect(resultAuto.kind).toBe("ok");
+    expect(resultNoOpts.kind).toBe("ok");
+    if (resultAuto.kind !== "ok" || resultNoOpts.kind !== "ok") return;
+    expect(resultAuto.query.sortKey).toBeUndefined();
+    expect(resultNoOpts.query.sortKey).toBeUndefined();
+  });
+
+  it("explicit between with empty max param → error naming the max param", () => {
+    const ap: AccessPattern = {
+      index: "table",
+      pk: "USER#${userId}",
+      sk: "DATE#${day}",
+    };
+    const result = compileModel(
+      ap,
+      { userId: "u1", day: "2025-01-01" },
+      DESC_BASE,
+      { skOp: "between", skMaxParams: { day: "" } },
+    );
+    expect(result.kind).toBe("error");
+    if (result.kind !== "error") return;
+    expect(result.field).toBe("sk");
+    expect(result.reason).toMatch(/day/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Compose: modelCompiler → builderCompiler end-to-end for various scenarios
 // ---------------------------------------------------------------------------
 

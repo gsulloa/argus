@@ -246,7 +246,51 @@ export interface DynamoModel {
   /** Physical DynamoDB table this model belongs to (derived from file path). */
   physical_table?: string;
   access_patterns: AccessPattern[];
+  /**
+   * Raw Markdown body of the model doc. Carried by `context_list_models` so the
+   * editor can seed its body field when editing. May be absent for older
+   * payloads.
+   */
+  body?: string;
 }
+
+/**
+ * The single write-contract for a model doc. Produced by the manual editor
+ * (and, later, the AI inspector) and consumed by `saveModel`. `physical_table`
+ * is intentionally absent — the target table is passed separately so a draft
+ * can never disagree with where it lands (decision D1/D7-bis).
+ */
+export interface ModelDraft {
+  name: string;
+  access_patterns: AccessPattern[];
+  body?: string;
+}
+
+// ---------------------------------------------------------------------------
+// §5.4  AI Inspector wire types — InspectDelta streaming event payload
+//        Mirrors Rust #[serde(tag="kind", content="data", rename_all="PascalCase")]
+// ---------------------------------------------------------------------------
+
+export interface Provenance {
+  file: string;
+  lines: string | null;
+  reason: string;
+}
+
+export interface InspectedModel {
+  name: string;
+  access_patterns: AccessPattern[];
+  body: string | null;
+  confidence: number;     // 0..1
+  provenance: Provenance[];
+  warnings: string[];
+}
+
+export type InspectDelta =
+  | { kind: "Status"; data: string }
+  | { kind: "Proposals"; data: InspectedModel[] }
+  | { kind: "Done" }
+  | { kind: "Error"; data: string };
 
 export interface BuilderState {
   mode: "scan" | "query";
@@ -277,6 +321,13 @@ export interface BuilderState {
     entity: string;
     accessPattern: string;
     params: Record<string, string>;
+    /**
+     * Explicit sort-key operator in model mode. Undefined → "auto": the
+     * template fill-rule decides (equality / begins_with / partition-only).
+     */
+    skOp?: "=" | "<" | "<=" | ">" | ">=" | "between" | "begins_with";
+    /** Upper-bound params for `between` (lower bound uses `params`). */
+    skMaxParams?: Record<string, string>;
   };
 }
 
