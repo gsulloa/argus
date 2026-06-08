@@ -2,6 +2,7 @@ pub mod anthropic_api;
 pub mod caps;
 pub mod chat_session;
 pub mod claude_cli;
+pub mod cli_detect;
 pub mod codex_cli;
 pub mod commands;
 pub mod factory;
