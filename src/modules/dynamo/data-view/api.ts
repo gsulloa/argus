@@ -19,6 +19,7 @@ import type {
   DeleteItemRequest,
   DeleteItemResponse,
   DynamoModel,
+  ModelDraft,
   Origin,
   PutItemRequest,
   PutItemResponse,
@@ -130,6 +131,57 @@ export function listModels(
     connectionId,
     table: tableName,
   });
+}
+
+export interface SaveModelResult { path: string; created: boolean; }
+export interface DeleteModelResult { deleted: boolean; }
+
+/**
+ * Writes (creates or edits) a dynamo_model doc. Wraps `context_save_model`.
+ * `physical_table` is derived backend-side from `tableName`, never sent.
+ */
+export function saveModel(
+  connectionId: string,
+  tableName: string,
+  draft: ModelDraft,
+): Promise<SaveModelResult> {
+  return call<SaveModelResult>("context_save_model", {
+    connectionId,
+    table: tableName,
+    draft,
+  });
+}
+
+/** Deletes a dynamo_model doc. Wraps `context_delete_model`. No-op-safe. */
+export function deleteModel(
+  connectionId: string,
+  tableName: string,
+  name: string,
+): Promise<DeleteModelResult> {
+  return call<DeleteModelResult>("context_delete_model", {
+    connectionId,
+    table: tableName,
+    modelName: name,
+  });
+}
+
+/** Invokes the AI model inspector (fires streaming events on the channel). */
+export function inspectModels(
+  sessionId: string,
+  connectionId: string,
+  tableName: string,
+): Promise<void> {
+  return call<void>("ai_inspect_models", { sessionId, connectionId, table: tableName });
+}
+
+/** Returns the project source path linked to this connection (or null). */
+export function getProjectSource(connectionId: string): Promise<string | null> {
+  return call<string | null>("context_get_project_source", { connectionId });
+}
+
+/** Sets the project source path for this connection. */
+export function setProjectSource(connectionId: string, path: string): Promise<void> {
+  return call<void>("context_set_project_source", { connectionId, path });
 }
 
 export function dynamoDeleteItem(

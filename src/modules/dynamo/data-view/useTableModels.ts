@@ -12,9 +12,13 @@
  * returns an empty array immediately with `isStd: false` — the "By model"
  * toggle is hidden and no fetch is issued (D2: STD detection by presence of
  * model docs).
+ *
+ * Task 4.4: Adds optimistic overlay (pendingUpserts / pendingDeletes) so a
+ * just-saved/just-deleted model is reflected immediately and reconciled when
+ * the watcher-driven refresh lands.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useContextChangeListener } from "@/modules/context/eventBus";
 import type { ContextChangeKind } from "@/modules/context/types";
 import { listModels } from "./api";
@@ -29,6 +33,10 @@ interface TableModelsResult {
   isStd: boolean;
   loading: boolean;
   error: Error | null;
+  /** Optimistically mark a model as saved (upsert by name). */
+  applyOptimisticSave(model: DynamoModel): void;
+  /** Optimistically mark a model as deleted (remove by name). */
+  applyOptimisticDelete(name: string): void;
 }
 
 /**
@@ -49,6 +57,14 @@ export function useTableModels(
     error: Error | null;
   }>({ models: [], loading: false, error: null });
 
+  // Optimistic overlay — stored in state so changes trigger re-renders.
+  const [pendingUpserts, setPendingUpserts] = useState<Map<string, DynamoModel>>(
+    () => new Map(),
+  );
+  const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(
+    () => new Set(),
+  );
+
   const refresh = useCallback(() => {
     if (!enabled) {
       setState({ models: [], loading: false, error: null });
@@ -56,7 +72,39 @@ export function useTableModels(
     }
     setState((s) => ({ ...s, loading: true, error: null }));
     listModels(connectionId, tableName)
-      .then((data) => setState({ models: data, loading: false, error: null }))
+      .then((data) => {
+        setState({ models: data, loading: false, error: null });
+
+        // Reconcile: clear overlay entries that disk now agrees with.
+        setPendingUpserts((prev) => {
+          const next = new Map(prev);
+          let changed = false;
+          for (const [name, pendingModel] of next) {
+            const diskModel = data.find((m) => m.name === name);
+            if (
+              diskModel &&
+              JSON.stringify(diskModel.access_patterns) ===
+                JSON.stringify(pendingModel.access_patterns)
+            ) {
+              next.delete(name);
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+
+        setPendingDeletes((prev) => {
+          const next = new Set(prev);
+          let changed = false;
+          for (const name of next) {
+            if (!data.find((m) => m.name === name)) {
+              next.delete(name);
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      })
       .catch((e: Error) =>
         setState({ models: [], loading: false, error: e }),
       );
@@ -70,10 +118,54 @@ export function useTableModels(
   // Live re-fetch on folder watcher events (mirrors useContextObject)
   useContextChangeListener(contextPath, KINDS, refresh);
 
+  // Merge: start from fetched models, drop deleted, upsert pending saves.
+  const mergedModels = useMemo(() => {
+    let result = state.models.filter((m) => !pendingDeletes.has(m.name));
+    for (const [name, model] of pendingUpserts) {
+      const idx = result.findIndex((m) => m.name === name);
+      if (idx >= 0) {
+        result = result.map((m, i) => (i === idx ? model : m));
+      } else {
+        result = [...result, model];
+      }
+    }
+    return result;
+  }, [state.models, pendingUpserts, pendingDeletes]);
+
+  const applyOptimisticSave = useCallback((model: DynamoModel) => {
+    setPendingUpserts((prev) => {
+      const next = new Map(prev);
+      next.set(model.name, model);
+      return next;
+    });
+    setPendingDeletes((prev) => {
+      if (!prev.has(model.name)) return prev;
+      const next = new Set(prev);
+      next.delete(model.name);
+      return next;
+    });
+  }, []);
+
+  const applyOptimisticDelete = useCallback((name: string) => {
+    setPendingDeletes((prev) => {
+      const next = new Set(prev);
+      next.add(name);
+      return next;
+    });
+    setPendingUpserts((prev) => {
+      if (!prev.has(name)) return prev;
+      const next = new Map(prev);
+      next.delete(name);
+      return next;
+    });
+  }, []);
+
   return {
-    models: state.models,
-    isStd: state.models.length > 0,
+    models: mergedModels,
+    isStd: mergedModels.length > 0,
     loading: state.loading,
     error: state.error,
+    applyOptimisticSave,
+    applyOptimisticDelete,
   };
 }

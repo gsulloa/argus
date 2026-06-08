@@ -13,6 +13,7 @@ import React, { useMemo, useState, useRef, useImperativeHandle } from "react";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
 import { compile } from "./builderCompiler";
 import { compileModel } from "./modelCompiler";
+import type { ModelSkOptions } from "./modelCompiler";
 import type { BuilderState, DynamoModel, FilterRow, TypedValue } from "./types";
 import { getFilterCombinator } from "./types";
 import {
@@ -63,6 +64,18 @@ export interface QueryBuilderProps {
   models?: DynamoModel[];
   /** True when `models` is non-empty (STD table). */
   isStd?: boolean;
+  /** Whether model editing is available (a context folder is linked or the prompt will guide them). */
+  canEditModels?: boolean;
+  /** Open the editor to create a new model. */
+  onNewModel?(): void;
+  /** Open the editor to edit the model with this entity name. */
+  onEditModel?(entityName: string): void;
+  /** Open the AI model inspector. */
+  onInspectModels?(): void;
+  /** Whether the active provider supports reading files (CLI providers). */
+  canInspect?: boolean;
+  /** Reason why inspect is disabled (shown as tooltip). */
+  inspectDisabledReason?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -619,6 +632,12 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
       disabled = false,
       models = [],
       isStd = false,
+      canEditModels = false,
+      onNewModel,
+      onEditModel,
+      onInspectModels,
+      canInspect = false,
+      inspectDisabledReason,
     }: QueryBuilderProps,
     ref,
   ) {
@@ -795,12 +814,16 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
     revalidate(next);
   }
 
-  function revalidate(next: BuilderState) {
+  function revalidate(next: BuilderState, skOpts?: ModelSkOptions) {
     // In model mode, the query is derived from modelSelection — validate that.
     const effectiveMode: "model" | "raw" =
       isStd && next.builderMode === "model" ? "model" : "raw";
     if (effectiveMode === "model" && next.modelSelection && selectedAp) {
-      const modelResult = compileModel(selectedAp, next.modelSelection.params, describe);
+      const opts: ModelSkOptions = skOpts ?? {
+        skOp: next.modelSelection.skOp,
+        skMaxParams: next.modelSelection.skMaxParams,
+      };
+      const modelResult = compileModel(selectedAp, next.modelSelection.params, describe, opts);
       if (modelResult.kind === "error") {
         onValidityChange(false, modelResult.reason);
         return;
@@ -869,11 +892,42 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
     [selectedAp],
   );
 
+  // ── Required-marker param sets ─────────────────────────────────────────────
+  // pkParamSet: idents appearing in the PK template.
+  // skParamSet: idents appearing in the SK template (empty set if no sk).
+  const { pkParamSet, skParamSet } = useMemo(() => {
+    if (!selectedAp) return { pkParamSet: new Set<string>(), skParamSet: new Set<string>() };
+    const re = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+    const pkSet = new Set<string>();
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(selectedAp.pk)) !== null) pkSet.add(m[1]!);
+    const skSet = new Set<string>();
+    if (selectedAp.sk) {
+      re.lastIndex = 0;
+      while ((m = re.exec(selectedAp.sk)) !== null) skSet.add(m[1]!);
+    }
+    return { pkParamSet: pkSet, skParamSet: skSet };
+  }, [selectedAp]);
+
+  // ── Whether the selected AP's index has a sort key ─────────────────────────
+  // Used to decide whether to show the SK operator selector.
+  const apIndexHasSk = useMemo(() => {
+    if (!selectedAp) return false;
+    const indexName = selectedAp.index === "table" ? null : selectedAp.index;
+    const schema = resolveKeySchemaFor(indexName, describe);
+    return !!schema?.skName;
+  }, [selectedAp, describe]);
+
   // ── Model compile result (model mode only) ─────────────────────────────────
   const modelCompileResult = useMemo(() => {
     if (effectiveBuilderMode !== "model" || !selectedAp) return null;
     const params = builder.modelSelection?.params ?? {};
-    return compileModel(selectedAp, params, describe);
+    const opts: ModelSkOptions = {
+      skOp: builder.modelSelection?.skOp,
+      skMaxParams: builder.modelSelection?.skMaxParams,
+    };
+    return compileModel(selectedAp, params, describe, opts);
   }, [effectiveBuilderMode, selectedAp, builder.modelSelection, describe]);
 
   // ── Model mode handlers ────────────────────────────────────────────────────
@@ -891,7 +945,11 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
             (p) => deriveAccessPatternLabel(p) === builder.modelSelection!.accessPattern,
           );
         if (ap) {
-          const result = compileModel(ap, builder.modelSelection.params, describe);
+          const opts: ModelSkOptions = {
+            skOp: builder.modelSelection.skOp,
+            skMaxParams: builder.modelSelection.skMaxParams,
+          };
+          const result = compileModel(ap, builder.modelSelection.params, describe, opts);
           if (result.kind === "ok") {
             next = { ...next, indexName: result.indexName, query: result.query };
           }
@@ -911,7 +969,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
     }
   }
 
-  /** Select an entity model. Resets access pattern and params. */
+  /** Select an entity model. Resets access pattern, params, skOp, and skMaxParams. */
   function setModelEntity(entityName: string) {
     const model = models.find((m) => m.name === entityName);
     if (!model) return;
@@ -921,9 +979,9 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
     const next: BuilderState = {
       ...builder,
       builderMode: "model",
-      modelSelection: { entity: entityName, accessPattern: apLabel, params: {} },
+      modelSelection: { entity: entityName, accessPattern: apLabel, params: {}, skOp: undefined, skMaxParams: undefined },
     };
-    // Compile immediately
+    // Compile immediately — no skOp after reset
     if (firstAp) {
       const result = compileModel(firstAp, {}, describe);
       if (result.kind === "ok") {
@@ -939,7 +997,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
     }
   }
 
-  /** Select an access pattern (by derived label). Resets params. */
+  /** Select an access pattern (by derived label). Resets params, skOp, and skMaxParams. */
   function setModelAccessPattern(apLabel: string) {
     if (!builder.modelSelection) return;
     const model = models.find((m) => m.name === builder.modelSelection!.entity);
@@ -948,8 +1006,15 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
     if (!ap) return;
     const next: BuilderState = {
       ...builder,
-      modelSelection: { ...builder.modelSelection, accessPattern: apLabel, params: {} },
+      modelSelection: {
+        ...builder.modelSelection,
+        accessPattern: apLabel,
+        params: {},
+        skOp: undefined,
+        skMaxParams: undefined,
+      },
     };
+    // No skOp after AP reset
     const result = compileModel(ap, {}, describe);
     if (result.kind === "ok") {
       onBuilderChange({ ...next, indexName: result.indexName, query: result.query });
@@ -968,7 +1033,48 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
       ...builder,
       modelSelection: { ...builder.modelSelection, params: nextParams },
     };
-    const result = compileModel(selectedAp, nextParams, describe);
+    const opts: ModelSkOptions = {
+      skOp: builder.modelSelection.skOp,
+      skMaxParams: builder.modelSelection.skMaxParams,
+    };
+    const result = compileModel(selectedAp, nextParams, describe, opts);
+    if (result.kind === "ok") {
+      onBuilderChange({ ...next, indexName: result.indexName, query: result.query });
+      onValidityChange(true);
+    } else {
+      onBuilderChange(next);
+      onValidityChange(false, result.reason);
+    }
+  }
+
+  /** Set the explicit sort-key operator in model mode. "auto" clears it. */
+  function setModelSkOp(op: "auto" | "=" | "<" | "<=" | ">" | ">=" | "between" | "begins_with") {
+    if (!builder.modelSelection || !selectedAp) return;
+    const skOp = op === "auto" ? undefined : op;
+    const nextSelection = { ...builder.modelSelection, skOp, skMaxParams: skOp === "between" ? (builder.modelSelection.skMaxParams ?? {}) : undefined };
+    const next: BuilderState = { ...builder, modelSelection: nextSelection };
+    const opts: ModelSkOptions = { skOp, skMaxParams: nextSelection.skMaxParams };
+    const result = compileModel(selectedAp, nextSelection.params, describe, opts);
+    if (result.kind === "ok") {
+      onBuilderChange({ ...next, indexName: result.indexName, query: result.query });
+      onValidityChange(true);
+    } else {
+      onBuilderChange(next);
+      onValidityChange(false, result.reason);
+    }
+  }
+
+  /** Update an upper-bound param value for `between` in model mode. */
+  function setModelSkMaxParam(paramName: string, value: string) {
+    if (!builder.modelSelection || !selectedAp) return;
+    const nextMaxParams = { ...(builder.modelSelection.skMaxParams ?? {}), [paramName]: value };
+    const nextSelection = { ...builder.modelSelection, skMaxParams: nextMaxParams };
+    const next: BuilderState = { ...builder, modelSelection: nextSelection };
+    const opts: ModelSkOptions = {
+      skOp: builder.modelSelection.skOp,
+      skMaxParams: nextMaxParams,
+    };
+    const result = compileModel(selectedAp, nextSelection.params, describe, opts);
     if (result.kind === "ok") {
       onBuilderChange({ ...next, indexName: result.indexName, query: result.query });
       onValidityChange(true);
@@ -1094,6 +1200,35 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
             </select>
           </>
         )}
+
+        {/* Bootstrap: table has no models yet — show "Define a model" button */}
+        {canEditModels && !isStd && builder.mode === "query" && (
+          <button
+            type="button"
+            className={styles.modeBtn}
+            onClick={() => onNewModel?.()}
+            disabled={disabled}
+            data-testid="qb-new-model"
+            title="Define the first model for this table"
+            style={{ borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)" }}
+          >
+            ＋ Define a model
+          </button>
+        )}
+        {/* AI inspector bootstrap — visible when no models yet */}
+        {!isStd && builder.mode === "query" && (
+          <button
+            type="button"
+            className={styles.modeBtn}
+            onClick={() => onInspectModels?.()}
+            disabled={disabled || !canInspect}
+            data-testid="qb-inspect-models"
+            title={canInspect ? "Generate models with AI" : inspectDisabledReason}
+            style={{ borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)" }}
+          >
+            Generate models with AI ✨
+          </button>
+        )}
       </FilterBarHeader>
 
       {/* ── Body ───────────────────────────────────────────────────────── */}
@@ -1119,6 +1254,45 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
                   <option key={m.name} value={m.name}>{m.name}</option>
                 ))}
               </select>
+              {canEditModels && (
+                <>
+                  <button
+                    type="button"
+                    className={styles.modeBtn}
+                    onClick={() => onNewModel?.()}
+                    disabled={disabled}
+                    data-testid="qb-new-model"
+                    title="Define a new model"
+                    style={{ borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)" }}
+                  >
+                    ＋ New
+                  </button>
+                  {builder.modelSelection?.entity && (
+                    <button
+                      type="button"
+                      className={styles.modeBtn}
+                      onClick={() => onEditModel?.(builder.modelSelection!.entity)}
+                      disabled={disabled}
+                      data-testid="qb-edit-model"
+                      title={`Edit ${builder.modelSelection.entity}`}
+                      style={{ borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)" }}
+                    >
+                      Edit
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={styles.modeBtn}
+                    onClick={() => onInspectModels?.()}
+                    disabled={disabled || !canInspect}
+                    data-testid="qb-inspect-models"
+                    title={canInspect ? "Generate models with AI" : inspectDisabledReason}
+                    style={{ borderRadius: "var(--radius-md)", border: "1px solid var(--border-strong)" }}
+                  >
+                    Generate models with AI ✨
+                  </button>
+                </>
+              )}
             </div>
 
             {/* Access pattern selector */}
@@ -1147,27 +1321,91 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
             )}
 
             {/* Parameter inputs — one per distinct ${param} in the chosen pattern */}
-            {selectedAp && apParams.map((param) => (
-              <div key={param} className={styles.keyRow}>
-                <span className={styles.keyLabel}>{param}</span>
-                <input
-                  type="text"
-                  className={`${styles.textInput} ${styles.keyValueInput}`}
-                  value={builder.modelSelection?.params[param] ?? ""}
-                  onChange={(e) => setModelParam(param, e.target.value)}
-                  placeholder={`value for ${param}`}
-                  aria-label={`Parameter ${param}`}
-                  data-testid={`model-param-${param}`}
+            {selectedAp && apParams.map((param) => {
+              const required = pkParamSet.has(param) || (!!selectedAp.sk && skParamSet.has(param));
+              return (
+                <div key={param} className={styles.keyRow}>
+                  <span className={styles.keyLabel}>
+                    {param}
+                    {required && (
+                      <span
+                        className={styles.requiredMarker}
+                        aria-hidden="true"
+                        data-testid={`model-param-required-${param}`}
+                      >
+                        {" *"}
+                      </span>
+                    )}
+                  </span>
+                  <input
+                    type="text"
+                    className={`${styles.textInput} ${styles.keyValueInput}`}
+                    value={builder.modelSelection?.params[param] ?? ""}
+                    onChange={(e) => setModelParam(param, e.target.value)}
+                    placeholder={`value for ${param}`}
+                    aria-label={`Parameter ${param}`}
+                    aria-required={required}
+                    data-testid={`model-param-${param}`}
+                    disabled={disabled}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                        e.preventDefault();
+                        handleRun();
+                      }
+                    }}
+                  />
+                </div>
+              );
+            })}
+
+            {/* SK operator selector — visible only when AP has sk AND the index has a SK */}
+            {selectedAp?.sk && apIndexHasSk && (
+              <div className={styles.keyRow}>
+                <span className={styles.keyLabel}>Sort key</span>
+                <select
+                  className={styles.skOpSelect}
+                  value={builder.modelSelection?.skOp ?? "auto"}
+                  onChange={(e) =>
+                    setModelSkOp(
+                      e.target.value as "auto" | "=" | "<" | "<=" | ">" | ">=" | "between" | "begins_with",
+                    )
+                  }
+                  aria-label="Sort key operator"
+                  data-testid="model-sk-op"
                   disabled={disabled}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                      e.preventDefault();
-                      handleRun();
-                    }
-                  }}
-                />
+                >
+                  <option value="auto">auto (from template)</option>
+                  {SK_OPS.map((op) => (
+                    <option key={op} value={op}>{op}</option>
+                  ))}
+                </select>
               </div>
-            ))}
+            )}
+
+            {/* Between upper-bound inputs — visible only when skOp === "between" */}
+            {selectedAp?.sk && builder.modelSelection?.skOp === "between" &&
+              Array.from(skParamSet).map((param) => (
+                <div key={`skmax-${param}`} className={styles.keyRow}>
+                  <span className={styles.keyLabel}>{param} (to)</span>
+                  <input
+                    type="text"
+                    className={`${styles.textInput} ${styles.keyValueInput}`}
+                    value={builder.modelSelection?.skMaxParams?.[param] ?? ""}
+                    onChange={(e) => setModelSkMaxParam(param, e.target.value)}
+                    placeholder={`upper bound for ${param}`}
+                    aria-label={`Upper bound for ${param}`}
+                    data-testid={`model-skmax-${param}`}
+                    disabled={disabled}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                        e.preventDefault();
+                        handleRun();
+                      }
+                    }}
+                  />
+                </div>
+              ))
+            }
 
             {/* Model compile error hint */}
             {modelCompileResult?.kind === "error" && (

@@ -67,6 +67,16 @@ import type { AccessPattern, BuilderState, TypedValue } from "./types";
 // Public return type — mirrors builderCompiler's CompileResult error shape
 // ---------------------------------------------------------------------------
 
+/**
+ * Optional 4th argument to `compileModel` for explicit sort-key operator control.
+ * When absent (or `skOp` is undefined), the fill-rule inference is used unchanged.
+ */
+export interface ModelSkOptions {
+  skOp?: "=" | "<" | "<=" | ">" | ">=" | "between" | "begins_with";
+  /** Upper-bound params for `between` (lower bound uses the main `params`). */
+  skMaxParams?: Record<string, string>;
+}
+
 export type ModelCompileResult =
   | {
       kind: "ok";
@@ -321,11 +331,30 @@ function applyFillRule(
 // ---------------------------------------------------------------------------
 
 /**
+ * Fully substitute all `${ident}` placeholders in `segments` with values from
+ * `subParams`. Returns the resulting string without any validation — call sites
+ * must check for empty required params themselves.
+ */
+function substitute(segments: Segment[], subParams: Record<string, string>): string {
+  let result = "";
+  for (const seg of segments) {
+    if (seg.kind === "literal") {
+      result += seg.text;
+    } else {
+      result += subParams[seg.ident] ?? "";
+    }
+  }
+  return result;
+}
+
+/**
  * Compile an access pattern + filled params into a BuilderState.query.
  *
  * @param accessPattern  The chosen access pattern from a DynamoModel.
  * @param params         User-filled parameter values; missing keys treated as "".
  * @param describe       The TableDescription for the physical table.
+ * @param opts           Optional explicit sort-key operator overrides. When absent,
+ *                       the fill-rule inference is used unchanged (no regression).
  * @returns ModelCompileResult — either `{ kind: "ok", query, indexName }` or
  *          `{ kind: "error", reason, field? }`.
  *
@@ -336,6 +365,7 @@ export function compileModel(
   accessPattern: AccessPattern,
   params: Record<string, string>,
   describe: TableDescription,
+  opts?: ModelSkOptions,
 ): ModelCompileResult {
   // 1. Resolve index → key schema
   const keySchemaOrError = resolveKeySchema(accessPattern.index, describe);
@@ -419,30 +449,100 @@ export function compileModel(
     }
     const skSegments = skSegmentsOrError;
 
-    // Apply SK fill rule
-    const skFill = applyFillRule(skSegments, params, skAttrType, "sk");
-    if (skFill.kind === "error") return skFill;
+    const skOp = opts?.skOp;
 
-    if (skFill.kind === "drop") {
-      // Drop SK → partition-only query
-      sortKey = undefined;
-    } else if (skFill.kind === "begins_with") {
-      sortKey = {
-        name: skDef.attribute_name,
-        op: "begins_with",
-        value: { type: "S", value: skFill.prefix },
-      };
+    if (skOp !== undefined) {
+      // ── Explicit operator path ──────────────────────────────────────────────
+      // Find the first SK param that is empty (for error reporting).
+      const skParamSegments = skSegments.filter(
+        (s): s is Extract<Segment, { kind: "param" }> => s.kind === "param",
+      );
+
+      // Validate min (lower-bound) params — used for all ops.
+      const emptyMinParam = skParamSegments.find((p) => (params[p.ident] ?? "").length === 0);
+      if (emptyMinParam) {
+        return {
+          kind: "error",
+          reason: `Sort-key parameter "${emptyMinParam.ident}" is required for the ${skOp} condition`,
+          field: "sk",
+        };
+      }
+
+      const vMin = substitute(skSegments, params);
+
+      if (skOp === "between") {
+        // Validate upper-bound params.
+        const maxParams = opts?.skMaxParams ?? {};
+        const emptyMaxParam = skParamSegments.find((p) => (maxParams[p.ident] ?? "").length === 0);
+        if (emptyMaxParam) {
+          return {
+            kind: "error",
+            reason: `Sort-key parameter "${emptyMaxParam.ident}" is required for the between condition`,
+            field: "sk",
+          };
+        }
+
+        const vMax = substitute(skSegments, maxParams);
+        const minTyped: TypedValue =
+          skAttrType === "N" ? { type: "N", value: vMin } : { type: "S", value: vMin };
+        const maxTyped: TypedValue =
+          skAttrType === "N" ? { type: "N", value: vMax } : { type: "S", value: vMax };
+        sortKey = {
+          name: skDef.attribute_name,
+          op: "between",
+          value: { min: minTyped, max: maxTyped },
+        };
+      } else if (skOp === "begins_with") {
+        // begins_with is valid only on S-typed sort keys.
+        if (skAttrType !== "S") {
+          return {
+            kind: "error",
+            reason: "begins_with is only valid on a string (S) sort key",
+            field: "sk",
+          };
+        }
+        sortKey = {
+          name: skDef.attribute_name,
+          op: "begins_with",
+          value: { type: "S", value: vMin },
+        };
+      } else {
+        // Single-value ops: =, <, <=, >, >=
+        const value: TypedValue =
+          skAttrType === "N" ? { type: "N", value: vMin } : { type: "S", value: vMin };
+        sortKey = {
+          name: skDef.attribute_name,
+          op: skOp,
+          value,
+        };
+      }
     } else {
-      // equality
-      const skTypedValue: TypedValue =
-        skAttrType === "N"
-          ? { type: "N", value: skFill.value }
-          : { type: "S", value: skFill.value };
-      sortKey = {
-        name: skDef.attribute_name,
-        op: "=",
-        value: skTypedValue,
-      };
+      // ── Fill-rule inference path (unchanged behaviour) ──────────────────────
+      // Apply SK fill rule
+      const skFill = applyFillRule(skSegments, params, skAttrType, "sk");
+      if (skFill.kind === "error") return skFill;
+
+      if (skFill.kind === "drop") {
+        // Drop SK → partition-only query
+        sortKey = undefined;
+      } else if (skFill.kind === "begins_with") {
+        sortKey = {
+          name: skDef.attribute_name,
+          op: "begins_with",
+          value: { type: "S", value: skFill.prefix },
+        };
+      } else {
+        // equality
+        const skTypedValue: TypedValue =
+          skAttrType === "N"
+            ? { type: "N", value: skFill.value }
+            : { type: "S", value: skFill.value };
+        sortKey = {
+          name: skDef.attribute_name,
+          op: "=",
+          value: skTypedValue,
+        };
+      }
     }
   }
   // If accessPattern.sk is undefined or skDef is missing → partition-only (sortKey stays undefined)

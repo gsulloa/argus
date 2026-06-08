@@ -204,31 +204,166 @@ fn shape_to_system(shape: &ObjectShape) -> ObjectSystem {
 
 // ---- Fresh file content ----
 
-fn build_fresh_file(system: &ObjectSystem) -> AppResult<String> {
-    let sys_yaml = serde_yaml::to_string(system)
-        .map_err(|e| AppError::Internal(format!("yaml serialise system: {e}")))?;
-    let human_yaml = "{}";
-    let name = &system.name;
-    Ok(format!(
-        "---\nsystem:\n{indented_sys}human: {human_yaml}\n---\n# {name}\n",
-        indented_sys = sys_yaml
-            .lines()
-            .map(|l| if l.is_empty() {
+/// Build a complete fresh doc string from a pre-serialized `sys_yaml` and a body.
+///
+/// Format:
+/// ```text
+/// ---
+/// system:
+///   <indented sys_yaml lines>
+/// human: {}
+/// ---
+/// <body>
+/// ```
+pub(crate) fn build_fresh_doc(sys_yaml: &str, body: &str) -> String {
+    let indented_sys = sys_yaml
+        .lines()
+        .map(|l| {
+            if l.is_empty() {
                 String::new()
             } else {
                 format!("  {l}")
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n",
-        human_yaml = human_yaml,
-        name = name,
-    ))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    format!("---\nsystem:\n{indented_sys}human: {{}}\n---\n{body}")
+}
+
+fn build_fresh_file(system: &ObjectSystem) -> AppResult<String> {
+    let sys_yaml = serde_yaml::to_string(system)
+        .map_err(|e| AppError::Internal(format!("yaml serialise system: {e}")))?;
+    let name = &system.name;
+    Ok(build_fresh_doc(&sys_yaml, &format!("# {name}\n")))
+}
+
+/// Splice a pre-serialized `system:` YAML block into an existing file at `path`,
+/// preserving the `human:` block and body bytes. `body_override`, when `Some`,
+/// replaces the Markdown body (encoded to match the file's existing line ending);
+/// when `None`, the existing body is preserved byte-for-byte.
+///
+/// If `body_override` equals the existing decoded body (byte-for-byte String
+/// comparison), the original body bytes are preserved exactly (round-trip safe).
+///
+/// Returns the full new file bytes.
+pub(crate) fn rewrite_file_with_system_yaml(
+    path: &Path,
+    sys_yaml: &str,
+    body_override: Option<&str>,
+) -> AppResult<Vec<u8>> {
+    // Read raw bytes to preserve body exactly.
+    let raw_bytes = std::fs::read(path)
+        .map_err(|e| AppError::Storage(format!("read {}: {e}", path.display())))?;
+    let raw_str = String::from_utf8_lossy(&raw_bytes);
+
+    // Detect CRLF.
+    let is_crlf = has_crlf(&raw_bytes);
+
+    // Normalise to LF for parsing.
+    let normalised = raw_str.replace("\r\n", "\n");
+
+    if !normalised.starts_with("---\n") {
+        return Err(AppError::Internal(format!(
+            "rewrite: malformed frontmatter in {}",
+            path.display()
+        )));
+    }
+
+    let after_open = &normalised[4..];
+    // Find closing "---".
+    let (fm_end, _body_start_norm) = after_open
+        .find("\n---\n")
+        .map(|p| (p + 1, p + 5))
+        .or_else(|| {
+            after_open
+                .find("\n---")
+                .filter(|&p| p + 4 == after_open.len())
+                .map(|p| (p + 1, p + 4))
+        })
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "rewrite: could not find closing --- in {}",
+                path.display()
+            ))
+        })?;
+
+    let frontmatter = &after_open[..fm_end];
+
+    // Body bytes from original (raw, preserving encoding).
+    let body_start_in_raw = find_body_start_in_raw(&raw_bytes);
+
+    let body_bytes = match body_override {
+        Some(override_str) => {
+            // If the override equals the existing decoded body, preserve original bytes.
+            let existing_body_string = match body_start_in_raw {
+                Some(start) => String::from_utf8_lossy(&raw_bytes[start..]).into_owned(),
+                None => String::new(),
+            };
+            if override_str == existing_body_string.as_str() {
+                // Round-trip: preserve original bytes.
+                match body_start_in_raw {
+                    Some(start) => raw_bytes[start..].to_vec(),
+                    None => b"\n".to_vec(),
+                }
+            } else {
+                // Use the override, encoded to match the file's line endings.
+                if is_crlf {
+                    convert_to_crlf(override_str).into_bytes()
+                } else {
+                    override_str.as_bytes().to_vec()
+                }
+            }
+        }
+        None => {
+            // Preserve original body bytes.
+            match body_start_in_raw {
+                Some(start) => raw_bytes[start..].to_vec(),
+                None => b"\n".to_vec(),
+            }
+        }
+    };
+
+    // Splice system block into frontmatter.
+    let new_frontmatter = match splice_system_block(frontmatter, sys_yaml) {
+        Some(f) => f,
+        None => {
+            // Fall back: full re-serialisation.
+            tracing::warn!(
+                path = %path.display(),
+                "context sync: falling back to full re-serialisation (could not splice system block)"
+            );
+            let indented: String = sys_yaml
+                .lines()
+                .map(|l| {
+                    if l.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {l}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            format!("{indented}human: {{}}\n")
+        }
+    };
+
+    let full_content = format!("---\nsystem:\n{new_frontmatter}---\n");
+    let full_content = if is_crlf {
+        convert_to_crlf(&full_content)
+    } else {
+        full_content
+    };
+
+    let mut out = full_content.into_bytes();
+    out.extend_from_slice(&body_bytes);
+    Ok(out)
 }
 
 // ---- Atomic write ----
 
-fn atomic_write(path: &Path, content: &[u8]) -> AppResult<()> {
+pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> AppResult<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| AppError::Storage(format!("create dir: {e}")))?;
@@ -340,100 +475,9 @@ fn walk_existing_objects(root: &Path, engine: EngineKind) -> Vec<PathBuf> {
 /// `new_system`: the updated `ObjectSystem` to splice in.
 /// Returns the bytes to write, or an error.
 fn rewrite_file(path: &Path, new_system: &ObjectSystem) -> AppResult<Vec<u8>> {
-    // Read raw bytes to preserve body exactly.
-    let raw_bytes = std::fs::read(path)
-        .map_err(|e| AppError::Storage(format!("read {}: {e}", path.display())))?;
-    let raw_str = String::from_utf8_lossy(&raw_bytes);
-
-    // Detect CRLF.
-    let is_crlf = has_crlf(&raw_bytes);
-
-    // Extract frontmatter boundaries.
-    // File must start with "---\n" (or "---\r\n").
-    // Normalise to LF for parsing.
-    let normalised = raw_str.replace("\r\n", "\n");
-
-    if !normalised.starts_with("---\n") {
-        return Err(AppError::Internal(format!(
-            "rewrite: malformed frontmatter in {}",
-            path.display()
-        )));
-    }
-
-    let after_open = &normalised[4..];
-    // Find closing "---".
-    let (fm_end, body_start) = after_open
-        .find("\n---\n")
-        .map(|p| (p + 1, p + 5))
-        .or_else(|| {
-            after_open
-                .find("\n---")
-                .filter(|&p| p + 4 == after_open.len())
-                .map(|p| (p + 1, p + 4))
-        })
-        .ok_or_else(|| {
-            AppError::Internal(format!(
-                "rewrite: could not find closing --- in {}",
-                path.display()
-            ))
-        })?;
-
-    let frontmatter = &after_open[..fm_end];
-    // Body bytes from original (raw, preserving encoding).
-    let body_start_in_raw = {
-        // Recalculate body start in the original (possibly CRLF) bytes.
-        // Since we normalised for parsing, map back via counting the text
-        // before the body. Safest: just re-derive from raw.
-        // We'll search the raw bytes for the pattern "---\n" or "---\r\n"
-        // following the opening "---\n".
-        find_body_start_in_raw(&raw_bytes)
-    };
-
-    let body_bytes = match body_start_in_raw {
-        Some(start) => raw_bytes[start..].to_vec(),
-        None => b"\n".to_vec(),
-    };
-
-    // Serialise new system block.
     let sys_yaml =
         serde_yaml::to_string(new_system).map_err(|e| AppError::Internal(format!("yaml: {e}")))?;
-
-    // Splice system block into frontmatter.
-    let new_frontmatter = match splice_system_block(frontmatter, &sys_yaml) {
-        Some(f) => f,
-        None => {
-            // Fall back: full re-serialisation.
-            tracing::warn!(
-                path = %path.display(),
-                "context sync: falling back to full re-serialisation (could not splice system block)"
-            );
-            // Build minimal frontmatter with system + empty human.
-            let indented: String = sys_yaml
-                .lines()
-                .map(|l| {
-                    if l.is_empty() {
-                        String::new()
-                    } else {
-                        format!("  {l}")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-                + "\n";
-            format!("{indented}human: {{}}\n")
-        }
-    };
-
-    let full_content = format!("---\nsystem:\n{new_frontmatter}---\n");
-    let full_content = if is_crlf {
-        convert_to_crlf(&full_content)
-    } else {
-        full_content
-    };
-
-    let mut out = full_content.into_bytes();
-    out.extend_from_slice(&body_bytes);
-    Ok(out)
+    rewrite_file_with_system_yaml(path, &sys_yaml, None)
 }
 
 /// Find the byte offset in `raw_bytes` where the body starts (after the
@@ -996,5 +1040,165 @@ mod tests {
             has_crlf(&new_bytes),
             "CRLF line endings should be preserved"
         );
+    }
+
+    // ---- model doc helpers (task 1.5) ----
+
+    fn model_sys_yaml() -> String {
+        #[derive(serde::Serialize)]
+        struct ModelSystemDoc<'a> {
+            kind: &'static str,
+            name: &'a str,
+            access_patterns: &'a [serde_yaml::Value],
+        }
+        // Build by hand to avoid pulling in the commands module.
+        "kind: dynamo_model\nname: Order\naccess_patterns:\n- index: table\n  pk: \"USER#${userId}\"\n  sk: \"ORDER#${orderId}\"\n".to_string()
+    }
+
+    /// A fresh model doc is parseable and round-trips access_patterns.
+    /// physical_table must NOT appear in the file bytes.
+    #[test]
+    fn model_fresh_doc_is_parseable() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        let sys_yaml = model_sys_yaml();
+        let body = "# Order\n";
+        let content = build_fresh_doc(&sys_yaml, body);
+
+        // Must not contain physical_table.
+        assert!(
+            !content.contains("physical_table"),
+            "fresh doc must not contain physical_table"
+        );
+
+        // Write to the expected path so load_folder can derive physical_table.
+        let path = write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/Order.md",
+            &content,
+        );
+
+        // Parse directly.
+        let doc = crate::modules::context::parser::parse_object_doc(&path).unwrap();
+        assert_eq!(doc.system.kind, "dynamo_model");
+        assert_eq!(doc.system.name, "Order");
+        assert!(
+            doc.system.physical_table.is_none(),
+            "physical_table is not stored in frontmatter"
+        );
+
+        // Verify access_patterns round-trip via load_folder (which derives physical_table).
+        let ctx =
+            crate::modules::context::parser::load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        let order = ctx
+            .objects
+            .iter()
+            .find(|d| d.system.name == "Order")
+            .expect("Order not found");
+        assert_eq!(order.system.kind, "dynamo_model");
+        assert_eq!(order.system.physical_table.as_deref(), Some("AppTable"));
+        let aps = order.system.access_patterns.as_ref().expect("access_patterns missing");
+        assert_eq!(aps.len(), 1);
+        assert_eq!(aps[0].index, "table");
+        assert_eq!(aps[0].pk, "USER#${userId}");
+        assert_eq!(aps[0].sk.as_deref(), Some("ORDER#${orderId}"));
+    }
+
+    /// Editing a model preserves the human block and body bytes.
+    #[test]
+    fn model_edit_preserves_human_and_body() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        let original = "---\nsystem:\n  kind: dynamo_model\n  name: Order\n  access_patterns:\n    - index: table\n      pk: \"USER#${userId}\"\nhuman:\n  tags:\n    - important\n---\n# Order\n\nSome body text.\n";
+        let path = write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/Order.md",
+            original,
+        );
+
+        // New access pattern.
+        let new_sys_yaml =
+            "kind: dynamo_model\nname: Order\naccess_patterns:\n- index: table\n  pk: \"USER#${userId}\"\n- index: GSI1\n  pk: \"STATUS#${status}\"\n";
+
+        let bytes = rewrite_file_with_system_yaml(&path, new_sys_yaml, None).unwrap();
+        atomic_write(&path, &bytes).unwrap();
+
+        let new_content = String::from_utf8(fs::read(&path).unwrap()).unwrap();
+
+        // New access pattern present.
+        assert!(
+            new_content.contains("GSI1"),
+            "new access pattern should be present"
+        );
+        // Human block preserved.
+        assert!(
+            new_content.contains("important"),
+            "human tags should be preserved"
+        );
+        // Body preserved byte-for-byte.
+        let new_bytes = fs::read(&path).unwrap();
+        let body_start = find_body_start_in_raw(&new_bytes).expect("body start");
+        let body = &new_bytes[body_start..];
+        assert_eq!(body, b"# Order\n\nSome body text.\n");
+    }
+
+    /// When body_override equals the existing body string, original body bytes are preserved.
+    #[test]
+    fn model_edit_unchanged_body_preserved() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        let original = "---\nsystem:\n  kind: dynamo_model\n  name: Order\n  access_patterns:\n    - index: table\n      pk: \"USER#${userId}\"\nhuman: {}\n---\n# Order\n\nOriginal body.\n";
+        let path = write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/Order.md",
+            original,
+        );
+
+        let original_bytes = fs::read(&path).unwrap();
+        let body_start_orig = find_body_start_in_raw(&original_bytes).unwrap();
+        let original_body_bytes = original_bytes[body_start_orig..].to_vec();
+
+        let new_sys_yaml = "kind: dynamo_model\nname: Order\naccess_patterns:\n- index: table\n  pk: \"USER#${userId}\"\n- index: GSI1\n  pk: \"X#${x}\"\n";
+        // Pass the existing body string as the override → should round-trip.
+        let existing_body_str = "# Order\n\nOriginal body.\n";
+        let bytes =
+            rewrite_file_with_system_yaml(&path, new_sys_yaml, Some(existing_body_str)).unwrap();
+        atomic_write(&path, &bytes).unwrap();
+
+        let new_bytes = fs::read(&path).unwrap();
+        let body_start_new = find_body_start_in_raw(&new_bytes).unwrap();
+        let new_body_bytes = new_bytes[body_start_new..].to_vec();
+
+        assert_eq!(
+            new_body_bytes, original_body_bytes,
+            "body bytes should be identical when override matches existing"
+        );
+    }
+
+    /// When body_override differs from the existing body, the new body is written.
+    #[test]
+    fn model_edit_body_changed() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        let original = "---\nsystem:\n  kind: dynamo_model\n  name: Order\n  access_patterns:\n    - index: table\n      pk: \"USER#${userId}\"\nhuman: {}\n---\n# Order\n\nOld body.\n";
+        let path = write_file(
+            dir.path(),
+            "dynamo/tables/AppTable/models/Order.md",
+            original,
+        );
+
+        let new_sys_yaml = "kind: dynamo_model\nname: Order\naccess_patterns:\n- index: table\n  pk: \"USER#${userId}\"\n";
+        let bytes =
+            rewrite_file_with_system_yaml(&path, new_sys_yaml, Some("# New body\n")).unwrap();
+        atomic_write(&path, &bytes).unwrap();
+
+        let new_bytes = fs::read(&path).unwrap();
+        let body_start = find_body_start_in_raw(&new_bytes).unwrap();
+        let new_body = &new_bytes[body_start..];
+        assert_eq!(new_body, b"# New body\n");
     }
 }

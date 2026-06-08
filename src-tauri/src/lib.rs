@@ -11,13 +11,14 @@ use tracing_subscriber::EnvFilter;
 
 use crate::modules::ai::commands::{
     ai_chat_cancel, ai_chat_close, ai_chat_history, ai_chat_send, ai_delete_api_key,
-    ai_generate_sql, ai_get_settings, ai_list_providers, ai_set_api_key, ai_set_settings,
-    ai_validate_provider,
+    ai_generate_sql, ai_get_settings, ai_inspect_models, ai_list_providers, ai_set_api_key,
+    ai_set_settings, ai_validate_provider,
 };
 use crate::modules::context::commands::{
-    context_ai_payload, context_create_folder, context_get_object, context_get_query,
-    context_link_folder, context_list_models, context_list_objects, context_list_queries,
-    context_reveal_path, context_sync_schema, context_unlink,
+    context_ai_payload, context_create_folder, context_delete_model, context_get_object,
+    context_get_project_source, context_get_query, context_link_folder, context_list_models,
+    context_list_objects, context_list_queries, context_reveal_path, context_save_model,
+    context_set_project_source, context_sync_schema, context_unlink,
 };
 use crate::modules::context::registry::{ContextRegistry, TauriEmitter};
 use crate::modules::dynamo::client::DynamoClientRegistry;
@@ -175,7 +176,42 @@ pub fn run() {
             // Context registry — shared singleton keyed by canonical folder path.
             let emitter: Arc<dyn crate::modules::context::registry::EventEmitter> =
                 Arc::new(TauriEmitter(app.handle().clone()));
-            app.manage(ContextRegistry::new(emitter));
+            let context_registry = ContextRegistry::new(emitter);
+            app.manage(context_registry.clone());
+
+            // Re-subscribe every connection that has a linked context folder, so
+            // documentation and Dynamo model docs are detected on app start
+            // (the registry is in-memory; without this nothing is subscribed
+            // until the user re-links a folder). Missing/invalid folders fail
+            // gracefully — subscribe records them as unavailable.
+            if let Some(db) = app.try_state::<DbState>() {
+                let conns = {
+                    let lock = db.0.lock().expect("db poisoned");
+                    crate::platform::connections::list(&lock)
+                };
+                match conns {
+                    Ok(conns) => {
+                        for c in conns {
+                            if let Some(path) = c.context_path.as_deref() {
+                                if let Some(engine) =
+                                    crate::modules::context::engine::EngineKind::from_connection_kind(
+                                        &c.kind,
+                                    )
+                                {
+                                    let _ = context_registry.subscribe(
+                                        c.id,
+                                        std::path::Path::new(path),
+                                        engine,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("context re-subscribe on startup failed to list connections: {e}");
+                    }
+                }
+            }
 
             // AI validation cache.
             app.manage(crate::modules::ai::validation_cache::ValidationCache::new());
@@ -310,6 +346,10 @@ pub fn run() {
             context_sync_schema,
             context_ai_payload,
             context_reveal_path,
+            context_save_model,
+            context_delete_model,
+            context_get_project_source,
+            context_set_project_source,
             // AI provider commands
             ai_list_providers,
             ai_validate_provider,
@@ -324,6 +364,7 @@ pub fn run() {
             ai_chat_cancel,
             ai_chat_close,
             ai_chat_history,
+            ai_inspect_models,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")
