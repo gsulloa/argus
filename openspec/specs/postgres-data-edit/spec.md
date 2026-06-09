@@ -448,11 +448,23 @@ The viewer SHALL apply edits directly when the user presses `⌘S` (or activates
 
 The viewer MUST NOT open a diff preview modal. The diff preview command (`postgres_preview_table_edits`) does not exist in this capability.
 
+`⌘S` detection MUST use a `window`-level `keydown` listener that is active only while the table tab is the active tab. The listener MUST trigger the save whenever the table tab is active AND the currently focused element is `null`/`document.body` OR is contained within the table tab's root element, EXCEPT when the focused element is inside a CodeMirror editor (`.cm-editor`), in which case `⌘S` MUST be left to that editor. Focus being outside the data grid (including no element focused) MUST NOT prevent the save.
+
 #### Scenario: Cmd-S applies the buffer directly
 
-- **WHEN** the user has any dirty entries and presses `⌘S` while the table tab is focused
+- **WHEN** the user has any dirty entries and presses `⌘S` while the table tab is active
 - **THEN** `postgres_apply_table_edits` is invoked with the current `EditOp[]` and `origin: "user"`
 - **AND** no preview modal is rendered
+
+#### Scenario: Cmd-S saves when focus is outside the grid
+
+- **WHEN** the user has dirty entries, clicks an empty area so no grid cell is focused (or focuses a toolbar control), and presses `⌘S` while the table tab is active
+- **THEN** `postgres_apply_table_edits` is invoked with the current `EditOp[]` and `origin: "user"`
+
+#### Scenario: Cmd-S is left to a focused CodeMirror editor
+
+- **WHEN** focus is inside a `.cm-editor` surface within the tab and the user presses `⌘S`
+- **THEN** the viewer does NOT dispatch `postgres_apply_table_edits` from the global listener
 
 #### Scenario: Cmd-S is no-op when buffer is clean
 
