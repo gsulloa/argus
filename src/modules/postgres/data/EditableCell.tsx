@@ -18,6 +18,10 @@ export interface EditableCellProps {
   enumValues?: string[];
   /** Inline-edit mode is on when this cell is the active editor. */
   editing: boolean;
+  /** The column index in the grid — used for cell-selection targeting. */
+  colIndex?: number;
+  /** True when this is the currently active (single-cell selected) cell. */
+  isActiveCell?: boolean;
   onStartEdit(): void;
   onCommitEdit(value: EditValue): void;
   onCancelEdit(): void;
@@ -95,6 +99,8 @@ export function EditableCell(props: EditableCellProps) {
     readOnly,
     enumValues,
     editing,
+    colIndex,
+    isActiveCell,
     onStartEdit,
     onCommitEdit,
     onCancelEdit,
@@ -103,13 +109,18 @@ export function EditableCell(props: EditableCellProps) {
 
   // ----- Display path -----
   if (!editing) {
-    const cls = [styles.cell, dirty ? styles.cellDirty : ""]
+    const cls = [
+      styles.cell,
+      dirty ? styles.cellDirty : "",
+      isActiveCell ? styles.cellActive : "",
+    ]
       .filter(Boolean)
       .join(" ");
     return (
       <div
         className={cls}
         style={style}
+        data-col={colIndex}
         onDoubleClick={() => {
           if (!readOnly) onStartEdit();
         }}
@@ -132,7 +143,7 @@ export function EditableCell(props: EditableCellProps) {
 
   // ----- Edit path -----
   return (
-    <div className={`${styles.cell} ${styles.cellEditing}`} style={style}>
+    <div className={`${styles.cell} ${styles.cellEditing}`} style={style} data-col={colIndex}>
       <CellEditor
         column={column}
         initial={displayValue}

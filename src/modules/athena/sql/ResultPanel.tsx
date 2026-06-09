@@ -10,10 +10,11 @@
  * Unlike MySQL, Athena has NO "affected" variant — only "rows" and "succeeded".
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { RunState } from "./useQueryRun";
 import type { AthenaStatementOutcome, AthenaRunSqlResult, AthenaResultColumnInfo } from "../types";
 import { ExportMenu } from "./export/ExportMenu";
+import { copyCellValue } from "@/platform/grid/cellClipboard";
 import { sortResultRows, type SortOrder } from "@/platform/table/sortResultRows";
 
 interface Props {
@@ -231,7 +232,9 @@ function SimpleTable({
   columns: AthenaResultColumnInfo[];
   rows: unknown[][];
 }) {
-  const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  const tableRootRef = useRef<HTMLDivElement | null>(null);
+  // Single-cell active selection — mutually exclusive with sorting.
+  const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
   // Client-side sort state (issue #91). Athena results are read-only and have
   // no table context to re-query, so sorting reorders the loaded rows in-memory.
   const [orderBy, setOrderBy] = useState<SortOrder[]>([]);
@@ -253,6 +256,31 @@ function SimpleTable({
     [rows, columns, orderBy],
   );
 
+  // Clear the active cell whenever the displayed data changes (new query or
+  // re-sort) — the cell index refers to a position in `sortedRows`.
+  useEffect(() => {
+    setActiveCell(null);
+  }, [columnsSig, rows, orderBy]);
+
+  function onGridKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C")) {
+      if (activeCell !== null) {
+        const target = e.target as HTMLElement;
+        const tag = target.tagName.toUpperCase();
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT" && !target.isContentEditable) {
+          const row = sortedRows[activeCell.row];
+          const value = row ? (row[activeCell.col] ?? null) : null;
+          e.preventDefault();
+          void copyCellValue(value);
+          return;
+        }
+      }
+    }
+    if (e.key === "Escape") {
+      setActiveCell(null);
+    }
+  }
+
   const handleHeaderClick = (name: string) => {
     const cur = orderBy.find((o) => o.column === name);
     if (!cur) setOrderBy([{ column: name, direction: "asc" }]);
@@ -261,7 +289,12 @@ function SimpleTable({
   };
 
   return (
-    <div style={{ overflow: "auto", height: "100%" }}>
+    <div
+      ref={tableRootRef}
+      style={{ overflow: "auto", height: "100%", outline: "none" }}
+      tabIndex={0}
+      onKeyDown={onGridKeyDown}
+    >
       <table
         style={{
           borderCollapse: "collapse",
@@ -317,33 +350,40 @@ function SimpleTable({
           {sortedRows.map((row, i) => (
             <tr
               key={i}
-              onClick={() => setSelectedRow(i)}
               style={{
-                background: selectedRow === i ? "var(--bg-active)" : undefined,
                 cursor: "pointer",
               }}
             >
-              {(row as unknown[]).map((cell, j) => (
-                <td
-                  key={j}
-                  style={{
-                    padding: "2px 8px",
-                    borderBottom: "1px solid var(--border)",
-                    color: cell === null ? "var(--text-subtle)" : "var(--text)",
-                    whiteSpace: "nowrap",
-                    maxWidth: 320,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                  title={cell === null ? "NULL" : String(cell)}
-                >
-                  {cell === null ? (
-                    <span style={{ color: "var(--text-subtle)", fontStyle: "italic" }}>NULL</span>
-                  ) : (
-                    String(cell)
-                  )}
-                </td>
-              ))}
+              {(row as unknown[]).map((cell, j) => {
+                const isActive = activeCell !== null && activeCell.row === i && activeCell.col === j;
+                return (
+                  <td
+                    key={j}
+                    style={{
+                      padding: "2px 8px",
+                      borderBottom: "1px solid var(--border)",
+                      color: cell === null ? "var(--text-subtle)" : "var(--text)",
+                      whiteSpace: "nowrap",
+                      maxWidth: 320,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      background: isActive ? "var(--accent-soft, rgba(168, 85, 247, 0.12))" : undefined,
+                      boxShadow: isActive ? "inset 0 0 0 2px var(--accent, #a855f7)" : undefined,
+                    }}
+                    title={cell === null ? "NULL" : String(cell)}
+                    onClick={() => {
+                      setActiveCell({ row: i, col: j });
+                      tableRootRef.current?.focus();
+                    }}
+                  >
+                    {cell === null ? (
+                      <span style={{ color: "var(--text-subtle)", fontStyle: "italic" }}>NULL</span>
+                    ) : (
+                      String(cell)
+                    )}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>

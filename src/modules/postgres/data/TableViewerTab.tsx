@@ -139,6 +139,7 @@ export function TableViewer({
     anchor: null,
     active: null,
   });
+  const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
   const [activeSubtab, setActiveSubtab] = useState<Subtab>("data");
   // Monotonically-advancing token incremented on every Apply gesture so that
   // re-applying a structurally-identical filter model still triggers a refetch.
@@ -280,9 +281,10 @@ export function TableViewer({
     return out;
   }, [data.rows, data.columns, buffer.rows, insertRowKeys, pkColumns]);
 
-  // Reset row selection whenever sort/filter/pageSize/relation changes.
+  // Reset row selection and active cell whenever sort/filter/pageSize/relation changes.
   useEffect(() => {
     setSelection({ anchor: null, active: null });
+    setActiveCell(null);
   }, [pageSize, orderBy, applied, connectionId, schema, relation]);
 
   // Count rows: lazy, on demand. Invalidates whenever filters change.
@@ -566,8 +568,9 @@ export function TableViewer({
     if (isReadOnly) return;
     if (relationKind !== "table") return; // Views/mat-views: no insert.
     buffer.addInsertRow({});
-    // Select the newly inserted row (it appears first).
+    // Select the newly inserted row (it appears first); clear active cell.
     setSelection({ anchor: 0, active: 0 });
+    setActiveCell(null);
     // Scroll the grid back to the top so the insert row is visible.
     gridRef.current?.scrollToTop();
   }
@@ -704,6 +707,7 @@ export function TableViewer({
                 nextError={data.error}
                 reachedEnd={data.reachedEnd}
                 selection={selection}
+                activeCell={activeCell}
                 bulkEditActive={bulkEditActive}
                 isReadOnly={isReadOnly}
                 pkColumns={pkColumns}
@@ -713,6 +717,7 @@ export function TableViewer({
                 schema={schema}
                 relation={relation}
                 onSelectionChange={setSelection}
+                onActiveCellChange={setActiveCell}
                 onSortChange={setOrderBy}
                 onLoadNextPage={data.loadNextPage}
                 onRetryNextPage={data.retryNextPage}

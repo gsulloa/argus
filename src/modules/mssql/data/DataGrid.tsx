@@ -22,6 +22,7 @@ import { AppError } from "@/platform/errors/AppError";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import { headerFloorWidthFor } from "@/modules/postgres/data/headerMeasure";
+import { copyCellValue, formatCellValue } from "@/platform/grid/cellClipboard";
 import { EditableCell } from "./EditableCell";
 import type { ColumnInfo, OrderBy } from "../types";
 import type { CellValue, EditValue } from "./types";
@@ -143,9 +144,20 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
   // Multi-cell selection state for clipboard (tab-separated)
   const [editingCell, setEditingCell] = useState<{ rowIdx: number; colIdx: number } | null>(null);
 
-  // Copy-to-clipboard on Ctrl/Cmd+C (§18.7)
+  // Single-cell active selection — mutually exclusive with row range.
+  const [activeCell, setActiveCell] = useState<{ rowIdx: number; colIdx: number } | null>(null);
+
+  // Reset active cell when rows/columns change (sort, filter, page, data refresh).
+  useEffect(() => {
+    setActiveCell(null);
+  }, [rows, columns]);
+
+  // Row-range copy-to-clipboard on Ctrl/Cmd+C (§18.7).
+  // Early-returns when a single cell is active so the keydown handler owns that path.
   useEffect(() => {
     function handleCopy(e: ClipboardEvent) {
+      // Single-cell takes precedence — handled by the keydown handler.
+      if (activeCell !== null) return;
       const { anchor, active } = selection;
       if (anchor === null || active === null) return;
       const from = Math.min(anchor, active);
@@ -154,7 +166,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
       for (let i = from; i <= to; i++) {
         const row = rows[i];
         if (!row) continue;
-        lines.push(row.cells.map(cellToString).join("\t"));
+        lines.push(row.cells.map(formatCellValue).join("\t"));
       }
       if (lines.length > 0) {
         e.clipboardData?.setData("text/plain", lines.join("\n"));
@@ -163,15 +175,55 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     }
     window.addEventListener("copy", handleCopy);
     return () => window.removeEventListener("copy", handleCopy);
-  }, [selection, rows]);
+  }, [selection, rows, activeCell]);
 
-  function onRowClick(e: React.MouseEvent, idx: number) {
+  function onCellClick(e: React.MouseEvent, rowIdx: number, colIdx: number) {
     if (e.shiftKey && selection.anchor !== null) {
-      onSelectionChange({ anchor: selection.anchor, active: idx });
+      // Shift-click extends row range — keep row-range mode, clear active cell.
+      onSelectionChange({ anchor: selection.anchor, active: rowIdx });
+      setActiveCell(null);
     } else {
-      onSelectionChange({ anchor: idx, active: idx });
+      // Plain click — set active cell, clear row range.
+      setActiveCell({ rowIdx, colIdx });
+      onSelectionChange({ anchor: null, active: null });
     }
-    onCellSelect?.(idx, null);
+    onCellSelect?.(rowIdx, colIdx);
+  }
+
+  function onGridKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (editingCell !== null) return; // editor handles its own keys
+
+    // ⌘C / Ctrl+C — single-cell copy.
+    if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C")) {
+      if (activeCell !== null) {
+        const target = e.target as HTMLElement;
+        const tag = target.tagName.toUpperCase();
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT" && !target.isContentEditable) {
+          const row = rows[activeCell.rowIdx];
+          if (row) {
+            const displayVal = buffer.getDisplayValue(
+              row.rowKey,
+              row.cells,
+              columns.map((c) => c.name),
+              columns[activeCell.colIdx]?.name ?? "",
+            );
+            e.preventDefault();
+            void copyCellValue(displayVal);
+          }
+          return;
+        }
+      }
+    }
+
+    if (e.key === "Escape") {
+      if (activeCell !== null) {
+        setActiveCell(null);
+        return;
+      }
+      if (selection.anchor !== null) {
+        onSelectionChange({ anchor: null, active: null });
+      }
+    }
   }
 
   const selFrom =
@@ -186,7 +238,11 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
   const items = virtualizer.getVirtualItems();
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", flex: 1, minWidth: 0 }}>
+    <div
+      style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", flex: 1, minWidth: 0 }}
+      tabIndex={0}
+      onKeyDown={onGridKeyDown}
+    >
       {/* Header */}
       <div
         style={{
@@ -302,7 +358,6 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   textDecoration: isDeleted ? "line-through" : "none",
                   cursor: "default",
                 }}
-                onClick={(e) => onRowClick(e, rowIdx)}
               >
                 {/* Gutter with row number / indicator */}
                 <div
@@ -340,6 +395,11 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   const isEditing =
                     editingCell?.rowIdx === rowIdx && editingCell?.colIdx === colIdx;
 
+                  const isActiveCellHere =
+                    activeCell !== null &&
+                    activeCell.rowIdx === rowIdx &&
+                    activeCell.colIdx === colIdx;
+
                   return (
                     <div
                       key={col.name}
@@ -352,9 +412,17 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                         borderRight: "1px solid var(--border)",
                         fontSize: 12,
                         overflow: "hidden",
-                        background: cellIsDirty ? "rgba(250, 204, 21, 0.12)" : "transparent",
+                        background: isActiveCellHere
+                          ? "var(--accent-soft, rgba(168, 85, 247, 0.12))"
+                          : cellIsDirty
+                          ? "rgba(250, 204, 21, 0.12)"
+                          : "transparent",
+                        boxShadow: isActiveCellHere
+                          ? "inset 0 0 0 2px var(--accent, #a855f7)"
+                          : undefined,
                         position: "relative",
                       }}
+                      onClick={(e) => onCellClick(e, rowIdx, colIdx)}
                       onDoubleClick={() => {
                         if (isReadOnly || (isPk && !isInsert)) return;
                         setEditingCell({ rowIdx, colIdx });
@@ -452,21 +520,8 @@ function buildPkMap(
   return out;
 }
 
-function cellToString(v: CellValue): string {
-  if (v === null) return "";
-  if (typeof v === "boolean") return v ? "true" : "false";
-  if (typeof v === "object") {
-    try {
-      return JSON.stringify(v);
-    } catch {
-      return "";
-    }
-  }
-  return String(v);
-}
-
 function CellDisplay({ value }: { value: CellValue | EditValue; isDirty: boolean }) {
-  const str = cellToString(value as CellValue);
+  const str = formatCellValue(value);
   return (
     <span
       style={{

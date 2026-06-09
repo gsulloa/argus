@@ -31,6 +31,7 @@ function Harness({ columns }: { columns: DataColumn[] }) {
       nextError={null}
       reachedEnd={true}
       selection={{ anchor: null, active: null }}
+      activeCell={null}
       bulkEditActive={false}
       isReadOnly={false}
       pkColumns={null}
@@ -40,6 +41,7 @@ function Harness({ columns }: { columns: DataColumn[] }) {
       schema="public"
       relation="users"
       onSelectionChange={() => {}}
+      onActiveCellChange={() => {}}
       onSortChange={() => {}}
       onLoadNextPage={() => {}}
       onRetryNextPage={() => {}}

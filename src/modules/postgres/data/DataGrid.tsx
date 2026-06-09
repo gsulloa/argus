@@ -4,6 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppError } from "@/platform/errors/AppError";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
+import { copyCellValue } from "@/platform/grid/cellClipboard";
 import { EditableCell, looksLikeBytea } from "./EditableCell";
 import { pixelYToRowIndex } from "./dragRowIndex";
 import { headerFloorWidthFor } from "./headerMeasure";
@@ -39,6 +40,8 @@ export interface DataGridProps {
   reachedEnd: boolean;
   /** Multi-row selection: anchor + active indices (both null = nothing selected). */
   selection: { anchor: number | null; active: number | null };
+  /** Single-cell active selection — mutually exclusive with row range. */
+  activeCell: { row: number; col: number } | null;
   /** When true (effective selection >= 2 and pkColumns != null), inline cell
    *  editing is suppressed so the inspector bulk-edit UI handles all edits. */
   bulkEditActive: boolean;
@@ -53,6 +56,7 @@ export interface DataGridProps {
   /** Relation name — used for per-relation column-width persistence. */
   relation: string;
   onSelectionChange(next: { anchor: number | null; active: number | null }): void;
+  onActiveCellChange(next: { row: number; col: number } | null): void;
   onSortChange(next: OrderBy[]): void;
   onLoadNextPage(): void;
   onRetryNextPage(): void;
@@ -71,6 +75,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     nextError,
     reachedEnd,
     selection,
+    activeCell,
     bulkEditActive,
     isReadOnly,
     pkColumns,
@@ -80,6 +85,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     schema,
     relation,
     onSelectionChange,
+    onActiveCellChange,
     onSortChange,
     onLoadNextPage,
     onRetryNextPage,
@@ -162,6 +168,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
   interface DragState {
     status: "pending" | "active";
     anchorIndex: number;
+    anchorColIndex: number;
     anchorClientX: number;
     anchorClientY: number;
   }
@@ -180,10 +187,40 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
       : Math.max(selection.anchor, selection.active ?? selection.anchor);
 
   // -----------------------------------------------------------------------
-  // Keyboard handler: Backspace / Delete toggles bulk delete; Escape clears
+  // Keyboard handler: Backspace / Delete toggles bulk delete; Escape clears;
+  // ⌘C / Ctrl+C copies the active cell value when a single cell is selected.
   // -----------------------------------------------------------------------
   function onGridKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     if (editing) return; // editor handles its own keys
+
+    // ⌘C / Ctrl+C — single-cell copy. Only fires when:
+    //   • activeCell is set
+    //   • the event target is not an input/textarea/select (native copy)
+    if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C")) {
+      if (activeCell !== null) {
+        const target = e.target as HTMLElement;
+        const tag = target.tagName.toUpperCase();
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT" && !target.isContentEditable) {
+          const row = rows[activeCell.row];
+          if (row) {
+            const serverValue = row.cells[activeCell.col] ?? null;
+            const col = columns[activeCell.col];
+            const displayValue =
+              col && row.rowKey
+                ? (() => {
+                    const editsEntry = buffer.getRowEdits(row.rowKey);
+                    return editsEntry && col.name in editsEntry.changes
+                      ? (editsEntry.changes[col.name] as EditValue)
+                      : serverValue;
+                  })()
+                : serverValue;
+            e.preventDefault();
+            void copyCellValue(displayValue);
+          }
+          return;
+        }
+      }
+    }
 
     if (e.key === "Backspace" || e.key === "Delete") {
       if (selection.anchor === null) return;
@@ -218,6 +255,10 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     }
 
     if (e.key === "Escape") {
+      if (activeCell !== null) {
+        onActiveCellChange(null);
+        return;
+      }
       if (selection.anchor !== null) {
         onSelectionChange({ anchor: null, active: null });
       }
@@ -275,16 +316,18 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
       }
 
       if (drag.status === "active") {
-        // Drag completed — finalize selection (already up-to-date from last mousemove).
-        // Ensure final active index reflects mouseup position.
+        // Drag completed — finalize row-range selection; clear active cell.
         const rowIndex = computeActiveIndex(e.clientY);
         onSelectionChange({ anchor: drag.anchorIndex, active: rowIndex });
+        onActiveCellChange(null);
       } else {
-        // Click (pending, never crossed threshold) — always force-select the row.
-        onSelectionChange({ anchor: drag.anchorIndex, active: drag.anchorIndex });
+        // Click (pending, never crossed threshold) — set the active cell;
+        // clear any row-range selection (mutually exclusive).
+        onActiveCellChange({ row: drag.anchorIndex, col: drag.anchorColIndex });
+        onSelectionChange({ anchor: null, active: null });
       }
 
-      // Focus the grid root so Escape / Backspace work immediately after click/drag.
+      // Focus the grid root so Escape / ⌘C work immediately after click.
       const rootEl = viewportRef.current?.parentElement as HTMLElement | null;
       rootEl?.focus();
 
@@ -419,9 +462,13 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   if (e.button !== 0) return;
                   // Prevent the browser from starting a native text-selection drag inside the cell.
                   e.preventDefault();
+                  // Detect which column was clicked from the nearest data-col attribute.
+                  const cellEl = (e.target as HTMLElement).closest("[data-col]") as HTMLElement | null;
+                  const colIdx = cellEl ? parseInt(cellEl.dataset.col ?? "0", 10) : 0;
                   dragRef.current = {
                     status: "pending",
                     anchorIndex: vi.index,
+                    anchorColIndex: colIdx,
                     anchorClientX: e.clientX,
                     anchorClientY: e.clientY,
                   };
@@ -494,6 +541,11 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                     }
                   }
 
+                  const isActiveCellHere =
+                    activeCell !== null &&
+                    activeCell.row === vi.index &&
+                    activeCell.col === colIdx;
+
                   return (
                     <EditableCell
                       key={col.name}
@@ -503,6 +555,8 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                       readOnly={cellReadOnly}
                       enumValues={enumValuesByColumn[col.name]}
                       editing={cellEditing}
+                      colIndex={colIdx}
+                      isActiveCell={isActiveCellHere}
                       onStartEdit={onStartEdit}
                       onCommitEdit={onCommitEdit}
                       onCancelEdit={onCancelEdit}
