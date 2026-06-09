@@ -9,6 +9,7 @@ import {
 } from "./types";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
+import type { SortOrder } from "@/platform/table/sortResultRows";
 import styles from "./DataGrid.module.css";
 
 const ROW_HEIGHT = 26;
@@ -21,6 +22,14 @@ export interface AdhocResultGridProps {
   selectedRowIndex?: number | null;
   /** Called with the row index on click (or `null` on toggle-off). */
   onSelectRow?(index: number | null): void;
+  /**
+   * Current client-side sort state (issue #91). When provided together with
+   * `onSortChange`, column headers become click-to-sort and show ↑/↓ indicators.
+   * The caller is responsible for sorting `rows` to match.
+   */
+  orderBy?: SortOrder[];
+  /** Fired with the next sort state when a header is clicked. */
+  onSortChange?(next: SortOrder[]): void;
   /** Optional element rendered when `rows.length === 0`. */
   emptyState?: ReactNode;
   /** Forwarded to the root container. */
@@ -30,8 +39,9 @@ export interface AdhocResultGridProps {
 /**
  * Read-only virtualized result grid. Used by the SQL editor for ad-hoc query
  * results and shares the same DOM and styling as the editable table viewer's
- * grid (no separate virtualization implementation). Intentionally has zero
- * sort/filter/edit affordances — it is purely presentational.
+ * grid (no separate virtualization implementation). It has no edit/filter
+ * affordances; client-side sort (header click → asc/desc/unsorted) is opt-in
+ * via the `orderBy`/`onSortChange` props.
  *
  * Column widths are in-memory only (storageKey: null) and reset automatically
  * when the columns shape changes (via the `key` on the inner component).
@@ -41,6 +51,8 @@ export function AdhocResultGrid({
   rows,
   selectedRowIndex,
   onSelectRow,
+  orderBy,
+  onSortChange,
   emptyState,
   style,
 }: AdhocResultGridProps) {
@@ -59,6 +71,8 @@ export function AdhocResultGrid({
       rows={rows}
       selectedRowIndex={selectedRowIndex}
       onSelectRow={onSelectRow}
+      orderBy={orderBy}
+      onSortChange={onSortChange}
       emptyState={emptyState}
       style={style}
     />
@@ -76,10 +90,23 @@ function AdhocResultGridInner({
   rows,
   selectedRowIndex,
   onSelectRow,
+  orderBy,
+  onSortChange,
   emptyState,
   style,
 }: AdhocResultGridProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  const sortable = !!onSortChange;
+  const sortDirFor = (name: string): "asc" | "desc" | null =>
+    orderBy?.find((o) => o.column === name)?.direction ?? null;
+  const handleHeaderClick = (name: string) => {
+    if (!onSortChange) return;
+    const cur = orderBy?.find((o) => o.column === name);
+    if (!cur) onSortChange([{ column: name, direction: "asc" }]);
+    else if (cur.direction === "asc") onSortChange([{ column: name, direction: "desc" }]);
+    else onSortChange([]);
+  };
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -160,23 +187,34 @@ function AdhocResultGridInner({
       <div className={styles.viewport} ref={viewportRef}>
         <div className={styles.thead} style={{ width: effectiveTotalWidth }}>
           <div className={styles.headerRow} style={{ height: HEADER_HEIGHT }}>
-            {columns.map((col) => (
-              <div
-                key={col.name}
-                className={styles.headerCell}
-                style={{ width: widthFor(col.name), cursor: "default", position: "relative" }}
-                role="columnheader"
-                title={`${col.name} : ${col.data_type}`}
-              >
-                <span className={styles.colName}>{col.name}</span>
-                <span className={styles.colType}>{col.data_type}</span>
-                <ResizeHandle
-                  currentWidth={widthFor(col.name)}
-                  onChange={(px) => setWidth(col.name, px)}
-                  onReset={() => resetWidth(col.name)}
-                />
-              </div>
-            ))}
+            {columns.map((col) => {
+              const dir = sortDirFor(col.name);
+              return (
+                <div
+                  key={col.name}
+                  className={styles.headerCell}
+                  style={{
+                    width: widthFor(col.name),
+                    cursor: sortable ? "pointer" : "default",
+                    position: "relative",
+                  }}
+                  role="columnheader"
+                  title={`${col.name} : ${col.data_type}`}
+                  onClick={sortable ? () => handleHeaderClick(col.name) : undefined}
+                >
+                  <span className={styles.colName}>{col.name}</span>
+                  {dir && (
+                    <span className={styles.sortBadge}>{dir === "asc" ? "↑" : "↓"}</span>
+                  )}
+                  <span className={styles.colType}>{col.data_type}</span>
+                  <ResizeHandle
+                    currentWidth={widthFor(col.name)}
+                    onChange={(px) => setWidth(col.name, px)}
+                    onReset={() => resetWidth(col.name)}
+                  />
+                </div>
+              );
+            })}
           </div>
         </div>
         <div
