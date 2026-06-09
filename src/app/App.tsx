@@ -43,6 +43,7 @@ import { MysqlFormProvider, useMysqlCommands } from "@/modules/mysql";
 import { useMysqlTabLifecycle } from "@/modules/mysql/useMysqlTabLifecycle";
 import { MssqlFormProvider, useMssqlCommands } from "@/modules/mssql";
 import { useMssqlTabLifecycle } from "@/modules/mssql/useMssqlTabLifecycle";
+import { AthenaFormProvider } from "@/modules/athena";
 import { useDataViewLifecycle } from "@/modules/dynamo/data-view/useDataViewLifecycle";
 import { DynamoTablesCacheProvider, useDynamoTablesPaletteCommands } from "@/modules/dynamo/tables";
 import { KindPickerProvider } from "@/platform/shell/useKindPicker";
@@ -65,12 +66,14 @@ export function App() {
                       <MysqlFormProvider>
                         <MssqlFormProvider>
                           <DynamoFormProvider>
-                            <DynamoTablesCacheProvider>
-                              <KindPickerProvider>
-                                <Shell />
-                                <CredentialsRefreshedListener />
-                              </KindPickerProvider>
-                            </DynamoTablesCacheProvider>
+                            <AthenaFormProvider>
+                              <DynamoTablesCacheProvider>
+                                <KindPickerProvider>
+                                  <Shell />
+                                  <CredentialsRefreshedListener />
+                                </KindPickerProvider>
+                              </DynamoTablesCacheProvider>
+                            </AthenaFormProvider>
                           </DynamoFormProvider>
                         </MssqlFormProvider>
                       </MysqlFormProvider>

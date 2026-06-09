@@ -21,6 +21,16 @@ use crate::modules::context::commands::{
     context_set_project_source, context_sync_schema, context_unlink,
 };
 use crate::modules::context::registry::{ContextRegistry, TauriEmitter};
+use crate::modules::athena::commands::{
+    athena_connect, athena_disconnect, athena_disconnect_all, athena_list_active,
+    athena_test_connection,
+};
+use crate::modules::athena::pool::AthenaClientRegistry;
+use crate::modules::athena::s3::{athena_list_s3_buckets, athena_list_s3_prefixes};
+use crate::modules::athena::schema_commands::{
+    athena_list_columns, athena_list_databases, athena_list_relations,
+};
+use crate::modules::athena::sql::{athena_cancel_query, athena_run_sql, athena_run_sql_many};
 use crate::modules::dynamo::client::DynamoClientRegistry;
 use crate::modules::dynamo::commands::{
     dynamo_connect, dynamo_disconnect, dynamo_list_active, dynamo_list_aws_profiles,
@@ -171,6 +181,7 @@ pub fn run() {
             app.manage(MysqlPoolRegistry::new());
             app.manage(MssqlPoolRegistry::new());
             app.manage(DynamoClientRegistry::new());
+            app.manage(AthenaClientRegistry::new());
             app.manage(platform::updater::UpdaterState::default());
 
             // Context registry — shared singleton keyed by canonical folder path.
@@ -313,6 +324,20 @@ pub fn run() {
             saved_queries_move,
             saved_queries_delete,
             saved_queries_duplicate,
+            // Athena commands
+            athena_test_connection,
+            athena_connect,
+            athena_disconnect,
+            athena_disconnect_all,
+            athena_list_active,
+            athena_list_databases,
+            athena_list_relations,
+            athena_list_columns,
+            athena_run_sql,
+            athena_run_sql_many,
+            athena_cancel_query,
+            athena_list_s3_buckets,
+            athena_list_s3_prefixes,
             // DynamoDB commands
             dynamo_list_aws_profiles,
             dynamo_test_connection,

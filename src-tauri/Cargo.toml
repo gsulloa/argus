@@ -46,7 +46,10 @@ regex = "1"
 percent-encoding = "2"
 time = { version = "0.3", features = ["formatting", "macros", "serde"] }
 async-trait = "0.1"
+aws-sdk-athena = "1.104.0"
 aws-sdk-dynamodb = "1.111.0"
+aws-sdk-glue = "1.114.0"
+aws-sdk-s3 = "1.104.0"
 aws-sdk-sts = "1.103.0"
 aws-config = "1.8.16"
 # Transitive dep, pinned explicitly so we can pattern-match on SdkError variants.

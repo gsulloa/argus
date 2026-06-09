@@ -50,6 +50,17 @@ import {
   MssqlSchemaToolbar,
 } from "@/modules/mssql";
 import { openMssqlQueryTab } from "@/modules/mssql/openMssqlQueryTab";
+import {
+  ATHENA_KIND,
+  AthenaIcon,
+  athenaApi,
+  useActiveAthenaConnections,
+  useAthenaForm,
+  AthenaSchemaTree,
+  AthenaSchemaPrimaryActions,
+  AthenaSchemaToolbar,
+} from "@/modules/athena";
+import { openAthenaQueryTab } from "@/modules/athena/openAthenaQueryTab";
 import { ContextQueriesBranch } from "@/modules/context/components/ContextQueriesBranch";
 import { openContextQuery } from "@/modules/context/openContextQuery";
 import { useTabs } from "@/platform/shell/tabs";
@@ -85,12 +96,14 @@ export function ConnectionRow({
   const dyActive = useActiveDynamoConnections();
   const myActive = useActiveMysqlConnections();
   const msActive = useActiveMssqlConnections();
+  const athenaActive = useActiveAthenaConnections();
   const { items: allConnections, remove, move } = useConnections();
   const { items: groups } = useConnectionGroups();
   const pgForm = usePostgresForm();
   const dyForm = useDynamoForm();
   const myForm = useMysqlForm();
   const msForm = useMssqlForm();
+  const athenaForm = useAthenaForm();
   const handleDynamoError = useDynamoErrorHandler();
   const tabs = useTabs();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -101,6 +114,7 @@ export function ConnectionRow({
   const isDynamo = connection.kind === DYNAMO_KIND;
   const isMySQL = connection.kind === MYSQL_KIND;
   const isMssql = connection.kind === MSSQL_KIND;
+  const isAthena = connection.kind === ATHENA_KIND;
 
   const active = isPostgres
     ? pgActive.isActive(connection.id)
@@ -110,7 +124,9 @@ export function ConnectionRow({
         ? myActive.isActive(connection.id)
         : isMssql
           ? msActive.isActive(connection.id)
-          : false;
+          : isAthena
+            ? athenaActive.isActive(connection.id)
+            : false;
 
   const activeDynamoView = isDynamo ? dyActive.getActive(connection.id) : undefined;
 
@@ -183,6 +199,15 @@ export function ConnectionRow({
       } finally {
         setIsConnecting(false);
       }
+    } else if (isAthena) {
+      setIsConnecting(true);
+      try {
+        await athenaApi.connect(connection.id);
+      } catch (e) {
+        console.error("[argus] athena connect:", e);
+      } finally {
+        setIsConnecting(false);
+      }
     }
     // unknown kind: no-op
   }
@@ -219,6 +244,14 @@ export function ConnectionRow({
     }
   }
 
+  async function handleAthenaDisconnect() {
+    try {
+      await athenaApi.disconnect(connection.id);
+    } catch (e) {
+      console.error("[argus] athena disconnect:", e);
+    }
+  }
+
   async function handleDelete() {
     try {
       if (active) {
@@ -230,6 +263,8 @@ export function ConnectionRow({
           await mysqlApi.disconnect(connection.id);
         } else if (isMssql) {
           await mssqlApi.disconnect(connection.id);
+        } else if (isAthena) {
+          await athenaApi.disconnect(connection.id);
         }
       }
       await remove(connection.id);
@@ -266,7 +301,7 @@ export function ConnectionRow({
       : "Connect";
 
   // Determine whether the row has any clickable primary action
-  const isClickable = isPostgres || isDynamo || isMySQL || isMssql;
+  const isClickable = isPostgres || isDynamo || isMySQL || isMssql || isAthena;
 
   return (
     <>
@@ -304,6 +339,8 @@ export function ConnectionRow({
                   <MysqlIcon size={14} />
                 ) : isMssql ? (
                   <MssqlIcon size={14} />
+                ) : isAthena ? (
+                  <AthenaIcon size={14} />
                 ) : (
                   <span className={styles.itemKind}>{connection.kind}</span>
                 )}
@@ -440,6 +477,28 @@ export function ConnectionRow({
                 </span>
               </>
             )}
+            {isAthena && active && (
+              <>
+                <span className={styles.rowPrimary}>
+                  <AthenaSchemaPrimaryActions connectionId={connection.id} />
+                </span>
+                <button
+                  type="button"
+                  className={styles.disconnectBtn}
+                  aria-label="Disconnect"
+                  title="Disconnect"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDisconnect(true);
+                  }}
+                >
+                  <Power size={12} strokeWidth={2.5} />
+                </button>
+                <span className={styles.rowToolbar}>
+                  <AthenaSchemaToolbar connectionId={connection.id} />
+                </span>
+              </>
+            )}
           </div>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
@@ -524,6 +583,29 @@ export function ConnectionRow({
                 <ContextMenu.Separator className={styles.contextSeparator} />
               </>
             )}
+            {isAthena && active && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() =>
+                    openAthenaQueryTab(tabs, {
+                      connectionId: connection.id,
+                      connectionName: connection.name,
+                      sql: "",
+                    })
+                  }
+                >
+                  New SQL Query
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => setConfirmDisconnect(true)}
+                >
+                  Disconnect
+                </ContextMenu.Item>
+                <ContextMenu.Separator className={styles.contextSeparator} />
+              </>
+            )}
             {isPostgres && (
               <>
                 <ContextMenu.Item
@@ -588,7 +670,23 @@ export function ConnectionRow({
                 </ContextMenu.Item>
               </>
             )}
-            {!isPostgres && !isDynamo && !isMySQL && !isMssql && (
+            {isAthena && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => athenaForm.openEdit(connection)}
+                >
+                  Edit
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => athenaForm.openDuplicate(connection)}
+                >
+                  Duplicate
+                </ContextMenu.Item>
+              </>
+            )}
+            {!isPostgres && !isDynamo && !isMySQL && !isMssql && !isAthena && (
               <ContextMenu.Item className={styles.contextItem} disabled>
                 {connection.kind}
               </ContextMenu.Item>
@@ -693,6 +791,11 @@ export function ConnectionRow({
           />
         </div>
       )}
+      {isAthena && active && (
+        <div className={styles.subtree}>
+          <AthenaSchemaTree connectionId={connection.id} />
+        </div>
+      )}
 
       <DisconnectConfirmDialog
         open={confirmDisconnect}
@@ -707,7 +810,9 @@ export function ConnectionRow({
               ? handleMysqlDisconnect
               : isMssql
                 ? handleMssqlDisconnect
-                : handleDynamoDisconnect
+                : isAthena
+                  ? handleAthenaDisconnect
+                  : handleDynamoDisconnect
         }
       />
 

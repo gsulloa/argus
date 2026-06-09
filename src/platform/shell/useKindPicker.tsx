@@ -7,6 +7,7 @@ import { DYNAMO_KIND } from "@/modules/dynamo/types";
 import { PostgresIcon } from "@/modules/postgres/icon";
 import { useMysqlForm, MysqlIcon, MYSQL_KIND } from "@/modules/mysql";
 import { useMssqlForm, MssqlIcon, MSSQL_KIND } from "@/modules/mssql";
+import { useAthenaForm, AthenaIcon, ATHENA_KIND } from "@/modules/athena";
 
 interface KindPickerControllerValue {
   open: () => void;
@@ -25,6 +26,7 @@ export function KindPickerProvider({
   const dy = useDynamoForm();
   const my = useMysqlForm();
   const ms = useMssqlForm();
+  const at = useAthenaForm();
 
   const kinds = React.useMemo<KindCard[]>(
     () => [
@@ -56,8 +58,15 @@ export function KindPickerProvider({
         Icon: DynamoIcon,
         onPick: () => dy.openCreate(),
       },
+      {
+        kind: ATHENA_KIND,
+        label: "Amazon Athena",
+        description: "Connect to AWS Athena (query S3 via Glue)",
+        Icon: AthenaIcon,
+        onPick: () => at.openCreate(),
+      },
     ],
-    [pg, my, ms, dy],
+    [pg, my, ms, dy, at],
   );
 
   const value = React.useMemo<KindPickerControllerValue>(
