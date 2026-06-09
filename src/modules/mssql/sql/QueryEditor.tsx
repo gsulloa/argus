@@ -45,6 +45,7 @@ import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import { composeSources } from "./completionSources";
 import { formatSql } from "./format";
+import { noAutoCorrectEditorAttrs } from "../../shared/text-input-hygiene";
 
 // ---------------------------------------------------------------------------
 // Error-position underline decoration (§20.5)
@@ -230,6 +231,7 @@ export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
           ]),
           customKeymap,
           updateListener,
+          noAutoCorrectEditorAttrs,
           EditorView.theme({
             "&": { height: "100%", fontSize: "12.5px" },
             ".cm-scroller": { fontFamily: "var(--font-mono)" },

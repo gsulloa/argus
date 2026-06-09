@@ -7,6 +7,7 @@ import { useDirtySummary } from "@/platform/shell/tabs/useDirtySummary";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { AppError } from "@/platform/errors/AppError";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useSaveShortcut } from "@/platform/shell/useSaveShortcut";
 import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import { DocsSubtab } from "@/modules/context/components/DocsSubtab";
 import { useActiveConnections } from "../useActiveConnections";
@@ -480,11 +481,6 @@ export function TableViewer({
       const root = rootRef.current;
       if (!root) return;
       if (!root.contains(document.activeElement)) return;
-      // ⌘S → save (open preview)
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        onSave();
-      }
       // ⌘1 / ⌘2 / ⌘3 / ⌘4 → sub-tab switching. Skip when focus is in an editable
       // surface (input/textarea/CodeMirror) so the user's typing isn't stolen.
       if (
@@ -562,7 +558,11 @@ export function TableViewer({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, onSave, buffer, activeSubtab, filterBarVisible, setFilterBarVisible, onReload]);
+  }, [active, buffer, activeSubtab, filterBarVisible, setFilterBarVisible, onReload]);
+
+  // ⌘S → save the dirty buffer regardless of focus position within the tab
+  // (issue #88). Shared with the MySQL / MSSQL viewers.
+  useSaveShortcut({ active, rootRef, onSave });
 
   function onAddRow() {
     if (isReadOnly) return;

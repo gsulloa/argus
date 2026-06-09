@@ -22,6 +22,7 @@ import type { BuilderState } from "./types";
 import type { DynamoItemsStatus } from "./useDynamoItems";
 import type { CountResult } from "./BottomBar";
 import styles from "./Toolbar.module.css";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
 export type ViewMode = "tabla" | "json" | "metadata";
 
@@ -227,6 +228,7 @@ export function Toolbar({
       <input
         id="dynamo-page-size"
         type="number"
+        {...noAutoCorrectProps}
         className={styles.pageSizeInput}
         min={1}
         max={1000}

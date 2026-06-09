@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 
 import { aiApi } from "@/modules/ai/api";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 import { useAiSettings } from "@/modules/ai/store";
 import {
   PROVIDER_IDS,
@@ -185,11 +186,11 @@ function ProviderCard({ entry, modelValue, onModelChange, keyPresent }: Provider
             <input
               id={`apikey-${entry.id}`}
               type="password"
+              {...noAutoCorrectProps}
               className={styles.input}
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
               placeholder="Paste key…"
-              autoComplete="off"
             />
             <button
               type="button"

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { ColumnRef, DataColumn } from "../types";
 import styles from "./FilterBar.module.css";
+import { noAutoCorrectProps } from "../../../shared/text-input-hygiene";
 
 interface Props {
   value: ColumnRef;
@@ -70,6 +71,7 @@ export function ColumnPicker({ value, columns, onChange }: Props) {
       {open && (
         <div ref={popoverRef} className={styles.columnPopover} role="listbox">
           <input
+            {...noAutoCorrectProps}
             className={styles.columnSearch}
             placeholder="Search columns…"
             value={query}

@@ -15,6 +15,7 @@ import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
 import { useDirtySummary } from "@/platform/shell/tabs/useDirtySummary";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useSaveShortcut } from "@/platform/shell/useSaveShortcut";
 import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import { DocsSubtab } from "@/modules/context/components/DocsSubtab";
 import { useActiveMssqlConnections } from "../useActiveConnections";
@@ -221,6 +222,7 @@ function MssqlTableViewer({
   const [discardOpen, setDiscardOpen] = useState(false);
 
   const gridRef = useRef<DataGridHandle | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   // Load PK on mount
   useEffect(() => {
@@ -378,10 +380,6 @@ function MssqlTableViewer({
         e.preventDefault();
         buffer.undo();
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        void handleApply();
-      }
       // ⌘R / Ctrl+R → Reload the current table query (Data subtab only).
       // Skip when focus is inside a CodeMirror surface.
       if (active && (e.metaKey || e.ctrlKey) && e.key === "r" && !e.shiftKey && !e.altKey) {
@@ -390,8 +388,11 @@ function MssqlTableViewer({
         tableData.refresh();
       }
     },
-    [active, selection, isReadOnly, unifiedRows, tableData, pkColumns, buffer, handleApply],
+    [active, selection, isReadOnly, unifiedRows, tableData, pkColumns, buffer],
   );
+
+  // ⌘S → apply the dirty buffer regardless of focus position (issue #88).
+  useSaveShortcut({ active, rootRef, onSave: handleApply });
 
   // §18.8 — Empty state discrimination
   const tableIsEmpty = tableData.isReady && tableData.rows.length === 0 && !buffer.hasDirty;
@@ -403,6 +404,7 @@ function MssqlTableViewer({
 
   return (
     <div
+      ref={rootRef}
       style={{ display: "flex", flexDirection: "column", height: "100%", flex: 1, minWidth: 0, outline: "none" }}
       onKeyDown={handleKeyDown}
       tabIndex={-1}

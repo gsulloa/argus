@@ -10,6 +10,7 @@
  */
 
 import React, { useMemo, useState, useRef, useImperativeHandle } from "react";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 import type { TableDescription } from "@/modules/dynamo/tables/types";
 import { compile } from "./builderCompiler";
 import { compileModel } from "./modelCompiler";
@@ -219,6 +220,7 @@ function TypedValueEditor({
     editor = (
       <input
         type="text"
+        {...noAutoCorrectProps}
         className={inputClassName}
         value={v}
         onChange={(e) => onChange({ type: "S", value: e.target.value })}
@@ -239,6 +241,7 @@ function TypedValueEditor({
     editor = (
       <input
         type="text"
+        {...noAutoCorrectProps}
         inputMode="decimal"
         className={inputClassName}
         value={v}
@@ -419,6 +422,7 @@ function FilterRowEditor({ row, index, onChange, onRemove, onApplyOnly, isFirst,
           </select>
           <input
             type="text"
+            {...noAutoCorrectProps}
             inputMode={sharedType === "N" ? "decimal" : "text"}
             className={styles.textInput}
             value={min.type === "N" || min.type === "S" ? min.value : ""}
@@ -445,6 +449,7 @@ function FilterRowEditor({ row, index, onChange, onRemove, onApplyOnly, isFirst,
           <span className={styles.betweenAnd}>and</span>
           <input
             type="text"
+            {...noAutoCorrectProps}
             inputMode={sharedType === "N" ? "decimal" : "text"}
             className={styles.textInput}
             value={max.type === "N" || max.type === "S" ? max.value : ""}
@@ -504,6 +509,7 @@ function FilterRowEditor({ row, index, onChange, onRemove, onApplyOnly, isFirst,
     <div className={styles.filterRow} data-testid={`filter-row-${index}`}>
       <input
         type="text"
+        {...noAutoCorrectProps}
         className={styles.filterAttrInput}
         value={row.attribute}
         onChange={(e) => handleAttrChange(e.target.value)}
@@ -1339,6 +1345,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
                   </span>
                   <input
                     type="text"
+                    {...noAutoCorrectProps}
                     className={`${styles.textInput} ${styles.keyValueInput}`}
                     value={builder.modelSelection?.params[param] ?? ""}
                     onChange={(e) => setModelParam(param, e.target.value)}
@@ -1389,6 +1396,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
                   <span className={styles.keyLabel}>{param} (to)</span>
                   <input
                     type="text"
+                    {...noAutoCorrectProps}
                     className={`${styles.textInput} ${styles.keyValueInput}`}
                     value={builder.modelSelection?.skMaxParams?.[param] ?? ""}
                     onChange={(e) => setModelSkMaxParam(param, e.target.value)}
@@ -1464,6 +1472,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
                       <>
                         <input
                           type="text"
+                          {...noAutoCorrectProps}
                           inputMode={keySchema.skType === "N" ? "decimal" : "text"}
                           className={styles.textInput}
                           value={
@@ -1488,6 +1497,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
                         <span className={styles.betweenAnd}>and</span>
                         <input
                           type="text"
+                          {...noAutoCorrectProps}
                           inputMode={keySchema.skType === "N" ? "decimal" : "text"}
                           className={styles.textInput}
                           value={
@@ -1513,6 +1523,7 @@ export const QueryBuilder = React.forwardRef<FilterBarHandle, QueryBuilderProps>
                     ) : (
                       <input
                         type="text"
+                        {...noAutoCorrectProps}
                         inputMode={keySchema.skType === "N" ? "decimal" : "text"}
                         className={`${styles.textInput} ${styles.keyValueInput}`}
                         value={

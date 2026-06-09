@@ -19,6 +19,7 @@ import { useSavedQueries } from "./useSavedQueries";
 import type { FolderNode } from "./types";
 import dialogStyles from "@/platform/shell/Dialog.module.css";
 import styles from "./SaveAsModal.module.css";
+import { noAutoCorrectProps } from "../shared/text-input-hygiene";
 
 export interface SaveAsModalProps {
   open: boolean;
@@ -116,6 +117,7 @@ export function SaveAsModal({
           {/* Name field */}
           <label className={styles.label} htmlFor="save-as-name">Name</label>
           <input
+            {...noAutoCorrectProps}
             id="save-as-name"
             ref={nameRef}
             type="text"
@@ -167,6 +169,7 @@ export function SaveAsModal({
           {showNewFolder ? (
             <div className={styles.newFolderRow}>
               <input
+                {...noAutoCorrectProps}
                 type="text"
                 className={styles.input}
                 placeholder={

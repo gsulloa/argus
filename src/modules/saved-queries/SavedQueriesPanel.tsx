@@ -29,6 +29,7 @@ import { FolderPicker } from "./FolderPicker";
 import type { FolderNode, QueryNode, SavedQueryFolder, TreeNode as SqTreeNode } from "./types";
 import dialogStyles from "@/platform/shell/Dialog.module.css";
 import styles from "./SavedQueriesPanel.module.css";
+import { noAutoCorrectProps } from "../shared/text-input-hygiene";
 
 // ---------------------------------------------------------------------------
 // Settings key
@@ -384,6 +385,7 @@ function RenameInput({ initialName, onCommit, onCancel }: RenameInputProps) {
 
   return (
     <input
+      {...noAutoCorrectProps}
       ref={inputRef}
       type="text"
       className={styles.renameInput}
@@ -908,6 +910,7 @@ export function SavedQueriesPanel() {
       {/* Search */}
       <div className={styles.searchWrap}>
         <input
+          {...noAutoCorrectProps}
           type="text"
           className={styles.searchInput}
           placeholder="Filter…"
@@ -917,7 +920,6 @@ export function SavedQueriesPanel() {
             if (e.key === "Escape") { e.stopPropagation(); setSearchQuery(""); }
           }}
           aria-label="Filter saved queries"
-          spellCheck={false}
         />
       </div>
 

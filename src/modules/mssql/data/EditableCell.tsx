@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ColumnInfo } from "../types";
 import type { CellValue, EditValue } from "./types";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
 // ---------------------------------------------------------------------------
 // Type helpers
@@ -379,6 +380,7 @@ function TextEditor({ initialValue, nullable, onCommit, onCancel }: TextEditorPr
           minWidth: 0,
         }}
         autoFocus
+        {...noAutoCorrectProps}
       />
       {nullable && (
         <button
@@ -481,6 +483,7 @@ function JsonEditor({ initialValue, onCommit, onCancel }: JsonEditorProps) {
           color: "var(--text)",
           resize: "vertical",
         }}
+        {...noAutoCorrectProps}
       />
       {error && (
         <span style={{ fontSize: 10, color: "var(--danger)" }}>{error}</span>
@@ -541,6 +544,7 @@ function XmlEditor({
         resize: "vertical",
         width: "100%",
       }}
+      {...noAutoCorrectProps}
     />
   );
 }
@@ -670,6 +674,7 @@ function UuidEditor({ initialValue, nullable, onCommit, onCancel }: UuidEditorPr
           fontFamily: "var(--font-mono, monospace)",
         }}
         autoFocus
+        {...noAutoCorrectProps}
       />
       {nullable && (
         <button
@@ -754,6 +759,7 @@ function DateTimeEditor({ dataType, initialValue, onCommit, onCancel }: DateTime
         color: "var(--text)",
         width: "100%",
       }}
+      {...noAutoCorrectProps}
     />
   );
 }

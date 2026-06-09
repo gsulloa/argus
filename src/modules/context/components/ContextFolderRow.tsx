@@ -6,6 +6,7 @@ import { contextApi } from "@/modules/context/api";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { SyncReportModal } from "./SyncReportModal";
 import styles from "./ContextFolderRow.module.css";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
 export interface ContextFolderRowProps {
   connectionId: string;
@@ -50,6 +51,7 @@ function FolderNameDialog({ open, onOpenChange, defaultName, onSubmit }: FolderN
           <Dialog.Title className={styles.promptTitle}>New context folder name</Dialog.Title>
           <form onSubmit={handleSubmit} className={styles.promptForm}>
             <input
+              {...noAutoCorrectProps}
               className={styles.promptInput}
               value={name}
               onChange={(e) => setName(e.target.value)}

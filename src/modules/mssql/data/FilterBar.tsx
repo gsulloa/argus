@@ -14,6 +14,7 @@ import { Plus, Trash2 } from "lucide-react";
 import type { ColumnInfo, Operator } from "../types";
 import type { FilterModel, FilterRow } from "./types";
 import { EMPTY_FILTER_ROW } from "./types";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
 // ---------------------------------------------------------------------------
 // Operator definitions (no ILIKE for MSSQL)
@@ -245,6 +246,7 @@ function FilterRowEditor({ row, columns, onChange, onRemove, onApply }: RowEdito
       {opDef.needsValue && (
         <input
           type="text"
+          {...noAutoCorrectProps}
           value={displayValue as string}
           onChange={handleValueChange}
           onKeyDown={(e) => {

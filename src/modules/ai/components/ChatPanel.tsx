@@ -22,6 +22,7 @@ import type { AiReadiness } from "@/modules/ai/useAiReadiness";
 import { CommandRegistry } from "@/platform/command-palette/CommandRegistry";
 
 import styles from "./ChatPanel.module.css";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -928,6 +929,7 @@ export function ChatPanel({
           </div>
         )}
         <textarea
+          {...noAutoCorrectProps}
           ref={textareaRef}
           className={styles.textarea}
           value={input}

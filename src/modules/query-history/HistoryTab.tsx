@@ -18,6 +18,7 @@ import {
 } from "./api";
 import styles from "./HistoryTab.module.css";
 import dialogStyles from "@/platform/shell/Dialog.module.css";
+import { noAutoCorrectProps } from "../shared/text-input-hygiene";
 
 export const QUERY_HISTORY_KIND = "query-history";
 export const QUERY_HISTORY_TAB_ID = "history";
@@ -277,6 +278,7 @@ function HistoryTab() {
       <div className={styles.filterBar}>
         <input
           type="search"
+          {...noAutoCorrectProps}
           className={styles.search}
           placeholder="Search SQL…"
           value={searchInput}

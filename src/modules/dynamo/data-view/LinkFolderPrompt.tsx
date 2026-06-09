@@ -17,6 +17,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { contextApi } from "@/modules/context/api";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
 export interface LinkFolderPromptProps {
   open: boolean;
@@ -245,6 +246,7 @@ export function LinkFolderPrompt({
 
                 <input
                   type="text"
+                  {...noAutoCorrectProps}
                   style={inputStyle}
                   value={folderName}
                   onChange={(e) => setFolderName(e.target.value)}

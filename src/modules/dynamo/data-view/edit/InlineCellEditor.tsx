@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { AttributeValue } from "../types";
+import { noAutoCorrectProps } from "../../../shared/text-input-hygiene";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -112,7 +113,7 @@ function SEditor({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter" || e.key === "Tab") {
+    if (e.key === "Enter" || e.key === "Tab" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s")) {
       e.preventDefault();
       commit();
     } else if (e.key === "Escape") {
@@ -137,6 +138,7 @@ function SEditor({
         }}
         onFocus={() => setFocused(true)}
         style={focused ? inputStyleFocus : inputStyle}
+        {...noAutoCorrectProps}
       />
       {saving && <Spinner />}
     </span>
@@ -179,7 +181,7 @@ function NEditor({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter" || e.key === "Tab") {
+    if (e.key === "Enter" || e.key === "Tab" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s")) {
       e.preventDefault();
       tryCommit();
     } else if (e.key === "Escape") {
@@ -214,6 +216,7 @@ function NEditor({
         }}
         onFocus={() => setFocused(true)}
         style={style}
+        {...noAutoCorrectProps}
       />
       {saving && <Spinner />}
     </span>
