@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { AttributeValue } from "../types";
+import { noAutoCorrectProps } from "../../../shared/text-input-hygiene";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -137,6 +138,7 @@ function SEditor({
         }}
         onFocus={() => setFocused(true)}
         style={focused ? inputStyleFocus : inputStyle}
+        {...noAutoCorrectProps}
       />
       {saving && <Spinner />}
     </span>
@@ -214,6 +216,7 @@ function NEditor({
         }}
         onFocus={() => setFocused(true)}
         style={style}
+        {...noAutoCorrectProps}
       />
       {saving && <Spinner />}
     </span>

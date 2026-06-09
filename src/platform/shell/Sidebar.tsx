@@ -42,6 +42,7 @@ import {
 } from "./dropResolution";
 import { DisconnectConfirmDialog } from "./DisconnectConfirmDialog";
 import { SavedQueriesPanel } from "@/modules/saved-queries/SavedQueriesPanel";
+import { noAutoCorrectProps } from "../../modules/shared/text-input-hygiene";
 
 export { UNGROUPED_DROPPABLE_ID };
 
@@ -523,6 +524,7 @@ function CreateGroupDialog({
           </Dialog.Description>
           <input
             type="text"
+            {...noAutoCorrectProps}
             placeholder="Group name"
             value={name}
             autoFocus
@@ -578,6 +580,7 @@ function RenameGroupDialog({
           <Dialog.Title className={dialogStyles.title}>Rename group</Dialog.Title>
           <input
             type="text"
+            {...noAutoCorrectProps}
             value={name}
             autoFocus
             onChange={(e) => setName(e.target.value)}

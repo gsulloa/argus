@@ -1,5 +1,6 @@
 import type { QueryParam } from "@/modules/context/types";
 import styles from "./ParamStrip.module.css";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
 export interface ParamStripProps {
   params: QueryParam[];
@@ -47,6 +48,7 @@ export function ParamStrip({
             </span>
             <input
               type="text"
+              {...noAutoCorrectProps}
               className={styles.paramInput}
               value={values[param.name] ?? ""}
               placeholder={param.type ?? ""}

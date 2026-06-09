@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Undo2 } from "lucide-react";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 import { isCellEnvelope, type CellEnvelope, type CellValue, type DataColumn, type EditValue } from "./types";
 import { categorize, isMonoCategory } from "./typeHelpers";
 import type { UseEditBufferResult } from "./useEditBuffer";
@@ -778,14 +779,7 @@ function InspectorBulkField({
                 setJsonWarning(false);
                 markTouched(v !== pristineTextRef.current);
               }}
-              {...(isJson
-                ? {
-                    autoCorrect: "off",
-                    autoCapitalize: "off",
-                    spellCheck: false,
-                    autoComplete: "off",
-                  }
-                : {})}
+              {...noAutoCorrectProps}
             />
             {isJson && jsonError && (
               <div className={styles.jsonError}>{jsonError}</div>
@@ -827,6 +821,7 @@ function InspectorBulkField({
             setText(v);
             markTouched(v !== pristineTextRef.current);
           }}
+          {...noAutoCorrectProps}
         />
         {revertButton}
       </div>
@@ -934,14 +929,7 @@ function InspectorEditableField({
             setJsonWarning(hasSmartQuotes(result.canonical));
           }}
           rows={4}
-          {...(isJson
-            ? {
-                autoCorrect: "off",
-                autoCapitalize: "off",
-                spellCheck: false,
-                autoComplete: "off",
-              }
-            : {})}
+          {...noAutoCorrectProps}
         />
         {isJson && jsonError && (
           <div className={styles.jsonError}>{jsonError}</div>
@@ -978,6 +966,7 @@ function InspectorEditableField({
           onChange(raw);
         }
       }}
+      {...noAutoCorrectProps}
     />
   );
 }

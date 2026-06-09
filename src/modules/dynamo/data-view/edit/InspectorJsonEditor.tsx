@@ -34,6 +34,7 @@ import {
   validateTaggedItem,
 } from "./attr-equality";
 import { buildLockingCondition } from "./lockingCondition";
+import { noAutoCorrectEditorAttrs } from "../../../shared/text-input-hygiene";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -287,6 +288,7 @@ export function InspectorJsonEditor({
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         json(),
         EditorView.lineWrapping,
+        noAutoCorrectEditorAttrs,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             const text = update.state.doc.toString();

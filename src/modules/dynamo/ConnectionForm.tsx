@@ -20,6 +20,7 @@ import {
   validateTableMatch,
   type TableMatch,
 } from "./tableMatch";
+import { noAutoCorrectProps } from "../shared/text-input-hygiene";
 import overlayStyles from "@/platform/shell/Dialog.module.css";
 import styles from "./ConnectionForm.module.css";
 
@@ -447,6 +448,7 @@ export function DynamoConnectionForm({
               <div className={`${styles.field} ${styles.fieldFull}`}>
                 <label className={styles.label}>Name</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={!form.name.trim() ? "true" : undefined}
                   value={form.name}
@@ -465,6 +467,7 @@ export function DynamoConnectionForm({
                 <div className={styles.field}>
                   <label className={styles.label}>Access Key ID</label>
                   <input
+                    {...noAutoCorrectProps}
                     className={styles.input}
                     data-error={
                       form.accessKeyId.trim() === "" && form.auth === "access_keys" && !isEdit
@@ -474,19 +477,18 @@ export function DynamoConnectionForm({
                     value={form.accessKeyId}
                     onChange={(e) => setField("accessKeyId", e.target.value)}
                     placeholder={isEdit && !isCredentialsOnly ? "leave blank to keep" : "AKIA…"}
-                    autoComplete="off"
                   />
                 </div>
 
                 <div className={styles.field}>
                   <label className={styles.label}>Secret Access Key</label>
                   <input
+                    {...noAutoCorrectProps}
                     className={styles.input}
                     type="password"
                     value={form.secretAccessKey}
                     onChange={(e) => setField("secretAccessKey", e.target.value)}
                     placeholder={isEdit && !isCredentialsOnly ? "leave blank to keep" : ""}
-                    autoComplete="new-password"
                   />
                 </div>
 
@@ -496,13 +498,13 @@ export function DynamoConnectionForm({
                     <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional)</span>
                   </label>
                   <input
+                    {...noAutoCorrectProps}
                     ref={sessionTokenRef}
                     className={styles.input}
                     type="password"
                     value={form.sessionToken}
                     onChange={(e) => setField("sessionToken", e.target.value)}
                     placeholder={isCredentialsOnly ? "Enter new session token" : "Paste if using temporary credentials"}
-                    autoComplete="new-password"
                   />
                   <span className={styles.hint}>
                     If you paste a session token, your credentials are time-limited — Argus will
@@ -572,6 +574,7 @@ export function DynamoConnectionForm({
                   <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional)</span>
                 </label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   value={form.endpointUrl}
                   onChange={(e) => setField("endpointUrl", e.target.value)}
@@ -631,13 +634,12 @@ export function DynamoConnectionForm({
                           </span>
                         </label>
                         <input
+                          {...noAutoCorrectProps}
                           className={styles.input}
                           data-error={tableMatchError ? "true" : undefined}
                           value={form.matchRegex}
                           onChange={(e) => setField("matchRegex", e.target.value)}
                           placeholder="^MyApp-prod-(?<logical>.+?)-[A-Z0-9]+$"
-                          autoComplete="off"
-                          spellCheck={false}
                         />
                       </div>
                     ) : (
@@ -645,12 +647,11 @@ export function DynamoConnectionForm({
                         <div className={styles.field}>
                           <label className={styles.label}>Prefix to strip</label>
                           <input
+                            {...noAutoCorrectProps}
                             className={styles.input}
                             value={form.matchPrefix}
                             onChange={(e) => setField("matchPrefix", e.target.value)}
                             placeholder="MyApp-prod-"
-                            autoComplete="off"
-                            spellCheck={false}
                           />
                         </div>
                         <div className={styles.field}>
@@ -661,13 +662,12 @@ export function DynamoConnectionForm({
                             </span>
                           </label>
                           <input
+                            {...noAutoCorrectProps}
                             className={styles.input}
                             data-error={tableMatchError ? "true" : undefined}
                             value={form.matchSuffix}
                             onChange={(e) => setField("matchSuffix", e.target.value)}
                             placeholder="-[A-Z0-9]+$"
-                            autoComplete="off"
-                            spellCheck={false}
                           />
                         </div>
                       </>

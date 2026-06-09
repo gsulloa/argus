@@ -13,6 +13,7 @@ import {
   type SslMode,
   type TestResult,
 } from "./types";
+import { noAutoCorrectProps } from "../shared/text-input-hygiene";
 import overlayStyles from "@/platform/shell/Dialog.module.css";
 import styles from "./ConnectionForm.module.css";
 
@@ -311,6 +312,7 @@ export function MysqlConnectionForm({
             <div>
               <div className={styles.urlRow}>
                 <input
+                  {...noAutoCorrectProps}
                   className={`${styles.input} ${styles.urlInput}`}
                   placeholder="mysql://user:pass@host:3306/database?ssl-mode=preferred"
                   value={urlInput}
@@ -334,6 +336,7 @@ export function MysqlConnectionForm({
               <div className={`${styles.field} ${styles.fieldFull}`}>
                 <label className={styles.label}>Name</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={Boolean(errors.name)}
                   value={form.name}
@@ -345,6 +348,7 @@ export function MysqlConnectionForm({
               <div className={styles.field}>
                 <label className={styles.label}>Host</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={Boolean(errors.host)}
                   value={form.host}
@@ -357,6 +361,7 @@ export function MysqlConnectionForm({
               <div className={styles.field}>
                 <label className={styles.label}>Port</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={Boolean(errors.port)}
                   value={form.port}
@@ -369,6 +374,7 @@ export function MysqlConnectionForm({
               <div className={styles.field}>
                 <label className={styles.label}>Database</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={Boolean(errors.database)}
                   value={form.database}
@@ -380,6 +386,7 @@ export function MysqlConnectionForm({
               <div className={styles.field}>
                 <label className={styles.label}>Username</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={Boolean(errors.username)}
                   value={form.username}
@@ -392,6 +399,7 @@ export function MysqlConnectionForm({
                 <label className={styles.label}>Password</label>
                 <div className={styles.passwordRow}>
                   <input
+                    {...noAutoCorrectProps}
                     className={`${styles.input} ${styles.passwordInput}`}
                     type="password"
                     value={form.password}
