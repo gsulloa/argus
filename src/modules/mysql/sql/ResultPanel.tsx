@@ -10,15 +10,16 @@
  * Also renders the idle / running states for single-run mode.
  */
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { RunState } from "./useQueryRun";
-import type { StatementOutcome, RunSqlResult } from "../types";
+import type { StatementOutcome, RunSqlResult, OrderBy } from "../types";
 import { MultiStatementTabs } from "./MultiStatementTabs";
 // We re-use the MySQL data DataGrid for rows output (it already handles
 // ColumnInfo and generic row arrays).
 import { DataGrid } from "../data/DataGrid";
 import { useEditBuffer } from "../data/useEditBuffer";
 import type { CellValue } from "../data/types";
+import { sortResultRows } from "@/platform/table/sortResultRows";
 
 // Export menu (§20.7)
 import { ExportMenu } from "./export/ExportMenu";
@@ -156,16 +157,41 @@ function RowsResultView({
   showExport: boolean;
 }) {
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  // Client-side sort state for this result (issue #91). SQL results have no
+  // table context to re-query, so sorting reorders the loaded rows in-memory.
+  const [orderBy, setOrderBy] = useState<OrderBy[]>([]);
   // Use a dummy buffer — the result grid is always read-only.
   const dummyBuffer = useEditBuffer();
 
+  // Reset the sort whenever the result's column shape changes (new query).
+  const columnsSig = result.columns.map((c) => c.name).join("|");
+  useEffect(() => {
+    setOrderBy([]);
+  }, [columnsSig]);
+
   // Map ColumnInfo to the DataGrid shape expected by the MySQL DataGrid.
   // The MySQL DataGrid expects ColumnInfo directly.
-  const unifiedRows = result.rows.map((row, i) => ({
-    rowKey: String(i),
-    cells: row as CellValue[],
-    source: "server" as const,
-  }));
+  const unifiedRows = useMemo(
+    () =>
+      result.rows.map((row, i) => ({
+        rowKey: String(i),
+        cells: row as CellValue[],
+        source: "server" as const,
+      })),
+    [result.rows],
+  );
+
+  // Sort the loaded rows client-side; the original result is never mutated.
+  const sortedRows = useMemo(
+    () =>
+      sortResultRows(
+        unifiedRows,
+        result.columns.map((c) => c.name),
+        orderBy,
+        (r, i) => r.cells[i],
+      ),
+    [unifiedRows, result.columns, orderBy],
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -214,9 +240,9 @@ function RowsResultView({
         ) : (
           <DataGrid
             columns={result.columns}
-            rows={unifiedRows}
+            rows={sortedRows}
             pageSize={result.rows.length}
-            orderBy={[]}
+            orderBy={orderBy}
             status="ready"
             nextError={null}
             reachedEnd
@@ -230,7 +256,7 @@ function RowsResultView({
             onSelectionChange={(sel) => {
               setSelectedRow(sel.anchor);
             }}
-            onSortChange={() => {}}
+            onSortChange={setOrderBy}
             onLoadNextPage={() => {}}
             onRetryNextPage={() => {}}
             onCellSelect={() => {}}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AdhocResultGrid } from "../data/AdhocResultGrid";
 import { Inspector as RowInspector } from "../data/Inspector";
 import { useEditBuffer } from "../data/useEditBuffer";
@@ -7,6 +7,7 @@ import type { RunManyOutcome, RunSqlResult } from "./api";
 import { MultiStatementTabs } from "./MultiStatementTabs";
 import { ResultErrorBlock } from "./ResultErrorBlock";
 import type { RunState } from "./useQueryRun";
+import { sortResultRows, type SortOrder } from "@/platform/table/sortResultRows";
 import styles from "./ResultPanel.module.css";
 
 interface Props {
@@ -98,11 +99,33 @@ function RowsResultView({
 }) {
   // Local row-selection state drives the inspector for this query result.
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  // Client-side sort state (issue #91). SQL results have no table context to
+  // re-query, so sorting reorders the loaded rows in-memory.
+  const [orderBy, setOrderBy] = useState<SortOrder[]>([]);
   // The shell inspector has stricter requirements (rowKey, buffer, etc.).
   // For ad-hoc results we render a slimmer side panel inline. Reuse the
   // existing RowInspector by passing an empty buffer; it already handles
   // the "no PK / no edits" branch as fully read-only.
   const dummyBuffer = useEditBuffer();
+
+  // Reset the sort whenever the result's column shape changes (new query).
+  const columnsSig = result.columns.map((c) => c.name).join("|");
+  useEffect(() => {
+    setOrderBy([]);
+  }, [columnsSig]);
+
+  // Sort the loaded rows client-side; the original result is never mutated.
+  const sortedRows = useMemo(
+    () =>
+      sortResultRows(
+        result.rows,
+        result.columns.map((c) => c.name),
+        orderBy,
+        (row, i) => row[i],
+      ),
+    [result.rows, result.columns, orderBy],
+  );
+
   return (
     <div className={styles.rowsLayout}>
       {result.truncated ? (
@@ -114,9 +137,11 @@ function RowsResultView({
         <div className={styles.rowsGrid}>
           <AdhocResultGrid
             columns={result.columns}
-            rows={result.rows}
+            rows={sortedRows}
             selectedRowIndex={selectedRow}
             onSelectRow={setSelectedRow}
+            orderBy={orderBy}
+            onSortChange={setOrderBy}
             emptyState={<div className={styles.empty}>(0 rows)</div>}
           />
         </div>
@@ -124,11 +149,11 @@ function RowsResultView({
           <RowInspector
             columns={result.columns}
             selectedRows={
-              selectedRow !== null && result.rows[selectedRow]
+              selectedRow !== null && sortedRows[selectedRow]
                 ? [
                     {
                       rowKey: "",
-                      row: result.rows[selectedRow]!,
+                      row: sortedRows[selectedRow]!,
                       pk: {},
                       source: "server" as const,
                       isDeleted: false,

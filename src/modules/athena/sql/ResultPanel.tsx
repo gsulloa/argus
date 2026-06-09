@@ -10,10 +10,11 @@
  * Unlike MySQL, Athena has NO "affected" variant — only "rows" and "succeeded".
  */
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { RunState } from "./useQueryRun";
 import type { AthenaStatementOutcome, AthenaRunSqlResult, AthenaResultColumnInfo } from "../types";
 import { ExportMenu } from "./export/ExportMenu";
+import { sortResultRows, type SortOrder } from "@/platform/table/sortResultRows";
 
 interface Props {
   state: RunState;
@@ -231,6 +232,33 @@ function SimpleTable({
   rows: unknown[][];
 }) {
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  // Client-side sort state (issue #91). Athena results are read-only and have
+  // no table context to re-query, so sorting reorders the loaded rows in-memory.
+  const [orderBy, setOrderBy] = useState<SortOrder[]>([]);
+
+  // Reset the sort whenever the result's column shape changes (new query).
+  const columnsSig = columns.map((c) => c.name).join("|");
+  useEffect(() => {
+    setOrderBy([]);
+  }, [columnsSig]);
+
+  const sortedRows = useMemo(
+    () =>
+      sortResultRows(
+        rows,
+        columns.map((c) => c.name),
+        orderBy,
+        (row, i) => row[i],
+      ),
+    [rows, columns, orderBy],
+  );
+
+  const handleHeaderClick = (name: string) => {
+    const cur = orderBy.find((o) => o.column === name);
+    if (!cur) setOrderBy([{ column: name, direction: "asc" }]);
+    else if (cur.direction === "asc") setOrderBy([{ column: name, direction: "desc" }]);
+    else setOrderBy([]);
+  };
 
   return (
     <div style={{ overflow: "auto", height: "100%" }}>
@@ -244,38 +272,49 @@ function SimpleTable({
       >
         <thead>
           <tr>
-            {columns.map((col) => (
-              <th
-                key={col.name}
-                style={{
-                  padding: "3px 8px",
-                  textAlign: "left",
-                  borderBottom: "1px solid var(--border)",
-                  background: "var(--surface)",
-                  color: "var(--text-muted)",
-                  fontWeight: 500,
-                  whiteSpace: "nowrap",
-                  position: "sticky",
-                  top: 0,
-                }}
-              >
-                {col.name}
-                <span
+            {columns.map((col) => {
+              const dir = orderBy.find((o) => o.column === col.name)?.direction ?? null;
+              return (
+                <th
+                  key={col.name}
+                  onClick={() => handleHeaderClick(col.name)}
                   style={{
-                    marginLeft: 6,
-                    opacity: 0.6,
-                    fontSize: 10,
-                    fontWeight: 400,
+                    padding: "3px 8px",
+                    textAlign: "left",
+                    borderBottom: "1px solid var(--border)",
+                    background: "var(--surface)",
+                    color: "var(--text-muted)",
+                    fontWeight: 500,
+                    whiteSpace: "nowrap",
+                    position: "sticky",
+                    top: 0,
+                    cursor: "pointer",
+                    userSelect: "none",
                   }}
                 >
-                  {col.ty}
-                </span>
-              </th>
-            ))}
+                  {col.name}
+                  <span
+                    style={{
+                      marginLeft: 6,
+                      opacity: 0.6,
+                      fontSize: 10,
+                      fontWeight: 400,
+                    }}
+                  >
+                    {col.ty}
+                  </span>
+                  {dir && (
+                    <span style={{ marginLeft: 4, fontSize: 10, color: "var(--accent)" }}>
+                      {dir === "asc" ? "↑" : "↓"}
+                    </span>
+                  )}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => (
+          {sortedRows.map((row, i) => (
             <tr
               key={i}
               onClick={() => setSelectedRow(i)}
