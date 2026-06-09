@@ -5,7 +5,7 @@ TBD - created by archiving change context-folders-other-engines. Update Purpose 
 ## Requirements
 ### Requirement: Schema sync supports MySQL, MSSQL, and Dynamo
 
-The `context_sync_schema` command SHALL produce a valid `SyncReport` for connections of kind `mysql`, `mssql`, and `dynamo` in addition to `postgres`. The command introspects the live source via the engine's existing pool/client registry and writes `ObjectShape`-derived `system:` blocks to the linked context folder using the same atomic, body-preserving rules already specified for Postgres. For Dynamo connections, the target file path SHALL be derived from the **logical** (normalized) table name — the live table name folded through the connection's table-name normalization rule (see `dynamo-table-name-normalization`) — so re-deploys that change the random suffix update the same `dynamo/tables/<logical>.md` file instead of creating a new one. When no rule is configured the logical name equals the live name, preserving prior behavior. When two or more distinct live tables normalize to the same logical name within one sync, the **first SHALL win and the rest SHALL be skipped**, and each skipped collision SHALL be surfaced in the `SyncReport` (e.g. via its warnings/skipped channel) rather than aborting the sync.
+The `context_sync_schema` command SHALL produce a valid `SyncReport` for connections of kind `mysql`, `mssql`, `dynamo`, and `athena` in addition to `postgres`. The command introspects the live source via the engine's existing pool/client registry and writes `ObjectShape`-derived `system:` blocks to the linked context folder using the same atomic, body-preserving rules already specified for Postgres. For Dynamo connections, the target file path SHALL be derived from the **logical** (normalized) table name — the live table name folded through the connection's table-name normalization rule (see `dynamo-table-name-normalization`) — so re-deploys that change the random suffix update the same `dynamo/tables/<logical>.md` file instead of creating a new one. When no rule is configured the logical name equals the live name, preserving prior behavior. When two or more distinct live tables normalize to the same logical name within one sync, the **first SHALL win and the rest SHALL be skipped**, and each skipped collision SHALL be surfaced in the `SyncReport` (e.g. via its warnings/skipped channel) rather than aborting the sync. For Athena the introspection source is AWS Glue (databases → schemas, tables/views → relations, Glue column types → columns), and the engine is organised like the other SQL engines: object files live at `athena/<database>/<relation>.md`.
 
 #### Scenario: MySQL connection produces a sync report
 
@@ -40,15 +40,26 @@ The `context_sync_schema` command SHALL produce a valid `SyncReport` for connect
 - **WHEN** an over-broad rule normalizes two distinct live tables `MyApp-prod-Events-AAAA` and `MyApp-prod-Events-BBBB` both to the logical name `Events` within one sync
 - **THEN** the first is written to `dynamo/tables/Events.md`, the second is skipped, and the `SyncReport` surfaces the skipped collision; the sync does not abort
 
+#### Scenario: Athena connection produces a sync report
+
+- **WHEN** the user invokes `context_sync_schema` on a connected Athena connection whose linked folder is empty
+- **THEN** the command returns a `SyncReport` whose `created` list contains one path per Glue relation, each path of the form `athena/<database>/<relation>.md`
+- **AND** each created file's `system.kind` is `"table"` or `"view"` (view when the Glue `TableType` is `VIRTUAL_VIEW`), `system.schema` matches the Glue database, `system.primary_key` is empty, and `system.columns` contains the storage-descriptor columns followed by partition keys
+
 #### Scenario: Existing files preserve human and body across all engines
 
-- **WHEN** a MySQL/MSSQL/Dynamo connection re-runs `context_sync_schema` on a folder where some object files already exist with hand-edited `human:` blocks and Markdown bodies
+- **WHEN** a MySQL/MSSQL/Dynamo/Athena connection re-runs `context_sync_schema` on a folder where some object files already exist with hand-edited `human:` blocks and Markdown bodies
 - **THEN** every existing file's `human:` block and body are preserved byte-for-byte
 - **AND** the `system:` block is replaced to reflect the current source schema
 
 ### Requirement: Introspector pools bundle
 
-The internal `introspector_for(engine, pools)` dispatcher SHALL accept an `IntrospectorPools` struct containing references to all four engine registries (`PgPoolRegistry`, `MysqlPoolRegistry`, `MssqlPoolRegistry`, `DynamoClientRegistry`). The `context_sync_schema` Tauri command SHALL receive each registry as a `State<>` parameter, assemble the bundle, and pass it to the dispatcher. Engines not yet wired (CloudWatch) continue to dispatch to `NotImplementedIntrospector`.
+The internal `introspector_for(engine, pools)` dispatcher SHALL accept an `IntrospectorPools` struct containing references to all wired engine registries (`PgPoolRegistry`, `MysqlPoolRegistry`, `MssqlPoolRegistry`, `DynamoClientRegistry`, `AthenaClientRegistry`). The `context_sync_schema` Tauri command SHALL receive each registry as a `State<>` parameter, assemble the bundle, and pass it to the dispatcher. Engines not yet wired (CloudWatch) continue to dispatch to `NotImplementedIntrospector`.
+
+#### Scenario: Athena dispatches to its introspector
+
+- **WHEN** `context_sync_schema` is invoked on a connection whose `kind` is `athena`
+- **THEN** the dispatcher routes to `AthenaIntrospector` using the `AthenaClientRegistry` from the bundle
 
 #### Scenario: CloudWatch still returns NotImplemented
 

@@ -62,5 +62,5 @@
 
 - [x] 9.1 README "Supported Sources": add Athena, setup steps, and the minimum IAM policy (`athena:{Start,Get,Stop}QueryExecution`, `athena:GetQueryResults`, `glue:Get{Databases,Tables,Table}`, `s3:{GetObject,PutObject,ListBucket}`)
 - [x] 9.2 Update `CLAUDE.md` supported-sources list to include Athena
-- [ ] 9.3 Manual QA: create/test/edit connection; expand Glue tree; run SELECT + multi-statement; cancel a running query; export CSV/JSONL/XLSX; sync schema to context folder; generate SQL with AI using the context folder
+- [x] 9.3 Manual QA: create/test/edit connection; expand Glue tree; run SELECT + multi-statement; cancel a running query; export CSV/JSONL/XLSX; sync schema to context folder; generate SQL with AI using the context folder
 - [x] 9.4 `cargo test`/`cargo clippy` and frontend typecheck/lint pass

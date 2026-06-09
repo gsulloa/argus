@@ -2,7 +2,7 @@
 
 ### Requirement: Schema sync supports MySQL, MSSQL, and Dynamo
 
-The `context_sync_schema` command SHALL produce a valid `SyncReport` for connections of kind `mysql`, `mssql`, `dynamo`, and `athena` in addition to `postgres`. The command introspects the live source via the engine's existing pool/client registry and writes `ObjectShape`-derived `system:` blocks to the linked context folder using the same atomic, body-preserving rules already specified for Postgres. For Athena the introspection source is AWS Glue (databases → schemas, tables/views → relations, Glue column types → columns), and the engine is organised like the other SQL engines: object files live at `athena/<database>/<relation>.md`.
+The `context_sync_schema` command SHALL produce a valid `SyncReport` for connections of kind `mysql`, `mssql`, `dynamo`, and `athena` in addition to `postgres`. The command introspects the live source via the engine's existing pool/client registry and writes `ObjectShape`-derived `system:` blocks to the linked context folder using the same atomic, body-preserving rules already specified for Postgres. For Dynamo connections, the target file path SHALL be derived from the **logical** (normalized) table name — the live table name folded through the connection's table-name normalization rule (see `dynamo-table-name-normalization`) — so re-deploys that change the random suffix update the same `dynamo/tables/<logical>.md` file instead of creating a new one. When no rule is configured the logical name equals the live name, preserving prior behavior. When two or more distinct live tables normalize to the same logical name within one sync, the **first SHALL win and the rest SHALL be skipped**, and each skipped collision SHALL be surfaced in the `SyncReport` (e.g. via its warnings/skipped channel) rather than aborting the sync. For Athena the introspection source is AWS Glue (databases → schemas, tables/views → relations, Glue column types → columns), and the engine is organised like the other SQL engines: object files live at `athena/<database>/<relation>.md`.
 
 #### Scenario: MySQL connection produces a sync report
 
@@ -18,9 +18,24 @@ The `context_sync_schema` command SHALL produce a valid `SyncReport` for connect
 
 #### Scenario: Dynamo connection produces a sync report
 
-- **WHEN** the user invokes `context_sync_schema` on a connected Dynamo connection whose linked folder is empty
+- **WHEN** the user invokes `context_sync_schema` on a connected Dynamo connection (with no normalization rule) whose linked folder is empty
 - **THEN** the command returns a `SyncReport` whose `created` list contains one path per table, each path of the form `dynamo/tables/<table>.md`
 - **AND** each created file's `system.kind` is `"dynamo_table"`, `system.schema` is omitted, `system.primary_key` lists the partition key followed by the sort key (if any), and `system.columns` contains only entries derived from `AttributeDefinition` (typed key + indexed attributes)
+
+#### Scenario: Dynamo sync writes the logical filename under a normalization rule
+
+- **WHEN** a Dynamo connection's rule strips `prefix: "MyApp-prod-"` and `suffix_pattern: "-[A-Z0-9]+$"`, and the live account has a table `MyApp-prod-EventsTable-3M4N5O6P7Q8R`
+- **THEN** the `SyncReport` references the path `dynamo/tables/EventsTable.md` (the logical name), not the suffixed live name
+
+#### Scenario: Re-deploy with a new suffix updates the same file
+
+- **WHEN** a folder already contains `dynamo/tables/EventsTable.md` from a prior sync, the rule strips the prefix and random suffix, and the connection re-syncs after a deploy that renamed the live table to `MyApp-prod-EventsTable-9Z8Y7X6W5V4U`
+- **THEN** `dynamo/tables/EventsTable.md` is updated in place (its `human:` block and body preserved) and no new suffixed file is created
+
+#### Scenario: Colliding live tables are skipped with a warning
+
+- **WHEN** an over-broad rule normalizes two distinct live tables `MyApp-prod-Events-AAAA` and `MyApp-prod-Events-BBBB` both to the logical name `Events` within one sync
+- **THEN** the first is written to `dynamo/tables/Events.md`, the second is skipped, and the `SyncReport` surfaces the skipped collision; the sync does not abort
 
 #### Scenario: Athena connection produces a sync report
 
