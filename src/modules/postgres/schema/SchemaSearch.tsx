@@ -1,6 +1,7 @@
 import { Search, X } from "lucide-react";
 import { type ChangeEvent, type KeyboardEvent } from "react";
 import styles from "./SchemaSearch.module.css";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
 interface Props {
   value: string;
@@ -27,13 +28,13 @@ export function SchemaSearch({ value, onChange, matches, total, placeholder }: P
         <Search size={12} />
       </span>
       <input
+        {...noAutoCorrectProps}
         className={styles.input}
         type="text"
         value={value}
         placeholder={placeholder ?? "Search…"}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        spellCheck={false}
         aria-label="Search schema objects"
       />
       {showIndicator && (

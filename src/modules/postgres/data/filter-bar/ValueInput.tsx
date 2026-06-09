@@ -8,6 +8,7 @@ import type {
   Operator,
 } from "../types";
 import styles from "./FilterBar.module.css";
+import { noAutoCorrectProps } from "../../../shared/text-input-hygiene";
 
 interface Props {
   column: ColumnRef;
@@ -59,6 +60,7 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
     return (
       <span className={styles.between}>
         <input
+          {...noAutoCorrectProps}
           type={inputType}
           className={`${styles.valueInput} ${styles.betweenInput}`}
           value={String(obj.min ?? "")}
@@ -69,6 +71,7 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
         />
         <span className={styles.betweenSep}>and</span>
         <input
+          {...noAutoCorrectProps}
           type={inputType}
           className={`${styles.valueInput} ${styles.betweenInput}`}
           value={String(obj.max ?? "")}
@@ -113,6 +116,7 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
   const inputType = inputTypeForCategory(cat);
   return (
     <input
+      {...noAutoCorrectProps}
       type={inputType}
       className={styles.valueInput}
       value={asScalarStringForDisplay(value)}
@@ -159,6 +163,7 @@ function ChipInput({ values, category, onChange }: ChipInputProps) {
         </span>
       ))}
       <input
+        {...noAutoCorrectProps}
         className={styles.chipInput}
         data-chip-input="true"
         value={draft}

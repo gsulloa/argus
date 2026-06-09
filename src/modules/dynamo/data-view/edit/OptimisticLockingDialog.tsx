@@ -9,6 +9,7 @@
  */
 
 import { useState } from "react";
+import { noAutoCorrectProps } from "../../../shared/text-input-hygiene";
 
 export interface OptimisticLockingDialogProps {
   open: boolean;
@@ -108,6 +109,7 @@ export function OptimisticLockingDialog({
             id="version-attr-input"
             data-testid="version-attr-input"
             type="text"
+            {...noAutoCorrectProps}
             value={localValue}
             onChange={(e) => setLocalValue(e.target.value)}
             placeholder="e.g. version"

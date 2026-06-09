@@ -14,6 +14,7 @@ import {
   type MssqlParams,
   type TestResult,
 } from "./types";
+import { noAutoCorrectProps } from "../shared/text-input-hygiene";
 import overlayStyles from "@/platform/shell/Dialog.module.css";
 import styles from "./ConnectionForm.module.css";
 
@@ -332,6 +333,7 @@ export function MssqlConnectionForm({
             <div>
               <div className={styles.urlRow}>
                 <input
+                  {...noAutoCorrectProps}
                   className={`${styles.input} ${styles.urlInput}`}
                   placeholder="mssql://user:pass@host:1433/database  or  Server=host;Database=db;User Id=u;Password=p"
                   value={urlInput}
@@ -356,6 +358,7 @@ export function MssqlConnectionForm({
               <div className={`${styles.field} ${styles.fieldFull}`}>
                 <label className={styles.label}>Name</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={Boolean(errors.name)}
                   value={form.name}
@@ -368,6 +371,7 @@ export function MssqlConnectionForm({
               <div className={styles.field}>
                 <label className={styles.label}>Host</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={Boolean(errors.host)}
                   value={form.host}
@@ -381,6 +385,7 @@ export function MssqlConnectionForm({
               <div className={styles.field}>
                 <label className={styles.label}>Port</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={Boolean(errors.port)}
                   value={form.port}
@@ -394,6 +399,7 @@ export function MssqlConnectionForm({
               <div className={styles.field}>
                 <label className={styles.label}>Database</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={Boolean(errors.database)}
                   value={form.database}
@@ -406,6 +412,7 @@ export function MssqlConnectionForm({
               <div className={styles.field}>
                 <label className={styles.label}>Instance Name <span style={{ fontWeight: 400, opacity: 0.6 }}>(optional)</span></label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   value={form.instanceName}
                   onChange={(e) => setField("instanceName", e.target.value)}
@@ -420,6 +427,7 @@ export function MssqlConnectionForm({
               <div className={styles.field}>
                 <label className={styles.label}>Username</label>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   data-error={Boolean(errors.username)}
                   value={form.username}
@@ -433,6 +441,7 @@ export function MssqlConnectionForm({
                 <label className={styles.label}>Password</label>
                 <div className={styles.passwordRow}>
                   <input
+                    {...noAutoCorrectProps}
                     className={`${styles.input} ${styles.passwordInput}`}
                     type="password"
                     value={form.password}

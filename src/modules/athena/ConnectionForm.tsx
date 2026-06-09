@@ -14,6 +14,7 @@ import {
   type ProfileInfo,
   type TestConnectionResult,
 } from "./types";
+import { noAutoCorrectProps } from "../shared/text-input-hygiene";
 import overlayStyles from "@/platform/shell/Dialog.module.css";
 import styles from "@/modules/dynamo/ConnectionForm.module.css";
 
@@ -371,6 +372,7 @@ export function AthenaConnectionForm({
             <div className={`${styles.field} ${styles.fieldFull}`}>
               <label className={styles.label}>Name</label>
               <input
+                {...noAutoCorrectProps}
                 className={styles.input}
                 data-error={!form.name.trim() ? "true" : undefined}
                 value={form.name}
@@ -388,6 +390,7 @@ export function AthenaConnectionForm({
                 <div className={styles.field}>
                   <label className={styles.label}>Access Key ID</label>
                   <input
+                    {...noAutoCorrectProps}
                     className={styles.input}
                     data-error={
                       form.accessKeyId.trim() === "" && form.auth === "access_keys" && !isEdit
@@ -397,19 +400,18 @@ export function AthenaConnectionForm({
                     value={form.accessKeyId}
                     onChange={(e) => setField("accessKeyId", e.target.value)}
                     placeholder={isEdit ? "leave blank to keep" : "AKIA…"}
-                    autoComplete="off"
                   />
                 </div>
 
                 <div className={styles.field}>
                   <label className={styles.label}>Secret Access Key</label>
                   <input
+                    {...noAutoCorrectProps}
                     className={styles.input}
                     type="password"
                     value={form.secretAccessKey}
                     onChange={(e) => setField("secretAccessKey", e.target.value)}
                     placeholder={isEdit ? "leave blank to keep" : ""}
-                    autoComplete="new-password"
                   />
                 </div>
 
@@ -419,13 +421,13 @@ export function AthenaConnectionForm({
                     <span style={{ fontWeight: 400, opacity: 0.7 }}>(optional)</span>
                   </label>
                   <input
+                    {...noAutoCorrectProps}
                     ref={sessionTokenRef}
                     className={styles.input}
                     type="password"
                     value={form.sessionToken}
                     onChange={(e) => setField("sessionToken", e.target.value)}
                     placeholder="Paste if using temporary credentials"
-                    autoComplete="new-password"
                   />
                   <span className={styles.hint}>
                     If you paste a session token, your credentials are time-limited.
@@ -488,6 +490,7 @@ export function AthenaConnectionForm({
             <div className={styles.field}>
               <label className={styles.label}>Workgroup</label>
               <input
+                {...noAutoCorrectProps}
                 className={styles.input}
                 data-error={!form.workgroup.trim() ? "true" : undefined}
                 value={form.workgroup}
@@ -507,6 +510,7 @@ export function AthenaConnectionForm({
               </label>
               <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
                 <input
+                  {...noAutoCorrectProps}
                   className={styles.input}
                   style={{ flex: 1 }}
                   value={form.outputLocation}

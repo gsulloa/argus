@@ -22,6 +22,7 @@ import { compileModel } from "./modelCompiler";
 import { validateDraft } from "./validateDraft";
 import type { AccessPattern, DynamoModel, ModelDraft } from "./types";
 import styles from "./ModelEditor.module.css";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -169,6 +170,7 @@ function AccessPatternRow({
       <div className={styles.apCardHeader}>
         <input
           type="text"
+          {...noAutoCorrectProps}
           className={styles.apNameInput}
           value={ap.name ?? ""}
           onChange={(e) => onChange({ ...ap, name: e.target.value || undefined })}
@@ -227,6 +229,7 @@ function AccessPatternRow({
           ) : (
             <input
               type="text"
+              {...noAutoCorrectProps}
               className={`${styles.apInput} ${indexError ? styles.apInputError : ""}`}
               value={ap.index}
               onChange={(e) => onChange({ ...ap, index: e.target.value })}
@@ -242,6 +245,7 @@ function AccessPatternRow({
           <span className={styles.apRowLabel}>PK</span>
           <input
             type="text"
+            {...noAutoCorrectProps}
             className={`${styles.apInput} ${(pkError || ap.pk.trim() === "") ? styles.apInputError : ""}`}
             value={ap.pk}
             onChange={(e) => onChange({ ...ap, pk: e.target.value })}
@@ -256,6 +260,7 @@ function AccessPatternRow({
           <span className={styles.apRowLabel}>SK</span>
           <input
             type="text"
+            {...noAutoCorrectProps}
             className={`${styles.apInput} ${skError ? styles.apInputError : ""}`}
             value={ap.sk ?? ""}
             onChange={(e) => {
@@ -464,6 +469,7 @@ export function ModelEditor({
               <input
                 id="model-editor-name-input"
                 type="text"
+                {...noAutoCorrectProps}
                 className={`${styles.input} ${nameErrorText ? styles.inputError : ""}`}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -526,6 +532,7 @@ export function ModelEditor({
               </label>
               <textarea
                 id="model-editor-body-input"
+                {...noAutoCorrectProps}
                 className={styles.textarea}
                 value={body}
                 onChange={(e) => setBody(e.target.value)}

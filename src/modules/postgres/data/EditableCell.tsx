@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { AlertTriangle } from "lucide-react";
+import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 import { categorize, isMonoCategory } from "./typeHelpers";
 import { isCellEnvelope, type CellEnvelope, type CellValue, type DataColumn, type EditValue } from "./types";
 import { validateJsonInput, hasSmartQuotes } from "./jsonEditValidation";
@@ -333,14 +334,7 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
           onBlur={commit}
           onKeyDown={handleKey}
           rows={3}
-          {...(isJsonColumn
-            ? {
-                autoCorrect: "off",
-                autoCapitalize: "off",
-                spellCheck: false,
-                autoComplete: "off",
-              }
-            : {})}
+          {...noAutoCorrectProps}
         />
         {isJsonColumn && jsonError && (
           <div className={styles.jsonError}>{jsonError}</div>
@@ -372,6 +366,7 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
       }}
       onBlur={commit}
       onKeyDown={handleKey}
+      {...noAutoCorrectProps}
     />
   );
 }

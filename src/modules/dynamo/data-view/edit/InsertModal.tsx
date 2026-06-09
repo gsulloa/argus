@@ -18,6 +18,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { noAutoCorrectProps } from "../../../shared/text-input-hygiene";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import {
@@ -32,6 +33,7 @@ import { dynamoPutItem } from "../api";
 import { AppError } from "@/platform/errors/AppError";
 import { useToast } from "@/platform/toast";
 import { validateTaggedItem } from "./attr-equality";
+import { noAutoCorrectEditorAttrs } from "../../../shared/text-input-hygiene";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -228,6 +230,7 @@ function JsonEditorPane({
             onChangeRef.current(update.state.doc.toString());
           }
         }),
+        noAutoCorrectEditorAttrs,
         EditorView.theme({
           "&": {
             fontSize: "12px",
@@ -908,6 +911,7 @@ function FormPane({
                 </label>
                 <input
                   type={kf.type === "N" ? "text" : "text"}
+                  {...noAutoCorrectProps}
                   inputMode={kf.type === "N" ? "decimal" : "text"}
                   data-testid={`key-input-${kf.name}`}
                   value={keyValues[kf.name] ?? ""}
@@ -1015,6 +1019,7 @@ function ExtraAttrRow({ attr, onChange, onRemove }: ExtraAttrRowProps) {
       {/* Name */}
       <input
         type="text"
+        {...noAutoCorrectProps}
         data-testid="extra-attr-name"
         value={attr.name}
         onChange={(e) => onChange({ name: e.target.value })}
@@ -1070,6 +1075,7 @@ function ExtraAttrRow({ attr, onChange, onRemove }: ExtraAttrRowProps) {
       ) : (
         <input
           type="text"
+          {...noAutoCorrectProps}
           inputMode={attr.type === "N" ? "decimal" : "text"}
           data-testid="extra-attr-value"
           value={attr.value}
