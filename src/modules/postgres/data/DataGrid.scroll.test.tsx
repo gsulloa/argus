@@ -43,6 +43,7 @@ function Harness({ gridRef }: { gridRef: React.Ref<DataGridHandle> }) {
       nextError={null}
       reachedEnd={true}
       selection={{ anchor: null, active: null }}
+      activeCell={null}
       bulkEditActive={false}
       isReadOnly={false}
       pkColumns={["id"]}
@@ -52,6 +53,7 @@ function Harness({ gridRef }: { gridRef: React.Ref<DataGridHandle> }) {
       schema="public"
       relation="users"
       onSelectionChange={() => {}}
+      onActiveCellChange={() => {}}
       onSortChange={() => {}}
       onLoadNextPage={() => {}}
       onRetryNextPage={() => {}}

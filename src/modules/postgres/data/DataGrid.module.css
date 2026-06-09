@@ -218,6 +218,12 @@
   background: color-mix(in srgb, var(--warning) 22%, transparent);
   box-shadow: inset 0 0 0 1px var(--warning);
 }
+
+/* Active single-cell selection focus ring — inset outline using the accent. */
+.cellActive {
+  box-shadow: inset 0 0 0 2px var(--accent, #a855f7);
+  background: var(--accent-soft, rgba(168, 85, 247, 0.12));
+}
 .row[data-selected="true"] .cellDirty {
   /* Keep dirty hue visible on the active row's accent stripe. */
   background: color-mix(in srgb, var(--warning) 30%, transparent);

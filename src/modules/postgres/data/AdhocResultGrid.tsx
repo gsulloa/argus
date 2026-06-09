@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { categorize, isMonoCategory } from "./typeHelpers";
 import {
@@ -9,6 +9,7 @@ import {
 } from "./types";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
+import { copyCellValue } from "@/platform/grid/cellClipboard";
 import styles from "./DataGrid.module.css";
 
 const ROW_HEIGHT = 26;
@@ -80,6 +81,15 @@ function AdhocResultGridInner({
   style,
 }: AdhocResultGridProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Single-cell active selection — mutually exclusive with row selection.
+  const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
+
+  // Reset active cell when the dataset changes.
+  useEffect(() => {
+    setActiveCell(null);
+  }, [columns, rows]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -155,8 +165,35 @@ function AdhocResultGridInner({
     );
   }
 
+  function onGridKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C")) {
+      if (activeCell !== null) {
+        const target = e.target as HTMLElement;
+        const tag = target.tagName.toUpperCase();
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT" && !target.isContentEditable) {
+          const row = rows[activeCell.row];
+          const value = row ? (row[activeCell.col] ?? null) : null;
+          e.preventDefault();
+          void copyCellValue(value);
+          return;
+        }
+      }
+    }
+    if (e.key === "Escape") {
+      if (activeCell !== null) {
+        setActiveCell(null);
+      }
+    }
+  }
+
   return (
-    <div className={styles.root} style={style}>
+    <div
+      ref={rootRef}
+      className={styles.root}
+      style={style}
+      tabIndex={0}
+      onKeyDown={onGridKeyDown}
+    >
       <div className={styles.viewport} ref={viewportRef}>
         <div className={styles.thead} style={{ width: effectiveTotalWidth }}>
           <div className={styles.headerRow} style={{ height: HEADER_HEIGHT }}>
@@ -204,15 +241,24 @@ function AdhocResultGridInner({
                   height: ROW_HEIGHT,
                   transform: `translateY(${vi.start}px)`,
                 }}
-                onClick={() => onSelectRow?.(selected ? null : vi.index)}
               >
                 {columns.map((col, ci) => {
                   const value = row[ci] ?? null;
+                  const isActiveCellHere =
+                    activeCell !== null &&
+                    activeCell.row === vi.index &&
+                    activeCell.col === ci;
                   return (
                     <div
                       key={col.name}
-                      className={styles.cell}
-                      style={{ width: widthFor(col.name) }}
+                      className={[styles.cell, isActiveCellHere ? styles.cellActive : ""].filter(Boolean).join(" ")}
+                      style={{ width: widthFor(col.name), cursor: "pointer" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveCell({ row: vi.index, col: ci });
+                        onSelectRow?.(null); // clear row selection
+                        rootRef.current?.focus();
+                      }}
                     >
                       <span className={styles.cellValue}>
                         <CellContent value={value} column={col} />

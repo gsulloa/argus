@@ -10,10 +10,11 @@
  * Unlike MySQL, Athena has NO "affected" variant — only "rows" and "succeeded".
  */
 
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import type { RunState } from "./useQueryRun";
 import type { AthenaStatementOutcome, AthenaRunSqlResult, AthenaResultColumnInfo } from "../types";
 import { ExportMenu } from "./export/ExportMenu";
+import { copyCellValue } from "@/platform/grid/cellClipboard";
 
 interface Props {
   state: RunState;
@@ -230,10 +231,35 @@ function SimpleTable({
   columns: AthenaResultColumnInfo[];
   rows: unknown[][];
 }) {
-  const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  const tableRootRef = useRef<HTMLDivElement | null>(null);
+  const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
+
+  function onGridKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C")) {
+      if (activeCell !== null) {
+        const target = e.target as HTMLElement;
+        const tag = target.tagName.toUpperCase();
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT" && !target.isContentEditable) {
+          const row = rows[activeCell.row];
+          const value = row ? (row[activeCell.col] ?? null) : null;
+          e.preventDefault();
+          void copyCellValue(value);
+          return;
+        }
+      }
+    }
+    if (e.key === "Escape") {
+      setActiveCell(null);
+    }
+  }
 
   return (
-    <div style={{ overflow: "auto", height: "100%" }}>
+    <div
+      ref={tableRootRef}
+      style={{ overflow: "auto", height: "100%", outline: "none" }}
+      tabIndex={0}
+      onKeyDown={onGridKeyDown}
+    >
       <table
         style={{
           borderCollapse: "collapse",
@@ -278,33 +304,40 @@ function SimpleTable({
           {rows.map((row, i) => (
             <tr
               key={i}
-              onClick={() => setSelectedRow(i)}
               style={{
-                background: selectedRow === i ? "var(--bg-active)" : undefined,
                 cursor: "pointer",
               }}
             >
-              {(row as unknown[]).map((cell, j) => (
-                <td
-                  key={j}
-                  style={{
-                    padding: "2px 8px",
-                    borderBottom: "1px solid var(--border)",
-                    color: cell === null ? "var(--text-subtle)" : "var(--text)",
-                    whiteSpace: "nowrap",
-                    maxWidth: 320,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                  title={cell === null ? "NULL" : String(cell)}
-                >
-                  {cell === null ? (
-                    <span style={{ color: "var(--text-subtle)", fontStyle: "italic" }}>NULL</span>
-                  ) : (
-                    String(cell)
-                  )}
-                </td>
-              ))}
+              {(row as unknown[]).map((cell, j) => {
+                const isActive = activeCell !== null && activeCell.row === i && activeCell.col === j;
+                return (
+                  <td
+                    key={j}
+                    style={{
+                      padding: "2px 8px",
+                      borderBottom: "1px solid var(--border)",
+                      color: cell === null ? "var(--text-subtle)" : "var(--text)",
+                      whiteSpace: "nowrap",
+                      maxWidth: 320,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      background: isActive ? "var(--accent-soft, rgba(168, 85, 247, 0.12))" : undefined,
+                      boxShadow: isActive ? "inset 0 0 0 2px var(--accent, #a855f7)" : undefined,
+                    }}
+                    title={cell === null ? "NULL" : String(cell)}
+                    onClick={() => {
+                      setActiveCell({ row: i, col: j });
+                      tableRootRef.current?.focus();
+                    }}
+                  >
+                    {cell === null ? (
+                      <span style={{ color: "var(--text-subtle)", fontStyle: "italic" }}>NULL</span>
+                    ) : (
+                      String(cell)
+                    )}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
