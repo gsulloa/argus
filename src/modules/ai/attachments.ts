@@ -1,4 +1,3 @@
-import type { CellValue } from "@/modules/postgres/data/types";
 import { isCellEnvelope } from "@/modules/postgres/data/types";
 
 /**
@@ -19,11 +18,16 @@ export interface AttachedResult {
 const MAX_ROWS = 100;
 const MAX_BYTES = 50 * 1024; // 50 KB serialised
 
-/** Stringify a single cell. SQL NULL → "NULL". */
-export function stringifyCell(v: CellValue): string {
+/**
+ * Stringify a single cell value from any engine.
+ * Handles Postgres CellEnvelope wrappers, primitives, and nulls.
+ * SQL NULL → "NULL".
+ */
+export function stringifyCell(v: unknown): string {
   if (v === null || v === undefined) return "NULL";
   if (typeof v === "string") return v;
   if (typeof v === "number" || typeof v === "boolean") return String(v);
+  // Postgres binary/truncated cell envelope.
   if (isCellEnvelope(v)) return v.preview;
   try {
     return JSON.stringify(v);
@@ -36,10 +40,13 @@ export function stringifyCell(v: CellValue): string {
  * Capture a live grid result as an AttachedResult, applying the 100-row / 50 KB
  * cap. Sets `truncated` when the source was already truncated OR the cap was hit,
  * and preserves the true total row count.
+ *
+ * Accepts `unknown[][]` so it works with both Postgres (CellValue[][]) and other
+ * engines (e.g. Athena, which returns rows as unknown[][]).
  */
 export function captureResult(
   columns: string[],
-  rows: CellValue[][],
+  rows: unknown[][],
   sourceTruncated: boolean,
 ): AttachedResult {
   const stringRows: string[][] = [];

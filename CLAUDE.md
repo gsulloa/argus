@@ -9,6 +9,7 @@ A Tauri 2 desktop app for inspecting and editing data across multiple sources.
 - **Microsoft SQL Server** — SQL Server 2017+, Azure SQL Database, Azure SQL Managed Instance. Supports schema browsing, virtualized data grid with inline editing, SQL editor with `GO` batch support, table structure viewer. SQL Authentication only in v1.
 - **DynamoDB** — Table browsing and item scanning.
 - **Amazon CloudWatch Logs** — Log group / stream browsing and querying.
+- **Amazon Athena** — Serverless SQL over S3 via the async query lifecycle (`StartQueryExecution` → poll → paginated fetch). Glue-backed schema browser (databases → tables/views → columns); SQL editor with multi-statement runs, bytes-scanned (cost) display, and CSV/JSONL/XLSX export. No inline-editing data grid — table click opens a `SELECT … LIMIT 100` preview. Context-folder schema sync via Glue introspection (`AthenaIntrospector`); context-folder-grounded AI SQL generation. Default `AwsDataCatalog` catalog only in v1; AWS credentials in OS keychain like DynamoDB.
 
 ## Context folders (cross-engine)
 
@@ -18,7 +19,7 @@ and prefab queries. Folders are engine-segregated under a neutral root and
 shareable across connections (one filesystem watcher per canonical path).
 Full layout, format, and behaviour: see `README.md` "Context folders" and
 `docs/context-folder-example/`. Schema-sync ships for Postgres, MySQL, MSSQL,
-and DynamoDB (`introspect_adapters.rs`); CloudWatch is on the roadmap.
+DynamoDB, and Athena (`introspect_adapters.rs`); CloudWatch is on the roadmap.
 DynamoDB connections may carry an optional per-connection **table-name
 normalization rule** (`DynamoParams.table_match`, applied via
 `context/normalize.rs`) that folds CDK-style physical names

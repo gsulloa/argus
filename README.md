@@ -9,6 +9,7 @@ A desktop tool for inspecting and editing data across multiple sources. Built on
 - **Microsoft SQL Server** — SQL Server 2017+, Azure SQL Database, Azure SQL Managed Instance. Supports schema browsing, virtualized data grid with inline editing, SQL editor with `GO` batch support, table structure viewer. SQL Authentication only in v1.
 - **DynamoDB** — Table browsing and item scanning.
 - **Amazon CloudWatch Logs** — Log group / stream browsing and querying.
+- **Amazon Athena** — Serverless SQL over S3. Connection management (region, workgroup, S3 output location, AWS auth via profile or access keys); Glue-backed schema browser (databases → tables/views → columns); SQL editor running queries through the async Athena lifecycle (`StartQueryExecution` → poll → paginated fetch) with cancellation, multi-statement runs, bytes-scanned (cost) display, and CSV/JSONL/XLSX export; context-folder schema sync via Glue introspection; and context-folder-grounded AI SQL generation. No inline-editing data grid — clicking a table opens a `SELECT … LIMIT 100` preview. Default `AwsDataCatalog` catalog only in v1. AWS credentials stored in the OS keychain like DynamoDB.
 
 ## Context folders
 
@@ -146,6 +147,59 @@ Folders synced before configuring a rule keep their old suffix-named files
 logical-name re-sync.
 
 A minimal example folder lives in `docs/context-folder-example/`.
+
+## Amazon Athena setup
+
+### IAM permissions
+
+The IAM identity used to connect (either a named profile or static access keys) must have the following minimum permissions. The S3 actions are needed on both the query-result output bucket and any data buckets Athena reads.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AthenaQueryExecution",
+      "Effect": "Allow",
+      "Action": [
+        "athena:StartQueryExecution",
+        "athena:GetQueryExecution",
+        "athena:StopQueryExecution",
+        "athena:GetQueryResults",
+        "athena:GetWorkGroup"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "GlueSchemaRead",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetDatabases",
+        "glue:GetTables",
+        "glue:GetTable"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3QueryOutputAndData",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::your-query-results-bucket",
+        "arn:aws:s3:::your-query-results-bucket/*",
+        "arn:aws:s3:::your-data-bucket",
+        "arn:aws:s3:::your-data-bucket/*"
+      ]
+    }
+  ]
+}
+```
+
+Replace `your-query-results-bucket` with the bucket backing the workgroup's S3 output location, and `your-data-bucket` with every bucket that holds the underlying table data. If an `access denied` error appears on test connection, the most common cause is a missing `athena:GetWorkGroup` or `s3:ListBucket` permission.
 
 ## AI providers
 

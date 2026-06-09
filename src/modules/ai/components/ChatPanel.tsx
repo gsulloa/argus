@@ -47,10 +47,12 @@ export interface ChatPanelProps {
   readiness: AiReadiness;
   onLinkContext: () => void;
   editorRef: React.RefObject<ChatEditorHandle>;
-  /** Live executed result from the surrounding QueryTab, available to attach as context. */
+  /** Live executed result from the surrounding QueryTab, available to attach as context.
+   * Accepts rows from any engine (Postgres `CellValue[][]` is assignable to `unknown[][]`,
+   * Athena returns `unknown[][]`). */
   result?: {
     columns: string[];
-    rows: import("@/modules/postgres/data/types").CellValue[][];
+    rows: unknown[][];
     truncated: boolean;
   } | null;
 }

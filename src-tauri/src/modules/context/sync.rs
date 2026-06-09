@@ -48,7 +48,7 @@ use crate::modules::dynamo::params::TableMatch;
 /// | CloudWatch   | `<root>/cloudwatch/groups/<name>.md` |
 pub fn target_path_for(root: &Path, engine: EngineKind, shape: &ObjectShape) -> PathBuf {
     match engine {
-        EngineKind::Postgres | EngineKind::Mysql | EngineKind::Mssql => {
+        EngineKind::Postgres | EngineKind::Mysql | EngineKind::Mssql | EngineKind::Athena => {
             let schema = shape.schema.as_deref().unwrap_or("default");
             root.join(engine.subtree())
                 .join(schema)
@@ -406,7 +406,7 @@ fn walk_existing_objects(root: &Path, engine: EngineKind) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
     match engine {
-        EngineKind::Postgres | EngineKind::Mysql | EngineKind::Mssql => {
+        EngineKind::Postgres | EngineKind::Mysql | EngineKind::Mssql | EngineKind::Athena => {
             // <engine>/<schema>/<name>.md — skip queries/ subdir
             if !engine_root.exists() {
                 return paths;

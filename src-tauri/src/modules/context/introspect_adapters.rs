@@ -1,7 +1,10 @@
 use async_trait::async_trait;
+use aws_sdk_glue::error::ProvideErrorMetadata;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::modules::athena::pool::AthenaClientRegistry;
+use crate::modules::athena::schema_commands::fetch_table_columns;
 use crate::modules::context::engine::EngineKind;
 use crate::modules::context::introspect::{IntrospectForContext, ObjectShape, ObjectShapeColumn};
 use crate::modules::dynamo::client::DynamoClientRegistry;
@@ -32,6 +35,7 @@ pub struct IntrospectorPools<'a> {
     pub mysql: &'a MysqlPoolRegistry,
     pub mssql: &'a MssqlPoolRegistry,
     pub dynamo: &'a DynamoClientRegistry,
+    pub athena: &'a AthenaClientRegistry,
 }
 
 // ---- Postgres adapter ----
@@ -374,6 +378,118 @@ impl<'a> IntrospectForContext for DynamoIntrospector<'a> {
     }
 }
 
+// ---- Athena adapter ----
+
+pub struct AthenaIntrospector<'a> {
+    pub registry: &'a AthenaClientRegistry,
+}
+
+#[async_trait]
+impl<'a> IntrospectForContext for AthenaIntrospector<'a> {
+    async fn introspect_for_context(&self, conn_id: Uuid) -> AppResult<Vec<ObjectShape>> {
+        let acquired = self.registry.acquire(&conn_id).await?;
+        let glue = &acquired.glue;
+
+        let mut shapes: Vec<ObjectShape> = Vec::new();
+
+        // Enumerate all Glue databases.
+        let mut db_next_token: Option<String> = None;
+        loop {
+            let db_resp = glue
+                .get_databases()
+                .set_next_token(db_next_token)
+                .send()
+                .await
+                .map_err(|e| {
+                    AppError::aws(
+                        e.meta().code().unwrap_or("Unknown").to_string(),
+                        e.meta()
+                            .message()
+                            .map(String::from)
+                            .unwrap_or_else(|| format!("{e:?}")),
+                        false,
+                    )
+                })?;
+
+            for db in db_resp.database_list() {
+                let database_name = db.name().to_string();
+
+                // Enumerate all tables in this database.
+                let mut tbl_next_token: Option<String> = None;
+                loop {
+                    let tbl_resp = match glue
+                        .get_tables()
+                        .database_name(&database_name)
+                        .set_next_token(tbl_next_token)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!(
+                                target: "argus::context",
+                                database = %database_name,
+                                "context sync (athena): failed to list tables: {:?}", e
+                            );
+                            break;
+                        }
+                    };
+
+                    for table in tbl_resp.table_list() {
+                        let kind =
+                            if table.table_type() == Some("VIRTUAL_VIEW") {
+                                "view".to_string()
+                            } else {
+                                "table".to_string()
+                            };
+                        let table_name = table.name().to_string();
+
+                        // Fetch columns.
+                        let col_entries =
+                            match fetch_table_columns(glue, &database_name, &table_name).await {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        target: "argus::context",
+                                        database = %database_name,
+                                        table = %table_name,
+                                        "context sync (athena): failed to list columns: {e}"
+                                    );
+                                    continue;
+                                }
+                            };
+
+                        let columns: Vec<ObjectShapeColumn> = col_entries
+                            .into_iter()
+                            .map(|c| ObjectShapeColumn { name: c.name, ty: c.ty })
+                            .collect();
+
+                        shapes.push(ObjectShape {
+                            kind,
+                            schema: Some(database_name.clone()),
+                            name: table_name.clone(),
+                            primary_key: vec![],
+                            columns,
+                        });
+                    }
+
+                    tbl_next_token = tbl_resp.next_token().map(str::to_string);
+                    if tbl_next_token.is_none() {
+                        break;
+                    }
+                }
+            }
+
+            db_next_token = db_resp.next_token().map(str::to_string);
+            if db_next_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(shapes)
+    }
+}
+
 // ---- Not-yet-implemented stub ----
 
 pub struct NotImplementedIntrospector {
@@ -404,6 +520,9 @@ pub fn introspector_for<'a>(
         EngineKind::Dynamo => Box::new(DynamoIntrospector {
             registry: pools.dynamo,
         }),
+        EngineKind::Athena => Box::new(AthenaIntrospector {
+            registry: pools.athena,
+        }),
         e => Box::new(NotImplementedIntrospector { engine: e }),
     }
 }
@@ -419,12 +538,14 @@ mod tests {
         mysql: &'a MysqlPoolRegistry,
         mssql: &'a MssqlPoolRegistry,
         dynamo: &'a DynamoClientRegistry,
+        athena: &'a AthenaClientRegistry,
     ) -> IntrospectorPools<'a> {
         IntrospectorPools {
             pg,
             mysql,
             mssql,
             dynamo,
+            athena,
         }
     }
 
@@ -438,7 +559,8 @@ mod tests {
         let mysql = MysqlPoolRegistry::new();
         let mssql = MssqlPoolRegistry::new();
         let dynamo = DynamoClientRegistry::new();
-        let pools = make_pools(&pg, &mysql, &mssql, &dynamo);
+        let athena = AthenaClientRegistry::new();
+        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena);
 
         let adapter = introspector_for(EngineKind::Mysql, pools);
         let err = adapter
@@ -458,7 +580,8 @@ mod tests {
         let mysql = MysqlPoolRegistry::new();
         let mssql = MssqlPoolRegistry::new();
         let dynamo = DynamoClientRegistry::new();
-        let pools = make_pools(&pg, &mysql, &mssql, &dynamo);
+        let athena = AthenaClientRegistry::new();
+        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena);
 
         let adapter = introspector_for(EngineKind::Mssql, pools);
         let err = adapter
@@ -478,7 +601,8 @@ mod tests {
         let mysql = MysqlPoolRegistry::new();
         let mssql = MssqlPoolRegistry::new();
         let dynamo = DynamoClientRegistry::new();
-        let pools = make_pools(&pg, &mysql, &mssql, &dynamo);
+        let athena = AthenaClientRegistry::new();
+        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena);
 
         let adapter = introspector_for(EngineKind::Dynamo, pools);
         let err = adapter
@@ -492,6 +616,27 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn athena_introspector_is_not_not_implemented() {
+        let pg = PgPoolRegistry::new();
+        let mysql = MysqlPoolRegistry::new();
+        let mssql = MssqlPoolRegistry::new();
+        let dynamo = DynamoClientRegistry::new();
+        let athena = AthenaClientRegistry::new();
+        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena);
+
+        let adapter = introspector_for(EngineKind::Athena, pools);
+        let err = adapter
+            .introspect_for_context(Uuid::nil())
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("not yet wired"),
+            "athena adapter should not be NotImplemented; got: {msg}"
+        );
+    }
+
     // §12.2 — Cloudwatch still returns "not yet wired".
     #[tokio::test]
     async fn cloudwatch_returns_not_yet_wired() {
@@ -499,7 +644,8 @@ mod tests {
         let mysql = MysqlPoolRegistry::new();
         let mssql = MssqlPoolRegistry::new();
         let dynamo = DynamoClientRegistry::new();
-        let pools = make_pools(&pg, &mysql, &mssql, &dynamo);
+        let athena = AthenaClientRegistry::new();
+        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena);
 
         let adapter = introspector_for(EngineKind::Cloudwatch, pools);
         let err = adapter

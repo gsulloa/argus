@@ -4,6 +4,7 @@
 /// query file extensions are valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EngineKind {
+    Athena,
     Postgres,
     Mysql,
     Mssql,
@@ -15,6 +16,7 @@ impl EngineKind {
     /// Map the `kind` string stored on a `Connection` to an `EngineKind`.
     pub fn from_connection_kind(kind: &str) -> Option<Self> {
         match kind {
+            "athena" => Some(Self::Athena),
             "postgres" => Some(Self::Postgres),
             "mysql" => Some(Self::Mysql),
             "mssql" => Some(Self::Mssql),
@@ -30,6 +32,7 @@ impl EngineKind {
     /// The subdirectory name under the context folder root for this engine.
     pub fn subtree(&self) -> &'static str {
         match self {
+            Self::Athena => "athena",
             Self::Postgres => "postgres",
             Self::Mysql => "mysql",
             Self::Mssql => "mssql",
@@ -41,7 +44,7 @@ impl EngineKind {
     /// Recognised body-file extensions inside this engine's `queries/` directory.
     pub fn query_extensions(&self) -> &'static [&'static str] {
         match self {
-            Self::Postgres | Self::Mysql | Self::Mssql => &["sql"],
+            Self::Postgres | Self::Mysql | Self::Mssql | Self::Athena => &["sql"],
             Self::Dynamo => &["partiql"],
             Self::Cloudwatch => &["cwlogs"],
         }
@@ -54,6 +57,10 @@ mod tests {
 
     #[test]
     fn maps_each_connection_kind_to_engine() {
+        assert_eq!(
+            EngineKind::from_connection_kind("athena"),
+            Some(EngineKind::Athena)
+        );
         assert_eq!(
             EngineKind::from_connection_kind("postgres"),
             Some(EngineKind::Postgres)

@@ -1,8 +1,5 @@
-# connection-context-folders Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change context-folders-other-engines. Update Purpose after archive.
-## Requirements
 ### Requirement: Schema sync supports MySQL, MSSQL, and Dynamo
 
 The `context_sync_schema` command SHALL produce a valid `SyncReport` for connections of kind `mysql`, `mssql`, `dynamo`, and `athena` in addition to `postgres`. The command introspects the live source via the engine's existing pool/client registry and writes `ObjectShape`-derived `system:` blocks to the linked context folder using the same atomic, body-preserving rules already specified for Postgres. For Dynamo connections, the target file path SHALL be derived from the **logical** (normalized) table name — the live table name folded through the connection's table-name normalization rule (see `dynamo-table-name-normalization`) — so re-deploys that change the random suffix update the same `dynamo/tables/<logical>.md` file instead of creating a new one. When no rule is configured the logical name equals the live name, preserving prior behavior. When two or more distinct live tables normalize to the same logical name within one sync, the **first SHALL win and the rest SHALL be skipped**, and each skipped collision SHALL be surfaced in the `SyncReport` (e.g. via its warnings/skipped channel) rather than aborting the sync. For Athena the introspection source is AWS Glue (databases → schemas, tables/views → relations, Glue column types → columns), and the engine is organised like the other SQL engines: object files live at `athena/<database>/<relation>.md`.
@@ -70,4 +67,3 @@ The internal `introspector_for(engine, pools)` dispatcher SHALL accept an `Intro
 
 - **WHEN** `context_sync_schema` is invoked on a Postgres connection
 - **THEN** the command returns the same `SyncReport` shape and behaviour as before this change
-

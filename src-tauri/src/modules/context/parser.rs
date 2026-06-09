@@ -331,7 +331,7 @@ pub fn load_folder(root: &Path, engine: EngineKind) -> Result<ParsedContext, Par
 
     // Walk object files depending on the engine.
     match engine {
-        EngineKind::Postgres | EngineKind::Mysql | EngineKind::Mssql => {
+        EngineKind::Postgres | EngineKind::Mysql | EngineKind::Mssql | EngineKind::Athena => {
             // <engine_root>/<schema>/<table>.md
             // Walk every subdirectory of engine_root except "queries/".
             if engine_root.exists() {
