@@ -437,10 +437,22 @@ The viewer SHALL apply edits directly when the user presses `⌘S` (or activates
 
 The viewer MUST NOT open a diff preview modal in v1.
 
+`⌘S` detection MUST use a `window`-level `keydown` listener that is active only while the table tab is the active tab — NOT the root `div`'s `onKeyDown` handler. The listener MUST trigger the save whenever the table tab is active AND the currently focused element is `null`/`document.body` OR is contained within the table tab's root element, EXCEPT when the focused element is inside a CodeMirror editor (`.cm-editor`), in which case `⌘S` MUST be left to that editor. Focus being outside the data grid (including no element focused) MUST NOT prevent the save. The non-save key handling (`⌫` delete, `⌘Z` undo, `⌘R` reload) MAY remain on the root `div`'s `onKeyDown`.
+
 #### Scenario: Cmd-S applies the buffer directly
 
-- **WHEN** the user has any dirty entries and presses `⌘S`
+- **WHEN** the user has any dirty entries and presses `⌘S` while the table tab is active
 - **THEN** `mysql_apply_table_edits` is invoked with the current `EditOp[]` and `origin: "user"`
+
+#### Scenario: Cmd-S saves when focus is outside the grid
+
+- **WHEN** the user has dirty entries, clicks an empty area so no grid cell is focused (or focuses a toolbar control), and presses `⌘S` while the table tab is active
+- **THEN** `mysql_apply_table_edits` is invoked with the current `EditOp[]` and `origin: "user"`
+
+#### Scenario: Cmd-S is left to a focused CodeMirror editor
+
+- **WHEN** focus is inside a `.cm-editor` surface within the tab and the user presses `⌘S`
+- **THEN** the viewer does NOT dispatch `mysql_apply_table_edits` from the global listener
 
 #### Scenario: Cmd-S is no-op when buffer is clean
 
