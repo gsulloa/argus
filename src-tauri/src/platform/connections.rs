@@ -16,6 +16,7 @@ pub struct Connection {
     pub group_id: Option<Uuid>,
     pub sort_order: f64,
     pub context_path: Option<String>,
+    pub project_source_path: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -32,6 +33,8 @@ pub struct ConnectionInput {
     pub secret: Option<String>,
     #[serde(default)]
     pub context_path: Option<String>,
+    #[serde(default)]
+    pub project_source_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -46,6 +49,10 @@ pub struct ConnectionUpdate {
     /// `Some(None)` = clear the context path (set to NULL).
     #[serde(default, deserialize_with = "deserialize_context_path_field")]
     pub context_path: Option<Option<String>>,
+    /// Triple state: missing field = leave project_source_path untouched,
+    /// `Some(Some(p))` = replace, `Some(None)` = clear the path (set to NULL).
+    #[serde(default, deserialize_with = "deserialize_project_source_path_field")]
+    pub project_source_path: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,6 +70,14 @@ where
 }
 
 fn deserialize_context_path_field<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v: Option<Option<String>> = Option::<Option<String>>::deserialize(d)?;
+    Ok(v)
+}
+
+fn deserialize_project_source_path_field<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -117,6 +132,7 @@ fn row_to_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<Connection> {
     let created_at: i64 = row.get(6)?;
     let updated_at: i64 = row.get(7)?;
     let context_path: Option<String> = row.get(8)?;
+    let project_source_path: Option<String> = row.get(9)?;
 
     Ok(Connection {
         id,
@@ -126,17 +142,18 @@ fn row_to_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<Connection> {
         group_id,
         sort_order,
         context_path,
+        project_source_path,
         created_at,
         updated_at,
     })
 }
 
 const SELECT_CONNECTION_COLS: &str =
-    "id, name, kind, params_json, group_id, sort_order, created_at, updated_at, context_path";
+    "id, name, kind, params_json, group_id, sort_order, created_at, updated_at, context_path, project_source_path";
 
 pub fn list(conn: &rusqlite::Connection) -> AppResult<Vec<Connection>> {
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.name, c.kind, c.params_json, c.group_id, c.sort_order, c.created_at, c.updated_at, c.context_path \
+        "SELECT c.id, c.name, c.kind, c.params_json, c.group_id, c.sort_order, c.created_at, c.updated_at, c.context_path, c.project_source_path \
          FROM connections c \
          LEFT JOIN connection_groups g ON g.id = c.group_id \
          ORDER BY (c.group_id IS NULL) ASC, COALESCE(g.sort_order, 0) ASC, c.sort_order ASC",
@@ -181,8 +198,8 @@ pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<
     let sort_order = max + 1.0;
 
     conn.execute(
-        "INSERT INTO connections (id, name, kind, params_json, group_id, sort_order, context_path, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+        "INSERT INTO connections (id, name, kind, params_json, group_id, sort_order, context_path, project_source_path, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
         params![
             id.as_bytes().to_vec(),
             input.name.trim(),
@@ -191,6 +208,7 @@ pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<
             input.group_id.map(|g| g.as_bytes().to_vec()),
             sort_order,
             input.context_path,
+            input.project_source_path,
             now,
         ],
     )?;
@@ -209,6 +227,7 @@ pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<
         group_id: input.group_id,
         sort_order,
         context_path: input.context_path.clone(),
+        project_source_path: input.project_source_path.clone(),
         created_at: now,
         updated_at: now,
     })
@@ -241,20 +260,26 @@ pub fn update(
         Some(v) => v,
         None => current.context_path.clone(),
     };
+    let new_project_source_path = match update.project_source_path {
+        Some(v) => v,
+        None => current.project_source_path.clone(),
+    };
     current.updated_at = now_unix();
 
     let params_json = serde_json::to_string(&current.params)?;
     conn.execute(
-        "UPDATE connections SET name = ?2, params_json = ?3, updated_at = ?4, context_path = ?5 WHERE id = ?1",
+        "UPDATE connections SET name = ?2, params_json = ?3, updated_at = ?4, context_path = ?5, project_source_path = ?6 WHERE id = ?1",
         params![
             current.id.as_bytes().to_vec(),
             current.name,
             params_json,
             current.updated_at,
             new_context_path,
+            new_project_source_path,
         ],
     )?;
     current.context_path = new_context_path;
+    current.project_source_path = new_project_source_path;
 
     match update.secret {
         Some(Some(s)) => {
@@ -435,6 +460,7 @@ mod tests {
                 group_id: None,
                 secret: Some("hunter2".into()),
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -460,6 +486,7 @@ mod tests {
                 group_id: None,
                 secret: None,
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap_err();
@@ -479,6 +506,7 @@ mod tests {
                 group_id: Some(Uuid::new_v4()),
                 secret: None,
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap_err();
@@ -505,6 +533,7 @@ mod tests {
                 group_id: Some(g.id),
                 secret: None,
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -531,6 +560,7 @@ mod tests {
                 group_id: Some(g.id),
                 secret: None,
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -571,6 +601,7 @@ mod tests {
                 group_id: None,
                 secret: Some("s".into()),
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -608,6 +639,7 @@ mod tests {
                 group_id: Some(g.id),
                 secret: None,
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -651,6 +683,7 @@ mod tests {
                 group_id: None,
                 secret: None,
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -690,6 +723,7 @@ mod tests {
                 group_id: None,
                 secret: None,
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -702,6 +736,7 @@ mod tests {
                 group_id: Some(g_b.id),
                 secret: None,
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -714,6 +749,7 @@ mod tests {
                 group_id: Some(g_a.id),
                 secret: None,
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -733,6 +769,7 @@ mod tests {
                 group_id: None,
                 secret: Some("a".into()),
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -778,6 +815,7 @@ mod tests {
                 group_id: None,
                 secret: Some("s".into()),
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -812,6 +850,7 @@ mod tests {
                 group_id: None,
                 secret: Some("old".into()),
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -843,6 +882,7 @@ mod tests {
                 group_id: None,
                 secret: None,
                 context_path: Some("/Users/me/billing/ctx".into()),
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -866,6 +906,7 @@ mod tests {
                 group_id: None,
                 secret: None,
                 context_path: None,
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -896,6 +937,7 @@ mod tests {
                 group_id: None,
                 secret: None,
                 context_path: Some("/x".into()),
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -926,6 +968,7 @@ mod tests {
                 group_id: None,
                 secret: None,
                 context_path: Some("/x".into()),
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -935,6 +978,7 @@ mod tests {
             ConnectionUpdate {
                 // context_path intentionally omitted (None means leave unchanged)
                 context_path: None,
+                project_source_path: None,
                 ..Default::default()
             },
         )
@@ -957,6 +1001,7 @@ mod tests {
                 group_id: None,
                 secret: None,
                 context_path: Some("/tmp/argus-context-test-fake".into()),
+                project_source_path: None,
             },
         )
         .unwrap();
@@ -964,5 +1009,119 @@ mod tests {
         assert!(list(&c).unwrap().is_empty());
         // The folder "/tmp/argus-context-test-fake" was never created, and
         // delete() did not attempt to create, modify, or remove it.
+    }
+
+    // ---- project_source_path tests ----
+
+    #[test]
+    fn create_with_project_source_path() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "src".into(),
+                kind: "dynamo".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: Some("/Users/me/app".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(made.project_source_path.as_deref(), Some("/Users/me/app"));
+        let listed = list(&c).unwrap();
+        assert_eq!(listed[0].project_source_path.as_deref(), Some("/Users/me/app"));
+    }
+
+    #[test]
+    fn update_sets_project_source_path() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "dynamo".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: None,
+            },
+        )
+        .unwrap();
+        assert!(made.project_source_path.is_none());
+        let updated = update(
+            &c,
+            made.id,
+            ConnectionUpdate {
+                project_source_path: Some(Some("/repo".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.project_source_path.as_deref(), Some("/repo"));
+        let listed = list(&c).unwrap();
+        assert_eq!(listed[0].project_source_path.as_deref(), Some("/repo"));
+    }
+
+    #[test]
+    fn update_clears_project_source_path() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "dynamo".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: Some("/repo".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(made.project_source_path.as_deref(), Some("/repo"));
+        let updated = update(
+            &c,
+            made.id,
+            ConnectionUpdate {
+                project_source_path: Some(None),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(updated.project_source_path.is_none());
+        let listed = list(&c).unwrap();
+        assert!(listed[0].project_source_path.is_none());
+    }
+
+    #[test]
+    fn update_omits_project_source_path_leaves_path() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "dynamo".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: Some("/repo".into()),
+            },
+        )
+        .unwrap();
+        let updated = update(
+            &c,
+            made.id,
+            ConnectionUpdate {
+                // project_source_path omitted (None means leave unchanged)
+                name: Some("renamed".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.project_source_path.as_deref(), Some("/repo"));
     }
 }

@@ -72,6 +72,10 @@ pub(crate) fn read_project_source_path(root: &Path) -> AppResult<Option<String>>
 /// Set (Some) or remove (None) `project_source_path` in `<root>/context.yaml`,
 /// preserving `schema_version`, `name`, and all other extras.
 /// Writes atomically via `atomic_write`.
+///
+/// `Some` is only used by the legacy migration's tests; production code calls
+/// this with `None` to strip a legacy value out of a shared, committable
+/// `context.yaml` once it has been relocated into local per-connection storage.
 pub(crate) fn write_project_source_path(root: &Path, path: Option<&str>) -> AppResult<()> {
     let mut manifest = parse_manifest(root).map_err(|e| AppError::Storage(format!("{e}")))?;
     match path {
@@ -88,6 +92,66 @@ pub(crate) fn write_project_source_path(root: &Path, path: Option<&str>) -> AppR
         .map_err(|e| AppError::Internal(format!("yaml serialise manifest: {e}")))?;
     atomic_write(&root.join("context.yaml"), yaml.as_bytes())?;
     Ok(())
+}
+
+/// Resolve a connection's project source path against an open DB connection.
+///
+/// Returns the connection's locally-stored `project_source_path` if set. If it
+/// is absent but the connection has a linked context folder whose `context.yaml`
+/// still carries a legacy `project_source_path`, that value is migrated: it is
+/// written into the connection record and stripped from `context.yaml` (leaving
+/// `schema_version`, `name`, and other extras intact), then returned. Returns
+/// `None` when neither source exists. A missing or unparseable legacy
+/// `context.yaml` is treated as "no legacy value" rather than an error.
+pub(crate) fn resolve_project_source_path_conn(
+    conn: &rusqlite::Connection,
+    conn_id: Uuid,
+) -> AppResult<Option<String>> {
+    let record = connections::list(conn)?
+        .into_iter()
+        .find(|c| c.id == conn_id)
+        .ok_or_else(|| AppError::NotFound(format!("connection {conn_id} not found")))?;
+
+    if let Some(p) = record
+        .project_source_path
+        .filter(|s| !s.trim().is_empty())
+    {
+        return Ok(Some(p));
+    }
+
+    let Some(root) = record.context_path else {
+        return Ok(None);
+    };
+    let root_path = Path::new(&root);
+
+    // A broken or missing legacy context.yaml is not fatal: there is simply
+    // nothing to migrate.
+    let Some(legacy) = read_project_source_path(root_path).ok().flatten() else {
+        return Ok(None);
+    };
+
+    connections::update(
+        conn,
+        conn_id,
+        ConnectionUpdate {
+            project_source_path: Some(Some(legacy.clone())),
+            ..Default::default()
+        },
+    )?;
+    write_project_source_path(root_path, None)?;
+    Ok(Some(legacy))
+}
+
+/// Resolve a connection's project source path, locking the shared DB.
+///
+/// Thin wrapper over [`resolve_project_source_path_conn`] used by Tauri command
+/// handlers and the AI model inspector.
+pub(crate) fn resolve_project_source_path(
+    db: &State<'_, DbState>,
+    conn_id: Uuid,
+) -> AppResult<Option<String>> {
+    let lock = db.0.lock().expect("db poisoned");
+    resolve_project_source_path_conn(&lock, conn_id)
 }
 
 /// Look up a connection and return its `kind` string.
@@ -874,23 +938,22 @@ pub fn context_save_model(
 
 // ---- context_get_project_source / context_set_project_source ----
 
-/// Return the `project_source_path` from the linked context folder's `context.yaml`,
-/// or `None` if not configured. Returns an error if the connection has no linked folder.
+/// Return the connection's locally-stored `project_source_path`, or `None` if
+/// not configured. Transparently migrates a legacy value out of the linked
+/// folder's `context.yaml` on first read (see [`resolve_project_source_path`]).
+/// Does not require the connection to have a linked context folder.
 #[tauri::command]
 pub fn context_get_project_source(
     db: State<'_, DbState>,
     connection_id: String,
 ) -> AppResult<Option<String>> {
     let conn_id = parse_conn_id(&connection_id)?;
-    let (_kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
-    let root = context_path.ok_or_else(|| {
-        AppError::Validation(format!("connection {conn_id} has no linked context folder"))
-    })?;
-    read_project_source_path(Path::new(&root))
+    resolve_project_source_path(&db, conn_id)
 }
 
-/// Set the `project_source_path` in the linked context folder's `context.yaml`.
-/// Returns an error if the connection has no linked folder.
+/// Store `project_source_path` as local per-connection state. This is never
+/// written to the shared, committable `context.yaml`. Does not require the
+/// connection to have a linked context folder.
 #[tauri::command]
 pub fn context_set_project_source(
     db: State<'_, DbState>,
@@ -898,11 +961,16 @@ pub fn context_set_project_source(
     path: String,
 ) -> AppResult<()> {
     let conn_id = parse_conn_id(&connection_id)?;
-    let (_kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
-    let root = context_path.ok_or_else(|| {
-        AppError::Validation(format!("connection {conn_id} has no linked context folder"))
-    })?;
-    write_project_source_path(Path::new(&root), Some(&path))
+    let lock = db.0.lock().expect("db poisoned");
+    connections::update(
+        &lock,
+        conn_id,
+        ConnectionUpdate {
+            project_source_path: Some(Some(path)),
+            ..Default::default()
+        },
+    )?;
+    Ok(())
 }
 
 // ---- 5.11: context_delete_model ----
@@ -1060,6 +1128,120 @@ mod tests {
 
         let result = read_project_source_path(dir.path()).unwrap();
         assert_eq!(result, None);
+    }
+
+    // ---- resolve_project_source_path_conn (local per-connection storage) ----
+    // (imports `ConnectionInput`/`ConnectionUpdate`/`open_in_memory` defined
+    // further down in this module are visible here module-wide.)
+
+    fn make_conn(
+        db: &rusqlite::Connection,
+        context_path: Option<String>,
+        project_source_path: Option<String>,
+    ) -> Uuid {
+        connections::create(
+            db,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "dynamo".into(),
+                params: serde_json::Value::Null,
+                group_id: None,
+                secret: None,
+                context_path,
+                project_source_path,
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    #[test]
+    fn resolve_returns_db_value_and_ignores_context_yaml() {
+        let db = open_in_memory().unwrap();
+        let dir = TempDir::new().unwrap();
+        // context.yaml carries a DIFFERENT legacy value that must be ignored.
+        fs::write(
+            dir.path().join("context.yaml"),
+            "schema_version: 1\nname: Test\nproject_source_path: /legacy/path\n",
+        )
+        .unwrap();
+        let id = make_conn(
+            &db,
+            Some(dir.path().to_string_lossy().into_owned()),
+            Some("/db/path".into()),
+        );
+
+        let resolved = resolve_project_source_path_conn(&db, id).unwrap();
+        assert_eq!(resolved.as_deref(), Some("/db/path"));
+
+        // context.yaml left untouched: legacy key still present.
+        let manifest = parse_manifest(dir.path()).unwrap();
+        assert_eq!(
+            manifest
+                .extras
+                .get(PROJECT_SOURCE_PATH_KEY)
+                .and_then(|v| v.as_str()),
+            Some("/legacy/path")
+        );
+    }
+
+    #[test]
+    fn resolve_migrates_legacy_context_yaml_into_db() {
+        let db = open_in_memory().unwrap();
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("context.yaml"),
+            "schema_version: 1\nname: Billing\nproject_source_path: /Users/me/app\nother_key: keep\n",
+        )
+        .unwrap();
+        let id = make_conn(&db, Some(dir.path().to_string_lossy().into_owned()), None);
+
+        let resolved = resolve_project_source_path_conn(&db, id).unwrap();
+        assert_eq!(resolved.as_deref(), Some("/Users/me/app"));
+
+        // DB column is now populated.
+        let after = connections::list(&db).unwrap();
+        assert_eq!(after[0].project_source_path.as_deref(), Some("/Users/me/app"));
+
+        // context.yaml lost the key but kept schema_version/name/other extras.
+        let manifest = parse_manifest(dir.path()).unwrap();
+        assert!(manifest.extras.get(PROJECT_SOURCE_PATH_KEY).is_none());
+        assert_eq!(manifest.schema_version, 1);
+        assert_eq!(manifest.name, "Billing");
+        assert_eq!(
+            manifest.extras.get("other_key").and_then(|v| v.as_str()),
+            Some("keep")
+        );
+    }
+
+    #[test]
+    fn set_and_resolve_without_linked_folder() {
+        // The "no linked context folder" precondition is dropped: a connection
+        // with no context_path can still store and resolve a project source
+        // path, and nothing is written to any context.yaml.
+        let db = open_in_memory().unwrap();
+        let id = make_conn(&db, None, None);
+
+        // Emulate context_set_project_source.
+        connections::update(
+            &db,
+            id,
+            ConnectionUpdate {
+                project_source_path: Some(Some("/repo".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let resolved = resolve_project_source_path_conn(&db, id).unwrap();
+        assert_eq!(resolved.as_deref(), Some("/repo"));
+    }
+
+    #[test]
+    fn resolve_returns_none_when_unset_and_no_folder() {
+        let db = open_in_memory().unwrap();
+        let id = make_conn(&db, None, None);
+        assert!(resolve_project_source_path_conn(&db, id).unwrap().is_none());
     }
 
     // ---- read-path matching with normalization (task 3.3) ----
@@ -1280,6 +1462,7 @@ mod tests {
                 group_id: None,
                 secret: None,
                 context_path,
+                project_source_path: None,
             },
         )
         .unwrap();
