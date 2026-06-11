@@ -382,8 +382,12 @@ pub fn load_folder(root: &Path, engine: EngineKind) -> Result<ParsedContext, Par
             }
         }
         EngineKind::Dynamo => {
-            // <engine_root>/tables/<name>.md   — flat table docs
+            // <engine_root>/tables/<name>.md          — legacy flat table docs (read-compat)
+            // <engine_root>/tables/<name>/table.md    — folder-based table docs (new format)
             // <engine_root>/tables/<name>/models/<Model>.md — model docs
+            //
+            // Precedence: if both tables/<name>.md and tables/<name>/table.md exist,
+            // the folder table.md wins and the flat file is skipped (no duplicates).
             let tables_dir = engine_root.join("tables");
             if tables_dir.exists() {
                 match std::fs::read_dir(&tables_dir) {
@@ -391,7 +395,18 @@ pub fn load_folder(root: &Path, engine: EngineKind) -> Result<ParsedContext, Par
                         for entry in entries.flatten() {
                             let p = entry.path();
                             if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("md") {
-                                // Flat table doc: tables/<name>.md
+                                // Legacy flat table doc: tables/<name>.md
+                                // Skip it if the folder-based table.md exists (folder wins).
+                                let stem = p
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let folder_doc = tables_dir.join(&stem).join("table.md");
+                                if folder_doc.exists() {
+                                    // Folder wins; flat file is silently skipped.
+                                    continue;
+                                }
                                 match parse_object_doc(&p) {
                                     Ok(doc) => objects.push(doc),
                                     Err(e) => warnings.push(LoadWarning {
@@ -406,6 +421,19 @@ pub fn load_folder(root: &Path, engine: EngineKind) -> Result<ParsedContext, Par
                                     Some(n) => n.to_owned(),
                                     None => continue,
                                 };
+
+                                // D4: parse tables/<name>/table.md as the dynamo_table doc.
+                                let table_doc_path = p.join("table.md");
+                                if table_doc_path.exists() {
+                                    match parse_object_doc(&table_doc_path) {
+                                        Ok(doc) => objects.push(doc),
+                                        Err(e) => warnings.push(LoadWarning {
+                                            path: table_doc_path,
+                                            message: e.to_string(),
+                                        }),
+                                    }
+                                }
+
                                 // Walk tables/<table>/models/*.md
                                 let models_dir = p.join("models");
                                 if models_dir.exists() {
@@ -909,7 +937,7 @@ mod tests {
         );
     }
 
-    /// `tables/AppTable.md` (table doc) and `tables/AppTable/models/Order.md`
+    /// `tables/AppTable/table.md` (folder table doc) and `tables/AppTable/models/Order.md`
     /// (model doc) coexist — both parsed, no shadowing.
     #[test]
     fn table_doc_and_model_doc_coexist() {
@@ -917,7 +945,7 @@ mod tests {
         write_file(dir.path(), "context.yaml", minimal_manifest());
         write_file(
             dir.path(),
-            "dynamo/tables/AppTable.md",
+            "dynamo/tables/AppTable/table.md",
             &dynamo_table_doc("AppTable"),
         );
         write_file(
@@ -992,6 +1020,65 @@ mod tests {
             .find(|d| d.system.physical_table.as_deref() == Some("TableB"))
             .expect("TableB Order not found");
         assert_eq!(order_b.system.access_patterns.as_ref().unwrap()[0].pk, "B#${id}");
+    }
+
+    /// Legacy read-compat: a flat `tables/<name>.md` (no folder) still parses
+    /// as a `dynamo_table` doc (D4 read-compat requirement).
+    #[test]
+    fn legacy_flat_table_doc_still_parses() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+        // Write only the flat file; no tables/Events/ directory.
+        write_file(
+            dir.path(),
+            "dynamo/tables/Events.md",
+            "---\nsystem:\n  kind: dynamo_table\n  name: Events\n---\n# Events\n",
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+        assert_eq!(ctx.objects.len(), 1, "legacy flat doc should be parsed");
+        assert_eq!(ctx.objects[0].system.kind, "dynamo_table");
+        assert_eq!(ctx.objects[0].system.name, "Events");
+        assert!(ctx.warnings.is_empty(), "no warnings expected: {:?}", ctx.warnings);
+    }
+
+    /// Folder-wins: when both `tables/Events.md` (flat) and
+    /// `tables/Events/table.md` exist, exactly one `dynamo_table` object for
+    /// `Events` is returned, sourced from the folder `table.md` (D4 precedence).
+    #[test]
+    fn folder_table_doc_wins_over_flat() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+
+        // Flat file with a distinctive marker.
+        write_file(
+            dir.path(),
+            "dynamo/tables/Events.md",
+            "---\nsystem:\n  kind: dynamo_table\n  name: Events\nhuman:\n  tags:\n    - flat\n---\n# Events flat\n",
+        );
+        // Folder-based file with a different distinctive marker.
+        write_file(
+            dir.path(),
+            "dynamo/tables/Events/table.md",
+            "---\nsystem:\n  kind: dynamo_table\n  name: Events\nhuman:\n  tags:\n    - folder\n---\n# Events folder\n",
+        );
+
+        let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
+
+        // Exactly one dynamo_table for Events.
+        let table_docs: Vec<_> = ctx
+            .objects
+            .iter()
+            .filter(|d| d.system.kind == "dynamo_table" && d.system.name == "Events")
+            .collect();
+        assert_eq!(table_docs.len(), 1, "must be exactly one dynamo_table for Events");
+
+        // It should be the folder-based doc, not the flat one.
+        let doc = table_docs[0];
+        assert!(
+            doc.human.tags.as_ref().map(|t| t.contains(&"folder".to_string())).unwrap_or(false),
+            "folder table.md should win over flat file; got tags: {:?}", doc.human.tags
+        );
     }
 
     /// `has_unterminated_placeholder` unit tests.

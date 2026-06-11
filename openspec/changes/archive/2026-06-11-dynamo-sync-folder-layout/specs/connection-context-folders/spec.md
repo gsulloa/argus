@@ -1,8 +1,5 @@
-# connection-context-folders Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change context-folders-other-engines. Update Purpose after archive.
-## Requirements
 ### Requirement: Schema sync supports MySQL, MSSQL, and Dynamo
 
 The `context_sync_schema` command SHALL produce a valid `SyncReport` for connections of kind `mysql`, `mssql`, `dynamo`, and `athena` in addition to `postgres`. The command introspects the live source via the engine's existing pool/client registry and writes `ObjectShape`-derived `system:` blocks to the linked context folder using the same atomic, body-preserving rules already specified for Postgres. For Dynamo connections, the target file path SHALL be `dynamo/tables/<logical>/table.md`, where `<logical>` is the **logical** (normalized) table name — the live table name folded through the connection's table-name normalization rule (see `dynamo-table-name-normalization`) — so each table is a self-contained folder holding its `table.md` doc alongside its `models/` subdirectory, and re-deploys that change the random suffix update the same `dynamo/tables/<logical>/table.md` file instead of creating a new one. When no rule is configured the logical name equals the live name, preserving prior behavior. If a pre-existing legacy flat `dynamo/tables/<logical>.md` file is present when a sync runs, the command SHALL relocate it to `dynamo/tables/<logical>/table.md` (moving the bytes so the `human:` block and body are preserved) before applying the `system:` splice, upgrading old folders in place. Sync SHALL be **convergent under the normalization rule**: content laid down before a rule was configured (or under a different rule) folds into the logical folder rather than being duplicated or stranded. Concretely: (a) when matching an existing table doc to a live shape, the doc's `system.name` SHALL be folded through the normalization rule before deriving its canonical path, so a doc whose frontmatter still carries the physical (suffixed) name is updated in place under the logical folder — and its `system.name` rewritten to the logical name — instead of being marked deleted while a parallel logical folder is created; (b) before writing, sync SHALL consolidate any sibling entry whose name normalizes to the same logical name — a directory `dynamo/tables/<physical>/` is merged into `dynamo/tables/<logical>/` (its `table.md` moved if the logical folder has none, its `models/*.md` moved into the logical folder's `models/`, skipping any name collisions, and the physical directory removed when emptied), and a legacy flat `dynamo/tables/<physical>.md` is migrated to `dynamo/tables/<logical>/table.md` when that target does not yet exist. Consolidation MUST only act on an entry when its folded name is one of the **live logical names of the current sync** — normalization rules are not necessarily idempotent, and an over-broad rule must not relocate user-curated folders into a destination that corresponds to no live table. When two or more distinct live tables normalize to the same logical name within one sync, the **first SHALL win and the rest SHALL be skipped**, and each skipped collision SHALL be surfaced in the `SyncReport` (e.g. via its warnings/skipped channel) rather than aborting the sync. For Athena the introspection source is AWS Glue (databases → schemas, tables/views → relations, Glue column types → columns), and the engine is organised like the other SQL engines: object files live at `athena/<database>/<relation>.md`.
@@ -76,23 +73,3 @@ The `context_sync_schema` command SHALL produce a valid `SyncReport` for connect
 - **WHEN** a MySQL/MSSQL/Dynamo/Athena connection re-runs `context_sync_schema` on a folder where some object files already exist with hand-edited `human:` blocks and Markdown bodies
 - **THEN** every existing file's `human:` block and body are preserved byte-for-byte
 - **AND** the `system:` block is replaced to reflect the current source schema
-
-### Requirement: Introspector pools bundle
-
-The internal `introspector_for(engine, pools)` dispatcher SHALL accept an `IntrospectorPools` struct containing references to all wired engine registries (`PgPoolRegistry`, `MysqlPoolRegistry`, `MssqlPoolRegistry`, `DynamoClientRegistry`, `AthenaClientRegistry`). The `context_sync_schema` Tauri command SHALL receive each registry as a `State<>` parameter, assemble the bundle, and pass it to the dispatcher. Engines not yet wired (CloudWatch) continue to dispatch to `NotImplementedIntrospector`.
-
-#### Scenario: Athena dispatches to its introspector
-
-- **WHEN** `context_sync_schema` is invoked on a connection whose `kind` is `athena`
-- **THEN** the dispatcher routes to `AthenaIntrospector` using the `AthenaClientRegistry` from the bundle
-
-#### Scenario: CloudWatch still returns NotImplemented
-
-- **WHEN** `context_sync_schema` is invoked on a connection whose `kind` is `cloudwatch`
-- **THEN** the command returns `AppError::Internal` with a message identifying the engine as not yet wired
-
-#### Scenario: Postgres path is unchanged
-
-- **WHEN** `context_sync_schema` is invoked on a Postgres connection
-- **THEN** the command returns the same `SyncReport` shape and behaviour as before this change
-

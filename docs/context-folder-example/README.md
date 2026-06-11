@@ -21,7 +21,7 @@ Argus connections.
 ## Object docs
 
 Each documented relation lives at `<engine>/<schema>/<name>.md` (SQL engines)
-or `<engine>/tables/<name>.md` (Dynamo) or `<engine>/groups/<name>.md`
+or `<engine>/tables/<name>/table.md` (Dynamo) or `<engine>/groups/<name>.md`
 (CloudWatch). The frontmatter splits into two blocks:
 
 - `system:` — Argus owns it. **Sync schema** in Argus regenerates this block
