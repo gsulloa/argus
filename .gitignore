@@ -12,6 +12,7 @@ src-tauri/target
 staging/
 latest.json
 *.partial.json
+download.json
 
 # Editor
 .vscode/*
