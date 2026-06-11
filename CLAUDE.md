@@ -15,14 +15,18 @@ A Tauri 2 desktop app for inspecting and editing data across multiple sources.
 
 Each connection can optionally link to a **context folder** on disk holding
 structured documentation (object docs with `system:` / `human:` frontmatter)
-and prefab queries. Folders are engine-segregated under a neutral root and
-shareable across connections (one filesystem watcher per canonical path).
-Full layout, format, and behaviour: see `README.md` "Context folders" and
-`docs/context-folder-example/`. Schema-sync ships for Postgres, MySQL, MSSQL,
-DynamoDB, and Athena (`introspect_adapters.rs`); CloudWatch is on the roadmap.
-DynamoDB connections may carry an optional per-connection **table-name
-normalization rule** (`DynamoParams.table_match`, applied via
-`context/normalize.rs`) that folds CDK-style physical names
+and prefab queries. The guiding model is **"the context folder is the project"**:
+multiple connections of any engine (Postgres, MySQL, MSSQL, DynamoDB, Athena)
+share one root; each engine's docs live under its own subtree within that root
+(`<root>/<engine>/<schema>/`). A folder is **independent of connection groups** —
+a connection retains its `context_path` regardless of which group it belongs to.
+One filesystem watcher per canonical path; the link/setup flow offers existing
+known folders first (reuse-first). Full layout, format, and behaviour: see
+`README.md` "Context folders" and `docs/context-folder-example/`. Schema-sync
+ships for Postgres, MySQL, MSSQL, DynamoDB, and Athena (`introspect_adapters.rs`);
+CloudWatch is on the roadmap. DynamoDB connections may carry an optional
+per-connection **table-name normalization rule** (`DynamoParams.table_match`,
+applied via `context/normalize.rs`) that folds CDK-style physical names
 (`MyApp-prod-EventsTable-3M4N…`) to a logical name (`EventsTable`) before every
 context match and sync write, so one shared folder serves all environments.
 

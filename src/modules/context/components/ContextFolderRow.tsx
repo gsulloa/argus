@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { AlertTriangle, Folder } from "lucide-react";
 import { contextApi } from "@/modules/context/api";
+import type { KnownFolder } from "@/modules/context/types";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { SyncReportModal } from "./SyncReportModal";
 import styles from "./ContextFolderRow.module.css";
@@ -146,6 +147,10 @@ export function ContextFolderRow({ connectionId, contextPath, onChanged }: Conte
   const [showSyncModal, setShowSyncModal] = useState(false);
   const syncChangedRef = useRef(false);
 
+  // Known-folder discovery (loaded when state is "none")
+  const [knownFolders, setKnownFolders] = useState<KnownFolder[] | null>(null);
+  const [knownFoldersLoading, setKnownFoldersLoading] = useState(false);
+
   // Availability check: call listObjects; if it throws a "not found" / missing-manifest
   // error, treat as missing. Any other error → show inline, keep as linked.
   useEffect(() => {
@@ -191,6 +196,25 @@ export function ContextFolderRow({ connectionId, contextPath, onChanged }: Conte
         ? "missing"
         : "linked";
 
+  // Load known folders whenever the row enters the "none" state, so we can
+  // offer reuse as the primary choice.
+  useEffect(() => {
+    if (state !== "none") {
+      setKnownFolders(null);
+      return;
+    }
+    setKnownFoldersLoading(true);
+    contextApi.listKnownFolders().then((folders) => {
+      setKnownFolders(folders);
+    }).catch(() => {
+      // On error (e.g. command not yet registered in older builds) fall back
+      // gracefully to the original create/link flow.
+      setKnownFolders([]);
+    }).finally(() => {
+      setKnownFoldersLoading(false);
+    });
+  }, [state]);
+
   // "Shared with N" count
   const sharedCount = contextPath != null
     ? connections.filter(
@@ -201,6 +225,20 @@ export function ContextFolderRow({ connectionId, contextPath, onChanged }: Conte
   // ---------------------------------------------------------------------------
   // Handlers
   // ---------------------------------------------------------------------------
+
+  async function handleReuseFolder(path: string) {
+    setBusy(true);
+    setInlineError(null);
+    try {
+      await contextApi.linkFolder(connectionId, path);
+      onChanged();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setInlineError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function handleCreateFolder() {
     const parentPath = await dialogOpen({
@@ -292,6 +330,29 @@ export function ContextFolderRow({ connectionId, contextPath, onChanged }: Conte
 
       {state === "none" && (
         <div className={styles.noneState}>
+          {/* Primary: reuse an existing known folder */}
+          {knownFoldersLoading && (
+            <p className={styles.hint}>Loading existing folders…</p>
+          )}
+          {!knownFoldersLoading && knownFolders != null && knownFolders.length > 0 && (
+            <div className={styles.knownFolderList}>
+              {knownFolders.map((folder) => (
+                <button
+                  key={folder.path}
+                  type="button"
+                  className={styles.knownFolderItem}
+                  disabled={busy}
+                  onClick={() => void handleReuseFolder(folder.path)}
+                >
+                  <Folder size={12} className={styles.folderIcon} />
+                  <span className={styles.knownFolderName}>{folder.name}</span>
+                  <span className={styles.knownFolderPath}>{folder.path}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Secondary: create new or choose any folder */}
           <div className={styles.btnGroup}>
             <button
               type="button"
@@ -299,7 +360,7 @@ export function ContextFolderRow({ connectionId, contextPath, onChanged }: Conte
               disabled={busy}
               onClick={() => void handleCreateFolder()}
             >
-              Create folder…
+              {(!knownFolders || knownFolders.length === 0) ? "Create folder…" : "New folder…"}
             </button>
             <button
               type="button"
@@ -307,7 +368,7 @@ export function ContextFolderRow({ connectionId, contextPath, onChanged }: Conte
               disabled={busy}
               onClick={() => void handleLinkExisting()}
             >
-              Link existing…
+              {(!knownFolders || knownFolders.length === 0) ? "Link existing…" : "Choose other…"}
             </button>
           </div>
           <p className={styles.hint}>
