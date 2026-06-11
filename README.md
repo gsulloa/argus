@@ -43,8 +43,8 @@ Layout (engine-segregated under a neutral root):
 │       └── top-customers.meta.yaml
 ├── dynamo/
 │   └── tables/
-│       ├── AppTable.md          # physical-table doc (kind: dynamo_table)
 │       └── AppTable/
+│           ├── table.md         # physical-table doc (kind: dynamo_table)
 │           └── models/
 │               ├── Order.md    # entity doc (kind: dynamo_model)
 │               └── User.md
@@ -64,7 +64,7 @@ CloudWatch is on the roadmap (same folder format).
 For Single-Table Design tables, you can add **model docs** that describe the
 logical entities stored in the table and how to query them. Model docs live at
 `dynamo/tables/<table>/models/<Model>.md`, alongside (not replacing) the
-physical-table doc at `dynamo/tables/<table>.md`.
+physical-table doc at `dynamo/tables/<table>/table.md`.
 
 Model docs can be created and edited two ways: **in-app** — open a Single-Table
 Design table in the data-view, switch the query builder to **By model**, and use
@@ -139,7 +139,7 @@ Two mutually-exclusive forms:
 
 The rule lives **on the connection**, not in the shared folder, because the
 prefix is environment-specific — so the same folder
-(`dynamo/tables/EventsTable.md`, its `models/`, etc.) is reused by `dev`,
+(`dynamo/tables/EventsTable/`, its `table.md` and `models/`, etc.) is reused by `dev`,
 `staging`, and `prod` connections, each with its own prefix. A malformed regex
 (or an advanced rule missing the `logical` group) is rejected when you test/save
 the connection. A rule that doesn't match a given name degrades to exact match,
@@ -147,8 +147,10 @@ so a misconfiguration never hides every doc.
 
 Normalization applies to every Dynamo context touch-point: the `📄` documented
 badge in the schema tree, model listing (**By model** filtering), and
-schema-sync (which writes `dynamo/tables/<logical>.md`, so a re-deploy with a new
-suffix updates the same file instead of creating a duplicate). If two live tables
+schema-sync (which writes `dynamo/tables/<logical>/table.md`, so a re-deploy with a new
+suffix updates the same file instead of creating a duplicate). Legacy flat
+`dynamo/tables/<logical>.md` files are still read and are automatically migrated
+into the folder layout on the next sync. If two live tables
 fold to the same logical name during one sync, the first wins and the rest are
 skipped (surfaced in the sync report) rather than aborting the sync.
 

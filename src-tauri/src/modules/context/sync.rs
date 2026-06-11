@@ -44,7 +44,7 @@ use crate::modules::dynamo::params::TableMatch;
 /// | Engine       | Path |
 /// |---|---|
 /// | Postgres/MySQL/MSSQL | `<root>/<engine>/<schema>/<name>.md` |
-/// | Dynamo       | `<root>/dynamo/tables/<name>.md` |
+/// | Dynamo       | `<root>/dynamo/tables/<name>/table.md` |
 /// | CloudWatch   | `<root>/cloudwatch/groups/<name>.md` |
 pub fn target_path_for(root: &Path, engine: EngineKind, shape: &ObjectShape) -> PathBuf {
     match engine {
@@ -57,7 +57,8 @@ pub fn target_path_for(root: &Path, engine: EngineKind, shape: &ObjectShape) -> 
         EngineKind::Dynamo => root
             .join("dynamo")
             .join("tables")
-            .join(format!("{}.md", shape.name)),
+            .join(&shape.name)
+            .join("table.md"),
         EngineKind::Cloudwatch => root
             .join("cloudwatch")
             .join("groups")
@@ -442,11 +443,30 @@ fn walk_existing_objects(root: &Path, engine: EngineKind) -> Vec<PathBuf> {
         EngineKind::Dynamo => {
             let tables_dir = engine_root.join("tables");
             if tables_dir.exists() {
-                if let Ok(files) = std::fs::read_dir(&tables_dir) {
-                    for entry in files.flatten() {
+                if let Ok(entries) = std::fs::read_dir(&tables_dir) {
+                    for entry in entries.flatten() {
                         let p = entry.path();
                         if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("md") {
-                            paths.push(p);
+                            // Legacy flat table doc: tables/<name>.md
+                            // Only include if the folder-based table.md does NOT exist.
+                            // Derive the logical name from the file stem.
+                            let stem = p
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let folder_doc = tables_dir.join(&stem).join("table.md");
+                            if !folder_doc.exists() {
+                                paths.push(p);
+                            }
+                            // If folder doc exists, folder wins; the flat file is skipped
+                            // from this walk (it will be left untouched per D3).
+                        } else if p.is_dir() {
+                            // Folder-based table doc: tables/<name>/table.md
+                            let folder_doc = p.join("table.md");
+                            if folder_doc.exists() {
+                                paths.push(folder_doc);
+                            }
                         }
                     }
                 }
@@ -576,11 +596,170 @@ pub async fn execute_sync(
         shapes
     };
 
+    // Build the set of live logical names (the shape.name values after folding).
+    // Used by the D6 consolidation pass to guard against over-stripping by
+    // non-idempotent rules (see comment on D6 below).
+    let live_logicals: HashSet<String> = shapes.iter().map(|s| s.name.clone()).collect();
+
     // Build lookup: target_path → shape.
     let mut shape_map: HashMap<PathBuf, ObjectShape> = HashMap::new();
     for shape in shapes {
         let path = target_path_for(folder_root, engine, &shape);
         shape_map.insert(path, shape);
+    }
+
+    // D6 — consolidation pass (Dynamo only, no-op when rule is None/identity).
+    //
+    // Before walking existing files, scan tables/ for any directories or legacy
+    // flat files whose entry name is PHYSICAL (i.e. normalize(X, rule) == L ≠ X).
+    // Move their contents into the logical folder so that walk_existing_objects
+    // sees everything under the logical name and the UPDATE path reuses it.
+    //
+    // This handles the case where a user added a normalization rule AFTER docs
+    // were already written under the physical (suffixed) name. Without this pass
+    // those physical-named folders would be stranded and their models invisible.
+    //
+    // Guard: only consolidate entry X into L when L is one of the live logical
+    // names of the current sync (i.e. `live_logicals.contains(&L)`). Without this
+    // guard, non-idempotent rules can over-strip user-renamed folders into a bogus
+    // target that has no corresponding live table (e.g. a rule
+    // `suffix_pattern: "-[0-9A-Za-z]+$"` would fold the hand-curated folder
+    // `CacheStack-CacheTable` → `CacheStack`, which is not a live logical name).
+    if engine == EngineKind::Dynamo {
+        let tables_dir = folder_root.join("dynamo").join("tables");
+        if tables_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&tables_dir) {
+                let mut candidates: Vec<(String, String, PathBuf)> = Vec::new();
+                for entry in entries.flatten() {
+                    let entry_name = match entry.file_name().into_string() {
+                        Ok(n) => n,
+                        Err(_) => continue,
+                    };
+                    let path = entry.path();
+                    // Derive the name to normalize per entry type:
+                    //   - directory         → the directory name as-is
+                    //   - file with .md ext → the file stem (strip ".md" first so
+                    //                         suffix-anchored rules can match)
+                    //   - anything else     → skip
+                    let name_to_normalize: String = if path.is_dir() {
+                        entry_name.clone()
+                    } else if path.is_file()
+                        && path.extension().and_then(|e| e.to_str()) == Some("md")
+                    {
+                        match path.file_stem().and_then(|s| s.to_str()) {
+                            Some(stem) => stem.to_string(),
+                            None => continue,
+                        }
+                    } else {
+                        continue;
+                    };
+                    let logical = normalize(&name_to_normalize, rule);
+                    // Only act when the rule actually changes the name AND the
+                    // resulting logical name is a live table in this sync.
+                    // The live_logicals guard prevents non-idempotent rules from
+                    // moving user-curated folders into bogus destinations.
+                    if logical != name_to_normalize && live_logicals.contains(&logical) {
+                        candidates.push((name_to_normalize, entry_name, path));
+                    }
+                }
+                for (name_to_normalize, _entry_name, physical_path) in candidates {
+                    // Re-derive logical from the appropriate name (dir name for dirs,
+                    // stem for flat files — stripped before normalization so that
+                    // suffix-anchored rules can match).
+                    let logical = normalize(&name_to_normalize, rule);
+                    let logical_dir = tables_dir.join(&logical);
+
+                    if physical_path.is_dir() {
+                        // Directory case: tables/<physical>/
+                        let physical_table_md = physical_path.join("table.md");
+                        let logical_table_md = logical_dir.join("table.md");
+                        if physical_table_md.exists() && !logical_table_md.exists() {
+                            // Move table.md to logical folder.
+                            if let Some(parent) = logical_table_md.parent() {
+                                std::fs::create_dir_all(parent).map_err(|e| {
+                                    AppError::Storage(format!(
+                                        "D6: create dir {}: {e}",
+                                        parent.display()
+                                    ))
+                                })?;
+                            }
+                            std::fs::rename(&physical_table_md, &logical_table_md).map_err(
+                                |e| {
+                                    AppError::Storage(format!(
+                                        "D6: move table.md {} -> {}: {e}",
+                                        physical_table_md.display(),
+                                        logical_table_md.display()
+                                    ))
+                                },
+                            )?;
+                        }
+                        // If both exist, leave physical in place (logical wins; benign leftover).
+
+                        // Move models/*.md to logical/models/ (skip collisions).
+                        let physical_models = physical_path.join("models");
+                        if physical_models.is_dir() {
+                            let logical_models = logical_dir.join("models");
+                            if let Ok(model_entries) = std::fs::read_dir(&physical_models) {
+                                for mentry in model_entries.flatten() {
+                                    let mpath = mentry.path();
+                                    if mpath.is_file()
+                                        && mpath.extension().and_then(|e| e.to_str()) == Some("md")
+                                    {
+                                        let fname = mentry.file_name();
+                                        let dest = logical_models.join(&fname);
+                                        if !dest.exists() {
+                                            if let Some(parent) = dest.parent() {
+                                                std::fs::create_dir_all(parent).map_err(|e| {
+                                                    AppError::Storage(format!(
+                                                        "D6: create models dir {}: {e}",
+                                                        parent.display()
+                                                    ))
+                                                })?;
+                                            }
+                                            std::fs::rename(&mpath, &dest).map_err(|e| {
+                                                AppError::Storage(format!(
+                                                    "D6: move model {} -> {}: {e}",
+                                                    mpath.display(),
+                                                    dest.display()
+                                                ))
+                                            })?;
+                                        }
+                                        // Skip collision: leave physical model in place.
+                                    }
+                                }
+                            }
+                            // Remove models dir if now empty.
+                            let _ = std::fs::remove_dir(&physical_models);
+                        }
+                        // Remove physical table dir if now empty.
+                        let _ = std::fs::remove_dir(&physical_path);
+                    } else if physical_path.is_file()
+                        && physical_path.extension().and_then(|e| e.to_str()) == Some("md")
+                    {
+                        // Legacy flat file case: tables/<physical>.md
+                        let logical_table_md = logical_dir.join("table.md");
+                        if !logical_table_md.exists() {
+                            if let Some(parent) = logical_table_md.parent() {
+                                std::fs::create_dir_all(parent).map_err(|e| {
+                                    AppError::Storage(format!(
+                                        "D6: create dir for legacy flat {}: {e}",
+                                        parent.display()
+                                    ))
+                                })?;
+                            }
+                            std::fs::rename(&physical_path, &logical_table_md).map_err(|e| {
+                                AppError::Storage(format!(
+                                    "D6: move legacy flat {} -> {}: {e}",
+                                    physical_path.display(),
+                                    logical_table_md.display()
+                                ))
+                            })?;
+                        }
+                        // If logical already exists, leave physical flat file (benign leftover).
+                    }
+                }
+            }
+        }
     }
 
     // Walk existing files in the engine subtree.
@@ -612,14 +791,25 @@ pub async fn execute_sync(
         // Derive the canonical target path.
         // If we have a parsed doc, use its system identity; otherwise derive
         // schema + name from the file path (parent dir = schema, stem = name).
+        //
+        // D6 — rule-aware canonical target for Dynamo: fold doc.system.name
+        // through normalize so that a doc written pre-rule (carrying the physical
+        // name in frontmatter) maps to the same logical canonical path as the
+        // live shape. Without this fold, the old physical name does not match
+        // any key in shape_map and the file is wrongly marked deleted.
         let canonical_target = if let Some(ref doc) = doc_opt {
+            let name_for_path = if engine == EngineKind::Dynamo {
+                normalize(&doc.system.name, rule)
+            } else {
+                doc.system.name.clone()
+            };
             target_path_for(
                 folder_root,
                 engine,
                 &ObjectShape {
                     kind: doc.system.kind.clone(),
                     schema: doc.system.schema.clone(),
-                    name: doc.system.name.clone(),
+                    name: name_for_path,
                     primary_key: vec![],
                     columns: vec![],
                 },
@@ -639,6 +829,21 @@ pub async fn execute_sync(
 
             let new_bytes = rewrite_file(file_path, &new_system)?;
             atomic_write(&canonical_target, &new_bytes)?;
+
+            // D3/D6 migration: if the existing file was at a legacy or physical
+            // path (different from the canonical target), remove the old file
+            // now that the content has been written to the new location.
+            // For Dynamo, also remove the physical parent dir if it is now empty
+            // (the consolidation pass may have already moved models/ out of it).
+            if file_path != &canonical_target {
+                let _ = std::fs::remove_file(file_path);
+                if engine == EngineKind::Dynamo {
+                    if let Some(physical_parent) = file_path.parent() {
+                        // Attempt removal; ignore errors (non-empty dir or race).
+                        let _ = std::fs::remove_dir(physical_parent);
+                    }
+                }
+            }
 
             // Orphan detection (only if we parsed the existing doc).
             if let Some(ref doc) = doc_opt {
@@ -699,10 +904,52 @@ pub async fn execute_sync(
         if handled_paths.contains(target_path) {
             continue;
         }
-        let system = shape_to_system(shape);
-        let content = build_fresh_file(&system)?;
-        atomic_write(target_path, content.as_bytes())?;
-        created.push(target_path.clone());
+
+        // D3 — lazy migration for Dynamo table docs.
+        // If a legacy flat tables/<logical>.md exists but the new
+        // tables/<logical>/table.md does NOT yet exist, move the legacy file
+        // to the new path so the normal splice can run against it (preserving
+        // the human: block and body bytes).
+        if engine == EngineKind::Dynamo {
+            // target_path is <root>/dynamo/tables/<name>/table.md
+            // The legacy flat path would be <root>/dynamo/tables/<name>.md
+            if let Some(table_dir) = target_path.parent() {
+                if let Some(logical_name) = table_dir.file_name().and_then(|n| n.to_str()) {
+                    if let Some(tables_dir) = table_dir.parent() {
+                        let legacy_flat = tables_dir.join(format!("{}.md", logical_name));
+                        if legacy_flat.exists() && !target_path.exists() {
+                            // Create parent directory and move file.
+                            if let Some(parent) = target_path.parent() {
+                                std::fs::create_dir_all(parent).map_err(|e| {
+                                    AppError::Storage(format!("create dir for migration: {e}"))
+                                })?;
+                            }
+                            std::fs::rename(&legacy_flat, target_path).map_err(|e| {
+                                AppError::Storage(format!(
+                                    "migrate legacy dynamo doc {}: {e}",
+                                    legacy_flat.display()
+                                ))
+                            })?;
+                        }
+                    }
+                }
+            }
+        }
+
+        if target_path.exists() {
+            // File was migrated into place (D3); rewrite to update the system block.
+            let system = shape_to_system(shape);
+            let sys_yaml = serde_yaml::to_string(&system)
+                .map_err(|e| AppError::Internal(format!("yaml serialise system: {e}")))?;
+            let new_bytes = rewrite_file_with_system_yaml(target_path, &sys_yaml, None)?;
+            atomic_write(target_path, &new_bytes)?;
+            updated.push(target_path.clone());
+        } else {
+            let system = shape_to_system(shape);
+            let content = build_fresh_file(&system)?;
+            atomic_write(target_path, content.as_bytes())?;
+            created.push(target_path.clone());
+        }
     }
 
     Ok(SyncReport {
@@ -787,7 +1034,7 @@ mod tests {
             columns: vec![],
         };
         let p = target_path_for(root, EngineKind::Dynamo, &shape);
-        assert_eq!(p, Path::new("/tmp/ctx/dynamo/tables/Sessions.md"));
+        assert_eq!(p, Path::new("/tmp/ctx/dynamo/tables/Sessions/table.md"));
     }
 
     // ---- execute_sync tests ----
@@ -1274,7 +1521,7 @@ mod tests {
         .await
         .unwrap();
 
-        let expected = dir.path().join("dynamo/tables/EventsTable.md");
+        let expected = dir.path().join("dynamo/tables/EventsTable/table.md");
         assert_eq!(report.created, vec![expected.clone()]);
         assert!(expected.exists());
         // system.name is the logical name, not the suffixed live name.
@@ -1291,9 +1538,9 @@ mod tests {
         manifest(dir.path());
         let rule = cdk_rule();
 
-        // Existing logical file with a hand-edited human block + body.
+        // Existing logical file in the new folder layout with a hand-edited human block + body.
         let original = "---\nsystem:\n  kind: dynamo_table\n  name: EventsTable\nhuman:\n  tags:\n    - audited\n---\n# EventsTable\n\nNotes about events.\n";
-        write_file(dir.path(), "dynamo/tables/EventsTable.md", original);
+        write_file(dir.path(), "dynamo/tables/EventsTable/table.md", original);
 
         let report = execute_sync(
             dir.path(),
@@ -1309,11 +1556,11 @@ mod tests {
         // No new suffixed file.
         let suffixed = dir
             .path()
-            .join("dynamo/tables/MyApp-prod-EventsTable-9Z8Y7X6W5V4U.md");
+            .join("dynamo/tables/MyApp-prod-EventsTable-9Z8Y7X6W5V4U/table.md");
         assert!(!suffixed.exists());
 
         let content =
-            fs::read_to_string(dir.path().join("dynamo/tables/EventsTable.md")).unwrap();
+            fs::read_to_string(dir.path().join("dynamo/tables/EventsTable/table.md")).unwrap();
         assert!(content.contains("audited"), "human block preserved");
         assert!(content.contains("Notes about events."), "body preserved");
     }
@@ -1344,7 +1591,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.created.len(), 1);
-        assert_eq!(report.created[0], dir.path().join("dynamo/tables/Events.md"));
+        assert_eq!(report.created[0], dir.path().join("dynamo/tables/Events/table.md"));
         assert_eq!(report.skipped.len(), 1, "one collision skipped");
         let s = &report.skipped[0];
         assert_eq!(s.logical, "Events");
@@ -1369,9 +1616,636 @@ mod tests {
 
         let expected = dir
             .path()
-            .join("dynamo/tables/MyApp-prod-EventsTable-3M4N5O6P7Q8R.md");
+            .join("dynamo/tables/MyApp-prod-EventsTable-3M4N5O6P7Q8R/table.md");
         assert_eq!(report.created, vec![expected.clone()]);
         assert!(expected.exists());
         assert!(report.skipped.is_empty());
+    }
+
+    /// D3 migration: a legacy flat tables/<logical>.md with a hand-written human block/body
+    /// and an existing models/ directory; after sync the flat file is gone,
+    /// tables/<logical>/table.md has the preserved human/body with a fresh system block,
+    /// and the models file is untouched.
+    #[tokio::test]
+    async fn dynamo_migration_moves_flat_doc_to_folder() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        // Write the legacy flat table doc with custom human block and body.
+        let legacy_content = "---\nsystem:\n  kind: dynamo_table\n  name: Orders\nhuman:\n  tags:\n    - important\n---\n# Orders\n\nLegacy notes.\n";
+        write_file(dir.path(), "dynamo/tables/Orders.md", legacy_content);
+
+        // Write a pre-existing model doc inside the table's models directory.
+        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: Order\n  access_patterns:\n    - index: table\n      pk: \"ORDER#${id}\"\n---\n# Order\n";
+        write_file(dir.path(), "dynamo/tables/Orders/models/Order.md", model_content);
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape("Orders")],
+            None,
+        )
+        .await
+        .unwrap();
+
+        // The legacy flat file must be gone.
+        let legacy_path = dir.path().join("dynamo/tables/Orders.md");
+        assert!(!legacy_path.exists(), "legacy flat file should be removed after migration");
+
+        // The new folder-based table.md must exist.
+        let new_path = dir.path().join("dynamo/tables/Orders/table.md");
+        assert!(new_path.exists(), "folder-based table.md must exist after migration");
+
+        // The content must preserve the human block and body.
+        let new_content = fs::read_to_string(&new_path).unwrap();
+        assert!(new_content.contains("important"), "human block should be preserved");
+        assert!(new_content.contains("Legacy notes."), "body should be preserved");
+        // System block should be fresh.
+        assert!(new_content.contains("kind: dynamo_table"), "system block should be present");
+        assert!(new_content.contains("name: Orders"), "system name should match");
+
+        // The models file must be untouched.
+        let model_path = dir.path().join("dynamo/tables/Orders/models/Order.md");
+        assert!(model_path.exists(), "models file must be untouched");
+        let model_read = fs::read_to_string(&model_path).unwrap();
+        assert_eq!(model_read, model_content, "model file content should be unchanged");
+
+        // The report should show the table as updated (migrated then rewritten).
+        assert!(report.created.is_empty() || report.updated.contains(&new_path),
+            "migrated table should appear in updated or created; report={:?}", report);
+    }
+
+    /// Re-sync after migration produces no spurious deletes (deleted_in_db not set for live tables).
+    #[tokio::test]
+    async fn dynamo_resync_after_migration_no_spurious_deletes() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        // Set up the new folder layout directly (post-migration state).
+        let table_content = "---\nsystem:\n  kind: dynamo_table\n  name: Products\nhuman:\n  tags:\n    - live\n---\n# Products\n\nProduct catalogue.\n";
+        write_file(dir.path(), "dynamo/tables/Products/table.md", table_content);
+
+        // First sync.
+        let report1 = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape("Products")],
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Should update (not create), and definitely not mark deleted.
+        assert!(report1.marked_deleted.is_empty(),
+            "live table should not be marked deleted on first resync: {:?}", report1.marked_deleted);
+
+        // Second sync (idempotent).
+        let report2 = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape("Products")],
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(report2.marked_deleted.is_empty(),
+            "live table should not be marked deleted on second resync: {:?}", report2.marked_deleted);
+
+        // Content should still have the human block.
+        let content = fs::read_to_string(dir.path().join("dynamo/tables/Products/table.md")).unwrap();
+        assert!(content.contains("live"), "human block preserved across resyncs");
+    }
+
+    // ---- D6 bug-fix tests: consolidation + rule-aware canonical target ----
+
+    /// After configuring a normalization rule, a pre-rule layout with
+    /// tables/<physical>/table.md and tables/<physical>/models/Order.md must be
+    /// consolidated into tables/<logical>/. The physical folder must be gone, the
+    /// table must appear under `updated` (not `marked_deleted`, not `created`),
+    /// and human block + body must be preserved with system.name rewritten to
+    /// the logical name.
+    #[tokio::test]
+    async fn dynamo_rule_added_after_sync_consolidates_physical_folder() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+        let rule = cdk_rule();
+
+        // Physical name that the rule folds to "CredentialsTable".
+        let physical = "MyApp-prod-CredentialsTable-LKL2QPAEYYKZ";
+        let logical = "CredentialsTable";
+
+        // Pre-rule layout: table.md has physical name in frontmatter, plus human/body.
+        let table_content = format!(
+            "---\nsystem:\n  kind: dynamo_table\n  name: {physical}\nhuman:\n  tags:\n    - secure\n---\n# {physical}\n\nPre-rule notes.\n"
+        );
+        write_file(
+            dir.path(),
+            &format!("dynamo/tables/{physical}/table.md"),
+            &table_content,
+        );
+        // Model doc under the physical folder.
+        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: Order\nhuman: {}\n---\n# Order\n";
+        write_file(
+            dir.path(),
+            &format!("dynamo/tables/{physical}/models/Order.md"),
+            model_content,
+        );
+
+        // Sync with the rule; live shape uses the physical name (what DynamoDB returns).
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape(physical)],
+            Some(&rule),
+        )
+        .await
+        .unwrap();
+
+        // Physical folder must be gone.
+        let physical_dir = dir.path().join(format!("dynamo/tables/{physical}"));
+        assert!(!physical_dir.exists(), "physical dir should be removed: {}", physical_dir.display());
+
+        // Logical table.md must exist with logical system.name.
+        let logical_table = dir.path().join(format!("dynamo/tables/{logical}/table.md"));
+        assert!(logical_table.exists(), "logical table.md must exist");
+        let content = fs::read_to_string(&logical_table).unwrap();
+        assert!(content.contains(&format!("name: {logical}")), "system.name should be logical");
+        assert!(!content.contains("deleted_in_db: true"), "must not be marked deleted");
+        // Human block and body preserved.
+        assert!(content.contains("secure"), "human tags should be preserved");
+        assert!(content.contains("Pre-rule notes."), "body should be preserved");
+
+        // Model moved to logical folder.
+        let logical_model = dir.path().join(format!("dynamo/tables/{logical}/models/Order.md"));
+        assert!(logical_model.exists(), "model must be in logical folder");
+        let model_read = fs::read_to_string(&logical_model).unwrap();
+        assert_eq!(model_read, model_content, "model content must be unchanged");
+
+        // Report: table appears in updated, not marked_deleted, not created.
+        assert!(
+            report.updated.contains(&logical_table),
+            "table should be in updated; report={:?}", report
+        );
+        assert!(
+            !report.marked_deleted.iter().any(|p| p.to_str().unwrap_or("").contains(logical)),
+            "table should not be in marked_deleted; report={:?}", report
+        );
+        assert!(
+            !report.created.iter().any(|p| p.to_str().unwrap_or("").contains(logical)),
+            "table should not be in created; report={:?}", report
+        );
+    }
+
+    /// When only a models folder exists under the physical name (no table.md),
+    /// and the logical table.md already exists from a prior rule-aware sync,
+    /// the models must be moved to the logical folder and the physical dir cleaned up.
+    #[tokio::test]
+    async fn dynamo_stranded_models_folder_merges_into_logical() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+        let rule = cdk_rule();
+
+        let physical = "MyApp-prod-OrdersTable-STRANDED1";
+        let logical = "OrdersTable";
+
+        // Physical folder has only a models dir (no table.md).
+        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: Order\nhuman: {}\n---\n# Order\n";
+        write_file(
+            dir.path(),
+            &format!("dynamo/tables/{physical}/models/Order.md"),
+            model_content,
+        );
+
+        // Logical table.md already exists (from a prior rule-aware sync).
+        let logical_table_content = format!(
+            "---\nsystem:\n  kind: dynamo_table\n  name: {logical}\nhuman:\n  tags:\n    - live\n---\n# {logical}\n\nLogical notes.\n"
+        );
+        write_file(
+            dir.path(),
+            &format!("dynamo/tables/{logical}/table.md"),
+            &logical_table_content,
+        );
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape(physical)],
+            Some(&rule),
+        )
+        .await
+        .unwrap();
+
+        // Physical dir must be gone (models moved + dir emptied).
+        let physical_dir = dir.path().join(format!("dynamo/tables/{physical}"));
+        assert!(!physical_dir.exists(), "physical dir should be removed");
+
+        // Model must exist in the logical folder.
+        let logical_model = dir.path().join(format!("dynamo/tables/{logical}/models/Order.md"));
+        assert!(logical_model.exists(), "model must be in logical folder");
+        let model_read = fs::read_to_string(&logical_model).unwrap();
+        assert_eq!(model_read, model_content, "model content must be unchanged");
+
+        // Logical table.md should be updated (not created or deleted).
+        let logical_table = dir.path().join(format!("dynamo/tables/{logical}/table.md"));
+        assert!(report.updated.contains(&logical_table),
+            "logical table should be in updated; report={:?}", report);
+        assert!(report.marked_deleted.is_empty(),
+            "nothing should be marked deleted; report={:?}", report);
+    }
+
+    /// A legacy flat tables/<physical>.md (human block + body) is consolidated
+    /// into tables/<logical>/table.md before the walk runs. After sync:
+    /// - tables/<logical>/table.md exists with preserved human/body and logical
+    ///   system.name;
+    /// - the physical flat file is gone.
+    #[tokio::test]
+    async fn dynamo_pre_rule_legacy_flat_migrates_to_logical_folder() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+        let rule = cdk_rule();
+
+        let physical = "MyApp-prod-LegacyFlatTable-ABCDEFGH";
+        let logical = "LegacyFlatTable";
+
+        // Legacy flat file with physical name in frontmatter + human/body.
+        let flat_content = format!(
+            "---\nsystem:\n  kind: dynamo_table\n  name: {physical}\nhuman:\n  tags:\n    - legacy\n---\n# {physical}\n\nFlat file body.\n"
+        );
+        write_file(
+            dir.path(),
+            &format!("dynamo/tables/{physical}.md"),
+            &flat_content,
+        );
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape(physical)],
+            Some(&rule),
+        )
+        .await
+        .unwrap();
+
+        // Physical flat file must be gone.
+        let physical_flat = dir.path().join(format!("dynamo/tables/{physical}.md"));
+        assert!(!physical_flat.exists(), "physical flat file should be gone");
+
+        // Logical table.md must exist.
+        let logical_table = dir.path().join(format!("dynamo/tables/{logical}/table.md"));
+        assert!(logical_table.exists(), "logical table.md must exist");
+        let content = fs::read_to_string(&logical_table).unwrap();
+        // system.name rewritten to logical.
+        assert!(content.contains(&format!("name: {logical}")), "system.name should be logical");
+        // Human block and body preserved.
+        assert!(content.contains("legacy"), "human tags should be preserved");
+        assert!(content.contains("Flat file body."), "body should be preserved");
+
+        // Must appear in updated (migrated then rewritten) or created, not marked_deleted.
+        assert!(
+            report.updated.contains(&logical_table) || report.created.contains(&logical_table),
+            "logical table should be in updated or created; report={:?}", report
+        );
+        assert!(report.marked_deleted.is_empty(),
+            "nothing should be marked deleted; report={:?}", report);
+    }
+
+    /// Regression: D6 consolidation must strip the `.md` extension from legacy flat
+    /// file names before normalizing, so that suffix-anchored rules can match.
+    ///
+    /// Without the fix, `normalize("MyApp-prod-Sessions-AAAA1111.md", rule)` produces
+    /// `"Sessions-AAAA1111.md"` (prefix stripped but suffix not matched because the
+    /// string ends in `.md`), causing the file to land in a junk directory literally
+    /// named `tables/Sessions-AAAA1111.md/table.md`.
+    #[tokio::test]
+    async fn dynamo_consolidation_flat_file_uses_stem_for_normalization() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+        let rule = cdk_rule(); // prefix: "MyApp-prod-", suffix_pattern: "-[A-Z0-9]+$"
+
+        let physical = "MyApp-prod-Sessions-AAAA1111";
+        let logical = "Sessions";
+
+        // Legacy flat file: tables/MyApp-prod-Sessions-AAAA1111.md
+        let flat_content = format!(
+            "---\nsystem:\n  kind: dynamo_table\n  name: {physical}\nhuman:\n  tags:\n    - auth\n---\n# {physical}\n\nSession docs.\n"
+        );
+        write_file(
+            dir.path(),
+            &format!("dynamo/tables/{physical}.md"),
+            &flat_content,
+        );
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape(physical)],
+            Some(&rule),
+        )
+        .await
+        .unwrap();
+
+        let tables_dir = dir.path().join("dynamo/tables");
+
+        // tables/Sessions/table.md must exist.
+        let logical_table = tables_dir.join(format!("{logical}/table.md"));
+        assert!(logical_table.exists(), "tables/{logical}/table.md must exist");
+
+        // The flat file must be gone.
+        let flat_file = tables_dir.join(format!("{physical}.md"));
+        assert!(!flat_file.exists(), "flat file {physical}.md must be removed");
+
+        // No entry whose name ends with ".md" may exist as a DIRECTORY under tables/.
+        let entries: Vec<_> = fs::read_dir(&tables_dir)
+            .unwrap()
+            .flatten()
+            .collect();
+        for entry in &entries {
+            let name = entry.file_name();
+            let name_str = name.to_str().unwrap_or("");
+            assert!(
+                !(name_str.ends_with(".md") && entry.path().is_dir()),
+                "junk *.md directory found: {:?}",
+                entry.path()
+            );
+        }
+
+        // tables/ must contain exactly one entry: the Sessions/ directory.
+        assert_eq!(
+            entries.len(),
+            1,
+            "tables/ should contain exactly one entry (Sessions/), found: {:?}",
+            entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            entries[0].file_name().to_str().unwrap_or(""),
+            logical,
+            "the single entry should be the logical dir '{logical}'"
+        );
+
+        // Report: table should be in updated or created, not marked_deleted.
+        assert!(
+            report.updated.contains(&logical_table) || report.created.contains(&logical_table),
+            "logical table should be in updated or created; report={:?}", report
+        );
+        assert!(
+            report.marked_deleted.is_empty(),
+            "nothing should be marked deleted; report={:?}", report
+        );
+    }
+
+    /// When rule is None, a folder `tables/Orders/table.md` and its models
+    /// should be updated in-place with no moves, no extra folders, and no
+    /// deleted entries.
+    #[tokio::test]
+    async fn dynamo_no_rule_behavior_unchanged() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        let table_content = "---\nsystem:\n  kind: dynamo_table\n  name: Orders\nhuman:\n  tags:\n    - live\n---\n# Orders\n\nOrders table.\n";
+        write_file(dir.path(), "dynamo/tables/Orders/table.md", table_content);
+        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: OrderItem\nhuman: {}\n---\n# OrderItem\n";
+        write_file(dir.path(), "dynamo/tables/Orders/models/OrderItem.md", model_content);
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape("Orders")],
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Updated in place, nothing moved or deleted.
+        let table_path = dir.path().join("dynamo/tables/Orders/table.md");
+        assert!(table_path.exists(), "table.md should still exist");
+        assert!(report.updated.contains(&table_path),
+            "table should be in updated; report={:?}", report);
+        assert!(report.marked_deleted.is_empty(),
+            "nothing should be deleted; report={:?}", report);
+        assert!(report.created.is_empty(),
+            "nothing should be created; report={:?}", report);
+
+        // No extra folder created.
+        let tables_dir = dir.path().join("dynamo/tables");
+        let entries: Vec<_> = fs::read_dir(&tables_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(entries.len(), 1, "only Orders/ should exist, found: {:?}", entries);
+
+        // Models file still in the same location, content unchanged.
+        let model_path = dir.path().join("dynamo/tables/Orders/models/OrderItem.md");
+        assert!(model_path.exists(), "model file should be untouched");
+        let model_read = fs::read_to_string(&model_path).unwrap();
+        assert_eq!(model_read, model_content, "model content should be unchanged");
+    }
+
+    // ---- D6 live-logicals guard tests ----
+
+    /// Bug regression: with a non-idempotent rule (suffix_pattern: "-[0-9A-Za-z]+$"),
+    /// the D6 consolidation pass must NOT move the hand-renamed folder
+    /// `CacheStack-CacheTable` into the bogus target `CacheStack/`.
+    ///
+    /// Only entries that normalize to a LIVE logical name should be consolidated.
+    /// `CacheStack-CacheTableC1E6DF7E-ML2P8F7HDM0M` normalizes to
+    /// `CacheStack-CacheTableC1E6DF7E` (the live logical), so the stranded models
+    /// from that physical folder land in the right place. The hand-curated
+    /// `CacheStack-CacheTable/` folder, which would over-strip to `CacheStack`
+    /// (NOT a live logical), must be left alone by the consolidation pass and then
+    /// processed by the rule-aware UPDATE path — landing its table.md under the
+    /// live logical `CacheStack-CacheTableC1E6DF7E/`.
+    #[tokio::test]
+    async fn dynamo_consolidation_skips_folders_not_matching_live_logicals() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        let rule = TableMatch {
+            prefix: None,
+            suffix_pattern: Some("-[0-9A-Za-z]+$".to_string()),
+            regex: None,
+        };
+
+        // The live (physical) table name that DynamoDB returns.
+        let physical = "CacheStack-CacheTableC1E6DF7E-ML2P8F7HDM0M";
+        // The live logical name: normalize(physical, rule) strips the last
+        // "-ML2P8F7HDM0M" suffix → "CacheStack-CacheTableC1E6DF7E".
+        let live_logical = "CacheStack-CacheTableC1E6DF7E";
+
+        // Hand-renamed folder — the user had previously renamed the table doc to
+        // a friendly name. Its frontmatter still carries the full physical name.
+        // Under the given rule normalize("CacheStack-CacheTable") = "CacheStack"
+        // which is NOT a live logical — this folder must NOT be moved to CacheStack/.
+        let hand_table_content = format!(
+            "---\nsystem:\n  kind: dynamo_table\n  name: {physical}\nhuman:\n  tags:\n    - hand-edited\n---\n# CacheStack-CacheTable\n\nHand-curated notes.\n"
+        );
+        write_file(
+            dir.path(),
+            "dynamo/tables/CacheStack-CacheTable/table.md",
+            &hand_table_content,
+        );
+
+        // Stranded models under the physical-named folder (no table.md here).
+        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: UserCredential\nhuman: {}\n---\n# UserCredential\n";
+        write_file(
+            dir.path(),
+            &format!("dynamo/tables/{physical}/models/UserCredential.md"),
+            model_content,
+        );
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape(physical)],
+            Some(&rule),
+        )
+        .await
+        .unwrap();
+
+        // The bogus over-strip target must NOT exist.
+        let bogus_dir = dir.path().join("dynamo/tables/CacheStack");
+        assert!(
+            !bogus_dir.exists(),
+            "tables/CacheStack/ must not be created by over-stripping the hand-curated folder"
+        );
+
+        // The stranded models were merged into the live logical folder.
+        let live_model = dir
+            .path()
+            .join(format!("dynamo/tables/{live_logical}/models/UserCredential.md"));
+        assert!(live_model.exists(), "stranded model must be merged into live logical folder");
+        let model_read = fs::read_to_string(&live_model).unwrap();
+        assert_eq!(model_read, model_content, "model content must be unchanged");
+
+        // The hand-curated folder's table.md was relocated to the live logical
+        // folder by the rule-aware UPDATE path (system.name in frontmatter folds
+        // to live_logical, so it matches the live shape).
+        let live_table = dir
+            .path()
+            .join(format!("dynamo/tables/{live_logical}/table.md"));
+        assert!(live_table.exists(), "live logical table.md must exist");
+        let live_table_content = fs::read_to_string(&live_table).unwrap();
+        assert!(
+            live_table_content.contains("hand-edited"),
+            "human tag from hand-curated folder must be preserved"
+        );
+
+        // The report must not have a `created` entry for this table (it's an update).
+        assert!(
+            !report.created.iter().any(|p| p.to_str().unwrap_or("").contains(live_logical)),
+            "live logical table should not be in created (it's an update); report={:?}", report
+        );
+        assert!(
+            report.updated.contains(&live_table),
+            "live logical table should be in updated; report={:?}", report
+        );
+    }
+
+    /// A rule that cleanly strips both the hash segment AND the random suffix in
+    /// one pass (`suffix_pattern: "[0-9A-F]{{8}}-[0-9A-Za-z]+$"`) is effectively
+    /// idempotent for the physical name. When the pre-sync state already has a
+    /// `tables/CacheStack-CacheTable/` folder (the correct logical target) plus
+    /// a stranded `tables/CacheStack-CacheTableC1E6DF7E-ML2P8F7HDM0M/models/`
+    /// folder, everything should converge into a single
+    /// `tables/CacheStack-CacheTable/` folder after sync.
+    #[tokio::test]
+    async fn dynamo_consolidation_converges_with_hash_stripping_rule() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        // This rule strips "C1E6DF7E-ML2P8F7HDM0M" in one shot, folding
+        // "CacheStack-CacheTableC1E6DF7E-ML2P8F7HDM0M" → "CacheStack-CacheTable".
+        let rule = TableMatch {
+            prefix: None,
+            suffix_pattern: Some("[0-9A-F]{8}-[0-9A-Za-z]+$".to_string()),
+            regex: None,
+        };
+
+        let physical = "CacheStack-CacheTableC1E6DF7E-ML2P8F7HDM0M";
+        let logical = "CacheStack-CacheTable";
+
+        // `tables/CacheStack-CacheTable/table.md` already exists (the user had
+        // set it up, or a prior sync with this rule created it). Its frontmatter
+        // still carries the full physical name (written before normalization was
+        // known) and a human tag.
+        let table_content = format!(
+            "---\nsystem:\n  kind: dynamo_table\n  name: {physical}\nhuman:\n  tags:\n    - important\n---\n# CacheStack-CacheTable\n\nCache table notes.\n"
+        );
+        write_file(
+            dir.path(),
+            &format!("dynamo/tables/{logical}/table.md"),
+            &table_content,
+        );
+
+        // Stranded models under the physical-named folder.
+        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: UserCredential\nhuman: {}\n---\n# UserCredential\n";
+        write_file(
+            dir.path(),
+            &format!("dynamo/tables/{physical}/models/UserCredential.md"),
+            model_content,
+        );
+
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Dynamo,
+            vec![dynamo_shape(physical)],
+            Some(&rule),
+        )
+        .await
+        .unwrap();
+
+        // Everything must converge into a single CacheStack-CacheTable/ folder.
+        let tables_dir = dir.path().join("dynamo/tables");
+        let entries: Vec<_> = fs::read_dir(&tables_dir)
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "tables/ should contain exactly one entry after convergence, found: {:?}",
+            entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            entries[0].file_name().to_str().unwrap_or(""),
+            logical,
+            "the single entry should be the logical dir '{logical}'"
+        );
+
+        // table.md updated in place with human tag preserved and system.name = logical.
+        let logical_table = tables_dir.join(format!("{logical}/table.md"));
+        assert!(logical_table.exists(), "logical table.md must exist");
+        let content = fs::read_to_string(&logical_table).unwrap();
+        assert!(
+            content.contains(&format!("name: {logical}")),
+            "system.name should be updated to logical name"
+        );
+        assert!(
+            content.contains("important"),
+            "human tag should be preserved"
+        );
+
+        // models/UserCredential.md present in logical folder.
+        let logical_model = tables_dir.join(format!("{logical}/models/UserCredential.md"));
+        assert!(logical_model.exists(), "models/UserCredential.md must be present in logical folder");
+
+        // Physical-named folder must be gone.
+        let physical_dir = tables_dir.join(physical);
+        assert!(!physical_dir.exists(), "physical folder must be removed after consolidation");
+
+        // Report: updated, not created or marked_deleted.
+        assert!(
+            report.updated.contains(&logical_table),
+            "logical table should be in updated; report={:?}", report
+        );
+        assert!(
+            report.marked_deleted.is_empty(),
+            "nothing should be marked deleted; report={:?}", report
+        );
+        assert!(
+            !report.created.iter().any(|p| p.to_str().unwrap_or("").contains(logical)),
+            "logical table should not be in created; report={:?}", report
+        );
     }
 }
