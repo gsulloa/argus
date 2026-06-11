@@ -62,6 +62,7 @@ function makeConnection(over: Partial<Connection> = {}): Connection {
     group_id: null,
     sort_order: 0,
     context_path: null,
+    project_source_path: null,
     created_at: 0,
     updated_at: 0,
     ...over,

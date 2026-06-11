@@ -31,6 +31,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0006_ai_settings.sql",
         include_str!("../../migrations/0006_ai_settings.sql"),
     ),
+    (
+        "0007_project_source.sql",
+        include_str!("../../migrations/0007_project_source.sql"),
+    ),
 ];
 
 pub fn open_db(app: &AppHandle) -> AppResult<Connection> {

@@ -597,13 +597,19 @@ pub async fn ai_inspect_models(
         )));
     }
 
-    // 4. Resolve project source path.
-    let (_kind, context_path) = crate::modules::context::commands::get_conn_kind_and_path(&db, conn_uuid)?;
-    let root = context_path.ok_or_else(|| {
-        AppError::Validation("connection has no linked context folder".into())
-    })?;
+    // 4. Resolve project source path. Generated models are saved into the
+    //    linked context folder, so a folder is still required; the source path
+    //    itself is now local per-connection state (migrated out of context.yaml
+    //    on first resolve).
+    let (_kind, context_path) =
+        crate::modules::context::commands::get_conn_kind_and_path(&db, conn_uuid)?;
+    if context_path.is_none() {
+        return Err(AppError::Validation(
+            "connection has no linked context folder".into(),
+        ));
+    }
     let project_source_path_str =
-        crate::modules::context::commands::read_project_source_path(std::path::Path::new(&root))?
+        crate::modules::context::commands::resolve_project_source_path(&db, conn_uuid)?
             .ok_or_else(|| {
                 AppError::Validation(
                     "project source path is not configured for this context folder".into(),
