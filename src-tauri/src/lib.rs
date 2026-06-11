@@ -16,9 +16,9 @@ use crate::modules::ai::commands::{
 };
 use crate::modules::context::commands::{
     context_ai_payload, context_create_folder, context_delete_model, context_get_object,
-    context_get_project_source, context_get_query, context_link_folder, context_list_models,
-    context_list_objects, context_list_queries, context_reveal_path, context_save_model,
-    context_set_project_source, context_sync_schema, context_unlink,
+    context_get_project_source, context_get_query, context_link_folder, context_list_known_folders,
+    context_list_models, context_list_objects, context_list_queries, context_reveal_path,
+    context_save_model, context_set_project_source, context_sync_schema, context_unlink,
 };
 use crate::modules::context::registry::{ContextRegistry, TauriEmitter};
 use crate::modules::athena::commands::{
@@ -361,6 +361,7 @@ pub fn run() {
             updater_logs_reveal,
             // Context folder commands
             context_create_folder,
+            context_list_known_folders,
             context_link_folder,
             context_unlink,
             context_list_objects,

@@ -213,24 +213,43 @@ fn collect_models(objects: &[ObjectDoc], physical_table: &str) -> Vec<ModelListI
 // ---- 5.1: context_create_folder ----
 
 /// Create a new context folder at `path` with the given `name`.
-/// Errors if the directory exists and is non-empty.
-/// Returns the canonical path string.
+///
+/// Behaviour:
+/// - Directory does not exist → scaffold `context.yaml`, `README.md`, `.gitignore` and return
+///   the canonical path.
+/// - Directory exists and is empty → scaffold as above.
+/// - Directory exists, is non-empty, and contains a parseable `context.yaml` → idempotent:
+///   return the canonical path without touching any existing files.
+/// - Directory exists, is non-empty, and does NOT contain a parseable `context.yaml` →
+///   return `AppError::Validation("directory not empty")`.
 #[tauri::command]
 pub fn context_create_folder(path: String, name: String) -> AppResult<String> {
     let dir = Path::new(&path);
 
     if dir.exists() {
-        // Error if non-empty.
+        // Check whether the directory has any contents.
         let mut entries =
             std::fs::read_dir(dir).map_err(|e| AppError::Storage(format!("io: {e}")))?;
         if entries.next().is_some() {
-            return Err(AppError::Validation("directory not empty".into()));
+            // Non-empty: accept only if it is already a valid context folder.
+            match parse_manifest(dir) {
+                Ok(_) => {
+                    // Valid context folder — idempotent success; return canonical path.
+                    let canon = std::fs::canonicalize(dir)
+                        .map_err(|e| AppError::Storage(format!("io: {e}")))?;
+                    return Ok(canon.to_string_lossy().into_owned());
+                }
+                Err(_) => {
+                    return Err(AppError::Validation("directory not empty".into()));
+                }
+            }
         }
+        // Empty directory — fall through to scaffold.
     } else {
         std::fs::create_dir_all(dir).map_err(|e| AppError::Storage(format!("io: {e}")))?;
     }
 
-    // Write context.yaml
+    // Scaffold: write context.yaml
     #[derive(serde::Serialize)]
     struct ManifestInit {
         schema_version: u32,
@@ -256,6 +275,87 @@ pub fn context_create_folder(path: String, name: String) -> AppResult<String> {
 
     let canon = std::fs::canonicalize(dir).map_err(|e| AppError::Storage(format!("io: {e}")))?;
     Ok(canon.to_string_lossy().into_owned())
+}
+
+// ---- context_list_known_folders ----
+
+/// One entry in the `context_list_known_folders` result.
+#[derive(Serialize)]
+pub struct KnownFolderEntry {
+    /// Canonical root path.
+    pub path: String,
+    /// Display name from `context.yaml`.
+    pub name: String,
+    /// Ids (as strings) of all connections whose `context_path` resolves to
+    /// this canonical root.
+    pub connection_ids: Vec<String>,
+}
+
+/// Core logic for listing known context folders; extracted for testability.
+///
+/// Takes a raw DB connection so tests can pass an in-memory database directly
+/// without needing a Tauri `State` wrapper.
+pub(crate) fn list_known_folders_inner(
+    db_conn: &rusqlite::Connection,
+) -> AppResult<Vec<KnownFolderEntry>> {
+    // Collect (connection_id, context_path) pairs.
+    let conn_paths: Vec<(Uuid, String)> = connections::list(db_conn)?
+        .into_iter()
+        .filter_map(|c| c.context_path.map(|p| (c.id, p)))
+        .collect();
+
+    // Canonicalize each path and group connection ids by canonical root.
+    // Vec<String> preserves insertion order for deterministic output.
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, Vec<Uuid>> =
+        std::collections::HashMap::new();
+
+    for (conn_id, raw_path) in conn_paths {
+        let canonical = match std::fs::canonicalize(&raw_path) {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(_) => continue, // path no longer exists — skip
+        };
+        let entry = groups.entry(canonical.clone()).or_insert_with(|| {
+            order.push(canonical.clone());
+            Vec::new()
+        });
+        entry.push(conn_id);
+    }
+
+    // Build result: parse manifest for each surviving root; omit on parse failure.
+    let mut result = Vec::new();
+    for canonical in order {
+        let ids = match groups.get(&canonical) {
+            Some(v) => v,
+            None => continue,
+        };
+        let manifest = match parse_manifest(std::path::Path::new(&canonical)) {
+            Ok(m) => m,
+            Err(_) => continue, // missing or unparseable manifest — skip
+        };
+        result.push(KnownFolderEntry {
+            path: canonical,
+            name: manifest.name,
+            connection_ids: ids.iter().map(|id| id.to_string()).collect(),
+        });
+    }
+
+    Ok(result)
+}
+
+/// Return the distinct context-folder roots already referenced by saved
+/// connections, enriched with the manifest name and the set of connection ids
+/// sharing each root.
+///
+/// Roots that no longer exist on disk, or whose `context.yaml` cannot be
+/// parsed, are silently omitted. Group membership is not considered.
+#[tauri::command]
+pub fn context_list_known_folders(
+    db: State<'_, DbState>,
+) -> AppResult<Vec<KnownFolderEntry>> {
+    // Drop the DB lock before doing any filesystem IO.
+    let lock = db.0.lock().expect("db poisoned");
+    list_known_folders_inner(&lock)
 }
 
 // ---- 5.2: context_link_folder ----
@@ -1080,5 +1180,212 @@ mod tests {
             &normalize("MyApp-prod-AppTable-XYZ", None),
         );
         assert!(suffixed.is_empty());
+    }
+
+    // ---- context_create_folder (task 1.4) ----
+
+    // 1.4a — fresh path scaffolds context.yaml, README.md, .gitignore.
+    #[test]
+    fn create_folder_fresh_path_scaffolds() {
+        let base = TempDir::new().unwrap();
+        let target = base.path().join("my-project");
+        // Directory must not exist yet.
+        assert!(!target.exists());
+
+        let result = context_create_folder(target.to_string_lossy().into_owned(), "My Project".into());
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+
+        assert!(target.join("context.yaml").exists(), "context.yaml missing");
+        assert!(target.join("README.md").exists(), "README.md missing");
+        assert!(target.join(".gitignore").exists(), ".gitignore missing");
+
+        let manifest = parse_manifest(&target).unwrap();
+        assert_eq!(manifest.schema_version, 1);
+        assert_eq!(manifest.name, "My Project");
+    }
+
+    // 1.4b — existing valid context folder returns canonical path, files unchanged.
+    #[test]
+    fn create_folder_existing_valid_returns_path_untouched() {
+        let base = TempDir::new().unwrap();
+        let target = base.path().join("shared-project");
+        fs::create_dir_all(&target).unwrap();
+
+        // Scaffold a valid context folder with extra content.
+        let original_yaml = "schema_version: 1\nname: Shared Project\nextra_key: keep_me\n";
+        fs::write(target.join("context.yaml"), original_yaml).unwrap();
+        fs::write(target.join("README.md"), "# original readme\n").unwrap();
+        fs::write(target.join(".gitignore"), "**/_generated.*\n").unwrap();
+        // Simulate an object doc to ensure nothing is touched.
+        fs::create_dir_all(target.join("postgres/public")).unwrap();
+        fs::write(target.join("postgres/public/users.md"), "---\nsystem:\n  kind: table\n  name: users\nhuman: {}\n---\n# users\n").unwrap();
+
+        // Call create_folder a second time (as if a second connection links the same root).
+        let result = context_create_folder(target.to_string_lossy().into_owned(), "Different Name".into());
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+
+        // context.yaml must be byte-for-byte identical to what we wrote.
+        let yaml_after = fs::read_to_string(target.join("context.yaml")).unwrap();
+        assert_eq!(
+            yaml_after, original_yaml,
+            "context.yaml was modified when it should be untouched"
+        );
+
+        // README.md also untouched.
+        let readme_after = fs::read_to_string(target.join("README.md")).unwrap();
+        assert_eq!(readme_after, "# original readme\n");
+
+        // Object doc untouched.
+        let doc_after = fs::read_to_string(target.join("postgres/public/users.md")).unwrap();
+        assert!(doc_after.contains("# users"));
+    }
+
+    // 1.4c — non-empty foreign directory (no context.yaml) returns Validation error.
+    #[test]
+    fn create_folder_foreign_nonempty_dir_errors() {
+        let base = TempDir::new().unwrap();
+        let target = base.path().join("foreign-dir");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("some_file.txt"), "I am not a context folder").unwrap();
+
+        let result = context_create_folder(target.to_string_lossy().into_owned(), "Ignored".into());
+        assert!(
+            matches!(result, Err(AppError::Validation(_))),
+            "expected Validation error, got {:?}",
+            result
+        );
+    }
+
+    // ---- context_list_known_folders (task 2.6) ----
+
+    use crate::platform::connections::{ConnectionInput, update as conn_update, ConnectionUpdate};
+    use crate::platform::storage::open_in_memory;
+
+    fn fresh_db() -> rusqlite::Connection {
+        open_in_memory().expect("open in-memory db")
+    }
+
+    fn make_connection_with_path(
+        db: &rusqlite::Connection,
+        name: &str,
+        kind: &str,
+        context_path: Option<String>,
+    ) -> uuid::Uuid {
+        let conn = crate::platform::connections::create(
+            db,
+            ConnectionInput {
+                name: name.into(),
+                kind: kind.into(),
+                params: serde_json::Value::Null,
+                group_id: None,
+                secret: None,
+                context_path,
+            },
+        )
+        .unwrap();
+        conn.id
+    }
+
+    // Helper: create a valid context folder on disk and return its canonical path.
+    fn make_context_folder(base: &std::path::Path, subdir: &str, folder_name: &str) -> String {
+        let dir = base.join(subdir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("context.yaml"),
+            format!("schema_version: 1\nname: {folder_name}\n"),
+        )
+        .unwrap();
+        std::fs::canonicalize(&dir)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    // 2.6 — two connections sharing one canonical root collapse to one entry with both ids.
+    #[test]
+    fn list_known_folders_two_conns_same_root() {
+        let base = TempDir::new().unwrap();
+        let canonical = make_context_folder(base.path(), "project", "My Project");
+
+        let db = fresh_db();
+        let id_a = make_connection_with_path(&db, "pg-conn", "postgres", Some(canonical.clone()));
+        let id_b = make_connection_with_path(&db, "dynamo-conn", "dynamodb", Some(canonical.clone()));
+
+        let result = list_known_folders_inner(&db).unwrap();
+        assert_eq!(result.len(), 1, "expected one entry");
+        assert_eq!(result[0].name, "My Project");
+        assert_eq!(result[0].path, canonical);
+
+        let mut ids = result[0].connection_ids.clone();
+        ids.sort();
+        let mut expected = vec![id_a.to_string(), id_b.to_string()];
+        expected.sort();
+        assert_eq!(ids, expected);
+    }
+
+    // 2.6 — stale/non-existent path is omitted.
+    #[test]
+    fn list_known_folders_stale_path_omitted() {
+        let db = fresh_db();
+        make_connection_with_path(
+            &db,
+            "stale-conn",
+            "postgres",
+            Some("/nonexistent/path/that/does/not/exist".into()),
+        );
+
+        let result = list_known_folders_inner(&db).unwrap();
+        assert!(result.is_empty(), "expected empty, got {:?} entries", result.len());
+    }
+
+    // 2.6 — no linked folders returns empty.
+    #[test]
+    fn list_known_folders_no_linked_folders_returns_empty() {
+        let db = fresh_db();
+        make_connection_with_path(&db, "conn-a", "postgres", None);
+        make_connection_with_path(&db, "conn-b", "dynamodb", None);
+
+        let result = list_known_folders_inner(&db).unwrap();
+        assert!(result.is_empty());
+    }
+
+    // 2.6 — cross-group sharing returns a single entry with all connection ids.
+    #[test]
+    fn list_known_folders_cross_group_single_entry() {
+        let base = TempDir::new().unwrap();
+        let canonical = make_context_folder(base.path(), "shared", "Cross Group Project");
+
+        // Create connections in different groups (groups not created here to keep
+        // it simple; group_id is None for both — the key property is that group
+        // membership does not matter for deduplication).
+        let db = fresh_db();
+        let id_a = make_connection_with_path(&db, "conn-1", "postgres", Some(canonical.clone()));
+        let id_b = make_connection_with_path(&db, "conn-2", "mysql", Some(canonical.clone()));
+
+        let result = list_known_folders_inner(&db).unwrap();
+        assert_eq!(result.len(), 1);
+
+        let mut ids = result[0].connection_ids.clone();
+        ids.sort();
+        let mut expected = vec![id_a.to_string(), id_b.to_string()];
+        expected.sort();
+        assert_eq!(ids, expected);
+    }
+
+    // 2.6 — path without a valid context.yaml manifest is omitted.
+    #[test]
+    fn list_known_folders_no_manifest_omitted() {
+        let base = TempDir::new().unwrap();
+        let dir = base.path().join("foreign");
+        fs::create_dir_all(&dir).unwrap();
+        // No context.yaml — just a random file.
+        fs::write(dir.join("random.txt"), "hello").unwrap();
+        let raw_path = dir.to_string_lossy().into_owned();
+
+        let db = fresh_db();
+        make_connection_with_path(&db, "conn", "postgres", Some(raw_path));
+
+        let result = list_known_folders_inner(&db).unwrap();
+        assert!(result.is_empty());
     }
 }

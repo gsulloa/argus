@@ -77,6 +77,58 @@
   margin: 0;
 }
 
+/* Known-folder reuse list (primary choice when folders exist) */
+.knownFolderList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
+.knownFolderItem {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  background: var(--elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 5px);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  min-width: 0;
+  transition: background var(--duration-instant, 80ms) ease-out,
+              border-color var(--duration-instant, 80ms) ease-out;
+}
+
+.knownFolderItem:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+
+.knownFolderItem:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.knownFolderName {
+  font-size: var(--text-md, 13px);
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.knownFolderPath {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: var(--text-sm, 12px);
+  color: var(--text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 /* Linked state */
 .linkedState {
   display: flex;

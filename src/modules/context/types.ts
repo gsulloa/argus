@@ -120,3 +120,17 @@ export interface ContextChangedEvent {
 }
 
 export const CONTEXT_CHANGED_EVENT = "context://changed";
+
+// ---------------------------------------------------------------------------
+// Known-folder discovery (context_list_known_folders)
+// ---------------------------------------------------------------------------
+
+/** One entry from `context_list_known_folders` — mirrors the Rust result type. */
+export interface KnownFolder {
+  /** Canonical path of the context folder root. */
+  path: string;
+  /** Display name from `context.yaml`. */
+  name: string;
+  /** IDs of connections already pointing at this root. */
+  connection_ids: string[];
+}

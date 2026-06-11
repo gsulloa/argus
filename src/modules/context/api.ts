@@ -3,6 +3,7 @@ import { toAppError } from "@/platform/errors/AppError";
 import type {
   AiPayload,
   ContextManifest,
+  KnownFolder,
   ObjectDoc,
   ObjectListItem,
   QueryDoc,
@@ -24,6 +25,9 @@ export const contextApi = {
 
   linkFolder: (connectionId: string, path: string) =>
     call<ContextManifest>("context_link_folder", { connectionId, path }),
+
+  listKnownFolders: () =>
+    call<KnownFolder[]>("context_list_known_folders"),
 
   unlink: (connectionId: string) =>
     call<void>("context_unlink", { connectionId }),

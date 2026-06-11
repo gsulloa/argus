@@ -18,6 +18,17 @@ structured directory of documentation and prefab queries that lives in the
 service's git repo and can be shared across related connections (e.g. prod +
 staging of the same service).
 
+**One folder per project.** The recommended model is one shared root per
+project, not one folder per connection. A project is simply the set of
+connections that point at the same canonical root — a Postgres connection, a
+DynamoDB connection, and an Athena connection for the same service all point at
+`~/code/billing-service/argus-context/`; each engine's docs live in its own
+subtree under that root (`postgres/`, `dynamo/`, `athena/`). When you link a
+new connection to a context folder, Argus offers existing known folders first so
+the natural path is to reuse an existing root rather than create a new one. The
+folder is independent of connection groups — a connection keeps its context
+folder regardless of which group it belongs to.
+
 Layout (engine-segregated under a neutral root):
 
 ```

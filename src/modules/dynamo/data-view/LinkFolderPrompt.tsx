@@ -12,10 +12,12 @@
  *   onLinked()   — called on successful link so the caller can refresh and open the editor
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
+import { Folder } from "lucide-react";
 import { contextApi } from "@/modules/context/api";
+import type { KnownFolder } from "@/modules/context/types";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
@@ -39,6 +41,36 @@ export function LinkFolderPrompt({
   // Name prompt state (for "Create folder…" flow)
   const [nameStep, setNameStep] = useState<{ parentPath: string } | null>(null);
   const [folderName, setFolderName] = useState("argus-context");
+
+  // Known-folder discovery
+  const [knownFolders, setKnownFolders] = useState<KnownFolder[] | null>(null);
+  const [knownFoldersLoading, setKnownFoldersLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setKnownFoldersLoading(true);
+    contextApi.listKnownFolders().then((folders) => {
+      setKnownFolders(folders);
+    }).catch(() => {
+      setKnownFolders([]);
+    }).finally(() => {
+      setKnownFoldersLoading(false);
+    });
+  }, [open]);
+
+  async function handleReuseFolder(path: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await contextApi.linkFolder(connectionId, path);
+      await refresh();
+      onLinked();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function handleCreateFolder() {
     const parentPath = await dialogOpen({
@@ -92,6 +124,7 @@ export function LinkFolderPrompt({
   function handleClose() {
     setNameStep(null);
     setError(null);
+    setKnownFolders(null);
     onClose();
   }
 
@@ -189,6 +222,56 @@ export function LinkFolderPrompt({
                   Link a context folder to define and save models.
                 </p>
 
+                {/* Primary: reuse a known folder */}
+                {knownFoldersLoading && (
+                  <p style={{ ...hintStyle, fontSize: 11 }}>Loading existing folders…</p>
+                )}
+                {!knownFoldersLoading && knownFolders != null && knownFolders.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    {knownFolders.map((folder) => (
+                      <button
+                        key={folder.path}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void handleReuseFolder(folder.path)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 7,
+                          padding: "6px 8px",
+                          background: "var(--elevated, #15151b)",
+                          border: "1px solid var(--border-strong, #2e2f3a)",
+                          borderRadius: "var(--radius-md, 5px)",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          width: "100%",
+                          minWidth: 0,
+                          transition: "background 80ms ease-out, border-color 80ms ease-out",
+                          opacity: busy ? 0.5 : 1,
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!busy) {
+                            (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--accent, #a855f7)";
+                            (e.currentTarget as HTMLButtonElement).style.background = "var(--surface-2, #23232c)";
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--border-strong, #2e2f3a)";
+                          (e.currentTarget as HTMLButtonElement).style.background = "var(--elevated, #15151b)";
+                        }}
+                      >
+                        <Folder size={12} style={{ color: "var(--text-muted, #a0a2ad)", flexShrink: 0 }} />
+                        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text, #f2f3f7)", whiteSpace: "nowrap", flexShrink: 0 }}>
+                          {folder.name}
+                        </span>
+                        <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 11, color: "var(--text-subtle, #6b6e7b)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+                          {folder.path}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {error && (
                   <div
                     style={{
@@ -204,6 +287,7 @@ export function LinkFolderPrompt({
                   </div>
                 )}
 
+                {/* Secondary: create new or choose any path */}
                 <div style={btnRowStyle}>
                   <button
                     type="button"
@@ -211,7 +295,7 @@ export function LinkFolderPrompt({
                     disabled={busy}
                     onClick={() => void handleCreateFolder()}
                   >
-                    Create folder…
+                    {(!knownFolders || knownFolders.length === 0) ? "Create folder…" : "New folder…"}
                   </button>
                   <button
                     type="button"
@@ -219,7 +303,7 @@ export function LinkFolderPrompt({
                     disabled={busy}
                     onClick={() => void handleLinkExisting()}
                   >
-                    Link existing…
+                    {(!knownFolders || knownFolders.length === 0) ? "Link existing…" : "Choose other…"}
                   </button>
                 </div>
 
