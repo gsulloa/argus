@@ -10,6 +10,7 @@
 
 import { useState } from "react";
 import { noAutoCorrectProps } from "../../../shared/text-input-hygiene";
+import { APP_DISPLAY_NAME } from "@/platform/app-identity";
 
 export interface OptimisticLockingDialogProps {
   open: boolean;
@@ -137,7 +138,8 @@ export function OptimisticLockingDialog({
             }}
           >
             When this is set AND the &ldquo;Use ConditionExpression on update&rdquo; toggle is on,
-            Argus appends{" "}
+            {" "}
+            {APP_DISPLAY_NAME} appends{" "}
             <code
               style={{
                 fontFamily: "var(--font-mono, monospace)",

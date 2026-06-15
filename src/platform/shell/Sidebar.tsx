@@ -16,6 +16,7 @@ import { useTabs } from "@/platform/shell/tabs";
 import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
 import { listAllDirtySummaries } from "@/platform/shell/tabs/useDirtySummary";
 import logoUrl from "@/assets/logo.svg";
+import { APP_DISPLAY_NAME } from "@/platform/app-identity";
 import {
   DndContext,
   KeyboardSensor,
@@ -53,7 +54,7 @@ export function Sidebar() {
       <div className={styles.root}>
         <header className={styles.brand}>
           <img src={logoUrl} alt="" className={styles.brandMark} />
-          <span className={styles.brandName}>Argus</span>
+          <span className={styles.brandName}>{APP_DISPLAY_NAME}</span>
         </header>
         <div ref={scrollRef} className={styles.scroll}>
           <ConnectionsSection />

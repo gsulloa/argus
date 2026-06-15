@@ -14,6 +14,7 @@ import { Loader2, X } from "lucide-react";
 import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
 import { useDirtySummary } from "@/platform/shell/tabs/useDirtySummary";
 import type { Tab } from "@/platform/shell/tabs/types";
+import { APP_DISPLAY_NAME } from "@/platform/app-identity";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useSaveShortcut } from "@/platform/shell/useSaveShortcut";
 import { useContextObjects, useContextObject } from "@/modules/context/hooks";
@@ -627,7 +628,7 @@ function MssqlTableViewer({
             flexShrink: 0,
           }}
         >
-          No primary key — existing rows cannot be edited or deleted via Argus
+          No primary key — existing rows cannot be edited or deleted via {APP_DISPLAY_NAME}
         </div>
       )}
 
