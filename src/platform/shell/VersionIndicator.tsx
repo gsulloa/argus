@@ -6,9 +6,10 @@ import { useUpdater } from "@/platform/updater";
 import { UpdaterLogsDialog } from "./UpdaterLogsDialog";
 import overlayStyles from "./Dialog.module.css";
 import styles from "./VersionIndicator.module.css";
+import { APP_DISPLAY_NAME, BUNDLE_IDENTIFIER } from "@/platform/app-identity";
 
-const PRODUCT_NAME = "Argus";
-const IDENTIFIER = "com.argus.app";
+const PRODUCT_NAME = APP_DISPLAY_NAME;
+const IDENTIFIER = BUNDLE_IDENTIFIER;
 const BUILD_COMMIT = (import.meta.env.VITE_BUILD_COMMIT ?? "") as string;
 
 export interface VersionIndicatorViewProps {

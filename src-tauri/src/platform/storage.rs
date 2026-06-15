@@ -45,7 +45,8 @@ pub fn open_db(app: &AppHandle) -> AppResult<Connection> {
 
     std::fs::create_dir_all(&dir)?;
 
-    let path = dir.join("argus.db");
+    // migration-sensitive: DB filename; see config::app_identity::DB_FILENAME.
+    let path = dir.join(crate::config::app_identity::DB_FILENAME);
     info!(path = %path.display(), "opening database");
 
     let mut conn = Connection::open(&path)

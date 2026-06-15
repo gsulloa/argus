@@ -59,6 +59,11 @@ pub fn enrichment_outcome() -> Option<EnrichmentOutcome> {
 /// attempt its own resolution at spawn time.
 ///
 /// `env_var` is the provider's absolute-path override (e.g. `ARGUS_CLAUDE_BIN`).
+///
+/// Naming convention: these override variables are `<ENV_VAR_PREFIX>_<PROVIDER>_BIN`
+/// where the prefix is `config::app_identity::ENV_VAR_PREFIX` (`ARGUS`). They are
+/// passed as literals at call sites (codex_cli.rs / claude_cli.rs); a rename must
+/// update both the literals and `ENV_VAR_PREFIX`, and is documented in RENAMING.md.
 pub fn resolve_cli_bin(name: &str, env_var: &str) -> PathBuf {
     // 1. Explicit override — trusted as-is (the user set it deliberately).
     if let Some(val) = std::env::var_os(env_var) {

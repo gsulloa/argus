@@ -10,8 +10,10 @@ pub const ACCOUNT_OPENAI: &str = "ai:openai";
 #[cfg(not(test))]
 use crate::error::AppError;
 
+// migration-sensitive: keychain service name; see config::app_identity::KEYCHAIN_SERVICE.
+// (Accounts ACCOUNT_ANTHROPIC / ACCOUNT_OPENAI above are also migration-sensitive.)
 #[cfg(not(test))]
-const SERVICE: &str = "argus";
+const SERVICE: &str = crate::config::app_identity::KEYCHAIN_SERVICE;
 
 #[cfg(not(test))]
 mod backend {

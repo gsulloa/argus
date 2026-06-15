@@ -1,5 +1,6 @@
 import { TabRegistry } from "./TabRegistry";
 import styles from "./welcome.module.css";
+import { APP_DISPLAY_NAME } from "@/platform/app-identity";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import type { Connection } from "@/platform/connection-registry/types";
 import { useAiSettings } from "@/modules/ai/store";
@@ -106,7 +107,9 @@ export function WelcomeTab(_props: { tab: unknown; active: boolean }) {
 
   return (
     <div className={styles.root}>
-      <h1>Welcome to Argus</h1>
+      <h1>Welcome to {APP_DISPLAY_NAME}</h1>
+      {/* The "Why Argus?" lore below is mythology-specific brand copy, not a
+          mechanical substitution — rewrite it by hand on rename. See RENAMING.md. */}
       <p>A desktop tool for inspecting and editing data across multiple sources.</p>
 
       <section className={styles.gettingStarted} aria-labelledby="getting-started">

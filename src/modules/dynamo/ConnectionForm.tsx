@@ -9,6 +9,7 @@ import type { Connection } from "@/platform/connection-registry/types";
 import { dynamoApi } from "./api";
 import { classifyDynamoError, extractSsoCommand } from "./errors";
 import { AWS_REGIONS } from "./regions";
+import { APP_DISPLAY_NAME } from "@/platform/app-identity";
 import {
   DYNAMO_KIND,
   type DynamoAuth,
@@ -507,8 +508,8 @@ export function DynamoConnectionForm({
                     placeholder={isCredentialsOnly ? "Enter new session token" : "Paste if using temporary credentials"}
                   />
                   <span className={styles.hint}>
-                    If you paste a session token, your credentials are time-limited — Argus will
-                    re-ask when they expire.
+                    If you paste a session token, your credentials are time-limited —{" "}
+                    {APP_DISPLAY_NAME} will re-ask when they expire.
                   </span>
                 </div>
               </>
