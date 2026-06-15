@@ -32,6 +32,8 @@ use crate::error::{AppError, AppResult};
 use crate::modules::ai::caps::{CLAUDE_CLI_DEFAULT_MODEL, CLAUDE_CLI_MODELS};
 use crate::modules::ai::cli_detect;
 use crate::modules::ai::provider::AiProvider;
+use crate::modules::context::engine::EngineKind;
+use crate::modules::dynamo::params::TableMatch;
 
 /// Resolve the `claude` binary path to use for validation and spawning.
 /// Honours `ARGUS_CLAUDE_BIN`, then the enriched PATH, then well-known install
@@ -136,6 +138,7 @@ impl AiProvider for ClaudeCli {
             &system_prompt,
             "Read Glob Grep",
             &req.project_source_path,
+            None, // inspect has no context folder → no MCP doc-writer
         )?;
         Ok(build_chat_stream(child, stdout, stderr))
     }
@@ -151,6 +154,35 @@ impl AiProvider for ClaudeCli {
         let cwd = req.context_path.clone().unwrap_or_else(std::env::temp_dir);
         let system_prompt = build_cli_system_prompt(&cwd);
         let resume_id = req.provider_state.get("resume_id").cloned();
+
+        // Build the MCP doc-writer config only when the connection has a linked
+        // context folder AND we know the engine.  Without a context folder the
+        // agent stays read-only (guardrails scenario D6).
+        let mcp_config_owned: Option<String> =
+            if req.context_path.is_some() {
+                if let Some(engine) = req.context_engine {
+                    match std::env::current_exe() {
+                        Ok(exe) => {
+                            let config = build_doc_mcp_config_json(
+                                &exe,
+                                &cwd,
+                                engine,
+                                req.dynamo_table_match.as_ref(),
+                            );
+                            Some(config)
+                        }
+                        Err(e) => {
+                            tracing::warn!("could not determine current_exe for MCP sidecar: {e}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+        let mcp_config = mcp_config_owned.as_deref();
 
         // If we have a resume id, try to use --resume first.
         // If that fails quickly (non-zero exit within RESUME_FAIL_TIMEOUT), retry without.
@@ -169,6 +201,7 @@ impl AiProvider for ClaudeCli {
                 &system_prompt,
                 "Read Glob Grep",
                 &cwd,
+                mcp_config, // §4.5: MCP wired on --resume path too
             ) {
                 Ok((child, stdout, stderr)) => {
                     return Ok(build_chat_stream(child, stdout, stderr));
@@ -190,6 +223,7 @@ impl AiProvider for ClaudeCli {
             &system_prompt,
             "Read Glob Grep",
             &cwd,
+            mcp_config, // §4.5: MCP wired on full-history fallback path too
         )?;
 
         let base_stream = build_chat_stream(child, stdout, stderr);
@@ -206,6 +240,51 @@ impl AiProvider for ClaudeCli {
     }
 }
 
+/// Build the `--mcp-config` JSON string for the doc-writer sidecar.
+///
+/// The returned string can be passed directly to `--mcp-config` on the claude
+/// CLI.  The sidecar is the *same* Argus binary invoked with `__mcp-doc-writer`
+/// so no new dependencies are required — parameters are baked into argv.
+///
+/// `--table-match` is only included when `dynamo_rule` is `Some`.
+pub(crate) fn build_doc_mcp_config_json(
+    current_exe: &std::path::Path,
+    root: &std::path::Path,
+    engine: EngineKind,
+    dynamo_rule: Option<&TableMatch>,
+) -> String {
+    let exe_str = current_exe.to_string_lossy();
+    let root_str = root.to_string_lossy();
+    let engine_str = engine.subtree();
+
+    let mut args = vec![
+        JsonValue::String("__mcp-doc-writer".to_string()),
+        JsonValue::String("--root".to_string()),
+        JsonValue::String(root_str.to_string()),
+        JsonValue::String("--engine".to_string()),
+        JsonValue::String(engine_str.to_string()),
+    ];
+
+    if let Some(rule) = dynamo_rule {
+        if let Ok(json_str) = serde_json::to_string(rule) {
+            args.push(JsonValue::String("--table-match".to_string()));
+            args.push(JsonValue::String(json_str));
+        }
+    }
+
+    let config = serde_json::json!({
+        "mcpServers": {
+            "argus": {
+                "type": "stdio",
+                "command": exe_str.as_ref(),
+                "args": args,
+            }
+        }
+    });
+
+    config.to_string()
+}
+
 /// Build the full argv vector for a `claude` stream-json invocation.
 ///
 /// Pure function — takes no `Command`, returns a `Vec<String>`. This makes
@@ -220,6 +299,9 @@ impl AiProvider for ClaudeCli {
 ///   --model <model>              select model (optional)
 ///   --resume <id>                resume a previous session (optional)
 ///   --system-prompt <prompt>     replace session system prompt (full replace, not append)
+///   --mcp-config <json>          (optional) inline MCP server config; only set when the
+///                                connection has a linked context folder
+///   --allowedTools <tools>       (optional) list of MCP tools to allow; set when mcp_config is Some
 ///   --tools <list>               restrict available built-in tools (VARIADIC: needs `--` after)
 ///   --                           terminates option parsing (keeps variadic --tools off the prompt)
 ///   <prompt>                     positional prompt (last argument)
@@ -229,6 +311,8 @@ pub(crate) fn build_claude_argv(
     resume_id: Option<&str>,
     system_prompt: &str,
     tools: &str,
+    mcp_config: Option<&str>,
+    allowed_mcp_tools: Option<&str>,
 ) -> Vec<String> {
     let mut argv: Vec<String> = Vec::new();
     // -p and --verbose are always present.
@@ -250,6 +334,15 @@ pub(crate) fn build_claude_argv(
     }
     argv.push("--system-prompt".into());
     argv.push(system_prompt.to_string());
+    // MCP doc-writer sidecar — only when the connection has a context folder.
+    if let Some(mcp_json) = mcp_config {
+        argv.push("--mcp-config".into());
+        argv.push(mcp_json.to_string());
+        if let Some(allowed) = allowed_mcp_tools {
+            argv.push("--allowedTools".into());
+            argv.push(allowed.to_string());
+        }
+    }
     argv.push("--tools".into());
     argv.push(tools.to_string());
     // `--tools` is variadic (`--tools <tools...>`); without an explicit `--`
@@ -263,6 +356,11 @@ pub(crate) fn build_claude_argv(
 }
 
 /// Spawn claude with --output-format stream-json. Returns (child, stdout, stderr).
+///
+/// When `mcp_config` is `Some`, the sidecar MCP server is wired in via
+/// `--mcp-config` and `--allowedTools mcp__argus__document_object`.
+/// When `None`, no MCP server is loaded (read-only mode for connections without
+/// a linked context folder).
 fn spawn_claude_stream_json(
     prompt: &str,
     model: Option<&str>,
@@ -270,12 +368,22 @@ fn spawn_claude_stream_json(
     system_prompt: &str,
     tools: &str,
     cwd: &std::path::Path,
+    mcp_config: Option<&str>,
 ) -> AppResult<(
     tokio::process::Child,
     tokio::process::ChildStdout,
     tokio::process::ChildStderr,
 )> {
-    let argv = build_claude_argv(prompt, model, resume_id, system_prompt, tools);
+    let allowed_mcp = mcp_config.map(|_| "mcp__argus__document_object");
+    let argv = build_claude_argv(
+        prompt,
+        model,
+        resume_id,
+        system_prompt,
+        tools,
+        mcp_config,
+        allowed_mcp,
+    );
     let mut cmd = Command::new(claude_bin());
     for arg in &argv {
         cmd.arg(arg);
@@ -737,7 +845,9 @@ mod tests {
     #[test]
     fn build_claude_argv_no_resume_contains_required_flags() {
         let sp = "You are a SQL assistant. MUST NOT execute SQL.";
-        let argv = build_claude_argv("SELECT 1", None, None, sp, "Read Glob Grep");
+        // Pass None for the two new mcp_config / allowed_mcp_tools params to
+        // keep old behavior identical.
+        let argv = build_claude_argv("SELECT 1", None, None, sp, "Read Glob Grep", None, None);
         assert!(argv.contains(&"-p".to_string()), "must contain -p");
         assert!(argv.contains(&"--verbose".to_string()), "must contain --verbose");
         assert!(argv.contains(&"--output-format".to_string()));
@@ -759,12 +869,23 @@ mod tests {
         assert_eq!(argv.last().unwrap(), "SELECT 1");
         // --resume must NOT be present
         assert!(!argv.contains(&"--resume".to_string()), "no --resume for None resume_id");
+        // --mcp-config must NOT be present when mcp_config is None
+        assert!(!argv.contains(&"--mcp-config".to_string()), "no --mcp-config when None");
+        assert!(!argv.contains(&"--allowedTools".to_string()), "no --allowedTools when None");
     }
 
     #[test]
     fn build_claude_argv_with_resume_contains_resume_flag() {
         let sp = "You are a SQL assistant. MUST NOT execute SQL.";
-        let argv = build_claude_argv("follow up", Some("claude-sonnet-4-6"), Some("sess-abc"), sp, "Read Glob Grep");
+        let argv = build_claude_argv(
+            "follow up",
+            Some("claude-sonnet-4-6"),
+            Some("sess-abc"),
+            sp,
+            "Read Glob Grep",
+            None,
+            None,
+        );
         let resume_idx = argv.iter().position(|a| a == "--resume")
             .expect("--resume flag not found");
         assert_eq!(argv[resume_idx + 1], "sess-abc");
@@ -780,6 +901,119 @@ mod tests {
         assert_eq!(argv[argv.len() - 2], "--", "`--` must precede the positional prompt");
         // positional prompt is last
         assert_eq!(argv.last().unwrap(), "follow up");
+    }
+
+    // ── build_claude_argv + mcp_config tests ──────────────────────────────────
+
+    #[test]
+    fn build_claude_argv_with_mcp_config_inserts_flags_before_terminator() {
+        let sp = "You are a SQL assistant. MUST NOT execute SQL.";
+        let mcp_json = r#"{"mcpServers":{"argus":{"type":"stdio","command":"/bin/argus","args":["__mcp-doc-writer"]}}}"#;
+        let argv = build_claude_argv(
+            "SELECT 1",
+            None,
+            None,
+            sp,
+            "Read Glob Grep",
+            Some(mcp_json),
+            Some("mcp__argus__document_object"),
+        );
+
+        // --mcp-config and value must be present.
+        let mcp_idx = argv.iter().position(|a| a == "--mcp-config")
+            .expect("--mcp-config flag not found");
+        assert_eq!(argv[mcp_idx + 1], mcp_json);
+
+        // --allowedTools and value must be present.
+        let allowed_idx = argv.iter().position(|a| a == "--allowedTools")
+            .expect("--allowedTools flag not found");
+        assert_eq!(argv[allowed_idx + 1], "mcp__argus__document_object");
+
+        // Both must appear BEFORE the `--` terminator.
+        let terminator_idx = argv.iter().position(|a| a == "--").expect("-- not found");
+        assert!(mcp_idx < terminator_idx, "--mcp-config must be before --");
+        assert!(allowed_idx < terminator_idx, "--allowedTools must be before --");
+
+        // --strict-mcp-config still present (guardrail).
+        assert!(argv.contains(&"--strict-mcp-config".to_string()));
+        // --tools still present.
+        assert!(argv.contains(&"--tools".to_string()));
+        // Positional prompt last.
+        assert_eq!(argv.last().unwrap(), "SELECT 1");
+    }
+
+    // ── build_doc_mcp_config_json tests ──────────────────────────────────────
+
+    #[test]
+    fn build_doc_mcp_config_json_valid_json_with_required_fields() {
+        use crate::modules::context::engine::EngineKind;
+        let exe = std::path::Path::new("/Applications/Argus.app/Argus");
+        let root = std::path::Path::new("/home/user/my-project");
+        let json_str = build_doc_mcp_config_json(exe, root, EngineKind::Postgres, None);
+
+        // Must be valid JSON.
+        let parsed: serde_json::Value = serde_json::from_str(&json_str)
+            .expect("build_doc_mcp_config_json must produce valid JSON");
+
+        // Must contain mcpServers.argus.
+        let server = &parsed["mcpServers"]["argus"];
+        assert_eq!(server["type"], "stdio");
+        assert_eq!(server["command"], "/Applications/Argus.app/Argus");
+
+        // Args must contain subcommand + --root + root + --engine + subtree.
+        let args = server["args"].as_array().expect("args must be array");
+        let arg_strs: Vec<&str> = args.iter().filter_map(|v| v.as_str()).collect();
+        assert!(arg_strs.contains(&"__mcp-doc-writer"), "args must contain subcommand");
+        assert!(arg_strs.contains(&"--root"), "args must contain --root");
+        assert!(arg_strs.contains(&"/home/user/my-project"), "args must contain root path");
+        assert!(arg_strs.contains(&"--engine"), "args must contain --engine");
+        assert!(arg_strs.contains(&"postgres"), "args must contain engine subtree");
+
+        // --table-match must NOT be present when dynamo_rule is None.
+        assert!(!arg_strs.contains(&"--table-match"), "--table-match must be absent when None");
+    }
+
+    #[test]
+    fn build_doc_mcp_config_json_includes_table_match_when_some() {
+        use crate::modules::context::engine::EngineKind;
+        use crate::modules::dynamo::params::TableMatch;
+        let exe = std::path::Path::new("/bin/argus");
+        let root = std::path::Path::new("/tmp/ctx");
+        let rule = TableMatch {
+            prefix: Some("MyApp-prod-".to_string()),
+            suffix_pattern: Some("-[A-Z0-9]+$".to_string()),
+            regex: None,
+        };
+        let json_str = build_doc_mcp_config_json(exe, root, EngineKind::Dynamo, Some(&rule));
+
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let args = parsed["mcpServers"]["argus"]["args"]
+            .as_array()
+            .unwrap();
+        let arg_strs: Vec<&str> = args.iter().filter_map(|v| v.as_str()).collect();
+
+        assert!(arg_strs.contains(&"--table-match"), "--table-match must be present when Some");
+        // The JSON for the table_match must be present somewhere in the args.
+        assert!(
+            arg_strs.iter().any(|s| s.contains("MyApp-prod-")),
+            "table_match json must appear in args"
+        );
+        assert!(arg_strs.contains(&"dynamo"), "engine must be dynamo");
+    }
+
+    #[test]
+    fn build_doc_mcp_config_json_absent_table_match_omitted() {
+        use crate::modules::context::engine::EngineKind;
+        let exe = std::path::Path::new("/bin/argus");
+        let root = std::path::Path::new("/tmp/ctx");
+        let json_str = build_doc_mcp_config_json(exe, root, EngineKind::Mysql, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let args = parsed["mcpServers"]["argus"]["args"]
+            .as_array()
+            .unwrap();
+        let arg_strs: Vec<&str> = args.iter().filter_map(|v| v.as_str()).collect();
+        assert!(!arg_strs.contains(&"--table-match"), "--table-match must be absent when None");
+        assert!(arg_strs.contains(&"mysql"), "engine must be mysql");
     }
 
     // ── stream-json parser unit tests ──────────────────────────────────────────

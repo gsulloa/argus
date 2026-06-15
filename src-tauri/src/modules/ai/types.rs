@@ -5,7 +5,9 @@ use futures::Stream;
 use serde_json::Value as JsonValue;
 
 use crate::error::{AppError, AppResult};
+use crate::modules::context::engine::EngineKind;
 use crate::modules::context::types::{AccessPattern, AiPayload};
+use crate::modules::dynamo::params::TableMatch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -115,6 +117,14 @@ pub struct ChatRequest {
     /// Executed-query results the user attached as context for THIS message only.
     /// Not persisted in the session registry — transient per request. Default empty.
     pub attached_results: Vec<AttachedResult>,
+    /// Engine kind for the active connection. Used by claude-cli to configure
+    /// the MCP doc-writer sidecar (`--mcp-config`). `None` for unknown engines
+    /// or when there is no connection (general chat).
+    pub context_engine: Option<EngineKind>,
+    /// Dynamo table-name normalization rule for the active connection. Only set
+    /// when `context_engine == Some(EngineKind::Dynamo)` and the connection
+    /// carries a non-trivial `table_match`. `None` for all other engines.
+    pub dynamo_table_match: Option<TableMatch>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -521,7 +531,23 @@ Read these files **first** before answering any question:\n\
 ## Secondary source — project / cross-connection docs\n\
 The parent directory (`../`) may contain cross-connection skills, shared glossaries, \
 and project-level documentation that applies to multiple connections. Consult it when \
-the context folder alone is insufficient."
+the context folder alone is insufficient.\n\
+\n\
+---\n\
+\n\
+# Persisting knowledge\n\
+\n\
+When a documentation tool is available and the user corrects or teaches you something \
+about the schema — for example, which table to use, what a column means, or which tags \
+apply to an object — you SHOULD persist that knowledge by calling the `document_object` \
+tool so it is available in future sessions. Use:\n\
+- `target=\"body\"` for general prose notes or corrections about a table or view.\n\
+- `target=\"column_note\"` (with `column=<name>`) for the meaning, contents, or \
+behaviour of a specific column.\n\
+- `target=\"tags\"` for object-level classification tags (e.g. `pii`, `soft-delete`).\n\
+\n\
+You MUST NOT use `document_object` to modify the `system:` frontmatter block — that \
+region is owned by schema sync. Write only to `body`, `column_note`, or `tags`."
     )
 }
 
@@ -680,6 +706,57 @@ mod tests {
         assert!(
             prompt.contains("cross-connection") || prompt.contains("secondary source"),
             "expected parent directory described as secondary/cross-connection source"
+        );
+    }
+
+    #[test]
+    fn cli_prompt_contains_document_object_guidance() {
+        let path = std::path::Path::new("/tmp/my-context");
+        let prompt = build_cli_system_prompt(path);
+        // Guidance to use document_object tool when user teaches the agent.
+        assert!(
+            prompt.contains("document_object"),
+            "expected document_object tool mentioned in prompt"
+        );
+        assert!(
+            prompt.contains("target=\"body\"") || prompt.contains("target=\\\"body\\\""),
+            "expected body target described"
+        );
+        assert!(
+            prompt.contains("target=\"column_note\"") || prompt.contains("target=\\\"column_note\\\""),
+            "expected column_note target described"
+        );
+        assert!(
+            prompt.contains("target=\"tags\"") || prompt.contains("target=\\\"tags\\\""),
+            "expected tags target described"
+        );
+        // Guardrail: system: block must remain off-limits.
+        assert!(
+            prompt.contains("system:"),
+            "expected system: block mentioned as off-limits"
+        );
+        assert!(
+            prompt.contains("MUST NOT") || prompt.contains("must not"),
+            "expected prohibition on writing to system: block"
+        );
+    }
+
+    #[test]
+    fn cli_prompt_sql_guardrails_still_present_after_doc_guidance() {
+        // Regression: adding documentation guidance must not weaken SQL-only clauses.
+        let path = std::path::Path::new("/tmp/my-context");
+        let prompt = build_cli_system_prompt(path);
+        assert!(
+            prompt.contains("only job is to generate SQL"),
+            "SQL-only clause must remain after documentation guidance addition"
+        );
+        assert!(
+            prompt.contains("MUST NOT execute SQL"),
+            "no-execution clause must remain"
+        );
+        assert!(
+            prompt.contains("psql") && prompt.contains("mysql") && prompt.contains("sqlcmd"),
+            "database CLI prohibition list must remain"
         );
     }
 

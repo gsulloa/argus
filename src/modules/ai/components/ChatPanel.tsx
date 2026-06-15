@@ -247,12 +247,58 @@ function firstLinePreview(text: string, max = 120): string {
 }
 
 /**
+ * Derive a friendly label for the `mcp__argus__document_object` tool call.
+ * While running (output === null) returns "Documenting …"; on finish returns
+ * "Documented …" (or an error label when is_error).
+ */
+function deriveDocumentObjectDisplay(
+  tool: ToolUseRecord,
+): { primary: string; secondary: string | null } {
+  const inp =
+    tool.input && typeof tool.input === "object" && !Array.isArray(tool.input)
+      ? (tool.input as Record<string, unknown>)
+      : {};
+
+  const schema = strField(inp, "schema");
+  const name = strField(inp, "name") ?? "?";
+  const target = strField(inp, "target");
+  const column = strField(inp, "column");
+  const mode = strField(inp, "mode");
+
+  const objectLabel = schema ? `${schema}.${name}` : name;
+
+  let regionLabel: string;
+  if (target === "column_note") {
+    regionLabel = `column note (${column ?? "?"})`;
+  } else if (target === "tags") {
+    regionLabel = "tags";
+  } else {
+    // "body" or unknown — treat as note
+    regionLabel = mode === "replace" ? "note (replaced)" : "note";
+  }
+
+  const isFinished = tool.output !== null;
+  if (!isFinished) {
+    return { primary: `Documenting ${objectLabel}…`, secondary: null };
+  }
+  if (tool.is_error) {
+    return { primary: `Document ${objectLabel} failed`, secondary: regionLabel };
+  }
+  return { primary: `Documented ${objectLabel} · ${regionLabel}`, secondary: null };
+}
+
+/**
  * Derive a tool-specific label + secondary description from the recorded input.
  * Maps Claude Code's tool names (Read, Edit, Write, Bash, Grep, Glob, WebFetch,
  * Task, Skill) to their conventional input fields. Unknown tools fall back to
  * the first plausible string field.
  */
 function deriveToolDisplay(tool: ToolUseRecord): { primary: string; secondary: string | null } {
+  // Special-case Argus document tool for a human-readable summary.
+  if (tool.name === "mcp__argus__document_object") {
+    return deriveDocumentObjectDisplay(tool);
+  }
+
   if (!tool.input || typeof tool.input !== "object" || Array.isArray(tool.input)) {
     return { primary: tool.name, secondary: null };
   }
