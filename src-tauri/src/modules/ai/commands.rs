@@ -418,11 +418,24 @@ pub async fn ai_chat_send(
         ))
     })?;
 
-    // Fetch context_path from the connection row (if linked).
-    let context_path = if let Some(id) = conn_uuid {
-        crate::modules::context::commands::get_conn_kind_and_path(&db, id)
-            .ok()
-            .and_then(|(_kind, p)| p.map(std::path::PathBuf::from))
+    // Fetch context_path and engine kind from the connection row (if linked).
+    let (context_path, context_engine) = if let Some(id) = conn_uuid {
+        match crate::modules::context::commands::get_conn_kind_and_path(&db, id) {
+            Ok((kind, path)) => {
+                let engine = crate::modules::context::engine::EngineKind::from_connection_kind(&kind);
+                let path_buf = path.map(std::path::PathBuf::from);
+                (path_buf, engine)
+            }
+            Err(_) => (None, None),
+        }
+    } else {
+        (None, None)
+    };
+
+    // Load the Dynamo table-match rule for Dynamo connections (None for all others).
+    let dynamo_table_match = if let (Some(id), Some(crate::modules::context::engine::EngineKind::Dynamo)) = (conn_uuid, context_engine) {
+        crate::modules::context::commands::load_table_match(&db, id)
+            .unwrap_or(None)
     } else {
         None
     };
@@ -459,6 +472,8 @@ pub async fn ai_chat_send(
         session_id: session_id.clone(),
         provider_state,
         attached_results,
+        context_engine,
+        dynamo_table_match,
     };
 
     let provider = factory::build(&db, provider_id)?;

@@ -9,6 +9,7 @@ pub mod parser;
 pub mod registry;
 pub mod sync;
 pub mod types;
+pub mod write;
 
 pub use canon_path::CanonPath;
 pub use engine::EngineKind;

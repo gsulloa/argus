@@ -69,9 +69,9 @@ pub fn target_path_for(root: &Path, engine: EngineKind, shape: &ObjectShape) -> 
 // ---- YAML frontmatter splice ----
 
 /// The byte range `[start, end)` of a value slice within a string.
-struct ByteRange {
-    start: usize,
-    end: usize,
+pub(crate) struct ByteRange {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 /// Find the byte range of the *value* of `target_key` inside a YAML frontmatter
@@ -83,7 +83,7 @@ struct ByteRange {
 /// string.
 ///
 /// Returns `None` if `target_key` is not found at top level.
-fn find_top_level_value_range(frontmatter: &str, target_key: &str) -> Option<ByteRange> {
+pub(crate) fn find_top_level_value_range(frontmatter: &str, target_key: &str) -> Option<ByteRange> {
     let needle = format!("{target_key}:\n");
     // Only match at the very start of a line (column 0).
     let key_pos = frontmatter.find(&needle)?;
@@ -379,11 +379,11 @@ pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> AppResult<()> {
 
 // ---- CRLF detection ----
 
-fn has_crlf(bytes: &[u8]) -> bool {
+pub(crate) fn has_crlf(bytes: &[u8]) -> bool {
     bytes.windows(2).any(|w| w == b"\r\n")
 }
 
-fn convert_to_crlf(s: &str) -> String {
+pub(crate) fn convert_to_crlf(s: &str) -> String {
     // Only replace bare `\n` (not `\r\n` already present).
     let mut result = String::with_capacity(s.len() + s.len() / 10);
     let mut prev = 0u8;
@@ -504,7 +504,7 @@ fn rewrite_file(path: &Path, new_system: &ObjectSystem) -> AppResult<Vec<u8>> {
 
 /// Find the byte offset in `raw_bytes` where the body starts (after the
 /// closing `---\n` or `---\r\n`).
-fn find_body_start_in_raw(raw_bytes: &[u8]) -> Option<usize> {
+pub(crate) fn find_body_start_in_raw(raw_bytes: &[u8]) -> Option<usize> {
     // Pattern: \n---\n or \n---\r\n
     let len = raw_bytes.len();
     if len < 4 {

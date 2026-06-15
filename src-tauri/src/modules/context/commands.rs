@@ -233,7 +233,7 @@ fn identity(doc: &ObjectDoc) -> String {
 /// persisted `params` JSON. Returns `None` for non-Dynamo connections, a
 /// missing connection, or an absent rule. Reuses the existing params column
 /// (the `connection-registry` treats params as opaque JSON).
-fn load_table_match(db: &State<'_, DbState>, conn_id: Uuid) -> AppResult<Option<TableMatch>> {
+pub(crate) fn load_table_match(db: &State<'_, DbState>, conn_id: Uuid) -> AppResult<Option<TableMatch>> {
     let lock = db.0.lock().expect("db poisoned");
     let conns = connections::list(&lock)?;
     let conn = match conns.into_iter().find(|c| c.id == conn_id) {

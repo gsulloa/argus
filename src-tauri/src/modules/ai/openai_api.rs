@@ -406,6 +406,8 @@ mod tests {
             session_id: "test-session".into(),
             provider_state: Default::default(),
             attached_results: vec![],
+            context_engine: None,
+            dynamo_table_match: None,
         };
         (provider, req)
     }
@@ -623,6 +625,8 @@ mod tests {
             session_id: "s".into(),
             provider_state: Default::default(),
             attached_results: vec![],
+            context_engine: None,
+            dynamo_table_match: None,
         };
         let result = provider.chat(req).await;
         assert!(matches!(result, Err(AppError::Validation(_))));
