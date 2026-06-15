@@ -239,7 +239,10 @@ pub async fn updater_logs_tail(app: AppHandle, max_lines: usize) -> Result<Strin
 }
 
 fn find_log_file(log_dir: &std::path::Path) -> Result<Option<std::path::PathBuf>, String> {
-    let plain = log_dir.join("argus.log");
+    // migration-sensitive: log file stem; see config::app_identity::LOG_FILE_STEM.
+    let stem = crate::config::app_identity::LOG_FILE_STEM;
+    let rotated_prefix = format!("{stem}.");
+    let plain = log_dir.join(stem);
     if plain.exists() {
         // Also check if there are rotated files newer than the plain one. Rolling
         // appender writes to `argus.log.YYYY-MM-DD`; the plain file is the
@@ -254,7 +257,7 @@ fn find_log_file(log_dir: &std::path::Path) -> Result<Option<std::path::PathBuf>
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with("argus.log.") {
+            if name.starts_with(&rotated_prefix) {
                 Some((name, e.path()))
             } else {
                 None

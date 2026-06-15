@@ -1,3 +1,4 @@
+pub mod config;
 pub mod error;
 pub mod modules;
 pub mod platform;
@@ -128,7 +129,9 @@ fn init_tracing(app: &AppHandle) {
             .try_init();
     } else if let Ok(log_dir) = app.path().app_log_dir() {
         let _ = std::fs::create_dir_all(&log_dir);
-        let appender = tracing_appender::rolling::daily(log_dir, "argus.log");
+        // migration-sensitive: log file stem; see config::app_identity::LOG_FILE_STEM.
+        let appender =
+            tracing_appender::rolling::daily(log_dir, crate::config::app_identity::LOG_FILE_STEM);
         let _ = tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(appender)
@@ -143,7 +146,10 @@ fn fail_startup(app: &AppHandle, message: &str) -> ! {
     let _ = app
         .dialog()
         .message(message)
-        .title("Argus failed to start")
+        .title(format!(
+            "{} failed to start",
+            crate::config::app_identity::APP_DISPLAY_NAME
+        ))
         .kind(MessageDialogKind::Error)
         .blocking_show();
     std::process::exit(1);

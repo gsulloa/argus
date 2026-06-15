@@ -8,7 +8,14 @@ fn main() {
     // --engine <subtree> [--table-match <json>]` we handle it here and exit,
     // never touching the Tauri runtime.  This check is O(1) and allocation-free
     // until we confirm the subcommand is present, so normal startup is unaffected.
-    if std::env::args().nth(1).as_deref() == Some("__mcp-doc-writer") {
+    //
+    // migration-sensitive: the binary is invoked as `<CARGO_BIN_NAME> <subcommand>`
+    // by the Claude CLI integration, so the produced binary name (Cargo
+    // `[package]`/`[lib]` name) and this subcommand are a coupled pair.
+    // See config::app_identity::{CARGO_BIN_NAME, MCP_SIDECAR_SUBCOMMAND}.
+    if std::env::args().nth(1).as_deref()
+        == Some(argus_lib::config::app_identity::MCP_SIDECAR_SUBCOMMAND)
+    {
         run_mcp_doc_writer_subcommand();
     }
 

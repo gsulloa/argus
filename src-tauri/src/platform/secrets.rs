@@ -8,8 +8,9 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::error::AppResult;
 
+// migration-sensitive: keychain service name; see config::app_identity::KEYCHAIN_SERVICE.
 #[cfg(not(test))]
-const SERVICE: &str = "argus";
+const SERVICE: &str = crate::config::app_identity::KEYCHAIN_SERVICE;
 
 fn account(id: &Uuid) -> String {
     format!("connection:{id}")
