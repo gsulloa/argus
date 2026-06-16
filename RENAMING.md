@@ -23,7 +23,7 @@ most chrome updates on rebuild.
 | Pre-hydration title | `index.html` → `<title>Argus</title>` | Static fallback shown before React mounts; `document.title` is then set from the frontend constant in `src/main.tsx`. Update for a flicker-free rename. |
 | Tauri product/window labels | `src-tauri/tauri.conf.json` → `productName`, `app.windows[0].title`, `bundle.longDescription` | Static JSON — cannot reference a Rust const. Edit by hand. |
 | npm package name | `package.json` → `name`, plus `homepage`/`repository`/`bugs` URLs | Cosmetic for an internal app. |
-| CI / release artifact names | `.github/workflows/release.yml`, `scripts/release-local.sh` → `Argus_${VERSION}_*` and release-bot identity | Output filenames only; no build logic depends on them. |
+| CI / release artifact names | `.github/workflows/release.yml`, `scripts/release.sh` → `Argus_${VERSION}_*` and release-bot identity | Output filenames only; no build logic depends on them. |
 | Docs | `README.md`, `DESIGN.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `CHANGELOG.md` | Prose. |
 | **"Why Argus?" lore** | `src/platform/shell/tabs/welcome.tsx` | ⚠️ Mythology-specific brand copy ("Argus Panoptes, the all-seeing"). **Not** a mechanical substitution — rewrite by hand so it reads sensibly under the new name. |
 | Brand prose in code | AI system prompts ("embedded in Argus, a database inspection tool" in `modules/ai/types.rs`), CLI error hints ("Argus tried to inherit your shell PATH…" in `modules/ai/{cli_detect,claude_cli,codex_cli}.rs`) | User/LLM-facing sentences that name the brand. Not routed through a constant (sentence-level copy); `grep -ri argus src-tauri/src` to find and rewrite on rename. |
