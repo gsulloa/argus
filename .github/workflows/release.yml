@@ -243,10 +243,13 @@ jobs:
           retention-days: 1
 
   publish:
-    name: Publish to R2
+    name: Publish to S3 + CloudFront
     needs: [bump, build]
     if: needs.bump.outputs.skipped != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required for OIDC role assumption
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -314,7 +317,7 @@ jobs:
         env:
           VERSION: ${{ needs.bump.outputs.version }}
           PUB_DATE: ${{ github.event.head_commit.timestamp }}
-          PUBLIC_URL_BASE: ${{ secrets.R2_PUBLIC_URL }}
+          PUBLIC_URL_BASE: ${{ secrets.PUBLIC_URL_BASE }}
           MANIFEST_MODE: ci
           DARWIN_AARCH64_TARBALL: Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz
           DARWIN_AARCH64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz.sig
@@ -330,7 +333,7 @@ jobs:
         env:
           VERSION: ${{ needs.bump.outputs.version }}
           PUB_DATE: ${{ github.event.head_commit.timestamp }}
-          PUBLIC_URL_BASE: ${{ secrets.R2_PUBLIC_URL }}
+          PUBLIC_URL_BASE: ${{ secrets.PUBLIC_URL_BASE }}
           MANIFEST_MODE: ci
           DARWIN_AARCH64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_aarch64.dmg
           DARWIN_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.dmg
@@ -338,30 +341,45 @@ jobs:
           WINDOWS_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.msi
         run: node packages/app/scripts/build-download-manifest.mjs
 
-      - name: Configure R2 credentials
-        run: |
-          mkdir -p ~/.aws
-          cat > ~/.aws/credentials <<EOF
-          [default]
-          aws_access_key_id = ${{ secrets.R2_ACCESS_KEY_ID }}
-          aws_secret_access_key = ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          EOF
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_RELEASE_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Upload binaries (long cache)
+      - name: Upload binaries to S3 (long cache)
         env:
-          AWS_DEFAULT_REGION: auto
-          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          BUCKET: ${{ secrets.R2_BUCKET }}
+          BUCKET: ${{ secrets.RELEASE_S3_BUCKET }}
         run: |
           for f in staging/*; do
             key=$(basename "$f")
             aws s3 cp "$f" "s3://${BUCKET}/${key}" \
-              --endpoint-url "$ENDPOINT" \
               --cache-control "public, max-age=31536000, immutable"
           done
 
-      - name: Upload manifests (no cache)
+      - name: Upload manifests to S3 (no cache)
         env:
+          BUCKET: ${{ secrets.RELEASE_S3_BUCKET }}
+        run: |
+          aws s3 cp latest.json "s3://${BUCKET}/latest.json" \
+            --cache-control "no-cache, max-age=0" \
+            --content-type "application/json"
+          aws s3 cp download.json "s3://${BUCKET}/download.json" \
+            --cache-control "no-cache, max-age=0" \
+            --content-type "application/json"
+
+      - name: Invalidate CloudFront manifest cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.RELEASE_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/latest.json" "/download.json"
+
+      # TRANSITION: dual-publish manifests to R2 so already-installed clients migrate to CloudFront.
+      # Remove after cutover (OpenSpec change releases-stack-aws task 8.5).
+      - name: Upload manifests to R2 (transition dual-publish)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
           ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
           BUCKET: ${{ secrets.R2_BUCKET }}

@@ -1,8 +1,5 @@
-# release-pipeline Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change ship-beta-auto-update. Update Purpose after archive.
-## Requirements
 ### Requirement: Beta build configuration is separate from production
 
 The repository SHALL maintain two Tauri configuration files: `src-tauri/tauri.conf.json` (the future production config, unchanged) and `src-tauri/tauri.beta.conf.json` (the beta override file). Beta builds MUST be produced exclusively by invoking `tauri build --config tauri.beta.conf.json`. The beta config MUST override `productName` to `"Argus Beta"`, `identifier` to `"com.argus.beta.app"`, `bundle.icon` paths to `src-tauri/icons-beta/*`, and `plugins.updater.endpoints` to the CloudFront manifest URL served by `ArgusReleasesStack` (the `latest.json` object behind the distribution domain).
@@ -101,18 +98,3 @@ invalidation; no separate `docs/release-setup.md` is required.
 
 - **WHEN** a release breaks the app and a prior `latest.json` object version is copied forward on S3 and CloudFront is invalidated for `/latest.json`
 - **THEN** all running team apps detect the "downgrade" on their next 4-hour check, and on the next quit they return to that version
-
-### Requirement: Beta has a dedicated icon variant
-
-The repository SHALL contain `src-tauri/icons-beta/` with a complete icon set (32x32.png, 128x128.png, 128x128@2x.png, icon.icns, icon.ico) that is visually distinct from the production icons, using an orange tint or badge so that team members can identify Argus Beta at a glance in the macOS dock and Applications folder. The icon dimensions MUST match `src-tauri/icons/` exactly so beta and prod can swap configurations without resolution drift.
-
-#### Scenario: Beta icon is recognizable in the dock
-
-- **WHEN** a user has both Argus and Argus Beta open
-- **THEN** the dock icons are visually distinguishable without zooming in (different color signal)
-
-#### Scenario: Icon dimensions match production
-
-- **WHEN** the `icons-beta/` set is inspected
-- **THEN** every file has the same pixel dimensions as its `icons/` counterpart
-
