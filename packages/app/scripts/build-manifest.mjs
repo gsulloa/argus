@@ -5,7 +5,7 @@
 // Inputs (env vars):
 //   VERSION                       e.g. 0.1.7
 //   PUB_DATE                      ISO 8601 timestamp
-//   PUBLIC_URL_BASE               e.g. https://pub-9f3a1b7e.r2.dev
+//   PUBLIC_URL_BASE               e.g. https://releases.argusdb.app
 //   NOTES                         (optional) release notes string
 //   MANIFEST_MODE                 ci | local (default ci). In ci, all four
 //                                 platforms are required and the script exits

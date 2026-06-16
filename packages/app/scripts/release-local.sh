@@ -11,8 +11,8 @@
 #   6. Push the commit + tag (only after the build succeeds, optional prompt).
 #      A failing build never leaves an orphan commit/tag on origin.
 #   7. Build latest.json (updater manifest) and download.json (public index).
-#   8. Upload binaries (immutable cache) and manifests (no-cache) to R2
-#      (Cloudflare) and, when ReleasesStack env is present, to S3 + CloudFront (AWS).
+#   8. Upload binaries (immutable cache) and manifests (no-cache) to S3 and
+#      invalidate the CloudFront manifest paths (AWS, via the loaded AWS profile).
 #
 # Host detection (from uname -s):
 #   Darwin            → macOS host; default targets: aarch64-apple-darwin,
@@ -26,7 +26,7 @@
 # Usage:
 #   ./scripts/release-local.sh                          # full release, prompts before push
 #   ./scripts/release-local.sh --no-push                # skip git push of commit+tag
-#   ./scripts/release-local.sh --no-upload              # build only, no upload (R2 + S3)
+#   ./scripts/release-local.sh --no-upload              # build only, no upload (S3 + CloudFront)
 #   ./scripts/release-local.sh --skip-bump              # use current version, no commit
 #   ./scripts/release-local.sh --target aarch64         # build a single target (must be valid for host)
 #   ./scripts/release-local.sh --target linux           # alias for x86_64-unknown-linux-gnu (Linux host only)
@@ -34,7 +34,7 @@
 #   ./scripts/release-local.sh --dry-run                # print plan, do nothing
 #
 # Local-host releases always emit a *full* latest.json / download.json: the
-# script downloads the live manifests from R2, spreads them, then overwrites
+# script downloads the live manifests from S3, spreads them, then overwrites
 # only the platforms this host built. Mac-only releases keep the prior Windows
 # / Linux entries, and vice versa. No .partial.json is ever produced or
 # uploaded.
@@ -101,7 +101,7 @@ while [ $# -gt 0 ]; do
     --no-upload)               NO_UPLOAD=1 ;;
     --dry-run)                 DRY_RUN=1 ;;
     --allow-partial-manifest)
-      echo "--allow-partial-manifest is deprecated and ignored (local releases always emit a full manifest by merging with R2)." >&2 ;;
+      echo "--allow-partial-manifest is deprecated and ignored (local releases always emit a full manifest by merging with S3)." >&2 ;;
     --target)                  TARGETS_FLAG="$2"; shift ;;
     --target=*)                TARGETS_FLAG="${1#*=}" ;;
     -h|--help)
@@ -270,13 +270,10 @@ case "$HOST_OS" in
     ;;
 esac
 
-# Required secrets for upload.
+# Required config for upload. Resource names resolve from SSM via .envrc.
 if [ "$NO_UPLOAD" = "0" ]; then
-  require_env R2_ACCOUNT_ID
-  require_env R2_ACCESS_KEY_ID
-  require_env R2_SECRET_ACCESS_KEY
-  require_env R2_BUCKET
-  require_env R2_PUBLIC_URL
+  require_env RELEASE_S3_BUCKET
+  require_env PUBLIC_URL_BASE
 fi
 
 # Verify rustup targets are installed.
@@ -455,7 +452,7 @@ fi
 
 # Determine which manifest_keys we built so we can pass them down to the
 # generator. The generators merge this build's entries on top of a base
-# manifest fetched from R2 so the output is always full (never .partial.json).
+# manifest fetched from S3 so the output is always full (never .partial.json).
 BUILT_KEYS=()
 for TARGET in "${TARGETS[@]}"; do
   BUILT_KEYS+=("$(manifest_key_for_target "$TARGET")")
@@ -500,40 +497,35 @@ env_for_manifest() {
   done
 }
 
-step "Fetching base manifests from R2 (so we merge instead of overwriting other platforms)"
+step "Fetching base manifests from S3 (so we merge instead of overwriting other platforms)"
 BASE_DIR="$STAGING/.manifest-base"
 LATEST_BASE="$BASE_DIR/latest.json"
 DOWNLOAD_BASE="$BASE_DIR/download.json"
 run "mkdir -p '$BASE_DIR'"
 
-# Configure aws creds early so we can read from R2 even when --no-upload is
-# set later. If R2 credentials are missing (e.g. --no-upload + unset env),
-# we skip the fetch and emit the manifest from scratch.
-HAVE_R2_READ=0
-if [ -n "${R2_ACCOUNT_ID:-}" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ] && [ -n "${R2_BUCKET:-}" ]; then
-  HAVE_R2_READ=1
-  ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-  export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
-  export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-  export AWS_DEFAULT_REGION="auto"
-  export AWS_EC2_METADATA_DISABLED="true"
+# Read the live manifests from the S3 release bucket using the loaded AWS
+# profile so we can merge this build's platform entries on top of them. When
+# the bucket name isn't resolved (e.g. --no-upload with .envrc not loaded), we
+# skip the fetch and emit the manifest from scratch.
+HAVE_S3_READ=0
+if [ -n "${RELEASE_S3_BUCKET:-}" ]; then
+  HAVE_S3_READ=1
 fi
 
 fetch_base() {
   local key="$1" out="$2"
-  if [ "$HAVE_R2_READ" = "0" ]; then
-    c_dim "  Skipping fetch of $key (R2 credentials not available)."
+  if [ "$HAVE_S3_READ" = "0" ]; then
+    c_dim "  Skipping fetch of $key (RELEASE_S3_BUCKET not set)."
     return 0
   fi
   if [ "$DRY_RUN" = "1" ]; then
-    c_dim "DRY: would fetch s3://${R2_BUCKET}/${key} → $out"
+    c_dim "DRY: would fetch s3://${RELEASE_S3_BUCKET}/${key} → $out"
     return 0
   fi
-  if aws s3 cp "s3://${R2_BUCKET}/${key}" "$out" \
-        --endpoint-url "$ENDPOINT" >/dev/null 2>&1; then
+  if aws s3 cp "s3://${RELEASE_S3_BUCKET}/${key}" "$out" >/dev/null 2>&1; then
     c_green "  Fetched base $key"
   else
-    c_dim "  No existing $key in R2 (will emit from scratch)."
+    c_dim "  No existing $key in S3 (will emit from scratch)."
     rm -f "$out"
   fi
 }
@@ -541,10 +533,9 @@ fetch_base() {
 fetch_base "latest.json" "$LATEST_BASE"
 fetch_base "download.json" "$DOWNLOAD_BASE"
 
-# Manifests reference the CloudFront base when the ReleasesStack env is loaded
-# (PUBLIC_URL_BASE from .envrc), so updating clients migrate to AWS hosting.
-# Falls back to the R2 public URL when the S3 infra isn't configured.
-MANIFEST_URL_BASE="${PUBLIC_URL_BASE:-$R2_PUBLIC_URL}"
+# Manifests reference the CloudFront base served by ArgusReleasesStack
+# (PUBLIC_URL_BASE from .envrc, resolved from SSM).
+MANIFEST_URL_BASE="$PUBLIC_URL_BASE"
 
 step "Building latest.json manifest (mode=local)"
 PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -590,49 +581,12 @@ fi
 LATEST_FILE="latest.json"
 DOWNLOAD_FILE="download.json"
 
-# ---------- upload to R2 ------------------------------------------------------
-
-if [ "$NO_UPLOAD" = "1" ]; then
-  c_dim "Skipping R2 upload (--no-upload)."
-else
-  step "Uploading to R2 (bucket: $R2_BUCKET)"
-  # AWS creds + ENDPOINT were already exported above for the base-manifest
-  # fetch. We require_env'd them in preflight, so they're guaranteed set here.
-
-  # Binaries: long cache (1 year), immutable. Skip the manifest-base cache
-  # subdirectory so we don't try to upload it as an artifact.
-  for f in "$STAGING"/*; do
-    [ -f "$f" ] || continue
-    key="$(basename "$f")"
-    run "aws s3 cp '$f' 's3://${R2_BUCKET}/${key}' \
-          --endpoint-url '$ENDPOINT' \
-          --cache-control 'public, max-age=31536000, immutable'"
-  done
-
-  # Manifests: no-cache, JSON content type. Always full — the generators
-  # spread the base file fetched from R2 so other platforms keep their entries.
-  if [ -f "$ROOT/$LATEST_FILE" ]; then
-    run "aws s3 cp '$ROOT/$LATEST_FILE' 's3://${R2_BUCKET}/latest.json' \
-          --endpoint-url '$ENDPOINT' \
-          --cache-control 'no-cache, max-age=0' \
-          --content-type 'application/json'"
-  fi
-  if [ -f "$ROOT/$DOWNLOAD_FILE" ]; then
-    run "aws s3 cp '$ROOT/$DOWNLOAD_FILE' 's3://${R2_BUCKET}/download.json' \
-          --endpoint-url '$ENDPOINT' \
-          --cache-control 'no-cache, max-age=0' \
-          --content-type 'application/json'"
-  fi
-fi
-
 # ---------- upload to S3 + CloudFront (AWS) -----------------------------------
 
-# Dual-publish to AWS using the loaded AWS profile (AWS_PROFILE). Resource names
-# come from the ReleasesStack SSM params, exported into the env by .envrc:
+# Publish to AWS using the loaded AWS profile (AWS_PROFILE). Resource names come
+# from the ReleasesStack SSM params, exported into the env by .envrc:
 #   RELEASE_S3_BUCKET, RELEASE_CLOUDFRONT_DISTRIBUTION_ID
-# The R2 fetch/upload above exported R2 creds into AWS_ACCESS_KEY_ID/etc; we
-# strip them per-command so the AWS profile (not R2) authenticates these calls.
-S3_AWS="env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_DEFAULT_REGION -u AWS_EC2_METADATA_DISABLED aws"
+S3_AWS="aws"
 
 if [ "$NO_UPLOAD" = "1" ]; then
   c_dim "Skipping S3 upload (--no-upload)."
@@ -683,8 +637,7 @@ echo "  Download    : $ROOT/$DOWNLOAD_FILE"
 if [ "$NO_UPLOAD" = "0" ]; then
   echo "  Manifest URL: $MANIFEST_URL_BASE/latest.json"
   echo "  Download    : $MANIFEST_URL_BASE/download.json"
-  echo "  R2 bucket   : $R2_BUCKET"
-  [ -n "${RELEASE_S3_BUCKET:-}" ] && echo "  S3 bucket   : $RELEASE_S3_BUCKET"
+  echo "  S3 bucket   : $RELEASE_S3_BUCKET"
   for f in "$STAGING"/*; do
     [ -f "$f" ] || continue
     name="$(basename "$f")"

@@ -47,7 +47,7 @@ When the updater detects a new version (and that version is not currently skippe
 
 #### Scenario: Failed download retries on next periodic check
 
-- **WHEN** a background download fails (network drop, 5xx from R2)
+- **WHEN** a background download fails (network drop, 5xx from the updater endpoint)
 - **THEN** the failure is logged but no error surfaces in the UI; the next 4-hour check retries
 
 ### Requirement: Pending update applies on app quit
