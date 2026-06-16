@@ -9,7 +9,8 @@
 #   4. Build, sign (and notarize on macOS) for the host's native targets.
 #   5. Collect + rename artifacts under ./staging/.
 #   6. Build latest.json (updater manifest) and download.json (public index).
-#   7. Upload binaries (immutable cache) and manifests (no-cache) to R2.
+#   7. Upload binaries (immutable cache) and manifests (no-cache) to R2
+#      (Cloudflare) and, when ReleasesStack env is present, to S3 + CloudFront (AWS).
 #
 # Host detection (from uname -s):
 #   Darwin            → macOS host; default targets: aarch64-apple-darwin,
@@ -23,7 +24,7 @@
 # Usage:
 #   ./scripts/release-local.sh                          # full release, prompts before push
 #   ./scripts/release-local.sh --no-push                # skip git push of commit+tag
-#   ./scripts/release-local.sh --no-upload              # build only, no R2 upload
+#   ./scripts/release-local.sh --no-upload              # build only, no upload (R2 + S3)
 #   ./scripts/release-local.sh --skip-bump              # use current version, no commit
 #   ./scripts/release-local.sh --target aarch64         # build a single target (must be valid for host)
 #   ./scripts/release-local.sh --target linux           # alias for x86_64-unknown-linux-gnu (Linux host only)
@@ -528,6 +529,11 @@ fetch_base() {
 fetch_base "latest.json" "$LATEST_BASE"
 fetch_base "download.json" "$DOWNLOAD_BASE"
 
+# Manifests reference the CloudFront base when the ReleasesStack env is loaded
+# (PUBLIC_URL_BASE from .envrc), so updating clients migrate to AWS hosting.
+# Falls back to the R2 public URL when the S3 infra isn't configured.
+MANIFEST_URL_BASE="${PUBLIC_URL_BASE:-$R2_PUBLIC_URL}"
+
 step "Building latest.json manifest (mode=local)"
 PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 if [ "$DRY_RUN" = "1" ]; then
@@ -550,7 +556,7 @@ else
   eval "env \
     VERSION='$VERSION' \
     PUB_DATE='$PUB_DATE' \
-    PUBLIC_URL_BASE='$R2_PUBLIC_URL' \
+    PUBLIC_URL_BASE='$MANIFEST_URL_BASE' \
     MANIFEST_MODE=local \
     $LATEST_BASE_ENV \
     $UPDATER_ENV \
@@ -561,7 +567,7 @@ else
   eval "env \
     VERSION='$VERSION' \
     PUB_DATE='$PUB_DATE' \
-    PUBLIC_URL_BASE='$R2_PUBLIC_URL' \
+    PUBLIC_URL_BASE='$MANIFEST_URL_BASE' \
     MANIFEST_MODE=local \
     STAGING_DIR='$STAGING' \
     $DOWNLOAD_BASE_ENV \
@@ -607,6 +613,51 @@ else
   fi
 fi
 
+# ---------- upload to S3 + CloudFront (AWS) -----------------------------------
+
+# Dual-publish to AWS using the loaded AWS profile (AWS_PROFILE). Resource names
+# come from the ReleasesStack SSM params, exported into the env by .envrc:
+#   RELEASE_S3_BUCKET, RELEASE_CLOUDFRONT_DISTRIBUTION_ID
+# The R2 fetch/upload above exported R2 creds into AWS_ACCESS_KEY_ID/etc; we
+# strip them per-command so the AWS profile (not R2) authenticates these calls.
+S3_AWS="env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_DEFAULT_REGION -u AWS_EC2_METADATA_DISABLED aws"
+
+if [ "$NO_UPLOAD" = "1" ]; then
+  c_dim "Skipping S3 upload (--no-upload)."
+elif [ -z "${RELEASE_S3_BUCKET:-}" ]; then
+  c_dim "Skipping S3 upload (RELEASE_S3_BUCKET unset — deploy ReleasesStack and load .envrc to enable)."
+else
+  step "Uploading to S3 (bucket: $RELEASE_S3_BUCKET, profile: ${AWS_PROFILE:-default})"
+
+  # Binaries: long cache (1 year), immutable. Skip the .manifest-base subdir.
+  for f in "$STAGING"/*; do
+    [ -f "$f" ] || continue
+    key="$(basename "$f")"
+    run "$S3_AWS s3 cp '$f' 's3://${RELEASE_S3_BUCKET}/${key}' \
+          --cache-control 'public, max-age=31536000, immutable'"
+  done
+
+  # Manifests: no-cache, JSON content type.
+  if [ -f "$ROOT/$LATEST_FILE" ]; then
+    run "$S3_AWS s3 cp '$ROOT/$LATEST_FILE' 's3://${RELEASE_S3_BUCKET}/latest.json' \
+          --cache-control 'no-cache, max-age=0' \
+          --content-type 'application/json'"
+  fi
+  if [ -f "$ROOT/$DOWNLOAD_FILE" ]; then
+    run "$S3_AWS s3 cp '$ROOT/$DOWNLOAD_FILE' 's3://${RELEASE_S3_BUCKET}/download.json' \
+          --cache-control 'no-cache, max-age=0' \
+          --content-type 'application/json'"
+  fi
+
+  # Bust the CloudFront cache for the two manifests.
+  if [ -n "${RELEASE_CLOUDFRONT_DISTRIBUTION_ID:-}" ]; then
+    step "Invalidating CloudFront manifests ($RELEASE_CLOUDFRONT_DISTRIBUTION_ID)"
+    run "$S3_AWS cloudfront create-invalidation \
+          --distribution-id '$RELEASE_CLOUDFRONT_DISTRIBUTION_ID' \
+          --paths '/latest.json' '/download.json'"
+  fi
+fi
+
 # ---------- summary -----------------------------------------------------------
 
 c_green ""
@@ -618,13 +669,15 @@ echo "  Targets     : ${TARGETS[*]}"
 echo "  Manifest    : $ROOT/$LATEST_FILE"
 echo "  Download    : $ROOT/$DOWNLOAD_FILE"
 if [ "$NO_UPLOAD" = "0" ]; then
-  echo "  Public URL  : $R2_PUBLIC_URL/latest.json"
-  echo "  Download    : $R2_PUBLIC_URL/download.json"
+  echo "  Manifest URL: $MANIFEST_URL_BASE/latest.json"
+  echo "  Download    : $MANIFEST_URL_BASE/download.json"
+  echo "  R2 bucket   : $R2_BUCKET"
+  [ -n "${RELEASE_S3_BUCKET:-}" ] && echo "  S3 bucket   : $RELEASE_S3_BUCKET"
   for f in "$STAGING"/*; do
     [ -f "$f" ] || continue
     name="$(basename "$f")"
     case "$name" in
-      *.dmg|*.AppImage|*.msi) echo "  Installer   : $R2_PUBLIC_URL/$name" ;;
+      *.dmg|*.AppImage|*.msi) echo "  Installer   : $MANIFEST_URL_BASE/$name" ;;
     esac
   done
 fi

@@ -2,6 +2,7 @@
 import * as cdk from "aws-cdk-lib";
 
 import { PROJECT_NAME } from "@/constants";
+import { ReleasesStack } from "@/lib/ReleasesStack/index";
 
 const baseProps = {
   env: {
@@ -12,13 +13,9 @@ const baseProps = {
 
 const app = new cdk.App();
 
-// TODO: ReleasesStack — migrate Cloudflare R2 artifact hosting to AWS (S3 + CloudFront)
-//   new ReleasesStack(app, `${PROJECT_NAME}ReleasesStack`, { ...baseProps });
-// TODO: FrontendStack — React + Vite landing page (S3 + CloudFront)
-//   new FrontendStack(app, `${PROJECT_NAME}FrontendStack`, { ...baseProps });
+new ReleasesStack(app, `${PROJECT_NAME}ReleasesStack`, { ...baseProps });
 
-// Reference to avoid noUnusedLocals (both vars are used in TODO comments above)
-void PROJECT_NAME;
-void baseProps;
+// TODO: LandingStack — React + Vite landing page (S3 + CloudFront)
+//   new LandingStack(app, `${PROJECT_NAME}LandingStack`, { ...baseProps });
 
 app.synth();
