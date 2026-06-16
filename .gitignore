@@ -1,11 +1,11 @@
 node_modules
-dist
+packages/app/dist
 dist-ssr
 *.local
 .DS_Store
 
 # Build output
-src-tauri/target
+packages/app/src-tauri/target
 
 # Local release
 .env.release
@@ -25,3 +25,7 @@ download.json
 *.sw?
 
 .envrc
+
+# CDK
+cdk.out
+packages/infra/cdk.out
