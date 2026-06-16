@@ -5,11 +5,13 @@
 # Steps it runs:
 #   1. Preflight: tools, secrets, clean tree, branch sanity (host-conditional).
 #   2. Bump patch version (tauri.conf.json / package.json / Cargo.toml).
-#   3. Commit + tag the bump (locally), optionally push.
+#   3. Commit + tag the bump (locally only — no push yet).
 #   4. Build, sign (and notarize on macOS) for the host's native targets.
 #   5. Collect + rename artifacts under ./staging/.
-#   6. Build latest.json (updater manifest) and download.json (public index).
-#   7. Upload binaries (immutable cache) and manifests (no-cache) to R2
+#   6. Push the commit + tag (only after the build succeeds, optional prompt).
+#      A failing build never leaves an orphan commit/tag on origin.
+#   7. Build latest.json (updater manifest) and download.json (public index).
+#   8. Upload binaries (immutable cache) and manifests (no-cache) to R2
 #      (Cloudflare) and, when ReleasesStack env is present, to S3 + CloudFront (AWS).
 #
 # Host detection (from uname -s):
@@ -327,25 +329,11 @@ else
   fi
   step "Bumped to v$VERSION"
 
-  step "Committing + tagging v$VERSION"
-  run "git add src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml"
+  step "Committing + tagging v$VERSION (locally)"
+  run "git add src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml src-tauri/Cargo.lock"
   run "git commit -m 'chore: bump version to v$VERSION [skip ci]'"
   run "git tag 'v$VERSION'"
-
-  if [ "$NO_PUSH" = "0" ]; then
-    if [ "$DRY_RUN" = "0" ]; then
-      read -r -p "Push commit + tag v$VERSION to origin/$CURRENT_BRANCH? [y/N] " ans
-      if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
-        run "git push origin 'HEAD:$CURRENT_BRANCH'"
-        run "git push origin 'v$VERSION'"
-      else
-        c_dim "Skipping push. You can push later with:"
-        c_dim "  git push origin HEAD:$CURRENT_BRANCH && git push origin v$VERSION"
-      fi
-    else
-      c_dim "DRY: would push HEAD and tag v$VERSION"
-    fi
-  fi
+  c_dim "Commit + tag created locally. Push happens after the build succeeds."
 fi
 
 # ---------- build each target -------------------------------------------------
@@ -438,6 +426,30 @@ for TARGET in "${TARGETS[@]}"; do
       ;;
   esac
 done
+
+# ---------- push commit + tag (only after a successful build) -----------------
+
+# We push here, not right after the bump, so a failing build never leaves an
+# orphan commit/tag on origin. With --skip-bump there is no new commit/tag to
+# push.
+if [ "$SKIP_BUMP" = "0" ]; then
+  if [ "$NO_PUSH" = "1" ]; then
+    c_dim "Skipping push (--no-push). Push later with:"
+    c_dim "  git push origin HEAD:$CURRENT_BRANCH && git push origin v$VERSION"
+  elif [ "$DRY_RUN" = "1" ]; then
+    c_dim "DRY: would push HEAD and tag v$VERSION"
+  else
+    step "Build succeeded — pushing commit + tag v$VERSION"
+    read -r -p "Push commit + tag v$VERSION to origin/$CURRENT_BRANCH? [y/N] " ans
+    if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+      run "git push origin 'HEAD:$CURRENT_BRANCH'"
+      run "git push origin 'v$VERSION'"
+    else
+      c_dim "Skipping push. You can push later with:"
+      c_dim "  git push origin HEAD:$CURRENT_BRANCH && git push origin v$VERSION"
+    fi
+  fi
+fi
 
 # ---------- manifests ---------------------------------------------------------
 
