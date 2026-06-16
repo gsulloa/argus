@@ -2,69 +2,12 @@ name: Release
 
 on:
   push:
-    branches: [master]
-
-# The bump job needs to push commits and tags back to the repo.
-permissions:
-  contents: write
+    tags:
+      - 'v*'
 
 jobs:
-  bump:
-    name: Bump version
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.bump.outputs.version }}
-      skipped: ${{ steps.guard.outputs.skipped }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Skip if last commit is itself a bump
-        id: guard
-        run: |
-          subject=$(git log -1 --pretty=%s)
-          echo "Last commit: $subject"
-          if echo "$subject" | grep -q "^chore: bump version to v"; then
-            echo "Already a bump commit. Skipping."
-            echo "skipped=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "skipped=false" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Node
-        if: steps.guard.outputs.skipped != 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Bump version
-        if: steps.guard.outputs.skipped != 'true'
-        id: bump
-        run: |
-          new=$(node packages/app/scripts/bump-version.mjs)
-          echo "Bumped to: $new"
-          echo "version=$new" >> "$GITHUB_OUTPUT"
-
-      - name: Commit + tag
-        if: steps.guard.outputs.skipped != 'true'
-        env:
-          NEW: ${{ steps.bump.outputs.version }}
-        run: |
-          git config user.name "argus-release-bot"
-          git config user.email "argus-release-bot@users.noreply.github.com"
-          git add packages/app/src-tauri/tauri.conf.json packages/app/package.json packages/app/src-tauri/Cargo.toml
-          git commit -m "chore: bump version to v${NEW} [skip ci]"
-          git tag "v${NEW}"
-          git push origin HEAD:master
-          git push origin "v${NEW}"
-
   build:
     name: Build ${{ matrix.target }}
-    needs: bump
-    if: needs.bump.outputs.skipped != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -87,10 +30,14 @@ jobs:
             manifest_key: windows-x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout (post-bump)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: v${{ needs.bump.outputs.version }}
+          ref: ${{ github.ref_name }}
+
+      - name: Resolve version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -189,7 +136,7 @@ jobs:
           test -f "$DMG"
           test -f "$TARBALL"
           test -f "$SIG"
-          VERSION="${{ needs.bump.outputs.version }}"
+          VERSION="${{ steps.ver.outputs.version }}"
           BASE_DMG="Argus_${VERSION}_${{ matrix.arch }}.dmg"
           BASE_TARBALL="Argus_${VERSION}_${{ matrix.arch }}.app.tar.gz"
           mkdir -p staging
@@ -208,7 +155,7 @@ jobs:
           test -f "$APPIMAGE"
           test -f "$TARBALL"
           test -f "$SIG"
-          VERSION="${{ needs.bump.outputs.version }}"
+          VERSION="${{ steps.ver.outputs.version }}"
           BASE_APPIMAGE="Argus_${VERSION}_x64.AppImage"
           BASE_TARBALL="Argus_${VERSION}_x64.AppImage.tar.gz"
           mkdir -p staging
@@ -227,7 +174,7 @@ jobs:
           test -f "$MSI"
           test -f "$ZIP"
           test -f "$SIG"
-          VERSION="${{ needs.bump.outputs.version }}"
+          VERSION="${{ steps.ver.outputs.version }}"
           BASE_MSI="Argus_${VERSION}_x64.msi"
           BASE_ZIP="Argus_${VERSION}_x64.msi.zip"
           mkdir -p staging
@@ -244,8 +191,7 @@ jobs:
 
   publish:
     name: Publish to S3 + CloudFront
-    needs: [bump, build]
-    if: needs.bump.outputs.skipped != 'true'
+    needs: [build]
     runs-on: ubuntu-latest
     permissions:
       id-token: write   # required for OIDC role assumption
@@ -254,7 +200,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: v${{ needs.bump.outputs.version }}
+          ref: ${{ github.ref_name }}
+
+      - name: Resolve version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -287,7 +237,7 @@ jobs:
 
       - name: Verify all four bundles present
         env:
-          VERSION: ${{ needs.bump.outputs.version }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           required=(
             "staging/Argus_${VERSION}_aarch64.dmg"
@@ -315,31 +265,33 @@ jobs:
 
       - name: Build manifest
         env:
-          VERSION: ${{ needs.bump.outputs.version }}
-          PUB_DATE: ${{ github.event.head_commit.timestamp }}
+          VERSION: ${{ steps.ver.outputs.version }}
           PUBLIC_URL_BASE: ${{ secrets.PUBLIC_URL_BASE }}
           MANIFEST_MODE: ci
-          DARWIN_AARCH64_TARBALL: Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz
-          DARWIN_AARCH64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_aarch64.app.tar.gz.sig
-          DARWIN_X86_64_TARBALL: Argus_${{ needs.bump.outputs.version }}_x64.app.tar.gz
-          DARWIN_X86_64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.app.tar.gz.sig
-          LINUX_X86_64_TARBALL: Argus_${{ needs.bump.outputs.version }}_x64.AppImage.tar.gz
-          LINUX_X86_64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.AppImage.tar.gz.sig
-          WINDOWS_X86_64_TARBALL: Argus_${{ needs.bump.outputs.version }}_x64.msi.zip
-          WINDOWS_X86_64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.msi.zip.sig
-        run: node packages/app/scripts/build-manifest.mjs
+          DARWIN_AARCH64_TARBALL: Argus_${{ steps.ver.outputs.version }}_aarch64.app.tar.gz
+          DARWIN_AARCH64_SIG_PATH: staging/Argus_${{ steps.ver.outputs.version }}_aarch64.app.tar.gz.sig
+          DARWIN_X86_64_TARBALL: Argus_${{ steps.ver.outputs.version }}_x64.app.tar.gz
+          DARWIN_X86_64_SIG_PATH: staging/Argus_${{ steps.ver.outputs.version }}_x64.app.tar.gz.sig
+          LINUX_X86_64_TARBALL: Argus_${{ steps.ver.outputs.version }}_x64.AppImage.tar.gz
+          LINUX_X86_64_SIG_PATH: staging/Argus_${{ steps.ver.outputs.version }}_x64.AppImage.tar.gz.sig
+          WINDOWS_X86_64_TARBALL: Argus_${{ steps.ver.outputs.version }}_x64.msi.zip
+          WINDOWS_X86_64_SIG_PATH: staging/Argus_${{ steps.ver.outputs.version }}_x64.msi.zip.sig
+        run: |
+          export PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          node packages/app/scripts/build-manifest.mjs
 
       - name: Build download.json
         env:
-          VERSION: ${{ needs.bump.outputs.version }}
-          PUB_DATE: ${{ github.event.head_commit.timestamp }}
+          VERSION: ${{ steps.ver.outputs.version }}
           PUBLIC_URL_BASE: ${{ secrets.PUBLIC_URL_BASE }}
           MANIFEST_MODE: ci
-          DARWIN_AARCH64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_aarch64.dmg
-          DARWIN_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.dmg
-          LINUX_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.AppImage
-          WINDOWS_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.msi
-        run: node packages/app/scripts/build-download-manifest.mjs
+          DARWIN_AARCH64_INSTALLER: Argus_${{ steps.ver.outputs.version }}_aarch64.dmg
+          DARWIN_X86_64_INSTALLER: Argus_${{ steps.ver.outputs.version }}_x64.dmg
+          LINUX_X86_64_INSTALLER: Argus_${{ steps.ver.outputs.version }}_x64.AppImage
+          WINDOWS_X86_64_INSTALLER: Argus_${{ steps.ver.outputs.version }}_x64.msi
+        run: |
+          export PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          node packages/app/scripts/build-download-manifest.mjs
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

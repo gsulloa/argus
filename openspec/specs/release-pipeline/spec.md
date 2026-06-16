@@ -22,27 +22,20 @@ The repository SHALL maintain two Tauri configuration files: `src-tauri/tauri.co
 - **WHEN** a user has both `Argus.app` (prod) and `Argus Beta.app` installed
 - **THEN** they appear as distinct entries in the dock and Applications folder, store data under separate `app_data_dir` paths derived from their respective identifiers, and update independently
 
-### Requirement: CI workflow builds, signs, and publishes on every merge to master
+### Requirement: CI workflow builds, signs, and publishes on every version tag
 
-The repository SHALL include a GitHub Actions workflow that triggers on `push` to `master`. The workflow MUST execute the following steps in order, failing fast on any error:
+The repository SHALL include a GitHub Actions workflow that triggers on `push: tags: ['v*']`. The version bump is owned by `scripts/release.sh` (run locally), which cuts a release branch off `dev`, bumps the version, lands a PR to `master`, tags the merge commit, and back-merges to `dev`. CI derives `VERSION` from the tag name (`${GITHUB_REF_NAME#v}`) and MUST NOT perform a version bump. The workflow MUST execute the following steps in order, failing fast on any error:
 
-1. Bump the patch version across `tauri.conf.json`, `tauri.beta.conf.json`, `package.json`, and `src-tauri/Cargo.toml` to the next patch number.
-2. Commit the bump with message starting with `chore: bump version to v` and `[skip ci]` to prevent recursion, then push and tag.
-3. Build a matrix of two macOS targets: `aarch64-apple-darwin` (on `macos-latest`) and `x86_64-apple-darwin` (on `macos-13` or `macos-latest` with explicit target).
-4. Code-sign each bundle with the `Developer ID Application` certificate loaded from `APPLE_CERTIFICATE` (base64) using `APPLE_CERTIFICATE_PASSWORD`.
-5. Submit each bundle to Apple notarization via `notarytool` using `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`. Staple the ticket on success.
-6. Sign each bundle archive (`.app.tar.gz`) with the Ed25519 updater private key loaded from `TAURI_UPDATER_PRIVATE_KEY` and `TAURI_UPDATER_KEY_PASSWORD`, producing `.sig` files.
-7. Authenticate to AWS by assuming the `ArgusReleasesStack` GitHub OIDC publish role (via `role-to-assume` with `id-token: write` permission — no long-lived access keys), then upload all artifacts (`.dmg`, `.app.tar.gz`, `.sig`) plus the generated `latest.json` and `download.json` to the release S3 bucket with the same cache-control semantics (binaries `public, max-age=31536000, immutable`; manifests `no-cache, max-age=0`), and create a CloudFront invalidation for `/latest.json` and `/download.json`.
+1. Build a matrix of two macOS targets: `aarch64-apple-darwin` (on `macos-latest`) and `x86_64-apple-darwin` (on `macos-13` or `macos-latest` with explicit target).
+2. Code-sign each bundle with the `Developer ID Application` certificate loaded from `APPLE_CERTIFICATE` (base64) using `APPLE_CERTIFICATE_PASSWORD`.
+3. Submit each bundle to Apple notarization via `notarytool` using `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`. Staple the ticket on success.
+4. Sign each bundle archive (`.app.tar.gz`) with the Ed25519 updater private key loaded from `TAURI_UPDATER_PRIVATE_KEY` and `TAURI_UPDATER_KEY_PASSWORD`, producing `.sig` files.
+5. Authenticate to AWS by assuming the `ArgusReleasesStack` GitHub OIDC publish role (via `role-to-assume` with `id-token: write` permission — no long-lived access keys), then upload all artifacts (`.dmg`, `.app.tar.gz`, `.sig`) plus the generated `latest.json` and `download.json` to the release S3 bucket with the same cache-control semantics (binaries `public, max-age=31536000, immutable`; manifests `no-cache, max-age=0`), and create a CloudFront invalidation for `/latest.json` and `/download.json`.
 
-#### Scenario: Successful merge produces a new beta release
+#### Scenario: Pushing a version tag produces a new release
 
-- **WHEN** a PR merges to `master` and the workflow completes without errors
+- **WHEN** `scripts/release.sh` tags the master merge commit with `vX.Y.Z` and the workflow completes without errors
 - **THEN** the release S3 bucket contains `latest.json` pointing to the new version (served via CloudFront), both architecture archives with valid `.sig` files, and `.dmg` installers for new team members
-
-#### Scenario: Bump step is idempotent against its own commit
-
-- **WHEN** the workflow's bump commit triggers another `push: master` event
-- **THEN** the bump step detects that the head commit already starts with `chore: bump version to v` and exits early without bumping again or starting a build
 
 #### Scenario: Notarization transient failure retries
 
@@ -81,33 +74,31 @@ standalone setup document. `ArgusReleasesStack` MUST be deployable with
 identifiers (S3 bucket name, CloudFront distribution id, CloudFront domain,
 publish-role ARN) MUST be discoverable at runtime from SSM Parameter Store under
 `/Argus/releases/`. Local tooling MUST resolve these from SSM using the loaded
-AWS profile and export them as environment variables (via `.envrc`), so neither
-`release-local.sh` nor a human needs to hardcode bucket/distribution names. The
-rollback procedure MUST rely on S3 object versioning (restore a prior
-`latest.json` by copying a previous version forward) plus a CloudFront
-invalidation; no separate `docs/release-setup.md` is required.
+AWS profile and export them as environment variables (via `.envrc`), so no human
+needs to hardcode bucket/distribution names. The rollback procedure MUST rely on
+S3 object versioning (restore a prior `latest.json` by copying a previous version
+forward) plus a CloudFront invalidation; no separate `docs/release-setup.md` is
+required.
 
-Release hosting SHALL reference AWS exclusively. `release-local.sh` and the CI
-workflow MUST NOT upload to, fetch from, or carry credentials for Cloudflare R2.
-The base manifest that `release-local.sh` merges per-platform entries onto MUST
-be fetched from the S3 release bucket using the loaded AWS profile, and the
-published manifest base URL MUST be `PUBLIC_URL_BASE` (the CloudFront custom
-domain) with no R2 fallback.
+Release hosting SHALL reference AWS exclusively. The CI workflow MUST NOT upload
+to, fetch from, or carry credentials for Cloudflare R2. The published manifest
+base URL MUST be `PUBLIC_URL_BASE` (the CloudFront custom domain) with no R2
+fallback.
 
 #### Scenario: Resource names resolve from SSM into the environment
 
 - **WHEN** a developer with the AWS profile loaded enters the repo (direnv evaluates `.envrc`) after `ArgusReleasesStack` has been deployed
 - **THEN** `RELEASE_S3_BUCKET`, `RELEASE_CLOUDFRONT_DISTRIBUTION_ID`, and `PUBLIC_URL_BASE` are populated from the `/Argus/releases/` SSM parameters without any hardcoded values
 
-#### Scenario: Local release publishes only to S3 and CloudFront
+#### Scenario: CI publish step uploads only to S3 and CloudFront
 
-- **WHEN** `release-local.sh` runs with the resolved `RELEASE_S3_BUCKET` and `PUBLIC_URL_BASE` present
-- **THEN** binaries and manifests are uploaded to the S3 bucket (and only that bucket), the base manifest is fetched from S3 to preserve other platforms' entries, the CloudFront manifest paths are invalidated, and the published manifests reference the CloudFront base URL — no R2 upload or fetch occurs
+- **WHEN** the CI workflow's publish step runs with the resolved `RELEASE_S3_BUCKET` and `PUBLIC_URL_BASE` present
+- **THEN** binaries and manifests are uploaded to the S3 bucket (and only that bucket), the CloudFront manifest paths are invalidated, and the published manifests reference the CloudFront base URL — no R2 upload or fetch occurs
 
 #### Scenario: No R2 credentials are required or referenced
 
-- **WHEN** `release-local.sh` runs in an environment with no `R2_*` variables set
-- **THEN** the script completes its upload and manifest-merge steps without error, because no code path reads `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, or `R2_PUBLIC_URL`
+- **WHEN** the CI workflow's publish step runs with no `R2_*` variables set
+- **THEN** the step completes its upload steps without error, because no code path reads `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, or `R2_PUBLIC_URL`
 
 #### Scenario: Rollback restores a known good version
 
