@@ -1,6 +1,6 @@
 [package]
 name = "argus"
-version = "0.1.38"
+version = "0.1.39"
 description = "A Tauri 2 desktop app for inspecting and editing data across PostgreSQL, MySQL/MariaDB, Microsoft SQL Server, DynamoDB, Amazon CloudWatch Logs, and Amazon Athena."
 authors = ["Gabriel Ulloa <gabriel.ulloa.e@gmail.com>"]
 license = "MIT"
