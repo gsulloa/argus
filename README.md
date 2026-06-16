@@ -270,8 +270,8 @@ The bundle lands under `src-tauri/target/release/bundle/`.
 
 Builds are produced automatically by GitHub Actions on every merge to `master`,
 signed and notarized for macOS, and distributed to the team via auto-updater. The
-one-time setup (Apple Developer cert, R2 bucket, updater keypair, GH Secrets) is
-documented in [docs/release-setup.md](docs/release-setup.md).
+one-time setup (Apple Developer cert, AWS release hosting via `ArgusReleasesStack`,
+updater keypair, GH Secrets) is documented in [docs/release-setup.md](docs/release-setup.md).
 
 ## Project layout
 

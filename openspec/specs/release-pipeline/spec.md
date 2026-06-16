@@ -87,15 +87,27 @@ rollback procedure MUST rely on S3 object versioning (restore a prior
 `latest.json` by copying a previous version forward) plus a CloudFront
 invalidation; no separate `docs/release-setup.md` is required.
 
+Release hosting SHALL reference AWS exclusively. `release-local.sh` and the CI
+workflow MUST NOT upload to, fetch from, or carry credentials for Cloudflare R2.
+The base manifest that `release-local.sh` merges per-platform entries onto MUST
+be fetched from the S3 release bucket using the loaded AWS profile, and the
+published manifest base URL MUST be `PUBLIC_URL_BASE` (the CloudFront custom
+domain) with no R2 fallback.
+
 #### Scenario: Resource names resolve from SSM into the environment
 
 - **WHEN** a developer with the AWS profile loaded enters the repo (direnv evaluates `.envrc`) after `ArgusReleasesStack` has been deployed
 - **THEN** `RELEASE_S3_BUCKET`, `RELEASE_CLOUDFRONT_DISTRIBUTION_ID`, and `PUBLIC_URL_BASE` are populated from the `/Argus/releases/` SSM parameters without any hardcoded values
 
-#### Scenario: Local release dual-publishes to R2 and S3
+#### Scenario: Local release publishes only to S3 and CloudFront
 
-- **WHEN** `release-local.sh` runs with both R2 secrets and the resolved `RELEASE_S3_BUCKET` present
-- **THEN** binaries and manifests are uploaded to both R2 (Cloudflare) and the S3 bucket, the CloudFront manifest paths are invalidated, and the published manifests reference the CloudFront base URL
+- **WHEN** `release-local.sh` runs with the resolved `RELEASE_S3_BUCKET` and `PUBLIC_URL_BASE` present
+- **THEN** binaries and manifests are uploaded to the S3 bucket (and only that bucket), the base manifest is fetched from S3 to preserve other platforms' entries, the CloudFront manifest paths are invalidated, and the published manifests reference the CloudFront base URL — no R2 upload or fetch occurs
+
+#### Scenario: No R2 credentials are required or referenced
+
+- **WHEN** `release-local.sh` runs in an environment with no `R2_*` variables set
+- **THEN** the script completes its upload and manifest-merge steps without error, because no code path reads `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, or `R2_PUBLIC_URL`
 
 #### Scenario: Rollback restores a known good version
 

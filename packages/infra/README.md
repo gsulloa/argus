@@ -19,7 +19,7 @@ Skeleton only — no stacks yet. The CDK app synthesizes to an empty cloud assem
 
 | Stack | Purpose |
 |---|---|
-| `ReleasesStack` | Migrate Cloudflare R2 artifact hosting to AWS (S3 + CloudFront distribution) |
+| `ReleasesStack` | Release artifact hosting on AWS (S3 bucket + CloudFront distribution) |
 | `FrontendStack` | React + Vite landing page hosted on S3 + CloudFront |
 
 ## Commands
