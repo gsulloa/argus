@@ -3,6 +3,7 @@ import * as cdk from "aws-cdk-lib";
 
 import { PROJECT_NAME } from "@/constants";
 import { DnsStack } from "@/lib/DnsStack/index";
+import { LandingStack } from "@/lib/LandingStack/index";
 import { ReleasesStack } from "@/lib/ReleasesStack/index";
 
 const baseProps = {
@@ -19,7 +20,9 @@ const dnsStack = new DnsStack(app, `${PROJECT_NAME}DnsStack`, { ...baseProps });
 const releasesStack = new ReleasesStack(app, `${PROJECT_NAME}ReleasesStack`, { ...baseProps });
 releasesStack.addDependency(dnsStack);
 
-// TODO: LandingStack — React + Vite landing page (S3 + CloudFront)
-//   new LandingStack(app, `${PROJECT_NAME}LandingStack`, { ...baseProps });
+const landingStack = new LandingStack(app, `${PROJECT_NAME}LandingStack`, {
+  ...baseProps,
+});
+landingStack.addDependency(dnsStack);
 
 app.synth();
