@@ -3,14 +3,21 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as iam from "aws-cdk-lib/aws-iam";
+import { ARecord, AaaaRecord, RecordTarget } from "aws-cdk-lib/aws-route53";
+import { CloudFrontTarget } from "aws-cdk-lib/aws-route53-targets";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Construct } from "constructs";
 
-import { PROJECT_NAME } from "@/constants";
+import { PROJECT_NAME, RELEASES_SUBDOMAIN } from "@/constants";
+import { DnsStack } from "@/lib/DnsStack/index";
 
 export class ReleasesStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
+
+    // ── DNS / Certificate (from DnsStack via SSM) ────────────────────────────
+    const hostedZone = DnsStack.getHostedZone(this);
+    const certificate = DnsStack.getCertificate(this);
 
     // ── S3 Bucket ─────────────────────────────────────────────────────────────
     const bucket = new s3.Bucket(this, "ArtifactsBucket", {
@@ -37,6 +44,8 @@ export class ReleasesStack extends cdk.Stack {
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
       },
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+      domainNames: [RELEASES_SUBDOMAIN],
+      certificate,
       // Additional no-cache behaviors for the two manifest files so updated
       // manifests are visible immediately without waiting for TTL expiry.
       additionalBehaviors: {
@@ -53,6 +62,19 @@ export class ReleasesStack extends cdk.Stack {
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         },
       },
+    });
+
+    // ── Route53 Alias Records ─────────────────────────────────────────────────
+    const recordTarget = RecordTarget.fromAlias(new CloudFrontTarget(distribution));
+    new ARecord(this, "ReleasesAliasA", {
+      zone: hostedZone,
+      recordName: RELEASES_SUBDOMAIN,
+      target: recordTarget,
+    });
+    new AaaaRecord(this, "ReleasesAliasAaaa", {
+      zone: hostedZone,
+      recordName: RELEASES_SUBDOMAIN,
+      target: recordTarget,
     });
 
     // ── GitHub OIDC Publish Role ───────────────────────────────────────────────
