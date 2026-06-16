@@ -5,7 +5,7 @@ TBD - created by archiving change ship-beta-auto-update. Update Purpose after ar
 ## Requirements
 ### Requirement: Beta build configuration is separate from production
 
-The repository SHALL maintain two Tauri configuration files: `src-tauri/tauri.conf.json` (the future production config, unchanged) and `src-tauri/tauri.beta.conf.json` (the beta override file). Beta builds MUST be produced exclusively by invoking `tauri build --config tauri.beta.conf.json`. The beta config MUST override `productName` to `"Argus Beta"`, `identifier` to `"com.argus.beta.app"`, `bundle.icon` paths to `src-tauri/icons-beta/*`, and `plugins.updater.endpoints` to the R2 manifest URL.
+The repository SHALL maintain two Tauri configuration files: `src-tauri/tauri.conf.json` (the future production config, unchanged) and `src-tauri/tauri.beta.conf.json` (the beta override file). Beta builds MUST be produced exclusively by invoking `tauri build --config tauri.beta.conf.json`. The beta config MUST override `productName` to `"Argus Beta"`, `identifier` to `"com.argus.beta.app"`, `bundle.icon` paths to `src-tauri/icons-beta/*`, and `plugins.updater.endpoints` to the CloudFront manifest URL served by `ArgusReleasesStack` (the `latest.json` object behind the distribution domain).
 
 #### Scenario: Default build produces production config
 
@@ -15,7 +15,7 @@ The repository SHALL maintain two Tauri configuration files: `src-tauri/tauri.co
 #### Scenario: Beta build produces beta config
 
 - **WHEN** the CI workflow runs `pnpm tauri build --config src-tauri/tauri.beta.conf.json`
-- **THEN** the resulting bundle has identifier `com.argus.beta.app`, productName `Argus Beta`, the orange-tinted icon set, and an embedded updater pubkey + endpoint
+- **THEN** the resulting bundle has identifier `com.argus.beta.app`, productName `Argus Beta`, the orange-tinted icon set, and an embedded updater pubkey + CloudFront endpoint
 
 #### Scenario: Beta and production apps coexist on disk
 
@@ -32,12 +32,12 @@ The repository SHALL include a GitHub Actions workflow that triggers on `push` t
 4. Code-sign each bundle with the `Developer ID Application` certificate loaded from `APPLE_CERTIFICATE` (base64) using `APPLE_CERTIFICATE_PASSWORD`.
 5. Submit each bundle to Apple notarization via `notarytool` using `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`. Staple the ticket on success.
 6. Sign each bundle archive (`.app.tar.gz`) with the Ed25519 updater private key loaded from `TAURI_UPDATER_PRIVATE_KEY` and `TAURI_UPDATER_KEY_PASSWORD`, producing `.sig` files.
-7. Upload all artifacts (`.dmg`, `.app.tar.gz`, `.sig`) plus the generated `latest.json` to the R2 bucket using credentials from `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`.
+7. Authenticate to AWS by assuming the `ArgusReleasesStack` GitHub OIDC publish role (via `role-to-assume` with `id-token: write` permission — no long-lived access keys), then upload all artifacts (`.dmg`, `.app.tar.gz`, `.sig`) plus the generated `latest.json` and `download.json` to the release S3 bucket with the same cache-control semantics (binaries `public, max-age=31536000, immutable`; manifests `no-cache, max-age=0`), and create a CloudFront invalidation for `/latest.json` and `/download.json`.
 
 #### Scenario: Successful merge produces a new beta release
 
 - **WHEN** a PR merges to `master` and the workflow completes without errors
-- **THEN** R2 contains `latest.json` pointing to the new version, both architecture archives with valid `.sig` files, and `.dmg` installers for new team members
+- **THEN** the release S3 bucket contains `latest.json` pointing to the new version (served via CloudFront), both architecture archives with valid `.sig` files, and `.dmg` installers for new team members
 
 #### Scenario: Bump step is idempotent against its own commit
 
@@ -49,18 +49,23 @@ The repository SHALL include a GitHub Actions workflow that triggers on `push` t
 - **WHEN** `notarytool submit` fails with a transient network or Apple-server error
 - **THEN** the step retries up to 3 times with backoff before failing the workflow
 
+#### Scenario: CI authenticates without stored AWS keys
+
+- **WHEN** the publish step runs
+- **THEN** it obtains temporary credentials by assuming the OIDC role scoped to `gsulloa/argus`, and no AWS access-key secrets are written to disk or used
+
 #### Scenario: Build failure leaves previous release intact
 
 - **WHEN** any step (build, sign, notarize, upload) fails
-- **THEN** R2 still serves the previous `latest.json` and the team's installed apps continue to receive that previous version on their next update check
+- **THEN** CloudFront still serves the previous `latest.json` and the team's installed apps continue to receive that previous version on their next update check
 
 ### Requirement: Manifest is signed and contains per-architecture entries
 
-The `latest.json` published to R2 MUST follow the Tauri v2 updater manifest schema with one `platforms` entry per supported architecture (at minimum `darwin-aarch64` and `darwin-x86_64`). Each entry MUST contain a `signature` field generated by the Ed25519 updater key over the corresponding `.app.tar.gz` content, the `url` of that archive in R2, and the `version` field at the top level MUST match the tag without the leading `v`.
+The `latest.json` published to the release S3 bucket (served via CloudFront) MUST follow the Tauri v2 updater manifest schema with one `platforms` entry per supported architecture (at minimum `darwin-aarch64` and `darwin-x86_64`). Each entry MUST contain a `signature` field generated by the Ed25519 updater key over the corresponding `.app.tar.gz` content, the `url` of that archive on the CloudFront distribution, and the `version` field at the top level MUST match the tag without the leading `v`.
 
 #### Scenario: Manifest validates against installed app pubkey
 
-- **WHEN** the installed app (which embeds the public Ed25519 key) fetches `latest.json` and a target archive
+- **WHEN** the installed app (which embeds the public Ed25519 key) fetches `latest.json` and a target archive from CloudFront
 - **THEN** the signature in the manifest validates against the archive bytes using the embedded public key, and the update proceeds
 
 #### Scenario: Tampered archive is rejected
@@ -68,19 +73,34 @@ The `latest.json` published to R2 MUST follow the Tauri v2 updater manifest sche
 - **WHEN** the archive at the URL has been modified after publication and the signature in `latest.json` no longer matches
 - **THEN** the updater plugin refuses to apply the update and surfaces an error in the app log
 
-### Requirement: Manual setup is documented end-to-end
+### Requirement: Release infrastructure is codified, not hand-documented
 
-The repository SHALL include `docs/release-setup.md` that documents every manual step a human must perform once to bootstrap the pipeline, in the order they must be performed. The doc MUST cover: Apple Developer ID certificate creation and export to base64; app-specific password creation; Cloudflare account, R2 bucket creation, public-bucket toggling, and API token scoping; Ed25519 updater keypair generation via `pnpm tauri signer generate` and where to back up the private key; the exact list of GitHub repository secrets and their values; and the icon variant generation procedure (placement under `src-tauri/icons-beta/`). The doc MUST also include a rollback runbook describing how to publish a hand-crafted `latest.json` pointing at a previous good version when a release breaks the team.
+The bootstrap of release hosting SHALL be reproducible from code rather than a
+standalone setup document. `ArgusReleasesStack` MUST be deployable with
+`pnpm --filter infra cdk deploy ArgusReleasesStack`, and the resulting resource
+identifiers (S3 bucket name, CloudFront distribution id, CloudFront domain,
+publish-role ARN) MUST be discoverable at runtime from SSM Parameter Store under
+`/Argus/releases/`. Local tooling MUST resolve these from SSM using the loaded
+AWS profile and export them as environment variables (via `.envrc`), so neither
+`release-local.sh` nor a human needs to hardcode bucket/distribution names. The
+rollback procedure MUST rely on S3 object versioning (restore a prior
+`latest.json` by copying a previous version forward) plus a CloudFront
+invalidation; no separate `docs/release-setup.md` is required.
 
-#### Scenario: A teammate following the doc reaches a working release
+#### Scenario: Resource names resolve from SSM into the environment
 
-- **WHEN** a teammate with no prior context follows `docs/release-setup.md` from top to bottom
-- **THEN** they end up with a configured GitHub Actions workflow that successfully produces a signed, notarized release on the next merge to `master`
+- **WHEN** a developer with the AWS profile loaded enters the repo (direnv evaluates `.envrc`) after `ArgusReleasesStack` has been deployed
+- **THEN** `RELEASE_S3_BUCKET`, `RELEASE_CLOUDFRONT_DISTRIBUTION_ID`, and `PUBLIC_URL_BASE` are populated from the `/Argus/releases/` SSM parameters without any hardcoded values
 
-#### Scenario: Rollback runbook restores a known good version
+#### Scenario: Local release dual-publishes to R2 and S3
 
-- **WHEN** a release breaks the app and the rollback runbook in `docs/release-setup.md` is followed
-- **THEN** R2's `latest.json` is rewritten to point at a previous version, all running team apps detect the "downgrade" on their next 4-hour check, and on the next quit they return to that version
+- **WHEN** `release-local.sh` runs with both R2 secrets and the resolved `RELEASE_S3_BUCKET` present
+- **THEN** binaries and manifests are uploaded to both R2 (Cloudflare) and the S3 bucket, the CloudFront manifest paths are invalidated, and the published manifests reference the CloudFront base URL
+
+#### Scenario: Rollback restores a known good version
+
+- **WHEN** a release breaks the app and a prior `latest.json` object version is copied forward on S3 and CloudFront is invalidated for `/latest.json`
+- **THEN** all running team apps detect the "downgrade" on their next 4-hour check, and on the next quit they return to that version
 
 ### Requirement: Beta has a dedicated icon variant
 
