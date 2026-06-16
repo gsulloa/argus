@@ -8,7 +8,12 @@ import { CloudFrontTarget } from "aws-cdk-lib/aws-route53-targets";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Construct } from "constructs";
 
-import { PROJECT_NAME, RELEASES_SUBDOMAIN } from "@/constants";
+import {
+  LANDING_PUBLIC_URL,
+  LANDING_WWW_SUBDOMAIN,
+  PROJECT_NAME,
+  RELEASES_SUBDOMAIN,
+} from "@/constants";
 import { DnsStack } from "@/lib/DnsStack/index";
 
 export class ReleasesStack extends cdk.Stack {
@@ -35,6 +40,28 @@ export class ReleasesStack extends cdk.Stack {
     // distribution only.
     const s3Origin = origins.S3BucketOrigin.withOriginAccessControl(bucket);
 
+    // ── CORS for the JSON manifests ────────────────────────────────────────────
+    // The landing page (argusdb.app) fetches download.json from this
+    // (releases.argusdb.app) origin to render its download CTA. That is a
+    // cross-origin request, so the manifest responses need CORS headers.
+    const manifestCorsPolicy = new cloudfront.ResponseHeadersPolicy(
+      this,
+      "ManifestCorsPolicy",
+      {
+        comment: "CORS for download.json / latest.json (landing page fetch)",
+        corsBehavior: {
+          accessControlAllowCredentials: false,
+          accessControlAllowHeaders: ["*"],
+          accessControlAllowMethods: ["GET", "HEAD"],
+          accessControlAllowOrigins: [
+            LANDING_PUBLIC_URL,
+            `https://${LANDING_WWW_SUBDOMAIN}`,
+          ],
+          originOverride: true,
+        },
+      }
+    );
+
     const distribution = new cloudfront.Distribution(this, "Distribution", {
       defaultBehavior: {
         origin: s3Origin,
@@ -54,12 +81,14 @@ export class ReleasesStack extends cdk.Stack {
           viewerProtocolPolicy:
             cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          responseHeadersPolicy: manifestCorsPolicy,
         },
         "download.json": {
           origin: s3Origin,
           viewerProtocolPolicy:
             cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          responseHeadersPolicy: manifestCorsPolicy,
         },
       },
     });
