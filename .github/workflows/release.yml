@@ -44,7 +44,7 @@ jobs:
         if: steps.guard.outputs.skipped != 'true'
         id: bump
         run: |
-          new=$(node scripts/bump-version.mjs)
+          new=$(node packages/app/scripts/bump-version.mjs)
           echo "Bumped to: $new"
           echo "version=$new" >> "$GITHUB_OUTPUT"
 
@@ -55,7 +55,7 @@ jobs:
         run: |
           git config user.name "argus-release-bot"
           git config user.email "argus-release-bot@users.noreply.github.com"
-          git add src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml
+          git add packages/app/src-tauri/tauri.conf.json packages/app/package.json packages/app/src-tauri/Cargo.toml
           git commit -m "chore: bump version to v${NEW} [skip ci]"
           git tag "v${NEW}"
           git push origin HEAD:master
@@ -114,8 +114,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
-          key: ${{ matrix.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+            packages/app/src-tauri/target
+          key: ${{ matrix.os }}-${{ matrix.target }}-cargo-${{ hashFiles('packages/app/src-tauri/Cargo.lock') }}
 
       - name: Cache apt packages (Linux)
         if: matrix.os == 'ubuntu-22.04'
@@ -175,13 +175,14 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: Developer ID Application
         with:
+          projectPath: packages/app
           args: --target ${{ matrix.target }}
 
       - name: Collect artifact paths (macOS)
         if: matrix.os == 'macos-latest' || matrix.os == 'macos-13'
         shell: bash
         run: |
-          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          BUNDLE_DIR="packages/app/src-tauri/target/${{ matrix.target }}/release/bundle"
           DMG=$(ls "$BUNDLE_DIR/dmg/"*.dmg | head -1)
           TARBALL=$(ls "$BUNDLE_DIR/macos/"*.app.tar.gz | head -1)
           SIG="${TARBALL}.sig"
@@ -200,7 +201,7 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         shell: bash
         run: |
-          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          BUNDLE_DIR="packages/app/src-tauri/target/${{ matrix.target }}/release/bundle"
           APPIMAGE=$(ls "$BUNDLE_DIR/appimage/"*.AppImage | head -1)
           TARBALL=$(ls "$BUNDLE_DIR/appimage/"*.AppImage.tar.gz | head -1)
           SIG="${TARBALL}.sig"
@@ -219,7 +220,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: bash
         run: |
-          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          BUNDLE_DIR="packages/app/src-tauri/target/${{ matrix.target }}/release/bundle"
           MSI=$(ls "$BUNDLE_DIR/msi/"*.msi | head -1)
           ZIP=$(ls "$BUNDLE_DIR/msi/"*.msi.zip | head -1)
           SIG="${ZIP}.sig"
@@ -323,7 +324,7 @@ jobs:
           LINUX_X86_64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.AppImage.tar.gz.sig
           WINDOWS_X86_64_TARBALL: Argus_${{ needs.bump.outputs.version }}_x64.msi.zip
           WINDOWS_X86_64_SIG_PATH: staging/Argus_${{ needs.bump.outputs.version }}_x64.msi.zip.sig
-        run: node scripts/build-manifest.mjs
+        run: node packages/app/scripts/build-manifest.mjs
 
       - name: Build download.json
         env:
@@ -335,7 +336,7 @@ jobs:
           DARWIN_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.dmg
           LINUX_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.AppImage
           WINDOWS_X86_64_INSTALLER: Argus_${{ needs.bump.outputs.version }}_x64.msi
-        run: node scripts/build-download-manifest.mjs
+        run: node packages/app/scripts/build-download-manifest.mjs
 
       - name: Configure R2 credentials
         run: |
