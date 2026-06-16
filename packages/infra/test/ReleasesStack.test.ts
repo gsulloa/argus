@@ -202,4 +202,42 @@ describe("ArgusReleasesStack", () => {
       Name: "/Argus/releases/publish-role-arn",
     });
   });
+
+  // ── Custom release domain (from DnsStack) ─────────────────────────────────
+
+  it("distribution declares the releases.argusdb.app alias", () => {
+    template.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: {
+        Aliases: Match.arrayWith(["releases.argusdb.app"]),
+      },
+    });
+  });
+
+  it("distribution uses an ACM viewer certificate", () => {
+    template.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: {
+        ViewerCertificate: Match.objectLike({
+          AcmCertificateArn: Match.anyValue(),
+        }),
+      },
+    });
+  });
+
+  it("does NOT create its own ACM certificate (imported from DnsStack)", () => {
+    template.resourceCountIs("AWS::CertificateManager::Certificate", 0);
+  });
+
+  it("creates an A alias record for releases.argusdb.app", () => {
+    template.hasResourceProperties("AWS::Route53::RecordSet", {
+      Type: "A",
+      Name: "releases.argusdb.app.",
+    });
+  });
+
+  it("creates an AAAA alias record for releases.argusdb.app", () => {
+    template.hasResourceProperties("AWS::Route53::RecordSet", {
+      Type: "AAAA",
+      Name: "releases.argusdb.app.",
+    });
+  });
 });
