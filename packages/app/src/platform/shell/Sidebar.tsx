@@ -326,7 +326,7 @@ function ConnectionsSection() {
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
-          onDragEnd={(event) => {
+          onDragEnd={(event: DragEndEvent) => {
             if (String(event.active.id).startsWith("group-sortable:")) {
               void handleGroupDragEnd(event);
             } else {
