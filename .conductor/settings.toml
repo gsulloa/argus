@@ -1,0 +1,5 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+archive = "bash packages/app/bin/dev-archive"
+setup = "bash packages/app/bin/dev-setup"
