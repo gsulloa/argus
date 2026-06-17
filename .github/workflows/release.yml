@@ -20,7 +20,7 @@ jobs:
             target: aarch64-apple-darwin
             arch: aarch64
             manifest_key: darwin-aarch64
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             arch: x64
             manifest_key: darwin-x86_64
@@ -41,6 +41,7 @@ jobs:
 
       - name: Resolve version from tag
         id: ver
+        shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm
@@ -91,7 +92,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Import Apple cert into keychain
-        if: matrix.os == 'macos-latest' || matrix.os == 'macos-13'
+        if: matrix.os == 'macos-latest' || matrix.os == 'macos-15-intel'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -128,7 +129,7 @@ jobs:
           args: --target ${{ matrix.target }}
 
       - name: Collect artifact paths (macOS)
-        if: matrix.os == 'macos-latest' || matrix.os == 'macos-13'
+        if: matrix.os == 'macos-latest' || matrix.os == 'macos-15-intel'
         shell: bash
         run: |
           BUNDLE_DIR="packages/app/src-tauri/target/${{ matrix.target }}/release/bundle"
@@ -150,39 +151,38 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         shell: bash
         run: |
+          # Tauri v2 emits the AppImage itself as the Linux updater artifact
+          # (signed as <name>.AppImage.sig). There is no .AppImage.tar.gz.
+          # The same AppImage serves as both the installer (download.json) and
+          # the updater target (latest.json).
           BUNDLE_DIR="packages/app/src-tauri/target/${{ matrix.target }}/release/bundle"
           APPIMAGE=$(ls "$BUNDLE_DIR/appimage/"*.AppImage | head -1)
-          TARBALL=$(ls "$BUNDLE_DIR/appimage/"*.AppImage.tar.gz | head -1)
-          SIG="${TARBALL}.sig"
+          SIG="${APPIMAGE}.sig"
           test -f "$APPIMAGE"
-          test -f "$TARBALL"
           test -f "$SIG"
           VERSION="${{ steps.ver.outputs.version }}"
           BASE_APPIMAGE="Argus_${VERSION}_x64.AppImage"
-          BASE_TARBALL="Argus_${VERSION}_x64.AppImage.tar.gz"
           mkdir -p staging
           cp "$APPIMAGE" "staging/$BASE_APPIMAGE"
-          cp "$TARBALL" "staging/$BASE_TARBALL"
-          cp "$SIG" "staging/${BASE_TARBALL}.sig"
+          cp "$SIG" "staging/${BASE_APPIMAGE}.sig"
 
       - name: Collect artifact paths (Windows)
         if: matrix.os == 'windows-latest'
         shell: bash
         run: |
+          # Tauri v2 signs the MSI itself as the Windows updater artifact
+          # (<name>.msi.sig). There is no .msi.zip. The same MSI serves as both
+          # the installer (download.json) and the updater target (latest.json).
           BUNDLE_DIR="packages/app/src-tauri/target/${{ matrix.target }}/release/bundle"
           MSI=$(ls "$BUNDLE_DIR/msi/"*.msi | head -1)
-          ZIP=$(ls "$BUNDLE_DIR/msi/"*.msi.zip | head -1)
-          SIG="${ZIP}.sig"
+          SIG="${MSI}.sig"
           test -f "$MSI"
-          test -f "$ZIP"
           test -f "$SIG"
           VERSION="${{ steps.ver.outputs.version }}"
           BASE_MSI="Argus_${VERSION}_x64.msi"
-          BASE_ZIP="Argus_${VERSION}_x64.msi.zip"
           mkdir -p staging
           cp "$MSI" "staging/$BASE_MSI"
-          cp "$ZIP" "staging/$BASE_ZIP"
-          cp "$SIG" "staging/${BASE_ZIP}.sig"
+          cp "$SIG" "staging/${BASE_MSI}.sig"
 
       - name: Upload artifact for downstream job
         uses: actions/upload-artifact@v4
@@ -206,6 +206,7 @@ jobs:
 
       - name: Resolve version from tag
         id: ver
+        shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node
@@ -249,11 +250,9 @@ jobs:
             "staging/Argus_${VERSION}_x64.app.tar.gz"
             "staging/Argus_${VERSION}_x64.app.tar.gz.sig"
             "staging/Argus_${VERSION}_x64.AppImage"
-            "staging/Argus_${VERSION}_x64.AppImage.tar.gz"
-            "staging/Argus_${VERSION}_x64.AppImage.tar.gz.sig"
+            "staging/Argus_${VERSION}_x64.AppImage.sig"
             "staging/Argus_${VERSION}_x64.msi"
-            "staging/Argus_${VERSION}_x64.msi.zip"
-            "staging/Argus_${VERSION}_x64.msi.zip.sig"
+            "staging/Argus_${VERSION}_x64.msi.sig"
           )
           missing=0
           for f in "${required[@]}"; do
@@ -274,10 +273,10 @@ jobs:
           DARWIN_AARCH64_SIG_PATH: staging/Argus_${{ steps.ver.outputs.version }}_aarch64.app.tar.gz.sig
           DARWIN_X86_64_TARBALL: Argus_${{ steps.ver.outputs.version }}_x64.app.tar.gz
           DARWIN_X86_64_SIG_PATH: staging/Argus_${{ steps.ver.outputs.version }}_x64.app.tar.gz.sig
-          LINUX_X86_64_TARBALL: Argus_${{ steps.ver.outputs.version }}_x64.AppImage.tar.gz
-          LINUX_X86_64_SIG_PATH: staging/Argus_${{ steps.ver.outputs.version }}_x64.AppImage.tar.gz.sig
-          WINDOWS_X86_64_TARBALL: Argus_${{ steps.ver.outputs.version }}_x64.msi.zip
-          WINDOWS_X86_64_SIG_PATH: staging/Argus_${{ steps.ver.outputs.version }}_x64.msi.zip.sig
+          LINUX_X86_64_TARBALL: Argus_${{ steps.ver.outputs.version }}_x64.AppImage
+          LINUX_X86_64_SIG_PATH: staging/Argus_${{ steps.ver.outputs.version }}_x64.AppImage.sig
+          WINDOWS_X86_64_TARBALL: Argus_${{ steps.ver.outputs.version }}_x64.msi
+          WINDOWS_X86_64_SIG_PATH: staging/Argus_${{ steps.ver.outputs.version }}_x64.msi.sig
         run: |
           export PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           node packages/app/scripts/build-manifest.mjs
