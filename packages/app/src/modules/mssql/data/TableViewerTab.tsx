@@ -27,6 +27,7 @@ import { FilterBar } from "./FilterBar";
 import { Inspector, type InspectorSelectedRow } from "./Inspector";
 import { useEditBuffer, buildRowKey } from "./useEditBuffer";
 import { useTableData } from "./useTableData";
+import { deriveDefaultOrderBy } from "@/modules/shared/orderBy";
 import { type CellValue, type RelationKind } from "./types";
 import type { EditOp, EditValue, PrimaryKeyResult } from "../types";
 import { useTableStructureCache } from "../structure/useTableStructureCache";
@@ -136,6 +137,9 @@ function MssqlTableViewer({
   // Primary key
   const [pkResult, setPkResult] = useState<PrimaryKeyResult | null>(null);
   const [pkLoading, setPkLoading] = useState(false);
+  // Whether the PK lookup has settled (resolved or failed). Gates the first
+  // data fetch so it carries the PK-derived default order.
+  const [pkSettled, setPkSettled] = useState(false);
   const pkColumns: string[] | null = pkResult?.columns ?? null;
 
   // §19.5 — Read-only detection from active connection metadata.
@@ -186,12 +190,17 @@ function MssqlTableViewer({
   // Structure cache for structure/raw subtabs
   const structureCache = useTableStructureCache(connectionId, schema, relation);
 
-  // Table data
+  // Table data — default the order to the PK descending until the user picks
+  // one; gate the first fetch on the PK lookup so it issues a single query.
+  // Heaps/views resolve to an empty order, leaving the backend PK-asc /
+  // SELECT NULL fallback in place.
   const tableData = useTableData({
     connectionId,
     schema,
     relation,
     relationKind,
+    initialOrderBy: deriveDefaultOrderBy(pkColumns, relationKind),
+    enabled: pkSettled,
   });
 
   // Edit buffer
@@ -241,7 +250,10 @@ function MssqlTableViewer({
         setPkResult(null);
       })
       .finally(() => {
-        if (!cancelled) setPkLoading(false);
+        if (!cancelled) {
+          setPkLoading(false);
+          setPkSettled(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -758,6 +770,8 @@ function MssqlTableViewer({
               onRetryNextPage={tableData.clearNextError}
               onCellSelect={(_rowIdx, _colIdx) => {
                 // Inspector uses selectedRows array; colIdx ignored for now.
+                // Selecting a row auto-reveals the inspector if it was hidden.
+                setInspectorVisible(true);
               }}
             />
           )}

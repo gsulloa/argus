@@ -249,18 +249,22 @@ Switching subtabs MUST NOT trigger a `postgres_query_table`, `postgres_count_tab
 
 The data grid SHALL support multi-row selection via vertical mouse drag inside the body region. The viewer MUST track selection as a pair `{ anchor: number | null, active: number | null }` where `anchor` is the row index where the drag started and `active` is the row index currently (or most recently) under the cursor. The set of selected indices MUST be derived as the inclusive range `[min(anchor, active), max(anchor, active)]`. When `anchor === null`, no rows are selected.
 
+The grid body MUST NOT allow the browser's native text selection to engage during click or drag interactions on the row display path. The rendered row and cell elements (`.row`, `.cell` in the display path) MUST have `user-select: none` (with the `-webkit-user-select: none` prefix for Tauri Webview compatibility) applied via CSS. The row's primary-button `mousedown` handler MUST call `event.preventDefault()` after confirming `event.button === 0`, so the browser does not start a text-selection drag or other default mousedown behavior. The inline cell editor wrapper (`.cellEditing`) and the editor input element (`.cellEditor`, including textarea and select variants) MUST re-enable `user-select: text` so the user can select, copy, and edit text inside the active editor normally.
+
 Mouse interaction MUST follow these rules:
 
-- **Mouse-down on a row** sets `anchor = active = rowIndex` but does NOT yet visually commit a multi-row selection; the drag intent is unresolved until the cursor has moved at least 4 pixels (vertically OR horizontally) from the mouse-down position.
+- **Mouse-down on a row** (primary button only) sets `anchor = active = rowIndex` but does NOT yet visually commit a multi-row selection; the drag intent is unresolved until the cursor has moved at least 4 pixels (vertically OR horizontally) from the mouse-down position. The mousedown handler MUST call `event.preventDefault()` to suppress native text-selection and drag-image side effects. `event.preventDefault()` on mousedown MUST NOT prevent the subsequent synthesized `dblclick` event from firing, so the double-click-to-edit affordance on cells remains intact.
 - **Mouse-move while in drag-pending state**: if the cursor has moved < 4px, the gesture is still a click; if it has moved ≥ 4px, the gesture transitions to drag-active and `active` updates on every subsequent mousemove to the row index under the cursor (computed from `scrollTop` and `clientY`, NOT from DOM presence — virtualized rows that are not mounted are still selectable).
 - **Mouse-move near the body's top or bottom edge** (within 20px) while drag-active MUST trigger auto-scroll of the grid viewport in that direction, so the user can extend the selection past the visible viewport. Auto-scroll velocity MUST be proportional to how close the cursor is to the edge.
 - **Mouse-up while drag-active** finalizes the selection at `[anchor, active]` and exits drag mode. The selection remains until cleared.
-- **Mouse-up while drag-pending** (cursor never crossed the threshold) is treated as a click: if the clicked row was already selected as a single row, deselect (`anchor = active = null`); otherwise select that single row (`anchor = active = rowIndex`).
+- **Mouse-up while drag-pending** (cursor never crossed the threshold) is treated as a click and MUST unconditionally set the selection to `{ anchor: rowIndex, active: rowIndex }`. Clicking a row that is already the sole selected row MUST be a no-op (the row remains selected). There is NO toggle-deselect-on-second-click behavior.
 - **Mouse-up outside the grid**: the same finalization MUST apply (the grid listens for `mouseup` on `document` while drag is active so the gesture can complete even if the cursor leaves).
 
-Selected rows MUST render with the same `data-selected="true"` attribute and `--accent-soft` background already used for single-row selection. No new design tokens are introduced. The selection MUST survive vertical scroll and tail pagination. The selection MUST be cleared when the user changes sort, filter, or page size (consistent with the existing buffer reset behavior on those events). The selection MUST be cleared when the user presses `Escape` outside of an active inline editor.
+Inline cell editing MUST be reachable ONLY via a double-click on an editable cell (a cell that is not read-only and whose value is not a binary / envelope / no-PK marker). A single click on any cell — selected row or not, editable or read-only — MUST NOT enter inline edit mode. The `onDoubleClick` handler on the cell display element is the sole entry point to `onStartEdit`.
 
-When the user clicks the same row a second time without dragging, the row is deselected. When the user clicks a different row without dragging, the previous selection is replaced by the new single-row selection (no Cmd/Shift extend in this capability).
+Selected rows MUST render with the same `data-selected="true"` attribute and `--accent-soft` background already used for single-row selection. No new design tokens are introduced. The selection MUST survive vertical scroll and tail pagination. The selection MUST be cleared when the user changes sort, filter, or page size (consistent with the existing buffer reset behavior on those events). The selection MUST be cleared when the user presses `Escape` outside of an active inline editor, or when the user clicks the `Clear` chip in the bottom bar (when present for 2+ row selections).
+
+When the user clicks a different row without dragging, the previous selection is replaced by the new single-row selection (no Cmd/Shift extend in this capability).
 
 #### Scenario: Click without drag selects a single row
 
@@ -314,6 +318,46 @@ When the user clicks the same row a second time without dragging, the row is des
 
 - **WHEN** the user has rows 5..10 selected and single-clicks row 20 without dragging
 - **THEN** the selection becomes `{ anchor: 20, active: 20 }`
+
+#### Scenario: Clicking the same row twice keeps it selected (no toggle-deselect)
+
+- **WHEN** the user single-clicks row 5 and then single-clicks row 5 again without dragging
+- **THEN** the selection remains `{ anchor: 5, active: 5 }` after both clicks
+- **AND** row 5 still renders with `data-selected="true"`
+
+#### Scenario: Dragging inside the grid does not highlight cell text
+
+- **WHEN** the user mouse-downs on a cell that contains text (e.g., a `varchar` column with the value `"hello world"`) and drags horizontally and vertically across multiple cells and rows
+- **THEN** no cell content is highlighted by the browser's native text selection (no blue / accent-tinted text selection appears within `.cell` elements)
+- **AND** the drag is interpreted as a row-range selection per the standard drag rules
+- **AND** `window.getSelection()?.toString()` returns an empty string after the drag completes
+
+#### Scenario: Single click on an editable cell selects the row but does not enter edit mode
+
+- **WHEN** the user single-clicks an editable cell (e.g., a non-PK `text` column in row 7)
+- **THEN** the selection is `{ anchor: 7, active: 7 }`
+- **AND** no inline editor is rendered (`editing` state remains `null`)
+- **AND** the cell continues to render in the display path (showing the `DisplayContent` span, not an `<input>` / `<textarea>` / `<select>`)
+
+#### Scenario: Double click on an editable cell enters edit mode
+
+- **WHEN** the user double-clicks an editable cell in row 7, column `name`
+- **THEN** the inline editor for `name` in row 7 is rendered with the cell's current value
+- **AND** the editor input is focused and its text is auto-selected (per the existing `cur.select()` behavior)
+- **AND** the row's selection state is unchanged by the double-click itself (selection follows the mousedown sequence)
+
+#### Scenario: Double click on a read-only cell does not enter edit mode
+
+- **WHEN** the user double-clicks a read-only cell (e.g., a PK column of a server row, or a `bytea` column, or a value envelope)
+- **THEN** no inline editor is rendered
+- **AND** the row's selection state follows the same rules as a single click (the row becomes the active single-row selection)
+
+#### Scenario: Text inside the active inline editor is selectable
+
+- **WHEN** an inline editor is active on a `text` cell containing `"hello world"`
+- **AND** the user click-drags inside the input element to select the substring `"hello"`
+- **THEN** the input's native text selection covers `"hello"` and `window.getSelection()` (or the input's `selectionStart`/`selectionEnd`) reflects that range
+- **AND** the row-level drag-to-select state machine is NOT engaged (the editor's stopPropagation / focus behavior keeps the row mousedown handler inert)
 
 ### Requirement: Virtualized data grid
 
@@ -483,6 +527,14 @@ The viewer SHALL render an inspector panel pinned to the right of the grid. When
 
 When the viewer is in editable mode, the inspector MUST reflect the buffer's dirty state for the selected row: cells that have been edited in the buffer MUST display the dirty value (not the server value), with a visual marker indicating the field is dirty. Editing inside the inspector MUST be supported as an alternative to inline grid editing for non-PK columns; changes commit to the buffer the same way (no direct DB writes). PK columns of existing rows MUST remain read-only in the inspector. Truncated/binary cells MUST remain read-only in the inspector regardless of mode.
 
+**Live commit semantics (single-row mode).** When the inspector is in single-row mode (effective selection of 0 or 1 row), every editable field MUST commit its current value to the edit buffer on every user-driven value change (the input's `onChange` / `change` event), not on blur. This applies to ALL field types: boolean select, enum select, numeric input, text input, and the long-text / JSON-or-JSONB textarea. As a consequence, when the user types or picks a value in any single-row inspector field, the corresponding grid cell MUST re-render with the dirty marker and the new display value before the user releases focus.
+
+For the long-text / JSON textarea specifically: the buffer MUST receive the raw `text` value on every change. JSON strict-parse validation (`validateJsonInput`) MUST NOT block the commit during typing; it MUST run on blur ONLY for the purpose of setting the inline error / smart-quote warning UI. The authoritative JSON validation for save still happens at apply time (Cmd-S) per the existing `postgres-data-edit` rules — an invalid JSON value sitting in the buffer is accepted at the inspector level but rejected at flush.
+
+For the numeric input: the same tolerant parsing currently used by the in-grid editor (`parseInputValue`) applies on every change — fully-parseable inputs coerce to `number`, partial inputs (e.g. `"-"`, `"3."`) remain as strings, and the empty string resolves to `null`.
+
+**Bulk-edit mode is OUT OF SCOPE for live-commit semantics.** When the effective selection is 2 or more rows, the bulk inspector's Apply/Cancel gate from the `postgres-data-edit` capability ("Bulk-edit mode in the inspector when multiple rows are selected") remains in force. Fields stay in their local touched/pristine state until Apply is clicked. This requirement does NOT modify that behavior.
+
 #### Scenario: Selecting a row populates the inspector
 
 - **WHEN** the user clicks any row in the grid
@@ -510,6 +562,47 @@ When the viewer is in editable mode, the inspector MUST reflect the buffer's dir
 - **WHEN** the user is on a writable connection, selects a row, and edits a non-PK field in the inspector
 - **THEN** that change is reflected in the buffer (the corresponding grid cell renders with dirty highlight)
 - **AND** no SQL is dispatched until the user runs `⌘S` (which applies the buffer directly via `postgres_apply_table_edits`)
+
+#### Scenario: Typing in a single-row inspector text field updates the grid live
+
+- **WHEN** the user selects a single row and types `hello` into a `text` column field in the inspector
+- **THEN** after each keystroke (`h`, `he`, `hel`, `hell`, `hello`) the grid cell for that column re-renders with the dirty marker and the cumulative display value
+- **AND** the user does NOT need to blur or tab out of the field for the grid to update
+- **AND** the inspector's input retains focus and the cursor position throughout
+
+#### Scenario: Typing in a single-row inspector JSON textarea updates the grid live
+
+- **WHEN** the user selects a single row and types `{"a":1}` into a `jsonb` column field in the inspector
+- **THEN** after each keystroke the grid cell shows the cumulative raw text as the dirty display value
+- **AND** the inspector textarea does NOT render an inline JSON error during typing (the strict-parse check only runs on blur)
+- **AND** if the user blurs the textarea with mid-typed text like `{"a":` (invalid JSON), the inspector renders its existing inline JSON error UI
+- **AND** the buffer continues to hold the invalid raw text; Cmd-S would surface a strict-parse error per the existing apply-time validation
+
+#### Scenario: Numeric input in the inspector updates the grid per keystroke with tolerant parsing
+
+- **WHEN** the user selects a single row and types `3.14` into a `numeric` column field in the inspector
+- **THEN** after typing `3` the grid cell shows `3` with the dirty marker
+- **AND** after typing `3.` the grid cell shows `3.` (still a string in the buffer; tolerant parse)
+- **AND** after typing `3.14` the grid cell shows `3.14` (a `number` in the buffer)
+- **AND** clearing the field shows `NULL` in the grid cell with the dirty marker
+
+#### Scenario: Reverting an inspector edit to the original value cleans up the buffer
+
+- **WHEN** the user types `hello` then deletes the 5 characters so the inspector field again shows the server value
+- **THEN** after the final keystroke the grid cell no longer renders the dirty marker
+- **AND** the buffer no longer contains an entry for that cell (the reducer collapses an edit equal to the original)
+
+#### Scenario: External buffer change re-syncs the inspector field
+
+- **WHEN** the user has selected row 5, then opens the in-grid editor for the `name` cell of row 5 and types `world`
+- **THEN** the inspector's `name` field updates to show `world` (the existing `lastSyncedValueRef` re-sync continues to work under per-keystroke commits)
+
+#### Scenario: Bulk-edit mode still uses Apply/Cancel (out of scope for this requirement)
+
+- **WHEN** the user selects 3+ eligible rows so the inspector enters bulk-edit mode
+- **THEN** typing into a bulk field does NOT commit to the buffer per keystroke
+- **AND** the grid does NOT show dirty markers on the affected rows until the user clicks `Apply to <N> rows`
+- **AND** the bulk inspector's behavior follows the `postgres-data-edit` capability's "Bulk-edit mode in the inspector when multiple rows are selected" requirement unchanged
 
 ### Requirement: Bottom bar status
 
@@ -1323,16 +1416,38 @@ The setting MUST be scoped per connection — two connections inspecting the sam
 
 ### Requirement: Per-table sort persistence
 
-The frontend SHALL persist the table viewer's `orderBy` per `(connectionId, schema, relation)` tuple under the settings key `pgTableOrder:<connectionId>:<schema>:<relation>` (a JSON array of `{ column, direction }`). When unset, the order MUST default to the empty array (the relation's natural row order).
+The frontend SHALL persist the table viewer's `orderBy` per `(connectionId, schema, relation)` tuple under the settings key `pgTableOrder:<connectionId>:<schema>:<relation>` (a JSON array of `{ column, direction }`). The persisted state MUST distinguish "no order has ever been selected for this relation" (the setting key is absent) from "the user has explicitly chosen an empty order" (the key is present with value `[]`).
+
+When the setting key is absent (no user selection yet):
+- if the relation has a primary key, the effective `orderBy` MUST default to every primary-key column in `desc` direction, in primary-key definition order;
+- if the relation has no primary key (including views and other PK-less relations), the effective `orderBy` MUST default to the empty array (the relation's natural row order).
+
+A persisted value MUST be used verbatim and MUST NOT be overwritten by the primary-key default — this includes a persisted explicit empty array `[]`, which MUST continue to issue SQL with no `ORDER BY` clause. Because the default is derived from the asynchronously-loaded primary key, when nothing is persisted the first-page fetch MUST NOT be issued with an empty order and then immediately re-fetched with the primary-key default; the viewer MUST defer the first-page fetch until the primary key has resolved so the relation opens with a single fetch carrying the correct order. When a persisted value exists, the first-page fetch MUST NOT wait on the primary key.
 
 The persisted sort MUST survive the same lifecycle events as the persisted filter (tab switches, tab close/reopen, app restarts). The persisted sort MUST be cleared only by the same explicit user gestures that change it: clicking a column header to cycle sort, or removing a sort via the existing sort UX. There is no separate "reset sort" affordance — the user's existing column-header gesture is the manual control.
 
 The setting MUST be scoped per connection — two connections inspecting the same `<schema>.<relation>` MUST NOT share sort state.
 
-#### Scenario: Default sort is empty
+#### Scenario: Default sort is primary key descending
 
-- **WHEN** the user opens a table tab for the first time and no setting is stored
+- **WHEN** the user opens a table tab for `public.users` (primary key `id`) for the first time and no setting is stored
+- **THEN** the issued SQL contains `ORDER BY "id" DESC`
+- **AND** the viewer issues exactly one first-page fetch (no preceding fetch with an empty order)
+
+#### Scenario: Composite primary key defaults to all columns descending
+
+- **WHEN** the user opens a table whose primary key is `(tenant_id, created_at)` for the first time with no setting stored
+- **THEN** the issued SQL contains `ORDER BY "tenant_id" DESC, "created_at" DESC`
+
+#### Scenario: Relation without a primary key defaults to no order
+
+- **WHEN** the user opens a view, or a table with no primary key, for the first time with no setting stored
 - **THEN** the issued SQL contains no `ORDER BY` clause
+
+#### Scenario: Explicit empty order is respected over the default
+
+- **WHEN** the relation has a primary key `id` and the persisted setting for the relation is an explicit empty array `[]`
+- **THEN** the issued SQL contains no `ORDER BY` clause (the default is not applied)
 
 #### Scenario: Sort persists across tab switches and restarts
 
@@ -1342,8 +1457,8 @@ The setting MUST be scoped per connection — two connections inspecting the sam
 
 #### Scenario: Sort is per connection
 
-- **WHEN** the user has `created_at desc` on `connectionA.public.users` and opens `connectionB.public.users`
-- **THEN** `connectionB.public.users` issues SQL with no `ORDER BY` clause
+- **WHEN** the user has `created_at desc` persisted on `connectionA.public.users` and opens `connectionB.public.users` (primary key `id`) for the first time with nothing persisted
+- **THEN** `connectionB.public.users` issues SQL ordered by its own default `ORDER BY "id" DESC`, not by `created_at` from connection A
 
 ### Requirement: Per-relation state isolation across tab switches
 

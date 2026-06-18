@@ -452,7 +452,9 @@ The MS SQL Server data-grid backend SHALL enforce a 1 MiB (1,048,576 byte) cap o
 
 ### Requirement: Inspector panel
 
-The viewer SHALL render an inspector panel pinned to the right of the grid. When a row is selected, the inspector MUST list every column from the response's `columns` array as a field showing `column name (data_type) → value`. Columns whose value was returned with `{ truncated: true, size }` MUST display the preview plus the original byte count (formatted as `KB`/`MB`). Long text values in the inspector MUST be scrollable inside their field, not truncated. When the column type is `JSON` (SQL Server 2025+) or `XML`, the inspector MUST render the parsed value as a collapsible tree (object/array nodes expandable for JSON; element/attribute nodes expandable for XML). For binary types (`BINARY` / `VARBINARY` / `IMAGE` / `ROWVERSION`), the inspector MUST display the encoding as `base64` next to the field label. When no row is selected, the inspector MUST display a hint such as "Select a row to inspect". The inspector MUST be horizontally resizable by dragging its left edge; the width MUST persist under `msInspectorWidth` (a single global setting, not per-table) with a sensible minimum (e.g. 280px).
+The viewer SHALL render an inspector panel pinned to the right of the grid. The panel's visibility MUST be toggleable via an `Inspector` button in the viewer toolbar; it defaults to visible. When a row is selected, the inspector MUST list every column from the response's `columns` array as a field showing `column name (data_type) → value`. Columns whose value was returned with `{ truncated: true, size }` MUST display the preview plus the original byte count (formatted as `KB`/`MB`). Long text values in the inspector MUST be scrollable inside their field, not truncated. When the column type is `JSON` (SQL Server 2025+) or `XML`, the inspector MUST render the parsed value as a collapsible tree (object/array nodes expandable for JSON; element/attribute nodes expandable for XML). For binary types (`BINARY` / `VARBINARY` / `IMAGE` / `ROWVERSION`), the inspector MUST display the encoding as `base64` next to the field label. When no row is selected, the inspector MUST display a hint such as "Select a row to inspect". The inspector MUST be horizontally resizable by dragging its left edge; the width MUST persist under `msInspectorWidth` (a single global setting, not per-table) with a sensible minimum (e.g. 280px).
+
+When the inspector panel is hidden, selecting a row in the grid MUST automatically reveal the panel and show the selected row. The auto-reveal MUST fire only on row/cell selection gestures (plain click and shift-click range extension); it MUST NOT fire on column header sort clicks, column resize, scroll, or toolbar actions. The auto-reveal MUST NOT change the selection range and MUST NOT interrupt an in-progress inline edit. Once revealed, the user MAY hide the inspector again via the toolbar toggle, and the next row selection MUST re-reveal it.
 
 When the viewer is in editable mode, the inspector MUST reflect the buffer's dirty state for the selected row: cells that have been edited in the buffer MUST display the dirty value (not the server value), with a visual marker indicating the field is dirty. Editing inside the inspector MUST be supported as an alternative to inline grid editing for non-PK columns; changes commit to the buffer the same way (no direct DB writes). PK columns of existing rows MUST remain read-only in the inspector. Truncated/binary cells MUST remain read-only in the inspector regardless of mode. Cells of type `GEOMETRY`, `GEOGRAPHY`, `HIERARCHYID`, and `SQL_VARIANT` MUST be read-only in the inspector (v1 does not support writes for those types).
 
@@ -460,6 +462,29 @@ When the viewer is in editable mode, the inspector MUST reflect the buffer's dir
 
 - **WHEN** the user clicks any row in the grid
 - **THEN** the inspector lists every column with its data type and value
+
+#### Scenario: Clicking a row reveals a hidden inspector
+
+- **WHEN** the inspector panel is hidden and the user clicks a row in the grid
+- **THEN** the inspector panel becomes visible
+- **AND** it shows the clicked row's columns and values
+
+#### Scenario: Clicking another row updates the open inspector without closing it
+
+- **WHEN** the inspector panel is already visible and the user clicks a different row
+- **THEN** the inspector updates to the newly clicked row
+- **AND** the panel stays visible
+
+#### Scenario: Header sort does not reveal a hidden inspector
+
+- **WHEN** the inspector panel is hidden and the user clicks a column header to sort, drags a column to resize it, scrolls the grid, or activates a toolbar action
+- **THEN** the inspector panel stays hidden
+
+#### Scenario: Shift-click multi-row selection reveals the inspector in range mode
+
+- **WHEN** the inspector panel is hidden and the user shift-clicks to extend a row range
+- **THEN** the inspector panel becomes visible
+- **AND** it reflects the multi-row selection
 
 #### Scenario: Truncated values show preview and byte length
 
@@ -664,9 +689,29 @@ The frontend SHALL persist a per-table page size under the settings key `msTable
 
 ### Requirement: Per-table ordering controls
 
-The data grid SHALL support changing the active order via column header clicks. Clicking a column header MUST cycle that column's sort through `ASC → DESC → unsorted`. Holding `Shift` while clicking a column header MUST extend the existing `order_by` array by appending (or toggling) that column — preserving multi-column sort. The new `order_by` array MUST be persisted per `(connectionId, schema, relation)` under `msTableOrder:<connectionId>:<schema>:<relation>` (a JSON array of `{ column, direction: "ASC" | "DESC" }`). When unset, the order MUST default to the empty array (the relation's primary-key-ascending fallback per the query-table requirement). The header MUST show a visible sort badge (e.g. `↑` / `↓`) on every column currently participating in the sort, with the badge order or index reflecting the column's position in the array.
+The data grid SHALL support changing the active order via column header clicks. Clicking a column header MUST cycle that column's sort through `ASC → DESC → unsorted`. Holding `Shift` while clicking a column header MUST extend the existing `order_by` array by appending (or toggling) that column — preserving multi-column sort. The new `order_by` array MUST be persisted per `(connectionId, schema, relation)` under `msTableOrder:<connectionId>:<schema>:<relation>` (a JSON array of `{ column, direction: "ASC" | "DESC" }`).
+
+When no order has been selected for the relation, the initial `order_by` MUST default to the relation's primary key in descending direction — every primary-key column `DESC`, in primary-key definition order. When the relation has no primary key (a heap or a view), the order MUST default to the empty array, which the backend resolves via its primary-key-ascending / `SELECT NULL` fallback per the query-table requirement. Because the primary key is loaded asynchronously, the viewer MUST seed the initial order from the resolved primary key and MUST NOT issue a first-page fetch with an empty order followed by a second fetch carrying the primary-key default; the relation MUST open with a single first-page fetch carrying the correct order. A user order change MUST take precedence over the default for the life of the tab and MUST NOT be overwritten when the primary key resolves.
+
+The header MUST show a visible sort badge (e.g. `↑` / `↓`) on every column currently participating in the sort, with the badge order or index reflecting the column's position in the array.
 
 The setting MUST be scoped per connection — two connections inspecting the same `<schema>.<relation>` MUST NOT share sort state.
+
+#### Scenario: Default order is primary key descending
+
+- **WHEN** the user opens `sales.orders` (primary key `id`) for the first time and no order has been selected
+- **THEN** the issued SQL contains `ORDER BY [id] DESC`
+- **AND** the viewer issues exactly one first-page fetch (no preceding fetch with an empty order)
+
+#### Scenario: Composite primary key defaults to all columns descending
+
+- **WHEN** the user opens a table whose primary key is `(tenant_id, created_at)` for the first time
+- **THEN** the issued SQL contains `ORDER BY [tenant_id] DESC, [created_at] DESC`
+
+#### Scenario: Heap or view defaults to the backend fallback
+
+- **WHEN** the user opens a heap table (no primary key) or a view for the first time
+- **THEN** the frontend sends no user `order_by` and the issued SQL uses the backend primary-key-ascending / `SELECT NULL` fallback
 
 #### Scenario: Single-column sort cycle
 
@@ -680,6 +725,11 @@ The setting MUST be scoped per connection — two connections inspecting the sam
 - **THEN** `order_by` becomes `[{ column: "country", direction: "ASC" }, { column: "created_at", direction: "ASC" }]`
 - **AND** the issued SQL contains `ORDER BY [country] ASC, [created_at] ASC`
 
+#### Scenario: User order is not overwritten by the primary-key default
+
+- **WHEN** the user changes the order on `sales.orders` and then the primary key resolves (or the tab re-renders)
+- **THEN** the user's `order_by` remains in effect and the primary-key default is not re-applied
+
 #### Scenario: Sort persists across tab switches and restarts
 
 - **WHEN** the user sets `order_by: [{ column: "created_at", direction: "DESC" }]` on `sales.orders` and switches tabs
@@ -688,8 +738,8 @@ The setting MUST be scoped per connection — two connections inspecting the sam
 
 #### Scenario: Sort is per connection
 
-- **WHEN** the user has `created_at DESC` on `connectionA.sales.orders` and opens `connectionB.sales.orders`
-- **THEN** `connectionB.sales.orders` issues SQL with the primary-key-ascending fallback (no user `ORDER BY`)
+- **WHEN** the user has `created_at DESC` on `connectionA.sales.orders` and opens `connectionB.sales.orders` (primary key `id`) for the first time
+- **THEN** `connectionB.sales.orders` issues SQL ordered by its own default `ORDER BY [id] DESC`, not by `created_at` from connection A
 
 ### Requirement: Bottom bar status
 
