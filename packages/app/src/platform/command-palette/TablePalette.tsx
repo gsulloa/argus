@@ -1,5 +1,5 @@
 import { Command as Cmdk } from "cmdk";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTabs } from "@/platform/shell/tabs";
 import { useActiveConnections } from "@/modules/postgres/useActiveConnections";
 import { useActiveMysqlConnections } from "@/modules/mysql/useActiveConnections";
@@ -62,6 +62,7 @@ function TableRow({ entry, valuePrefix = "", onSelect }: RowProps) {
 
 export function TablePalette() {
   const { open, hide } = useTablePalette();
+  const listRef = useRef<HTMLDivElement>(null);
   const tabs = useTabs();
   const { items: pgActives } = useActiveConnections();
   const { items: myActives } = useActiveMysqlConnections();
@@ -74,6 +75,12 @@ export function TablePalette() {
   useEffect(() => {
     if (open) setSearch("");
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (open && listRef.current) {
+      listRef.current.scrollTop = 0;
+    }
+  }, [search, open]);
 
   const activeIds = useMemo(() => new Set(actives.map((a) => a.id)), [actives]);
   const visibleRecents = useMemo(
@@ -136,6 +143,7 @@ export function TablePalette() {
       onSearchChange={setSearch}
       shouldFilter={hasConnections && entries.length > 0 && search.length > 0}
       filter={tableFilter}
+      listRef={listRef}
     >
       {!hasConnections ? (
         <div className={paletteStyles.empty}>
