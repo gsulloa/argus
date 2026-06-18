@@ -197,7 +197,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write   # required for OIDC role assumption
-      contents: read
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -263,6 +263,49 @@ jobs:
           done
           [ "$missing" = "0" ] || { echo "Not all four platform bundles are present; aborting publish."; exit 1; }
           echo "All four platform bundles present."
+
+      - name: Extract release notes
+        id: notes
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          CHANGELOG="packages/app/CHANGELOG.md"
+          # Slice the section for v${VERSION} from the changelog.
+          # Headers are of the form: #### [vX.Y.Z](...)
+          # Capture lines AFTER the matching header up to (but not including) the next ####.
+          awk -v ver="v${VERSION}" '
+            /^#### \[/ {
+              if (found) exit
+              if (index($0, "[" ver "]") > 0 || index($0, "[" ver "(") > 0) {
+                found=1
+                next
+              }
+            }
+            found && /^#### / { exit }
+            found { print }
+          ' "$CHANGELOG" | sed -e '/./,$!d' -e 's/[[:space:]]*$//' > RELEASE_NOTES.md
+          # Emit has_notes output
+          if [ -s RELEASE_NOTES.md ] && grep -qP '\S' RELEASE_NOTES.md 2>/dev/null || \
+             [ -s RELEASE_NOTES.md ] && grep -q '[^[:space:]]' RELEASE_NOTES.md; then
+            echo "has_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          generate_release_notes: ${{ steps.notes.outputs.has_notes != 'true' }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            staging/Argus_${{ steps.ver.outputs.version }}_aarch64.dmg
+            staging/Argus_${{ steps.ver.outputs.version }}_x64.dmg
+            staging/Argus_${{ steps.ver.outputs.version }}_x64.AppImage
+            staging/Argus_${{ steps.ver.outputs.version }}_x64.msi
 
       - name: Build manifest
         env:
