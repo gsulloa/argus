@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Context queries sidebar branch
 
@@ -18,6 +18,8 @@ For each connection with a linked context folder containing matching `queries/` 
 
 - **WHEN** both "Context Queries" (linked folder) and "Saved Queries" (sqlite) contain a query named `top-customers`
 - **THEN** the sidebar shows them in two separate branches and the user can open both
+
+## ADDED Requirements
 
 ### Requirement: Open context query in editor tab
 

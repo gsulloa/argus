@@ -5,82 +5,74 @@ TBD - created by archiving change context-folders-other-engines. Update Purpose 
 ## Requirements
 ### Requirement: List documented objects for connection
 
-The frontend SHALL expose, for each connection with a linked context folder, the set of documented objects parsed from the matching engine subtree. This applies uniformly to connections of kind `postgres`, `mysql`, `mssql`, and `dynamo`. The list SHALL update in response to `context://changed` events whose `kinds` include `"object"` for the connection's folder path.
+The frontend SHALL expose, for each connection with a linked context folder, the set of documented objects parsed from the matching engine subtree. The list SHALL update in response to `context://changed` events whose `kinds` include `"object"` for the connection's folder path.
 
-#### Scenario: MySQL connection lists MySQL objects
+#### Scenario: Postgres connection lists postgres objects
 
-- **WHEN** a MySQL connection is linked to a folder containing `mysql/sales/orders.md` and `mysql/sales/customers.md`
-- **THEN** the documented-objects list for that connection contains `sales.orders` and `sales.customers` and no entries from other engine subtrees
+- **WHEN** a Postgres connection is linked to a folder containing `postgres/public/users.md` and `postgres/billing/invoices.md`
+- **THEN** the documented-objects list for that connection contains `public.users` and `billing.invoices` and no entries from other engine subtrees
 
-#### Scenario: MSSQL connection lists MSSQL objects
+#### Scenario: File edit refreshes the list
 
-- **WHEN** an MSSQL connection is linked to a folder containing `mssql/dbo/Users.md`
-- **THEN** the documented-objects list contains `dbo.Users`
-
-#### Scenario: Dynamo connection lists Dynamo tables
-
-- **WHEN** a Dynamo connection is linked to a folder containing `dynamo/tables/sessions.md` and `dynamo/tables/audit-log.md`
-- **THEN** the documented-objects list contains `sessions` and `audit-log` with no schema component
+- **WHEN** the documented-objects list contains `public.users`
+- **AND** a `context://changed` event for the linked folder arrives with `kinds: ["object"]`
+- **THEN** the list re-reads from the registry and re-renders
 
 ### Requirement: Inline badge on schema-tree nodes
 
-For each schema-tree node that corresponds to a documented object (matched by engine-appropriate identity: `schema.name` for Postgres/MySQL/MSSQL, `name` for Dynamo), the engine's schema browser SHALL render a small `📄` caption-style badge after the node label. For Dynamo, the node's live table name SHALL be folded through the connection's table-name normalization rule (see `dynamo-table-name-normalization`) before comparison, so a CDK-named live table matches its logical doc; when no rule is configured the comparison is exact, unchanged from before. The badge applies to Postgres, MySQL, MSSQL, and Dynamo (`DynamoConnectionSubtree`'s table leaves). The badge SHALL only render when (a) the connection has a linked, available context folder, and (b) the node has a matching documented object.
+For each schema-tree node that corresponds to a documented object (matched by engine-appropriate identity: `schema.name` for relational engines, `name` for Dynamo/CloudWatch), the schema browser SHALL render a small `📄` caption-style badge after the node label. The badge SHALL only render when (a) the connection has a linked, available context folder, and (b) the node has a matching documented object.
 
-#### Scenario: MySQL documented table shows badge
+#### Scenario: Documented table shows badge
 
-- **WHEN** the linked folder has `mysql/sales/orders.md` and the MySQL schema browser tree shows `sales > orders`
-- **THEN** the `orders` node renders a `📄` badge after its label
+- **WHEN** the linked folder has `postgres/public/users.md` and the schema browser tree shows `public > users`
+- **THEN** the `users` node renders a `📄` badge after its label
 
-#### Scenario: Dynamo documented table shows badge
+#### Scenario: Undocumented table shows no badge
 
-- **WHEN** the linked folder has `dynamo/tables/sessions.md` and the Dynamo connection subtree shows a `sessions` leaf
-- **THEN** the `sessions` leaf renders a `📄` badge after its label
+- **WHEN** the linked folder has no file matching `public.orders`
+- **THEN** the `public > orders` node renders without a badge
 
-#### Scenario: Dynamo CDK-named leaf shows badge via normalized name
+#### Scenario: No folder linked, no badges
 
-- **WHEN** the connection's rule strips `prefix: "MyApp-prod-"` and `suffix_pattern: "-[A-Z0-9]+$"`, the linked folder has `dynamo/tables/EventsTable.md`, and the Dynamo subtree shows a leaf for the live table `MyApp-prod-EventsTable-3M4N5O6P7Q8R`
-- **THEN** that leaf renders a `📄` badge, matched via the normalized name `EventsTable`
+- **WHEN** a connection has no linked context folder
+- **THEN** no nodes in its schema tree render a `📄` badge
 
-#### Scenario: MSSQL undocumented table shows no badge
+#### Scenario: Folder unavailable, no badges
 
-- **WHEN** the linked folder has no file matching `dbo.Products`
-- **THEN** the `dbo > Products` node renders without a badge
+- **WHEN** a connection's linked folder is in `Unavailable` state
+- **THEN** no nodes in its schema tree render a `📄` badge
+- **AND** a banner above the tree explains the folder is missing
 
 ### Requirement: Object doc panel
 
-Selecting a schema-tree node that has a documented object SHALL surface a docs view for that node:
+Selecting a schema-tree node that has a documented object SHALL surface a "Docs" tab in the existing detail view for that node. The tab SHALL render the parsed object as: the Markdown body rendered as HTML; a chip strip showing `human.tags` and `human.owners`; and a `📄 No DB match` warning label when `system.deleted_in_db` is `true`.
 
-- For Postgres, MySQL, and MSSQL: a "Docs" subtab appears in the existing detail view's `SubtabHeader` alongside Data/Structure/Raw, rendering the `DocsSubtab` component.
-- For Dynamo: the `DocsSubtab` component is rendered as a collapsible panel inside the existing data-view inspector, below the existing table metadata block. Expanded by default when the object has a doc.
+#### Scenario: Docs tab renders body and chips
 
-The rendered content SHALL be the parsed object's Markdown body, a chip strip showing `human.tags` and `human.owners`, and a `📄 No DB match` warning label when `system.deleted_in_db` is `true`.
+- **WHEN** the user selects `public.users` whose doc has body `# users\n\nThe user table.\n` and `human: { tags: [pii, core], owners: ["@team-identity"] }`
+- **THEN** the Docs tab renders the body as HTML and shows chips `pii`, `core`, `@team-identity`
 
-#### Scenario: MySQL Docs subtab renders body and chips
+#### Scenario: Deleted-in-DB warning
 
-- **WHEN** the user selects a MySQL table whose doc has body `# orders\n\nThe orders table.\n` and `human: { tags: [pii], owners: ["@team-sales"] }`
-- **THEN** the Docs subtab renders the body and shows chips `pii`, `@team-sales`
+- **WHEN** the selected object's `system.deleted_in_db` is `true`
+- **THEN** the Docs tab renders a warning label "No DB match"
 
-#### Scenario: Dynamo Docs panel appears in inspector
+#### Scenario: Undocumented object hides the Docs tab
 
-- **WHEN** the user opens a Dynamo table whose doc has a body
-- **THEN** the data-view inspector renders a "Docs" panel below the existing metadata, expanded by default
-
-#### Scenario: Undocumented object hides the Docs surface
-
-- **WHEN** the selected node has no documented object
-- **THEN** the detail view shows no Docs subtab (Postgres/MySQL/MSSQL) and no Docs panel (Dynamo)
+- **WHEN** the selected schema-tree node has no documented object
+- **THEN** the detail view shows no Docs tab
 
 ### Requirement: Column-note decoration
 
-The columns list (Postgres/MySQL/MSSQL structure subtab) and the attribute-definitions list (Dynamo inspector) SHALL render `human.column_notes[<name>]` as an annotation next to the matching column/attribute when the connection has a linked folder and the selected object has a documented entry. Names without a matching note SHALL render unchanged.
+The columns list in the existing per-engine structure view SHALL render `human.column_notes[<column-name>]` as an annotation next to the matching column when the connection has a linked folder and the selected object has a documented entry. Columns without a matching note SHALL render unchanged.
 
-#### Scenario: MySQL column note appears next to column
+#### Scenario: Column note appears next to column
 
-- **WHEN** the selected MySQL table has `human.column_notes: { email: "lowercased before insert" }`
-- **THEN** the `email` row in the structure subtab shows the note string as an inline annotation
+- **WHEN** the selected object has `human.column_notes: { email: "lowercased before insert" }`
+- **THEN** the `email` column row in the structure view shows the note string as an inline annotation
 
-#### Scenario: Dynamo attribute note appears next to attribute
+#### Scenario: Columns without notes unchanged
 
-- **WHEN** the selected Dynamo table has `human.column_notes: { user_id: "partition key; opaque UUID v4" }`
-- **THEN** the `user_id` row in the inspector's attribute list shows the note string as an inline annotation
+- **WHEN** an object has `human.column_notes: { email: "..." }` and the table has columns `id`, `email`, `created_at`
+- **THEN** only the `email` row shows an annotation; `id` and `created_at` render as today
 
