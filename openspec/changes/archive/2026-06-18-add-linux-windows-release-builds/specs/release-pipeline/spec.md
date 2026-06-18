@@ -1,3 +1,11 @@
+## RENAMED Requirements
+
+- FROM: ### Requirement: CI workflow builds, signs, and publishes on every version tag
+  TO: ### Requirement: CI workflow builds, signs, and publishes on every merge to master
+
+- FROM: ### Requirement: Release infrastructure is codified, not hand-documented
+  TO: ### Requirement: Manual setup is documented end-to-end
+
 ## MODIFIED Requirements
 
 ### Requirement: CI workflow builds, signs, and publishes on every merge to master
