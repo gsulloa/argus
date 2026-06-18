@@ -952,7 +952,10 @@ a {
   gap: 16px;
   margin-top: 8px;
 }
-@media (max-width: 680px) {
+@media (max-width: 900px) {
+  .dl-cards { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px) {
   .dl-cards { grid-template-columns: 1fr; }
 }
 .dl-card {

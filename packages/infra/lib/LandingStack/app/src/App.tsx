@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, type ComponentType, useEffect, useMemo, useRef, useState } from "react";
 
 /* ── Release manifest ──────────────────────────────────────────────────── */
 
@@ -26,6 +26,16 @@ const FALLBACK: Manifest = {
       filename: "Argus_0.1.39_x64.dmg",
       size: 10578504,
     },
+    "windows-x86_64": {
+      url: "https://releases.argusdb.app/Argus_0.1.39_x64.msi",
+      filename: "Argus_0.1.39_x64.msi",
+      size: 9814016,
+    },
+    "linux-x86_64": {
+      url: "https://releases.argusdb.app/Argus_0.1.39_x64.AppImage",
+      filename: "Argus_0.1.39_x64.AppImage",
+      size: 87362040,
+    },
   },
 };
 
@@ -43,6 +53,33 @@ function fmtDate(iso: string): string {
   } catch {
     return iso.slice(0, 10);
   }
+}
+
+/** Best-effort OS-family detection: 'mac' | 'windows' | 'linux'. Defaults to 'mac'. */
+function detectOS(): "mac" | "windows" | "linux" {
+  try {
+    // Modern hint API (Chrome 90+, Edge 90+)
+    const platform = (navigator as Navigator & { userAgentData?: { platform?: string } })
+      .userAgentData?.platform?.toLowerCase() ?? "";
+    if (platform.includes("win")) return "windows";
+    if (platform.includes("linux")) return "linux";
+    if (platform.includes("mac")) return "mac";
+
+    // Legacy UA string
+    const ua = navigator.userAgent.toLowerCase();
+    if (/windows/.test(ua)) return "windows";
+    if (/linux/.test(ua) && !/android/.test(ua)) return "linux";
+    if (/mac/.test(ua)) return "mac";
+
+    // Legacy platform string
+    const leg = (navigator.platform ?? "").toLowerCase();
+    if (/win/.test(leg)) return "windows";
+    if (/linux/.test(leg)) return "linux";
+    if (/mac/.test(leg)) return "mac";
+  } catch {
+    /* ignore */
+  }
+  return "mac";
 }
 
 /** Best-effort: is this an Apple-Silicon Mac? Falls back to true (the common case). */
@@ -80,6 +117,24 @@ const AppleLogo = ({ size = 18 }: { size?: number }) => (
   </svg>
 );
 
+const WindowsLogo = ({ size = 18 }: { size?: number }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 5.5 11.5 4v7.5H3z" />
+    <path d="M13 3.7 21 2.5v9H13z" />
+    <path d="M3 12.5h8.5V20L3 18.5z" />
+    <path d="M13 12.5H21V21l-8-1.2z" />
+  </svg>
+);
+
+const LinuxLogo = ({ size = 18 }: { size?: number }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 2C9 2 7 4.5 7 8c0 2 .5 3.5 1 5l-2 3c-.5 1 0 2 1 2h10c1 0 1.5-1 1-2l-2-3c.5-1.5 1-3 1-5 0-3.5-2-6-5-6z" />
+    <path d="M9.5 14.5c-.5.5-1 1-1 1.5M14.5 14.5c.5.5 1 1 1 1.5" />
+    <circle cx="10" cy="9" r="1" fill="currentColor" stroke="none" />
+    <circle cx="14" cy="9" r="1" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 const Download = ({ size = 18 }: { size?: number }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 3v12m0 0 4-4m-4 4-4-4" />
@@ -99,6 +154,41 @@ const Chip = ({ size = 12 }: { size?: number }) => (
     <path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" />
   </svg>
 );
+
+/* ── OS-aware installer selection ──────────────────────────────────────── */
+
+type OsFamily = "mac" | "windows" | "linux";
+
+/** Ordered platform keys to try for a given OS, most-preferred first. */
+function platformKeys(os: OsFamily, arm: boolean): string[] {
+  if (os === "mac") return arm ? ["darwin-aarch64", "darwin-x86_64"] : ["darwin-x86_64", "darwin-aarch64"];
+  if (os === "windows") return ["windows-x86_64", "darwin-aarch64", "darwin-x86_64", "linux-x86_64"];
+  return ["linux-x86_64", "darwin-aarch64", "darwin-x86_64", "windows-x86_64"];
+}
+
+/** Returns the best available installer for the detected OS, never undefined if any exist. */
+function pickPrimary(
+  installers: Record<string, Installer>,
+  os: OsFamily,
+  arm: boolean,
+): { key: string; installer: Installer } | undefined {
+  const keys = platformKeys(os, arm);
+  for (const k of keys) {
+    if (installers[k]) return { key: k, installer: installers[k] };
+  }
+  // Final fallback: any available installer
+  const first = Object.entries(installers)[0];
+  return first ? { key: first[0], installer: first[1] } : undefined;
+}
+
+/** Human-readable label + file extension for a platform key. */
+function platformMeta(key: string): { label: string; ext: string } {
+  if (key === "darwin-aarch64") return { label: "macOS (Apple Silicon)", ext: ".dmg" };
+  if (key === "darwin-x86_64") return { label: "macOS (Intel)", ext: ".dmg" };
+  if (key === "windows-x86_64") return { label: "Windows", ext: ".msi" };
+  if (key === "linux-x86_64") return { label: "Linux", ext: ".AppImage" };
+  return { label: key, ext: "" };
+}
 
 /* ── Content data ──────────────────────────────────────────────────────── */
 
@@ -140,9 +230,11 @@ function useReveal() {
 export default function App() {
   const [manifest, setManifest] = useState<Manifest>(FALLBACK);
   const isArm = useRef<boolean>(true);
+  const os = useRef<OsFamily>("mac");
   useReveal();
 
   useEffect(() => {
+    os.current = detectOS();
     isArm.current = prefersAppleSilicon();
     let cancelled = false;
     fetch(MANIFEST_URL, { cache: "no-cache" })
@@ -156,13 +248,37 @@ export default function App() {
     };
   }, []);
 
-  const arm = manifest.installers["darwin-aarch64"];
-  const intel = manifest.installers["darwin-x86_64"];
-  const primary = useMemo(
-    () => (isArm.current ? arm : intel) ?? arm ?? intel,
-    [arm, intel]
+  // Derive the list of present installers in display order (only those in manifest)
+  const PLATFORM_ORDER = ["darwin-aarch64", "darwin-x86_64", "windows-x86_64", "linux-x86_64"];
+  const presentInstallers = useMemo(
+    () => PLATFORM_ORDER.filter((k) => !!manifest.installers[k]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [manifest.installers],
   );
-  const primaryArch = primary === intel ? "Intel" : "Apple Silicon";
+
+  // Resolve the primary (recommended) installer for hero CTA
+  const primaryResult = useMemo(
+    () => pickPrimary(manifest.installers, os.current, isArm.current),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [manifest.installers],
+  );
+  const primary = primaryResult?.installer;
+  const primaryKey = primaryResult?.key ?? "darwin-aarch64";
+  const { label: primaryLabel, ext: primaryExt } = platformMeta(primaryKey);
+
+  // Choose the right glyph for the hero CTA
+  const HeroGlyph =
+    os.current === "windows" ? WindowsLogo :
+    os.current === "linux"   ? LinuxLogo   :
+    AppleLogo;
+
+  // Per-card meta: title, sub, glyph, ext
+  function cardMeta(key: string): { title: string; sub: string; Glyph: ComponentType<{ size?: number }>; ext: string } {
+    if (key === "darwin-aarch64") return { title: "Apple Silicon", sub: "M1, M2, M3 and later", Glyph: AppleLogo, ext: ".dmg" };
+    if (key === "darwin-x86_64")  return { title: "Intel",         sub: "x86-64 Macs",         Glyph: AppleLogo, ext: ".dmg" };
+    if (key === "windows-x86_64") return { title: "Windows",       sub: "x86-64 · Windows 10+", Glyph: WindowsLogo, ext: ".msi" };
+    return                               { title: "Linux",         sub: "x86-64 AppImage",     Glyph: LinuxLogo,   ext: ".AppImage" };
+  }
 
   return (
     <>
@@ -214,11 +330,11 @@ export default function App() {
 
               <div className="cta-row">
                 <a className="btn-download" href={primary?.url}>
-                  <AppleLogo />
+                  <HeroGlyph />
                   <span className="bd-text">
-                    Download for macOS
+                    Download for {primaryLabel}
                     <span className="bd-meta">
-                      {primaryArch} · {primary ? fmtSize(primary.size) : "—"}
+                      {primaryExt} · {primary ? fmtSize(primary.size) : "—"}
                     </span>
                   </span>
                 </a>
@@ -228,8 +344,6 @@ export default function App() {
               </div>
 
               <div className="cta-note">
-                <span>macOS 11+</span>
-                <span className="sep" />
                 <span>Free</span>
                 <span className="sep" />
                 <span>v{manifest.version}</span>
@@ -384,26 +498,28 @@ export default function App() {
               <span className="eyebrow">
                 <span className="accent">↓</span> &nbsp;Download
               </span>
-              <h2>Get Argus for macOS.</h2>
+              <h2>Get Argus.</h2>
               <p>
-                Universal builds for Apple Silicon and Intel. Free, signed,
+                Signed installers for macOS, Windows, and Linux. Free,
                 version {manifest.version}.
               </p>
             </div>
 
             <div className="dl-cards reveal">
-              <DownloadCard
-                title="Apple Silicon"
-                sub="M1, M2, M3 and later"
-                installer={arm}
-                recommended={isArm.current}
-              />
-              <DownloadCard
-                title="Intel"
-                sub="x86-64 Macs"
-                installer={intel}
-                recommended={!isArm.current}
-              />
+              {presentInstallers.map((key) => {
+                const { title, sub, Glyph, ext } = cardMeta(key);
+                return (
+                  <DownloadCard
+                    key={key}
+                    title={title}
+                    sub={sub}
+                    glyph={<Glyph size={18} />}
+                    ext={ext}
+                    installer={manifest.installers[key]}
+                    recommended={key === primaryKey}
+                  />
+                );
+              })}
             </div>
 
             <div className="dl-foot">
@@ -411,7 +527,7 @@ export default function App() {
               <span>·</span>
               <span>Released {fmtDate(manifest.pub_date)}</span>
               <span>·</span>
-              <span>requires macOS 11 Big Sur or later</span>
+              <span>macOS 11+ · Windows 10+ · glibc 2.17+</span>
             </div>
           </div>
         </section>
@@ -443,11 +559,15 @@ export default function App() {
 function DownloadCard({
   title,
   sub,
+  glyph,
+  ext,
   installer,
   recommended,
 }: {
   title: string;
   sub: string;
+  glyph?: ReactNode;
+  ext?: string;
   installer?: Installer;
   recommended?: boolean;
 }) {
@@ -455,13 +575,13 @@ function DownloadCard({
     <div className={`dl-card${recommended ? " recommended" : ""}`}>
       {recommended && <span className="dl-badge">Recommended for you</span>}
       <div className="arch">
-        <Chip size={18} />
+        {glyph ?? <Chip size={18} />}
         {title}
       </div>
       <div className="sub">{sub}</div>
       <div className="meta">
         <span className="fn">{installer?.filename ?? "—"}</span>
-        <span>{installer ? `${fmtSize(installer.size)} · .dmg` : "—"}</span>
+        <span>{installer ? `${fmtSize(installer.size)} · ${ext ?? ".dmg"}` : "—"}</span>
       </div>
       <a className="dl-btn" href={installer?.url} aria-disabled={!installer}>
         <Download size={16} />
