@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Command as Cmdk } from "cmdk";
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import styles from "./Palette.module.css";
 
 export type PaletteFilter = (
@@ -26,6 +26,7 @@ export interface PaletteShellProps {
    *  default `command-score` fuzzy scorer (current behaviour for ⌘K). */
   filter?: PaletteFilter;
   children: ReactNode;
+  listRef?: Ref<HTMLDivElement>;
 }
 
 /**
@@ -44,6 +45,7 @@ export function PaletteShell({
   shouldFilter = true,
   filter,
   children,
+  listRef,
 }: PaletteShellProps) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -67,7 +69,7 @@ export function PaletteShell({
               value={search}
               onValueChange={onSearchChange}
             />
-            <Cmdk.List className={styles.list}>{children}</Cmdk.List>
+            <Cmdk.List ref={listRef} className={styles.list}>{children}</Cmdk.List>
           </Cmdk>
         </Dialog.Content>
       </Dialog.Portal>
