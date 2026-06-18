@@ -663,6 +663,8 @@ function MysqlTableViewer({
             onRetryNextPage={tableData.clearNextError}
             onCellSelect={(_rowIdx, _colIdx) => {
               // Inspector uses selectedRows array; colIdx ignored for now.
+              // Selecting a row auto-reveals the inspector if it was hidden.
+              setInspectorVisible(true);
             }}
           />
         )}
