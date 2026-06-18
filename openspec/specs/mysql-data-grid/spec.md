@@ -616,9 +616,29 @@ The frontend SHALL persist a per-table page size under the settings key `myTable
 
 ### Requirement: Per-table ordering controls
 
-The data grid SHALL support changing the active order via column header clicks. Clicking a column header MUST cycle that column's sort through `ASC → DESC → unsorted`. Holding `Shift` while clicking a column header MUST extend the existing `order_by` array by appending (or toggling) that column — preserving multi-column sort. The new `order_by` array MUST be persisted per `(connectionId, schema, relation)` under `myTableOrder:<connectionId>:<schema>:<relation>` (a JSON array of `{ column, direction: "ASC" | "DESC" }`). When unset, the order MUST default to the empty array (the relation's natural row order). The header MUST show a visible sort badge (e.g. `↑` / `↓`) on every column currently participating in the sort, with the badge order or index reflecting the column's position in the array.
+The data grid SHALL support changing the active order via column header clicks. Clicking a column header MUST cycle that column's sort through `ASC → DESC → unsorted`. Holding `Shift` while clicking a column header MUST extend the existing `order_by` array by appending (or toggling) that column — preserving multi-column sort. The new `order_by` array MUST be persisted per `(connectionId, schema, relation)` under `myTableOrder:<connectionId>:<schema>:<relation>` (a JSON array of `{ column, direction: "ASC" | "DESC" }`).
+
+When no order has been selected for the relation, the initial `order_by` MUST default to the relation's primary key in descending direction — every primary-key column `DESC`, in primary-key definition order. When the relation has no primary key (including views), the order MUST default to the empty array (the relation's natural row order). Because the primary key is loaded asynchronously, the viewer MUST seed the initial order from the resolved primary key and MUST NOT issue a first-page fetch with an empty order followed by a second fetch carrying the primary-key default; the relation MUST open with a single first-page fetch carrying the correct order. A user order change MUST take precedence over the default for the life of the tab and MUST NOT be overwritten when the primary key resolves.
+
+The header MUST show a visible sort badge (e.g. `↑` / `↓`) on every column currently participating in the sort, with the badge order or index reflecting the column's position in the array.
 
 The setting MUST be scoped per connection — two connections inspecting the same `<schema>.<relation>` MUST NOT share sort state.
+
+#### Scenario: Default order is primary key descending
+
+- **WHEN** the user opens `analytics.events` (primary key `id`) for the first time and no order has been selected
+- **THEN** the issued SQL contains `` ORDER BY `id` DESC ``
+- **AND** the viewer issues exactly one first-page fetch (no preceding fetch with an empty order)
+
+#### Scenario: Composite primary key defaults to all columns descending
+
+- **WHEN** the user opens a table whose primary key is `(tenant_id, created_at)` for the first time
+- **THEN** the issued SQL contains `` ORDER BY `tenant_id` DESC, `created_at` DESC ``
+
+#### Scenario: Relation without a primary key defaults to no order
+
+- **WHEN** the user opens a view, or a table with no primary key, for the first time
+- **THEN** the issued SQL contains no `ORDER BY` clause
 
 #### Scenario: Single-column sort cycle
 
@@ -632,6 +652,11 @@ The setting MUST be scoped per connection — two connections inspecting the sam
 - **THEN** `order_by` becomes `[{ column: "country", direction: "ASC" }, { column: "created_at", direction: "ASC" }]`
 - **AND** the issued SQL contains `` ORDER BY `country` ASC, `created_at` ASC ``
 
+#### Scenario: User order is not overwritten by the primary-key default
+
+- **WHEN** the user changes the order on `analytics.events` and then the primary key resolves (or the tab re-renders)
+- **THEN** the user's `order_by` remains in effect and the primary-key default is not re-applied
+
 #### Scenario: Sort persists across tab switches and restarts
 
 - **WHEN** the user sets `order_by: [{ column: "created_at", direction: "DESC" }]` on `analytics.events` and switches tabs
@@ -640,8 +665,8 @@ The setting MUST be scoped per connection — two connections inspecting the sam
 
 #### Scenario: Sort is per connection
 
-- **WHEN** the user has `created_at DESC` on `connectionA.analytics.events` and opens `connectionB.analytics.events`
-- **THEN** `connectionB.analytics.events` issues SQL with no `ORDER BY` clause
+- **WHEN** the user has `created_at DESC` on `connectionA.analytics.events` and opens `connectionB.analytics.events` (primary key `id`) for the first time
+- **THEN** `connectionB.analytics.events` issues SQL ordered by its own default `` ORDER BY `id` DESC ``, not by `created_at` from connection A
 
 ### Requirement: Bottom bar status
 

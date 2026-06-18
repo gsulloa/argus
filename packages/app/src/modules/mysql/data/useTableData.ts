@@ -4,7 +4,7 @@
  * Cold-load race protection: rows + columns are cleared simultaneously on new query.
  */
 
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AppError } from "@/platform/errors/AppError";
 import { dataApi } from "./api";
 import {
@@ -144,6 +144,13 @@ export interface UseTableDataArgs {
   relationKind: RelationKind;
   initialPageSize?: number;
   initialOrderBy?: OrderBy[];
+  /**
+   * When `false`, defer the first-page auto-fetch. Callers use this to wait for
+   * the async PK lookup so the first fetch carries the PK-derived default order
+   * instead of burning an empty-order fetch the default would immediately
+   * supersede. Defaults to `true`.
+   */
+  enabled?: boolean;
 }
 
 export function useTableData({
@@ -155,6 +162,7 @@ export function useTableData({
   relationKind: _relationKind,
   initialPageSize = DEFAULT_PAGE_SIZE,
   initialOrderBy = [],
+  enabled = true,
 }: UseTableDataArgs): UseTableDataResult {
   const [state, dispatch] = useReducer(reducer, undefined, initialState);
   const stateRef = useRef(state);
@@ -164,7 +172,7 @@ export function useTableData({
     (_: number, n: number) => Math.min(Math.max(1, n), MAX_PAGE_SIZE),
     initialPageSize,
   );
-  const [orderBy, setOrderBy] = useReducer(
+  const [orderBy, setOrderByRaw] = useReducer(
     (_: OrderBy[], o: OrderBy[]) => o,
     initialOrderBy,
   );
@@ -176,11 +184,35 @@ export function useTableData({
   const setPageSize = useCallback((n: number) => setPageSizeRaw(n), []);
   const setFilterModel = useCallback((m: FilterModel) => setFilterModelRaw(m), []);
 
+  // Re-seed `orderBy` from a freshly-resolved `initialOrderBy` (e.g. the
+  // PK-descending default that arrives after the async PK lookup completes),
+  // but only before the first fetch and only while the user has not chosen an
+  // order. Adjusting state during render (React's documented pattern) makes the
+  // new order visible to the auto-fetch effect in the same commit, so the
+  // relation opens with a single fetch carrying the correct order.
+  const userTouchedOrderRef = useRef(false);
+  const hasFetchedRef = useRef(false);
+  const initialOrderKey = JSON.stringify(initialOrderBy);
+  const [seededOrderKey, setSeededOrderKey] = useState(initialOrderKey);
+  if (
+    seededOrderKey !== initialOrderKey &&
+    !userTouchedOrderRef.current &&
+    !hasFetchedRef.current
+  ) {
+    setSeededOrderKey(initialOrderKey);
+    setOrderByRaw(initialOrderBy);
+  }
+  const setOrderBy = useCallback((o: OrderBy[]) => {
+    userTouchedOrderRef.current = true;
+    setOrderByRaw(o);
+  }, []);
+
   // Stable generation counter to detect stale fetches
   const fetchGenRef = useRef(0);
 
   const fetchFirstPage = useCallback(async () => {
     if (!isTauriRuntime()) return;
+    hasFetchedRef.current = true;
     const gen = ++fetchGenRef.current;
     dispatch({ type: "first-loading" });
     try {
@@ -210,10 +242,11 @@ export function useTableData({
   const depsKey = `${connectionId}/${schema}/${relation}/${pageSize}/${JSON.stringify(orderBy)}/${JSON.stringify(filterModel)}`;
   const depsKeyRef = useRef(depsKey);
   useEffect(() => {
+    if (!enabled) return;
     if (depsKeyRef.current === depsKey && stateRef.current.status.state !== "idle") return;
     depsKeyRef.current = depsKey;
     void fetchFirstPage();
-  }, [depsKey, fetchFirstPage]);
+  }, [depsKey, fetchFirstPage, enabled]);
 
   // refresh() is the explicit Apply gesture handler. It MUST unconditionally
   // reset the buffer and issue a new first-page fetch. It MUST NOT be routed

@@ -40,9 +40,11 @@ import {
   modelToPayload,
   type CellValue,
   type EditValue,
+  type OrderBy,
   type RelationKind,
 } from "./types";
 import type { FilterBarHandle } from "../../shared/filter-bar";
+import { deriveDefaultOrderBy } from "@/modules/shared/orderBy";
 import styles from "./TableViewerTab.module.css";
 
 export const POSTGRES_TABLE_DATA_KIND = "postgres-table-data";
@@ -131,7 +133,7 @@ export function TableViewer({
   );
 
   const {
-    orderBy,
+    persistedOrderBy,
     isLoaded: orderByLoaded,
     setOrderBy,
   } = useTableOrderBy(connectionId, schema, relation);
@@ -221,6 +223,16 @@ export function TableViewer({
   const pkLookup = useTablePrimaryKey(connectionId, schema, relation);
   const pkColumns = pkLookup.metadata?.pk_columns ?? null;
   const enumValuesByColumn = pkLookup.metadata?.enums ?? {};
+  // The PK lookup has settled once it is `ready` or `error` (an error is
+  // treated as "no PK" → no default order).
+  const pkResolved = pkLookup.status === "ready" || pkLookup.status === "error";
+
+  // Effective order: a persisted value wins (including an explicit empty array);
+  // otherwise default to the relation's PK descending once the PK has resolved.
+  const orderBy = useMemo<OrderBy[]>(
+    () => persistedOrderBy ?? deriveDefaultOrderBy(pkColumns, relationKind),
+    [persistedOrderBy, pkColumns, relationKind],
+  );
 
   const data = useTableData({
     connectionId,
@@ -229,7 +241,12 @@ export function TableViewer({
     pageSize,
     orderBy,
     applied,
-    enabled: filterLoaded && orderByLoaded,
+    // Defer the first fetch until persisted filter/order have loaded. When no
+    // order is persisted, also wait for the PK so the first fetch carries the
+    // PK-descending default (no wasted empty-order fetch). When a persisted
+    // order exists, do not block on the PK.
+    enabled:
+      filterLoaded && orderByLoaded && (persistedOrderBy !== null || pkResolved),
     applyToken,
   });
 
