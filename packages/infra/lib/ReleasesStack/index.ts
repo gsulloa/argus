@@ -12,8 +12,10 @@ import {
   LANDING_PUBLIC_URL,
   LANDING_WWW_SUBDOMAIN,
   PROJECT_NAME,
+  RELEASES_LOG_PREFIX,
   RELEASES_SUBDOMAIN,
 } from "@/constants";
+import { AnalyticsStack } from "@/lib/AnalyticsStack/index";
 import { DnsStack } from "@/lib/DnsStack/index";
 
 export class ReleasesStack extends cdk.Stack {
@@ -23,6 +25,9 @@ export class ReleasesStack extends cdk.Stack {
     // ── DNS / Certificate (from DnsStack via SSM) ────────────────────────────
     const hostedZone = DnsStack.getHostedZone(this);
     const certificate = DnsStack.getCertificate(this);
+
+    // ── Analytics log bucket (from AnalyticsStack via SSM) ───────────────────
+    const logBucket = AnalyticsStack.getLogBucket(this);
 
     // ── S3 Bucket ─────────────────────────────────────────────────────────────
     const bucket = new s3.Bucket(this, "ArtifactsBucket", {
@@ -73,6 +78,9 @@ export class ReleasesStack extends cdk.Stack {
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       domainNames: [RELEASES_SUBDOMAIN],
       certificate,
+      enableLogging: true,
+      logBucket,
+      logFilePrefix: RELEASES_LOG_PREFIX,
       // Additional no-cache behaviors for the two manifest files so updated
       // manifests are visible immediately without waiting for TTL expiry.
       additionalBehaviors: {
