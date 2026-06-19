@@ -272,6 +272,51 @@ textarea.cellEditor {
   min-height: 26px;
 }
 
+.cellEditorRow {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  background: var(--surface);
+}
+.cellEditorRow .cellEditor {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+.cellEditorNullActive {
+  color: var(--text-subtle);
+  font-style: italic;
+}
+.cellNullToggle {
+  flex-shrink: 0;
+  align-self: center;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 6px;
+  margin-right: 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.cellNullToggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.cellNullToggleActive {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+.cellNullToggleActive:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
 .jsonEditorWrapper {
   display: flex;
   flex-direction: column;

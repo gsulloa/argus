@@ -187,6 +187,40 @@ textarea.editor {
   color: var(--text);
 }
 
+.nullToggle {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  padding: 3px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.nullToggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.nullToggleActive {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+.nullToggleActive:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.editorNull {
+  color: var(--text-subtle);
+  font-style: italic;
+}
+
 .bulkPlaceholder {
   color: var(--text-muted);
   font-style: italic;

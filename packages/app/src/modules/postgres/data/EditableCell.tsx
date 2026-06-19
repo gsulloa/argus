@@ -320,33 +320,57 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
 
   const isJsonColumn = looksLikeJson(column.data_type);
 
+  // Explicit NULL toggle for nullable free-form columns (text / date / numeric /
+  // JSON). Mirrors the MySQL/MSSQL editors. `onMouseDown` preventDefault keeps
+  // focus on the editor so the toggle doesn't trigger a blur-commit; the editor
+  // stays open so the user can toggle it back off or keep typing.
+  const nullToggleButton = column.is_nullable ? (
+    <button
+      type="button"
+      tabIndex={-1}
+      title={nullToggle ? "Clear NULL" : "Set NULL"}
+      className={`${styles.cellNullToggle} ${
+        nullToggle ? styles.cellNullToggleActive : ""
+      }`}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => setNullToggle((v) => !v)}
+    >
+      NULL
+    </button>
+  ) : null;
+
   if (useTextarea) {
     const textareaClassName = [
       styles.cellEditor,
       styles.cellEditorMono,
+      nullToggle ? styles.cellEditorNullActive : "",
       isJsonColumn && jsonError ? styles.jsonErrorBorder : "",
     ]
       .filter(Boolean)
       .join(" ");
     return (
       <div className={styles.jsonEditorWrapper}>
-        <textarea
-          ref={(el) => {
-            inputRef.current = el;
-          }}
-          className={textareaClassName}
-          value={text}
-          onChange={(e) => {
-            setNullToggle(false);
-            setText(e.target.value);
-            setJsonError(null);
-            setJsonWarning(false);
-          }}
-          onBlur={commit}
-          onKeyDown={handleKey}
-          rows={3}
-          {...noAutoCorrectProps}
-        />
+        <div className={styles.cellEditorRow}>
+          <textarea
+            ref={(el) => {
+              inputRef.current = el;
+            }}
+            className={textareaClassName}
+            value={nullToggle ? "" : text}
+            placeholder={nullToggle ? "NULL" : undefined}
+            onChange={(e) => {
+              setNullToggle(false);
+              setText(e.target.value);
+              setJsonError(null);
+              setJsonWarning(false);
+            }}
+            onBlur={commit}
+            onKeyDown={handleKey}
+            rows={3}
+            {...noAutoCorrectProps}
+          />
+          {nullToggleButton}
+        </div>
         {isJsonColumn && jsonError && (
           <div className={styles.jsonError}>{jsonError}</div>
         )}
@@ -360,7 +384,7 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
     );
   }
 
-  return (
+  const inputEl = (
     <input
       ref={(el) => {
         inputRef.current = el;
@@ -369,8 +393,9 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
       inputMode={looksLikeNumeric(t) ? "decimal" : undefined}
       className={`${styles.cellEditor} ${
         isMonoCategory(categorize(t)) ? styles.cellEditorMono : ""
-      }`}
-      value={text}
+      } ${nullToggle ? styles.cellEditorNullActive : ""}`}
+      value={nullToggle ? "" : text}
+      placeholder={nullToggle ? "NULL" : undefined}
       onChange={(e) => {
         setNullToggle(false);
         setText(e.target.value);
@@ -379,6 +404,15 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
       onKeyDown={handleKey}
       {...noAutoCorrectProps}
     />
+  );
+
+  if (!nullToggleButton) return inputEl;
+
+  return (
+    <div className={styles.cellEditorRow}>
+      {inputEl}
+      {nullToggleButton}
+    </div>
   );
 }
 
