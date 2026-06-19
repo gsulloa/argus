@@ -318,11 +318,15 @@ describe("CacheProvider — 13.9: describe pipeline parallelism cap (max 8)", ()
       </TestProvider>,
     );
 
-    // Wait for all describes to settle.
+    // Wait for tables to load AND all describes to settle. Throw (don't
+    // return) while not ready, otherwise waitFor treats the first poll as a
+    // success and resolves before any describe has been dispatched.
     await waitFor(
       () => {
         const cache = latestCache;
-        if (!cache || cache.tables.status !== "ready") return;
+        if (!cache || cache.tables.status !== "ready") {
+          throw new Error("Tables not ready yet");
+        }
         const allDone = cache.tables.names.every((n) => {
           const slot = cache.describe.get(n);
           return slot?.status === "ready" || slot?.status === "error";
