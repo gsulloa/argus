@@ -105,6 +105,22 @@ export interface AthenaStatementOutcome {
 export type AthenaMultiSqlResult = AthenaStatementOutcome[];
 
 // ---------------------------------------------------------------------------
+// Named query types
+// ---------------------------------------------------------------------------
+
+export interface AthenaNamedQuerySummary {
+  named_query_id: string;
+  name: string;
+  description: string | null;
+  database: string;
+  work_group: string;
+}
+
+export interface AthenaNamedQueryDetail extends AthenaNamedQuerySummary {
+  query_string: string;
+}
+
+// ---------------------------------------------------------------------------
 // AWS credentials (shared with DynamoDB keychain shape)
 // ---------------------------------------------------------------------------
 

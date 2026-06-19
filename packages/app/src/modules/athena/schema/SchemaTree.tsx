@@ -25,7 +25,7 @@ import { athenaApi } from "../api";
 import { athenaSchemaCache } from "./globalSchemaCache";
 import { athenaColumnsCache } from "../sql/columnsCache";
 import { openAthenaQueryTab } from "../openAthenaQueryTab";
-import type { AthenaDatabaseInfo, AthenaRelationInfo, AthenaColumnInfo } from "../types";
+import type { AthenaDatabaseInfo, AthenaNamedQuerySummary, AthenaRelationInfo, AthenaColumnInfo } from "../types";
 import styles from "@/modules/mysql/schema/SchemaTree.module.css";
 
 interface Props {
@@ -38,18 +38,22 @@ interface Props {
 
 interface LeafData {
   kind: "leaf";
-  objectKind: "table" | "view" | "column";
+  objectKind: "table" | "view" | "column" | "named-query";
   database: string;
   relation?: string;
   name: string;
+  namedQueryId?: string;
+  description?: string | null;
 }
 
 interface GroupData {
   kind: "group";
   placeholder?: string;
   spinner?: boolean;
-  retry?: { kind: "databases" } | { kind: "relations"; database: string } | { kind: "columns"; database: string; relation: string };
+  retry?: { kind: "databases" } | { kind: "relations"; database: string } | { kind: "columns"; database: string; relation: string } | { kind: "named-queries" };
   countBadge?: number;
+  isNamedQueriesBranch?: boolean;
+  isWorkgroupGroup?: boolean;
 }
 
 type NodeData = LeafData | GroupData;
@@ -139,6 +143,58 @@ export function AthenaSchemaTree({ connectionId }: Props) {
   }, [connectionId]);
 
   // ---------------------------------------------------------------------------
+  // Named Queries — lazy-load on first expand (task 4.2)
+  // ---------------------------------------------------------------------------
+  const [nqState, setNqState] = useState<LoadState>("idle");
+  const [nqError, setNqError] = useState<string | undefined>();
+  const [namedQueries, setNamedQueries] = useState<AthenaNamedQuerySummary[]>(
+    () => athenaSchemaCache.getNamedQueries(connectionId) ?? [],
+  );
+
+  const loadNamedQueries = useCallback(async () => {
+    setNqState("loading");
+    setNqError(undefined);
+    try {
+      const queries = await athenaApi.listNamedQueries(connectionId);
+      athenaSchemaCache.recordNamedQueries(connectionId, queries);
+      setNamedQueries(queries);
+      setNqState("loaded");
+    } catch (e) {
+      setNqError((e as Error).message ?? "Failed to load named queries.");
+      setNqState("error");
+    }
+  }, [connectionId]);
+
+  // Sync named queries from cache (e.g. after invalidation + reload)
+  useEffect(() => {
+    const unsub = athenaSchemaCache.subscribe(() => {
+      const cached = athenaSchemaCache.getNamedQueries(connectionId);
+      if (cached !== null) {
+        setNamedQueries(cached);
+      } else {
+        // Cache was invalidated — reset to idle so next expand re-fetches
+        setNamedQueries([]);
+        setNqState("idle");
+      }
+    });
+    return unsub;
+  }, [connectionId]);
+
+  // Listen for manual refresh — reset named-queries state to idle (task 4.7)
+  useEffect(() => {
+    function onRefresh(e: Event) {
+      const ev = e as CustomEvent<string>;
+      if (ev.detail === connectionId) {
+        setNqState("idle");
+        setNqError(undefined);
+        setNamedQueries([]);
+      }
+    }
+    window.addEventListener("athena:schema-refresh", onRefresh);
+    return () => window.removeEventListener("athena:schema-refresh", onRefresh);
+  }, [connectionId]);
+
+  // ---------------------------------------------------------------------------
   // Relations per database
   // ---------------------------------------------------------------------------
   const [relState, setRelState] = useState<Map<string, LoadState>>(new Map());
@@ -195,7 +251,87 @@ export function AthenaSchemaTree({ connectionId }: Props) {
   // ---------------------------------------------------------------------------
 
   const builtNodes: TreeNode[] = useMemo(() => {
-    return databases.map((db) => {
+    // ---------------------------------------------------------------------------
+    // Named Queries branch (task 4.1 — above databases)
+    // ---------------------------------------------------------------------------
+    const nqBranchId = `athena:${connectionId}/named-queries`;
+
+    let nqChildren: TreeNode[];
+    if (nqState === "idle") {
+      nqChildren = [{ ...placeholderNode(nqBranchId, "idle", "(expand to load)"), level: 1 }];
+    } else if (nqState === "loading") {
+      nqChildren = [{ ...placeholderNode(nqBranchId, "loading", "Loading…", { spinner: true }), level: 1 }];
+    } else if (nqState === "error") {
+      nqChildren = [{
+        ...placeholderNode(nqBranchId, "error", nqError ?? "Failed to load named queries.", { retry: { kind: "named-queries" } }),
+        level: 1,
+      }];
+    } else if (namedQueries.length === 0) {
+      nqChildren = [{ ...placeholderNode(nqBranchId, "empty", "Sin named queries en la cuenta"), level: 1 }];
+    } else {
+      // Group by work_group preserving (work_group, name) order from backend.
+      // The array is pre-sorted by (work_group, name), so a stable sequential
+      // group-by preserves that order without any re-sort.
+      const groups = new Map<string, AthenaNamedQuerySummary[]>();
+      for (const nq of namedQueries) {
+        const bucket = groups.get(nq.work_group);
+        if (bucket) {
+          bucket.push(nq);
+        } else {
+          groups.set(nq.work_group, [nq]);
+        }
+      }
+
+      nqChildren = Array.from(groups.entries()).map<TreeNode>(([workgroup, queries]) => {
+        const wgId = `${nqBranchId}/wg/${workgroup}`;
+        const queryLeaves = queries.map<TreeNode>((nq) => ({
+          id: `${wgId}/${nq.named_query_id}`,
+          label: nq.name,
+          level: 2,
+          hasChildren: false,
+          data: {
+            kind: "leaf",
+            objectKind: "named-query",
+            database: nq.database,
+            name: nq.name,
+            namedQueryId: nq.named_query_id,
+            description: nq.description,
+          } satisfies LeafData,
+        }));
+
+        return {
+          id: wgId,
+          label: workgroup,
+          level: 1,
+          hasChildren: true,
+          data: {
+            kind: "group",
+            isWorkgroupGroup: true,
+            countBadge: queries.length,
+          } satisfies GroupData,
+          children: queryLeaves,
+        };
+      });
+    }
+
+    const nqBranchNode: TreeNode = {
+      id: nqBranchId,
+      label: "Named Queries",
+      level: 0,
+      hasChildren: true,
+      data: {
+        kind: "group",
+        spinner: nqState === "loading",
+        isNamedQueriesBranch: true,
+        countBadge: nqState === "loaded" && namedQueries.length > 0 ? namedQueries.length : undefined,
+      } satisfies GroupData,
+      children: nqChildren,
+    };
+
+    // ---------------------------------------------------------------------------
+    // Database nodes
+    // ---------------------------------------------------------------------------
+    const dbNodes = databases.map((db) => {
       const dbId = `athena:${connectionId}/db/${db.name}`;
       const dbRelState = relState.get(db.name) ?? "idle";
       const dbRelError = relError.get(db.name);
@@ -279,7 +415,9 @@ export function AthenaSchemaTree({ connectionId }: Props) {
         children: relChildren,
       };
     });
-  }, [databases, connectionId, relState, relError, relations, colState, colError, columns]);
+
+    return [nqBranchNode, ...dbNodes];
+  }, [databases, connectionId, relState, relError, relations, colState, colError, columns, nqState, nqError, namedQueries]);
 
   // ---------------------------------------------------------------------------
   // Filter
@@ -324,14 +462,26 @@ export function AthenaSchemaTree({ connectionId }: Props) {
     (node: TreeNode) => {
       const data = node.data as NodeData | undefined;
       if (!data || data.kind !== "leaf") return;
-      if (data.objectKind !== "table" && data.objectKind !== "view") return;
-      // D8: open SQL editor pre-filled with SELECT preview, unexecuted
-      const sql = `SELECT * FROM "${data.database}"."${data.name}" LIMIT 100`;
-      openAthenaQueryTab(tabs, {
-        connectionId,
-        connectionName,
-        sql,
-      });
+      if (data.objectKind === "table" || data.objectKind === "view") {
+        // D8: open SQL editor pre-filled with SELECT preview, unexecuted
+        const sql = `SELECT * FROM "${data.database}"."${data.name}" LIMIT 100`;
+        openAthenaQueryTab(tabs, {
+          connectionId,
+          connectionName,
+          sql,
+        });
+        return;
+      }
+      if (data.objectKind === "named-query" && data.namedQueryId) {
+        // Task 4.4: fetch query body then open in a new tab
+        void athenaApi.getNamedQuery(connectionId, data.namedQueryId).then((detail) => {
+          openAthenaQueryTab(tabs, {
+            connectionId,
+            connectionName,
+            sql: detail.query_string,
+          });
+        });
+      }
     },
     [tabs, connectionId, connectionName],
   );
@@ -341,6 +491,13 @@ export function AthenaSchemaTree({ connectionId }: Props) {
       if (!expanded) return;
       const data = node.data as NodeData | undefined;
       if (!data) return;
+      // Named Queries branch expanding → lazy-load on first expand (task 4.2)
+      if (data.kind === "group" && data.isNamedQueriesBranch) {
+        if (nqState === "idle") {
+          void loadNamedQueries();
+        }
+        return;
+      }
       // Database node expanding → load relations lazily
       if (data.kind === "group" && node.level === 0) {
         const dbName = node.label;
@@ -357,13 +514,31 @@ export function AthenaSchemaTree({ connectionId }: Props) {
         }
       }
     },
-    [relState, colState, loadRelations, loadColumns],
+    [nqState, relState, colState, loadNamedQueries, loadRelations, loadColumns],
   );
 
   const renderIcon = (n: TreeNode): ReactNode => {
     const data = n.data as NodeData | undefined;
     if (!data) return null;
     if (data.kind === "group") {
+      if (data.isNamedQueriesBranch) {
+        // Bookmark/star icon for Named Queries branch — hairline 1.5 stroke per DESIGN.md
+        return (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+          </svg>
+        );
+      }
+      if (data.isWorkgroupGroup) {
+        // Workgroup sub-group: layers/stack icon — same hairline stroke as database icon
+        return (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polygon points="12 2 2 7 12 12 22 7 12 2" />
+            <polyline points="2 17 12 22 22 17" />
+            <polyline points="2 12 12 17 22 12" />
+          </svg>
+        );
+      }
       if (n.level === 0) {
         return (
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -398,6 +573,14 @@ export function AthenaSchemaTree({ connectionId }: Props) {
         </svg>
       );
     }
+    if (data.objectKind === "named-query") {
+      // Small bookmark icon for individual named query leaves — hairline per DESIGN.md
+      return (
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+        </svg>
+      );
+    }
     return null;
   };
 
@@ -417,6 +600,7 @@ export function AthenaSchemaTree({ connectionId }: Props) {
         const onClick = (e: MouseEvent<HTMLButtonElement>) => {
           e.stopPropagation();
           if (retry.kind === "databases") void loadDatabases();
+          else if (retry.kind === "named-queries") void loadNamedQueries();
           else if (retry.kind === "relations") void loadRelations(retry.database);
           else if (retry.kind === "columns") void loadColumns(retry.database, retry.relation);
         };
@@ -444,6 +628,14 @@ export function AthenaSchemaTree({ connectionId }: Props) {
     if (data?.kind === "group" && data.placeholder) {
       return <span className={styles.placeholderText}>{data.placeholder}</span>;
     }
+    // Named query: surface description as tooltip (task 4.3)
+    if (data?.kind === "leaf" && data.objectKind === "named-query" && data.description) {
+      return (
+        <span title={data.description}>
+          {highlightLabel(n.label, query)}
+        </span>
+      );
+    }
     return highlightLabel(n.label, query);
   };
 
@@ -459,7 +651,9 @@ export function AthenaSchemaTree({ connectionId }: Props) {
     return count(filtered.nodes);
   }, [filtered.nodes]);
 
-  const showEmpty = dbState !== "loading" && !dbError && filtered.nodes.length === 0;
+  // The tree always renders (named-queries branch is independent of db state).
+  // A databases loading/error status line appears above the tree when relevant.
+  const showEmpty = filtered.nodes.length === 0;
   const emptyMessage = query.length > 0 ? "No matches." : "No databases.";
 
   return (
@@ -486,26 +680,24 @@ export function AthenaSchemaTree({ connectionId }: Props) {
           </button>
         </div>
       )}
-      {dbState !== "loading" && !dbError && (
-        <div className={styles.body}>
-          <SidebarTree
-            nodes={filtered.nodes}
-            onActivate={onActivate}
-            onToggle={onToggle}
-            isActivatable={(n) => {
-              const data = n.data as NodeData | undefined;
-              return data?.kind === "leaf" && (data.objectKind === "table" || data.objectKind === "view");
-            }}
-            renderIcon={renderIcon}
-            renderBadge={renderBadge}
-            renderLabel={renderLabel}
-            forceExpanded={filtered.forceExpanded}
-            ariaLabel={`Databases for ${connectionName}`}
-            empty={showEmpty ? emptyMessage : undefined}
-            scrollElementRef={sidebarScrollRef ?? undefined}
-          />
-        </div>
-      )}
+      <div className={styles.body}>
+        <SidebarTree
+          nodes={filtered.nodes}
+          onActivate={onActivate}
+          onToggle={onToggle}
+          isActivatable={(n) => {
+            const data = n.data as NodeData | undefined;
+            return data?.kind === "leaf" && (data.objectKind === "table" || data.objectKind === "view" || data.objectKind === "named-query");
+          }}
+          renderIcon={renderIcon}
+          renderBadge={renderBadge}
+          renderLabel={renderLabel}
+          forceExpanded={filtered.forceExpanded}
+          ariaLabel={`Databases and Named Queries for ${connectionName}`}
+          empty={showEmpty ? emptyMessage : undefined}
+          scrollElementRef={sidebarScrollRef ?? undefined}
+        />
+      </div>
     </div>
   );
 }

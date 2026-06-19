@@ -28,6 +28,7 @@ use crate::modules::athena::commands::{
 };
 use crate::modules::athena::pool::AthenaClientRegistry;
 use crate::modules::athena::s3::{athena_list_s3_buckets, athena_list_s3_prefixes};
+use crate::modules::athena::named_queries::{athena_get_named_query, athena_list_named_queries};
 use crate::modules::athena::schema_commands::{
     athena_list_columns, athena_list_databases, athena_list_relations,
 };
@@ -339,6 +340,8 @@ pub fn run() {
             athena_list_databases,
             athena_list_relations,
             athena_list_columns,
+            athena_list_named_queries,
+            athena_get_named_query,
             athena_run_sql,
             athena_run_sql_many,
             athena_cancel_query,

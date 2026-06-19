@@ -5,6 +5,8 @@ import type {
   AthenaColumnInfo,
   AthenaDatabaseInfo,
   AthenaMultiSqlResult,
+  AthenaNamedQueryDetail,
+  AthenaNamedQuerySummary,
   AthenaParams,
   AthenaRelationInfo,
   AthenaRunSqlResult,
@@ -74,6 +76,16 @@ export const athenaApi = {
 
   listColumns: (id: string, database: string, relation: string): Promise<AthenaColumnInfo[]> =>
     call<AthenaColumnInfo[]>("athena_list_columns", { id, database, relation }),
+
+  // ---------------------------------------------------------------------------
+  // Named queries
+  // ---------------------------------------------------------------------------
+
+  listNamedQueries: (id: string): Promise<AthenaNamedQuerySummary[]> =>
+    call<AthenaNamedQuerySummary[]>("athena_list_named_queries", { id }),
+
+  getNamedQuery: (id: string, namedQueryId: string): Promise<AthenaNamedQueryDetail> =>
+    call<AthenaNamedQueryDetail>("athena_get_named_query", { id, namedQueryId }),
 
   // ---------------------------------------------------------------------------
   // S3 browse — pick an output-location bucket with the form's credentials
