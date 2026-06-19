@@ -6,11 +6,12 @@
  * Mirror of mysqlSchemaCache — replaces MySQL types with Athena types.
  */
 
-import type { AthenaDatabaseInfo, AthenaRelationInfo } from "../types";
+import type { AthenaDatabaseInfo, AthenaNamedQuerySummary, AthenaRelationInfo } from "../types";
 
 interface ConnectionCache {
   databases: AthenaDatabaseInfo[];
   relationsByDatabase: Map<string, AthenaRelationInfo[]>;
+  namedQueries: AthenaNamedQuerySummary[] | null;
 }
 
 const cache = new Map<string, ConnectionCache>();
@@ -26,6 +27,7 @@ function ensure(connectionId: string): ConnectionCache {
     c = {
       databases: [],
       relationsByDatabase: new Map(),
+      namedQueries: null,
     };
     cache.set(connectionId, c);
   }
@@ -43,6 +45,16 @@ export const athenaSchemaCache = {
     const c = ensure(connectionId);
     c.relationsByDatabase.set(database, relations);
     notify();
+  },
+
+  recordNamedQueries(connectionId: string, queries: AthenaNamedQuerySummary[]) {
+    const c = ensure(connectionId);
+    c.namedQueries = queries;
+    notify();
+  },
+
+  getNamedQueries(connectionId: string): AthenaNamedQuerySummary[] | null {
+    return cache.get(connectionId)?.namedQueries ?? null;
   },
 
   invalidate(connectionId: string) {
