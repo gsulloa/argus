@@ -190,6 +190,7 @@ impl AiSettings {
                 .optional()?;
 
             if let Some((provider_id, model)) = override_row {
+                let model = crate::modules::ai::caps::sanitize_model(&provider_id, model);
                 return Ok(ResolvedProviderConfig { provider_id, model });
             }
         }
@@ -211,8 +212,8 @@ impl AiSettings {
         match default_provider {
             None => Err(AppError::Validation("no AI provider configured".into())),
             Some(provider_id) => Ok(ResolvedProviderConfig {
-                provider_id,
-                model: model_col,
+                provider_id: provider_id.clone(),
+                model: crate::modules::ai::caps::sanitize_model(&provider_id, model_col),
             }),
         }
     }
@@ -279,7 +280,7 @@ mod tests {
             &db,
             &AiSettingsInput {
                 default_provider: Some("claude-cli".into()),
-                claude_cli_model: Some("claude-opus-4-7".into()),
+                claude_cli_model: Some("claude-opus-4-8".into()),
                 codex_cli_model: None,
                 anthropic_api_model: None,
                 openai_api_model: None,
@@ -290,7 +291,85 @@ mod tests {
 
         let resolved = AiSettings::resolve(&db, None).unwrap();
         assert_eq!(resolved.provider_id, "claude-cli");
-        assert_eq!(resolved.model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(resolved.model.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    #[test]
+    fn retired_global_model_resolves_to_none() {
+        // gpt-4o-mini is retired from openai-api; resolve should return None so provider
+        // uses its default (gpt-5.1).
+        let db = make_db();
+        AiSettings::set(
+            &db,
+            &AiSettingsInput {
+                default_provider: Some("openai-api".into()),
+                claude_cli_model: None,
+                codex_cli_model: None,
+                anthropic_api_model: None,
+                openai_api_model: Some("gpt-4o-mini".into()),
+                overrides: vec![],
+            },
+        )
+        .unwrap();
+
+        let resolved = AiSettings::resolve(&db, None).unwrap();
+        assert_eq!(resolved.provider_id, "openai-api");
+        assert_eq!(resolved.model, None, "retired model should resolve to None");
+    }
+
+    #[test]
+    fn retired_override_model_resolves_to_none() {
+        // claude-opus-4-7 is retired from anthropic-api; override should resolve to None.
+        let db = make_db();
+        let conn_id = Uuid::new_v4();
+
+        {
+            let lock = db.0.lock().unwrap();
+            insert_connection(&lock, &conn_id);
+        }
+
+        AiSettings::set(
+            &db,
+            &AiSettingsInput {
+                default_provider: Some("claude-cli".into()),
+                claude_cli_model: None,
+                codex_cli_model: None,
+                anthropic_api_model: None,
+                openai_api_model: None,
+                overrides: vec![ConnectionOverrideRow {
+                    connection_id: conn_id.to_string(),
+                    provider_id: "anthropic-api".into(),
+                    model: Some("claude-opus-4-7".into()),
+                }],
+            },
+        )
+        .unwrap();
+
+        let resolved = AiSettings::resolve(&db, Some(conn_id)).unwrap();
+        assert_eq!(resolved.provider_id, "anthropic-api");
+        assert_eq!(resolved.model, None, "retired override model should resolve to None");
+    }
+
+    #[test]
+    fn valid_global_model_preserved() {
+        // claude-sonnet-4-6 is still valid for anthropic-api; it must be preserved.
+        let db = make_db();
+        AiSettings::set(
+            &db,
+            &AiSettingsInput {
+                default_provider: Some("anthropic-api".into()),
+                claude_cli_model: None,
+                codex_cli_model: None,
+                anthropic_api_model: Some("claude-sonnet-4-6".into()),
+                openai_api_model: None,
+                overrides: vec![],
+            },
+        )
+        .unwrap();
+
+        let resolved = AiSettings::resolve(&db, None).unwrap();
+        assert_eq!(resolved.provider_id, "anthropic-api");
+        assert_eq!(resolved.model.as_deref(), Some("claude-sonnet-4-6"));
     }
 
     #[test]

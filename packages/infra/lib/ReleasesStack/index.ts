@@ -142,7 +142,12 @@ export class ReleasesStack extends cdk.Stack {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
         },
         StringLike: {
-          "token.actions.githubusercontent.com:sub": "repo:gsulloa/argus:*",
+          // Scoped to tag pushes only — `release.yml` triggers on `v*` tags,
+          // which only maintainers with write access can push. A broad
+          // `repo:gsulloa/argus:*` would let any workflow run (any branch/PR/
+          // event) in this public repo assume the role.
+          "token.actions.githubusercontent.com:sub":
+            "repo:gsulloa/argus:ref:refs/tags/v*",
         },
       }),
       description: "Assumed by GitHub Actions to publish Argus release artifacts",

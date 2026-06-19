@@ -1,0 +1,12 @@
+# Code owners for Argus.
+# These owners are requested for review on every PR touching the matched paths.
+# https://docs.github.com/en/repositories/managing-your-repos-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repo.
+* @gsulloa
+
+# Infrastructure (CDK) — deploys to AWS, requires owner review.
+/packages/infra/ @gsulloa
+
+# CI / release automation and repo policy.
+/.github/ @gsulloa
