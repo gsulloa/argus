@@ -203,6 +203,18 @@ describe("ArgusReleasesStack", () => {
     });
   });
 
+  // ── CloudFront access logging ─────────────────────────────────────────────
+
+  it("distribution has access logging enabled with prefix 'releases/'", () => {
+    template.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: {
+        Logging: Match.objectLike({
+          Prefix: "releases/",
+        }),
+      },
+    });
+  });
+
   // ── Custom release domain (from DnsStack) ─────────────────────────────────
 
   it("distribution declares the releases.argusdb.app alias", () => {

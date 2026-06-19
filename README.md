@@ -273,6 +273,28 @@ signed and notarized for macOS, and distributed to the team via auto-updater. Th
 one-time setup (Apple Developer cert, AWS release hosting via `ArgusReleasesStack`,
 updater keypair, GH Secrets) is documented in [docs/release-setup.md](docs/release-setup.md).
 
+## Traffic & download analytics
+
+CloudFront standard access logs are written to a private S3 bucket provisioned by
+`ArgusAnalyticsStack`. Logs are retained for 90 days and then automatically
+expired by a lifecycle rule.
+
+- **Landing visits** — `landing/` prefix, covering every page request to `argusdb.app`.
+- **Installer downloads** — `releases/` prefix, covering every file GET from `releases.argusdb.app`.
+
+A Glue database (`argus_analytics`) with two external tables (`landing_logs`,
+`releases_logs`) and an Athena workgroup (`argus-analytics`) are provisioned in
+the same region as the deploy. To query metrics, open Argus's Athena connection
+pointed at **that same region** and select the `argus-analytics` workgroup —
+the two named queries are ready to run:
+
+- **visits-per-day** — successful HTML requests to the landing page, grouped by
+  day with a distinct-IP approximation (bots filtered).
+- **downloads-by-platform-version** — successful installer downloads (HTTP 200/206
+  for `.dmg`, `.msi`, `.AppImage`), grouped by platform and semver string.
+
+There is no client-side analytics script, cookie banner, or third-party tracker.
+
 ## Project layout
 
 ```
