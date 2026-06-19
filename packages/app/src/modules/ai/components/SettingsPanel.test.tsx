@@ -43,8 +43,8 @@ const CLAUDE_CLI_ENTRY: ProviderListEntry = {
     can_read_files: true,
     supports_streaming: false,
     requires_api_key: false,
-    default_model: "claude-opus-4-5",
-    available_models: ["claude-opus-4-5", "claude-sonnet-4-5"],
+    default_model: "claude-opus-4-8",
+    available_models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
   },
   validation: { kind: "Ready" },
 };
@@ -67,8 +67,8 @@ const ANTHROPIC_API_ENTRY: ProviderListEntry = {
     can_read_files: false,
     supports_streaming: false,
     requires_api_key: true,
-    default_model: "claude-opus-4-5",
-    available_models: ["claude-opus-4-5", "claude-sonnet-4-5"],
+    default_model: "claude-opus-4-8",
+    available_models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
   },
   validation: { kind: "Missing", hint: "Enter an API key below" },
 };
@@ -79,8 +79,8 @@ const OPENAI_API_ENTRY: ProviderListEntry = {
     can_read_files: false,
     supports_streaming: false,
     requires_api_key: true,
-    default_model: "gpt-4o",
-    available_models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
+    default_model: "gpt-5.1",
+    available_models: ["gpt-5.1", "gpt-5.1-mini", "gpt-4o"],
   },
   validation: { kind: "Ready" },
 };
@@ -97,7 +97,7 @@ const BASE_SETTINGS: AiSettingsView = {
   claude_cli_model: null,
   codex_cli_model: null,
   anthropic_api_model: null,
-  openai_api_model: "gpt-4o-mini",
+  openai_api_model: "gpt-5.1-mini",
   overrides: [],
   key_present: { anthropic: false, openai: false },
 };
@@ -151,16 +151,38 @@ describe("SettingsPanel — loaded settings preselected", () => {
     expect((claudeRadio as HTMLInputElement).checked).toBe(true);
   });
 
-  it("OpenAI model dropdown shows the configured model (gpt-4o-mini)", () => {
+  it("OpenAI model dropdown shows the configured model (gpt-5.1-mini)", () => {
     setupStore({
-      settings: { ...BASE_SETTINGS, openai_api_model: "gpt-4o-mini" },
+      settings: { ...BASE_SETTINGS, openai_api_model: "gpt-5.1-mini" },
     });
     renderPanel();
 
     // There are multiple model dropdowns — find the one for openai-api by its id
     const openaiModelSelect = document.getElementById("model-openai-api") as HTMLSelectElement;
     expect(openaiModelSelect).toBeTruthy();
-    expect(openaiModelSelect.value).toBe("gpt-4o-mini");
+    expect(openaiModelSelect.value).toBe("gpt-5.1-mini");
+  });
+});
+
+describe("SettingsPanel — retired model fallback", () => {
+  beforeEach(() => {
+    mockSetSettings.mockResolvedValue(undefined);
+  });
+
+  it("falls back to default_model when persisted model is not in available_models", () => {
+    // gpt-4o-mini is a retired id not present in OPENAI_API_ENTRY.available_models
+    setupStore({
+      settings: { ...BASE_SETTINGS, openai_api_model: "gpt-4o-mini" },
+    });
+    renderPanel();
+
+    const openaiModelSelect = document.getElementById("model-openai-api") as HTMLSelectElement;
+    expect(openaiModelSelect).toBeTruthy();
+    // Should show default_model ("gpt-5.1"), not the retired id
+    expect(openaiModelSelect.value).toBe("gpt-5.1");
+    // No option for the retired id
+    const options = Array.from(openaiModelSelect.options).map((o) => o.value);
+    expect(options).not.toContain("gpt-4o-mini");
   });
 });
 
