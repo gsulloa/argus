@@ -17,6 +17,20 @@ const textCol: DataColumn = {
   is_nullable: true,
 };
 
+const dateCol: DataColumn = {
+  name: "delivery_date",
+  data_type: "date",
+  ordinal_position: 3,
+  is_nullable: true,
+};
+
+const notNullTextCol: DataColumn = {
+  name: "name",
+  data_type: "text",
+  ordinal_position: 4,
+  is_nullable: false,
+};
+
 function renderEditing(column: DataColumn, initial: string | null, onCommit = vi.fn(), onCancel = vi.fn()) {
   return render(
     <EditableCell
@@ -112,5 +126,47 @@ describe("EditableCell - jsonb column", () => {
     expect(onCommit).not.toHaveBeenCalled();
     fireEvent.change(ta, { target: { value: '{"x":' } });
     expect(screen.queryByText(/JSON at position|Unexpected/i)).toBeNull();
+  });
+});
+
+describe("EditableCell - explicit NULL toggle", () => {
+  it("commits null when the NULL toggle is activated on a nullable date column", () => {
+    const onCommit = vi.fn();
+    renderEditing(dateCol, "2026-06-19", onCommit);
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    fireEvent.click(screen.getByRole("button", { name: "NULL" }));
+    // Input now reflects the NULL state (cleared with a NULL placeholder).
+    expect(input.value).toBe("");
+    expect(input.getAttribute("placeholder")).toBe("NULL");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onCommit).toHaveBeenCalledWith(null);
+  });
+
+  it("does not render the NULL toggle for a non-nullable column", () => {
+    renderEditing(notNullTextCol, "hello");
+    expect(screen.queryByRole("button", { name: "NULL" })).toBeNull();
+  });
+
+  it("commits an empty string (not null) for a nullable text column without the toggle", () => {
+    const onCommit = vi.fn();
+    renderEditing(textCol, "hello", onCommit);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith("");
+  });
+
+  it("restores the typed text when the NULL toggle is turned back off", () => {
+    const onCommit = vi.fn();
+    renderEditing(textCol, "", onCommit);
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "hello" } });
+    const nullBtn = screen.getByRole("button", { name: "NULL" });
+    fireEvent.click(nullBtn); // NULL on
+    expect(input.value).toBe("");
+    fireEvent.click(nullBtn); // NULL off
+    expect(input.value).toBe("hello");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onCommit).toHaveBeenCalledWith("hello");
   });
 });
