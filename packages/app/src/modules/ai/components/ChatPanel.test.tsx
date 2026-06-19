@@ -94,7 +94,7 @@ const NEEDS_CONTEXT: AiReadiness = {
 
 const DEFAULT_SETTINGS = {
   default_provider: "claude-cli" as const,
-  claude_cli_model: "claude-opus-4-7",
+  claude_cli_model: "claude-opus-4-8",
   codex_cli_model: null,
   anthropic_api_model: null,
   openai_api_model: null,

@@ -305,8 +305,8 @@ mod tests {
 
     #[test]
     fn resolve_model_accepts_known_codex_model() {
-        let result = resolve_model(&Some("o3-mini".into()), &None, CODEX_CLI_MODELS, CODEX_CLI_DEFAULT_MODEL);
-        assert_eq!(result.unwrap(), Some("o3-mini".to_string()));
+        let result = resolve_model(&Some("gpt-5.1-codex".into()), &None, CODEX_CLI_MODELS, CODEX_CLI_DEFAULT_MODEL);
+        assert_eq!(result.unwrap(), Some("gpt-5.1-codex".to_string()));
     }
 
     #[test]

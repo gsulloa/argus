@@ -24,10 +24,11 @@ pub fn build(db: &DbState, id: ProviderId) -> AppResult<Box<dyn AiProvider>> {
 }
 
 fn configured_model(row: &AiSettingsRow, id: ProviderId) -> Option<String> {
-    match id {
+    let raw = match id {
         ProviderId::ClaudeCli => row.claude_cli_model.clone(),
         ProviderId::CodexCli => row.codex_cli_model.clone(),
         ProviderId::AnthropicApi => row.anthropic_api_model.clone(),
         ProviderId::OpenAiApi => row.openai_api_model.clone(),
-    }
+    };
+    crate::modules::ai::caps::sanitize_model(id.as_kebab(), raw)
 }

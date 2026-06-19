@@ -121,7 +121,10 @@ function ProviderCard({ entry, modelValue, onModelChange, keyPresent }: Provider
 
   const badge = validationBadge(entry.validation);
   const availableModels = entry.capabilities.available_models;
-  const effectiveModel = modelValue ?? entry.capabilities.default_model;
+  const effectiveModel =
+    modelValue && availableModels.includes(modelValue)
+      ? modelValue
+      : entry.capabilities.default_model;
 
   const handleSaveKey = useCallback(async () => {
     const trimmed = keyInput.trim();
