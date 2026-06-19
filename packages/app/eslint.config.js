@@ -48,5 +48,18 @@ export default [
       "no-undef": "off",
     },
   },
+  {
+    files: ["scripts/**/*.{js,mjs}"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: {
+        process: "readonly",
+        console: "readonly",
+        URL: "readonly",
+        fetch: "readonly",
+      },
+    },
+  },
   prettier,
 ];

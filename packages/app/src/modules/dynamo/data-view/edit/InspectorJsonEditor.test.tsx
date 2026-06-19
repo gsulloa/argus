@@ -99,6 +99,7 @@ vi.mock("@codemirror/view", async (importOriginal) => {
       static lineWrapping = actual.EditorView.lineWrapping;
       static theme = vi.fn().mockReturnValue([]);
       static updateListener = actual.EditorView.updateListener;
+      static contentAttributes = actual.EditorView.contentAttributes;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       state: any;
       destroy: () => void;

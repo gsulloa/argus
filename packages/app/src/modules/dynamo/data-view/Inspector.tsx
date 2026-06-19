@@ -222,7 +222,6 @@ function AttributeNode({ name, value, depth, isPk, isSk }: AttributeNodeProps) {
         {expanded &&
           value.L.map((item, i) => (
             <AttributeNode
-              // eslint-disable-next-line react/no-array-index-key
               key={i}
               name={`[${i}]`}
               value={item}
@@ -270,7 +269,6 @@ function AttributeNode({ name, value, depth, isPk, isSk }: AttributeNodeProps) {
           <div className={styles.setElements} style={{ paddingLeft: indent + 16 }}>
             {elements.map((el, i) => (
               <div
-                // eslint-disable-next-line react/no-array-index-key
                 key={i}
                 className={styles.setElement}
                 data-testid="inspector-set-element"

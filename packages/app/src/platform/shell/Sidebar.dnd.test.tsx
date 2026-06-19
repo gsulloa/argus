@@ -175,6 +175,25 @@ vi.mock("@/modules/mssql/openMssqlQueryTab", () => ({
   openMssqlQueryTab: vi.fn(),
 }));
 
+vi.mock("@/modules/athena", () => ({
+  ATHENA_KIND: "athena",
+  AthenaIcon: () => null,
+  athenaApi: { connect: vi.fn(), disconnect: vi.fn() },
+  useActiveAthenaConnections: () => ({ items: [], isActive: () => false }),
+  useAthenaForm: () => ({
+    openCreate: vi.fn(),
+    openEdit: vi.fn(),
+    openDuplicate: vi.fn(),
+  }),
+  AthenaSchemaTree: () => null,
+  AthenaSchemaPrimaryActions: () => null,
+  AthenaSchemaToolbar: () => null,
+}));
+
+vi.mock("@/modules/athena/openAthenaQueryTab", () => ({
+  openAthenaQueryTab: vi.fn(),
+}));
+
 vi.mock("@/modules/context/openContextQuery", () => ({
   openContextQuery: vi.fn(),
 }));
