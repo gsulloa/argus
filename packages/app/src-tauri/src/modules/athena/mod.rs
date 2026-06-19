@@ -3,6 +3,7 @@
 pub mod client;
 pub mod commands;
 pub mod errors;
+pub mod named_queries;
 pub mod params;
 pub mod pool;
 pub mod s3;

@@ -53,7 +53,6 @@ const GO_RE = /^[ \t]*(go)(?:[ \t]+(\d+))?[ \t]*(?:--[^\n]*)?$/im;
 
 function splitBatches(source: string): Batch[] {
   const batches: Batch[] = [];
-  let start = 0;
   let rest = source;
   let absolutePos = 0;
 
@@ -78,8 +77,6 @@ function splitBatches(source: string): Batch[] {
     const advance = goLineEnd + (rest[goLineEnd] === "\n" ? 1 : 0);
     absolutePos += advance;
     rest = rest.slice(advance);
-    start = 0;
-    void start;
   }
   return batches;
 }

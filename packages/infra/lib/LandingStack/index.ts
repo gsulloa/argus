@@ -13,9 +13,11 @@ import { Construct } from "constructs";
 
 import {
   LANDING_DOMAIN,
+  LANDING_LOG_PREFIX,
   LANDING_WWW_SUBDOMAIN,
   PROJECT_NAME,
 } from "@/constants";
+import { AnalyticsStack } from "@/lib/AnalyticsStack/index";
 import { DnsStack } from "@/lib/DnsStack/index";
 
 export class LandingStack extends cdk.Stack {
@@ -25,6 +27,9 @@ export class LandingStack extends cdk.Stack {
     // ── DNS / Certificate (from DnsStack via SSM) ────────────────────────────
     const hostedZone = DnsStack.getHostedZone(this);
     const certificate = DnsStack.getCertificate(this);
+
+    // ── Analytics log bucket (from AnalyticsStack via SSM) ───────────────────
+    const logBucket = AnalyticsStack.getLogBucket(this);
 
     // ── S3 Bucket (private, served via CloudFront OAC) ───────────────────────
     const bucket = new s3.Bucket(this, "SiteBucket", {
@@ -49,6 +54,9 @@ export class LandingStack extends cdk.Stack {
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       domainNames: [LANDING_DOMAIN, LANDING_WWW_SUBDOMAIN],
       certificate,
+      enableLogging: true,
+      logBucket,
+      logFilePrefix: LANDING_LOG_PREFIX,
       errorResponses: [
         {
           httpStatus: 403,

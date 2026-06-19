@@ -18,6 +18,7 @@ vi.mock("@/modules/context/api", () => ({
     unlink: vi.fn(),
     syncSchema: vi.fn(),
     revealPath: vi.fn(),
+    listKnownFolders: vi.fn(() => Promise.resolve([])),
   },
 }));
 

@@ -37,13 +37,23 @@ The Athena module SHALL expose column metadata for a relation derived from the G
 
 ### Requirement: Schema tree and table preview
 
-The frontend SHALL render an Athena schema tree (databases → tables/views → columns) in the connection sidebar, mirroring the MySQL tree. Activating a table/view leaf MUST open a new SQL editor tab pre-filled with `SELECT * FROM "<database>"."<relation>" LIMIT 100` (Athena is read-mostly and `COUNT(*)` incurs scan cost, so no inline-edit data grid is provided in v1). The user runs the preview explicitly so no scan is billed until they choose to run it.
+The Athena sidebar SHALL render, for each connected Athena connection, a tree with a **"Named Queries"** branch (defined by the `athena-named-queries` capability) positioned **above** the Glue databases, followed by the databases tree (databases → tables/views → columns). Expanding a database lazy-loads its relations via `athena_list_relations`; expanding a relation lazy-loads its columns via `athena_list_columns`. Clicking a table or view opens a new Athena query tab pre-filled with `SELECT * FROM "<database>"."<relation>" LIMIT 100`. A manual refresh of the connection SHALL invalidate the cached schema **and** the cached NamedQueries listing for that connection.
 
 #### Scenario: Clicking a table opens a SELECT preview tab
 
-- **WHEN** the user clicks a table leaf in the Athena tree
-- **THEN** a new SQL editor tab opens pre-filled with `SELECT * FROM "<database>"."<relation>" LIMIT 100`
-- **AND** no query is executed until the user runs it
+- **WHEN** the user clicks a table node in the schema tree
+- **THEN** a new Athena query tab opens pre-filled with `SELECT * FROM "<database>"."<relation>" LIMIT 100`
+
+#### Scenario: Named Queries branch precedes databases
+
+- **WHEN** the user expands a connected Athena connection in the sidebar
+- **THEN** the "Named Queries" branch is rendered above the Glue databases
+- **AND** the databases → tables → columns behavior is unchanged
+
+#### Scenario: Refresh invalidates both schema and NamedQueries caches
+
+- **WHEN** the user manually refreshes an Athena connection
+- **THEN** both the cached schema (databases/relations/columns) and the cached NamedQueries listing for that connection are invalidated and re-fetched on next expand
 
 ### Requirement: Completion caches feed editor autocompletion
 
