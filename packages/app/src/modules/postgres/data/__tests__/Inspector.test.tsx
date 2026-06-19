@@ -181,6 +181,77 @@ describe("Inspector - jsonb column", () => {
   });
 });
 
+describe("Inspector - explicit NULL toggle (single-row)", () => {
+  it("commits null to the buffer when the NULL toggle is activated on a text field", () => {
+    const setCellEdit = vi.fn();
+    const buffer = makeBuffer(setCellEdit);
+    renderWithText("hello", buffer);
+    fireEvent.click(screen.getByRole("button", { name: "NULL" }));
+    expect(setCellEdit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ column: "description", value: null }),
+    );
+  });
+
+  it("does not render a NULL toggle for the read-only PK field", () => {
+    renderWithText("hello");
+    // Only the editable `description` field exposes a NULL toggle; the PK `id`
+    // field is read-only and renders none.
+    expect(screen.getAllByRole("button", { name: "NULL" })).toHaveLength(1);
+  });
+});
+
+function makeMultiSelectedRows() {
+  return [
+    {
+      rowKey: "row-1",
+      row: [1, "alpha"] as import("../types").CellValue[],
+      pk: { id: 1 } as Record<string, import("../types").EditValue>,
+      source: "server" as const,
+      isDeleted: false,
+    },
+    {
+      rowKey: "row-2",
+      row: [2, "beta"] as import("../types").CellValue[],
+      pk: { id: 2 } as Record<string, import("../types").EditValue>,
+      source: "server" as const,
+      isDeleted: false,
+    },
+  ];
+}
+
+describe("Inspector - explicit NULL toggle (bulk)", () => {
+  it("applies null to every selected row on Apply when the NULL toggle is active", () => {
+    const bulkSetCellEdit = vi.fn();
+    const buffer = makeBuffer();
+    buffer.bulkSetCellEdit = bulkSetCellEdit;
+    render(
+      <Inspector
+        columns={[idCol, textCol]}
+        selectedRows={makeMultiSelectedRows()}
+        bulkEditAvailable={true}
+        isReadOnly={false}
+        pkColumns={["id"]}
+        enumValuesByColumn={{}}
+        buffer={buffer}
+      />,
+    );
+    // Activate NULL on the `description` column, then Apply.
+    fireEvent.click(screen.getByRole("button", { name: "NULL" }));
+    fireEvent.click(screen.getByRole("button", { name: /Apply to 2 rows/i }));
+    expect(bulkSetCellEdit).toHaveBeenCalledTimes(1);
+    const entries = (bulkSetCellEdit.mock.calls[0]?.[0] ?? []) as Array<{
+      rowKey: string;
+      column: string;
+      value: unknown;
+    }>;
+    expect(entries).toHaveLength(2);
+    expect(entries.every((e) => e.column === "description" && e.value === null)).toBe(
+      true,
+    );
+    expect(entries.map((e) => e.rowKey).sort()).toEqual(["row-1", "row-2"]);
+  });
+});
+
 describe("Inspector - empty state", () => {
   it("shows select a row message when no rows are selected", () => {
     render(

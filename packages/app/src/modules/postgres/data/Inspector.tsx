@@ -591,6 +591,7 @@ function InspectorBulkField({
 
   // State
   const [text, setText] = useState<string>(() => pristineText);
+  const [isNull, setIsNull] = useState(false);
   const [touched, setTouched] = useState(false);
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [jsonWarning, setJsonWarning] = useState(false);
@@ -605,12 +606,38 @@ function InspectorBulkField({
 
   function resetToPristine() {
     setText(pristineTextRef.current);
+    setIsNull(false);
     markTouched(false);
     setJsonError(null);
     setJsonWarning(false);
   }
 
+  // Explicit NULL toggle for nullable free-form columns (text / numeric / JSON).
+  // Gated on `is_nullable`; boolean/enum already expose NULL via their selects.
+  const nullToggleButton = column.is_nullable ? (
+    <button
+      type="button"
+      tabIndex={-1}
+      title={isNull ? "Clear NULL" : "Set NULL"}
+      className={`${styles.nullToggle} ${isNull ? styles.nullToggleActive : ""}`}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => {
+        if (isNull) {
+          setIsNull(false);
+          markTouched(text !== pristineTextRef.current);
+        } else {
+          setIsNull(true);
+          setJsonError(null);
+          markTouched(true);
+        }
+      }}
+    >
+      NULL
+    </button>
+  ) : null;
+
   function getValue(): { ok: true; value: EditValue } | { ok: false; error: string } {
+    if (isNull) return { ok: true, value: null };
     if (isBool) {
       if (text === "__noop__") return { ok: true, value: pristineValue as EditValue };
       if (text === "null") return { ok: true, value: null };
@@ -768,13 +795,16 @@ function InspectorBulkField({
         <div className={styles.bulkFieldRow}>
           <div className={styles.jsonEditorWrapper}>
             <textarea
-              className={textareaClassName}
-              value={text}
-              placeholder={hasCommon ? undefined : "— multiple values —"}
+              className={`${textareaClassName} ${isNull ? styles.editorNull : ""}`}
+              value={isNull ? "" : text}
+              placeholder={
+                isNull ? "NULL" : hasCommon ? undefined : "— multiple values —"
+              }
               rows={4}
               onChange={(e) => {
                 const v = e.target.value;
                 setText(v);
+                setIsNull(false);
                 setJsonError(null);
                 setJsonWarning(false);
                 markTouched(v !== pristineTextRef.current);
@@ -791,6 +821,7 @@ function InspectorBulkField({
               </div>
             )}
           </div>
+          {nullToggleButton}
           {revertButton}
         </div>
       </div>
@@ -812,17 +843,21 @@ function InspectorBulkField({
           type="text"
           className={`${styles.editor} ${
             isMonoCategory(categorize(t)) ? styles.editorMono : ""
-          }`}
+          } ${isNull ? styles.editorNull : ""}`}
           inputMode={isNumeric ? "decimal" : undefined}
-          value={text}
-          placeholder={hasCommon ? undefined : "— multiple values —"}
+          value={isNull ? "" : text}
+          placeholder={
+            isNull ? "NULL" : hasCommon ? undefined : "— multiple values —"
+          }
           onChange={(e) => {
             const v = e.target.value;
             setText(v);
+            setIsNull(false);
             markTouched(v !== pristineTextRef.current);
           }}
           {...noAutoCorrectProps}
         />
+        {nullToggleButton}
         {revertButton}
       </div>
     </div>
@@ -844,6 +879,7 @@ function InspectorEditableField({
   onChange(next: EditValue): void;
 }) {
   const [text, setText] = useState<string>(() => valueToText(value));
+  const [isNull, setIsNull] = useState<boolean>(value === null || value === undefined);
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [jsonWarning, setJsonWarning] = useState<boolean>(false);
   // Re-sync `text` when `value` changes from an external source (e.g. the
@@ -853,6 +889,7 @@ function InspectorEditableField({
   useEffect(() => {
     if (!Object.is(value, lastSyncedValueRef.current)) {
       setText(valueToText(value));
+      setIsNull(value === null || value === undefined);
       lastSyncedValueRef.current = value;
     }
   }, [value]);
@@ -860,6 +897,46 @@ function InspectorEditableField({
   const isJson = t === "json" || t === "jsonb" || t.endsWith("[]") || t.startsWith("_");
   const isBool = t === "boolean";
   const isNumeric = categorize(t) === "numeric";
+
+  // Commit the current `text` according to the column's type — used when the
+  // user toggles NULL back off, restoring the previously typed value.
+  function commitText() {
+    if (isNumeric) {
+      if (text.trim() === "") {
+        onChange(null);
+      } else {
+        const n = Number(text);
+        onChange(Number.isFinite(n) ? n : text);
+      }
+    } else {
+      onChange(text);
+    }
+  }
+
+  // Explicit NULL toggle for nullable free-form columns. Gated on
+  // `is_nullable`; not rendered for boolean/enum columns (their selects already
+  // expose a NULL choice). `onMouseDown` preventDefault keeps focus on the
+  // field. Activating commits `null` immediately (single-row live-commit).
+  const nullToggleButton = column.is_nullable ? (
+    <button
+      type="button"
+      tabIndex={-1}
+      title={isNull ? "Clear NULL" : "Set NULL"}
+      className={`${styles.nullToggle} ${isNull ? styles.nullToggleActive : ""}`}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => {
+        if (isNull) {
+          setIsNull(false);
+          commitText();
+        } else {
+          setIsNull(true);
+          onChange(null);
+        }
+      }}
+    >
+      NULL
+    </button>
+  ) : null;
 
   if (isBool) {
     const cur = value === null ? "null" : value === true ? "true" : "false";
@@ -906,67 +983,77 @@ function InspectorEditableField({
       .filter(Boolean)
       .join(" ");
     return (
-      <div className={styles.jsonEditorWrapper}>
-        <textarea
-          className={textareaClassName}
-          value={text}
-          onChange={(e) => {
-            const raw = e.target.value;
-            setText(raw);
-            setJsonError(null);
-            setJsonWarning(false);
-            onChange(raw);
-          }}
-          onBlur={() => {
-            if (!isJson) return;
-            const result = validateJsonInput(text);
-            if (!result.ok) {
-              setJsonError(result.error);
+      <div className={styles.bulkFieldRow}>
+        <div className={styles.jsonEditorWrapper}>
+          <textarea
+            className={`${textareaClassName} ${isNull ? styles.editorNull : ""}`}
+            value={isNull ? "" : text}
+            placeholder={isNull ? "NULL" : undefined}
+            onChange={(e) => {
+              const raw = e.target.value;
+              setText(raw);
+              setIsNull(false);
+              setJsonError(null);
               setJsonWarning(false);
-              return;
-            }
-            setJsonError(null);
-            setJsonWarning(hasSmartQuotes(result.canonical));
-          }}
-          rows={4}
-          {...noAutoCorrectProps}
-        />
-        {isJson && jsonError && (
-          <div className={styles.jsonError}>{jsonError}</div>
-        )}
-        {isJson && jsonWarning && !jsonError && (
-          <div className={styles.jsonWarning}>
-            <AlertTriangle size={11} />
-            Contains smart quotes
-          </div>
-        )}
+              onChange(raw);
+            }}
+            onBlur={() => {
+              if (!isJson || isNull) return;
+              const result = validateJsonInput(text);
+              if (!result.ok) {
+                setJsonError(result.error);
+                setJsonWarning(false);
+                return;
+              }
+              setJsonError(null);
+              setJsonWarning(hasSmartQuotes(result.canonical));
+            }}
+            rows={4}
+            {...noAutoCorrectProps}
+          />
+          {isJson && jsonError && (
+            <div className={styles.jsonError}>{jsonError}</div>
+          )}
+          {isJson && jsonWarning && !jsonError && (
+            <div className={styles.jsonWarning}>
+              <AlertTriangle size={11} />
+              Contains smart quotes
+            </div>
+          )}
+        </div>
+        {nullToggleButton}
       </div>
     );
   }
 
   return (
-    <input
-      type="text"
-      className={`${styles.editor} ${
-        isMonoCategory(categorize(t)) ? styles.editorMono : ""
-      }`}
-      inputMode={isNumeric ? "decimal" : undefined}
-      value={text}
-      onChange={(e) => {
-        const raw = e.target.value;
-        setText(raw);
-        if (isNumeric) {
-          if (raw.trim() === "") {
-            onChange(null);
+    <div className={styles.bulkFieldRow}>
+      <input
+        type="text"
+        className={`${styles.editor} ${
+          isMonoCategory(categorize(t)) ? styles.editorMono : ""
+        } ${isNull ? styles.editorNull : ""}`}
+        inputMode={isNumeric ? "decimal" : undefined}
+        value={isNull ? "" : text}
+        placeholder={isNull ? "NULL" : undefined}
+        onChange={(e) => {
+          const raw = e.target.value;
+          setText(raw);
+          setIsNull(false);
+          if (isNumeric) {
+            if (raw.trim() === "") {
+              onChange(null);
+            } else {
+              const n = Number(raw);
+              onChange(Number.isFinite(n) ? n : raw);
+            }
           } else {
-            const n = Number(raw);
-            onChange(Number.isFinite(n) ? n : raw);
+            onChange(raw);
           }
-        } else {
-          onChange(raw);
-        }
-      }}
-      {...noAutoCorrectProps}
-    />
+        }}
+        {...noAutoCorrectProps}
+      />
+      {nullToggleButton}
+    </div>
   );
 }
