@@ -99,10 +99,13 @@ export class LandingStack extends cdk.Stack {
     });
 
     // ── Build the Vite app (synth time) ──────────────────────────────────────
+    const buildEnv = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("VITE_"))
+    );
     execSync("pnpm run landing:build", {
       cwd: path.resolve(__dirname, "../../"),
       stdio: "inherit",
-      env: { ...process.env },
+      env: buildEnv,
     });
 
     // ── Deploy built assets to S3 + invalidate CloudFront ────────────────────
