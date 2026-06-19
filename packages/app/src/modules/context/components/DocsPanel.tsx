@@ -93,7 +93,6 @@ export function DocsPanel({
             <div className={styles.chips}>
               {chips.map((chip, i) => (
                 // Index key is stable here — static list derived from the doc
-                // eslint-disable-next-line react/no-array-index-key
                 <span key={i} className={styles.chip} data-kind={chip.kind}>
                   {chip.label}
                 </span>

@@ -145,7 +145,7 @@ export function buildColumnSource(connectionId: string): CompletionSource {
     return {
       from: context.pos,
       options,
-      validFor: /^[\w\[\]]*$/,
+      validFor: /^[\w[\]]*$/,
     };
   };
 }
@@ -157,7 +157,7 @@ export function buildColumnSource(connectionId: string): CompletionSource {
 export const documentIdentifierSource: CompletionSource = (
   context: CompletionContext,
 ): CompletionResult | null => {
-  const word = context.matchBefore(/[\w\[\]]*/);
+  const word = context.matchBefore(/[\w[\]]*/);
   if (!word) return null;
   if (word.from === word.to && !context.explicit) return null;
 

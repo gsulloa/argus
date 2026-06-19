@@ -114,7 +114,6 @@ export function OptimisticLockingDialog({
             value={localValue}
             onChange={(e) => setLocalValue(e.target.value)}
             placeholder="e.g. version"
-            // eslint-disable-next-line jsx-a11y/no-autofocus
             autoFocus
             style={{
               padding: "6px 10px",

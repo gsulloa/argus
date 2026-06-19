@@ -42,10 +42,10 @@ describe("EditableCell - jsonb column", () => {
     expect(ta.getAttribute("autocomplete")).toBe("off");
   });
 
-  it("does NOT set autocorrect-off on a text column", () => {
+  it("sets autocorrect-off on a text column too", () => {
     renderEditing(textCol, "hello world");
     const input = screen.getByRole("textbox");
-    expect(input.getAttribute("autocorrect")).toBeNull();
+    expect(input.getAttribute("autocorrect")).toBe("off");
   });
 
   it("commits valid JSON as canonical form", () => {
