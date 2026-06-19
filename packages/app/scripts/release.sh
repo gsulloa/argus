@@ -280,11 +280,40 @@ run "gh pr create \
   --title 'Release v$NEXT' \
   --body 'Automated release v$NEXT.'"
 
-# ---------- merge PR (merge commit, not squash) --------------------------------
+# ---------- wait for CI checks, then merge PR (merge commit, not squash) -------
+# We must merge SYNCHRONOUSLY (not `gh pr merge --auto`): the steps below resolve
+# the merge commit on origin/master and tag it, so the merge has to be complete
+# before we continue. We block on the PR's CI checks and only merge on green.
+# On a failed check we abort: PR + branch stay open, and NO tag is pushed (so the
+# release pipeline in release.yml never fires). Skipped entirely under --dry-run.
 
-step "Merging PR into master (merge commit)"
-if ! run "gh pr merge '$RELEASE_BRANCH' --merge --delete-branch"; then
-  die "PR merge failed. The release branch '$RELEASE_BRANCH' and PR are still open — investigate and finish manually, or re-run. No tag has been pushed yet."
+if [ "$DRY" = "0" ]; then
+  step "Waiting for CI checks to register on PR"
+  CHECKS_READY=0
+  for _ in $(seq 1 24); do
+    N_CHECKS="$(gh pr view "$RELEASE_BRANCH" --json statusCheckRollup -q '.statusCheckRollup | length' 2>/dev/null || echo 0)"
+    case "$N_CHECKS" in ''|*[!0-9]*) N_CHECKS=0 ;; esac
+    if [ "$N_CHECKS" -gt 0 ]; then
+      CHECKS_READY=1
+      break
+    fi
+    sleep 5
+  done
+  [ "$CHECKS_READY" = "1" ] || die "No CI checks registered on the release PR after waiting. Is .github/workflows/ci.yml present and triggering on PRs to master? The branch '$RELEASE_BRANCH' and PR are still open — investigate. No tag has been pushed yet."
+
+  step "Waiting for CI checks to pass (gh pr checks --watch)"
+  if ! gh pr checks "$RELEASE_BRANCH" --watch --fail-fast; then
+    die "CI checks failed on the release PR. The branch '$RELEASE_BRANCH' and PR are still open — fix the failure (push to the release branch) and re-run. No tag has been pushed yet."
+  fi
+
+  step "Merging PR into master (merge commit)"
+  if ! gh pr merge "$RELEASE_BRANCH" --merge --delete-branch; then
+    die "PR merge failed even though checks passed. The branch '$RELEASE_BRANCH' and PR are still open — investigate and finish manually. No tag has been pushed yet."
+  fi
+else
+  c_dim "DRY: poll gh pr view '$RELEASE_BRANCH' --json statusCheckRollup until checks register"
+  c_dim "DRY: gh pr checks '$RELEASE_BRANCH' --watch --fail-fast"
+  c_dim "DRY: gh pr merge '$RELEASE_BRANCH' --merge --delete-branch"
 fi
 
 # ---------- resolve merge commit on master ------------------------------------
