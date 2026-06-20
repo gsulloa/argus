@@ -151,9 +151,8 @@ pub fn project_row(
 /// query or right after a pipe, followed by a number.
 fn has_limit_command(query: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(?i)(^|\|)\s*limit\s+\d").expect("valid limit-command regex")
-    });
+    let re = RE
+        .get_or_init(|| Regex::new(r"(?i)(^|\|)\s*limit\s+\d").expect("valid limit-command regex"));
     re.is_match(query)
 }
 
@@ -186,9 +185,9 @@ async fn run_insights_query(
 
     let start_resp = req.send().await.map_err(|e| sdk_err_to_app(&e))?;
 
-    let query_id = start_resp.query_id.ok_or_else(|| {
-        AppError::Internal("CloudWatch did not return a query_id".into())
-    })?;
+    let query_id = start_resp
+        .query_id
+        .ok_or_else(|| AppError::Internal("CloudWatch did not return a query_id".into()))?;
 
     // Notify frontend so it can cancel if needed.
     let _ = app.emit(
@@ -224,10 +223,7 @@ async fn run_insights_query(
             .await
             .map_err(|e| sdk_err_to_app(&e))?;
 
-        let status = resp
-            .status()
-            .map(|s| s.as_str())
-            .unwrap_or("Unknown");
+        let status = resp.status().map(|s| s.as_str()).unwrap_or("Unknown");
 
         match status {
             "Complete" => {
@@ -235,15 +231,9 @@ async fn run_insights_query(
 
                 // Read statistics.
                 let stats = resp.statistics();
-                let records_matched = stats
-                    .map(|s| s.records_matched())
-                    .unwrap_or(0.0);
-                let records_scanned = stats
-                    .map(|s| s.records_scanned())
-                    .unwrap_or(0.0);
-                let bytes_scanned = stats
-                    .map(|s| s.bytes_scanned())
-                    .unwrap_or(0.0);
+                let records_matched = stats.map(|s| s.records_matched()).unwrap_or(0.0);
+                let records_scanned = stats.map(|s| s.records_scanned()).unwrap_or(0.0);
+                let bytes_scanned = stats.map(|s| s.bytes_scanned()).unwrap_or(0.0);
 
                 // Collect all rows as maps + accumulate field names.
                 let raw_rows: Vec<std::collections::HashMap<String, String>> = resp
@@ -539,9 +529,8 @@ mod tests {
 
     #[test]
     fn project_row_empty_columns() {
-        let fields: HashMap<String, String> = [("level".into(), "INFO".into())]
-            .into_iter()
-            .collect();
+        let fields: HashMap<String, String> =
+            [("level".into(), "INFO".into())].into_iter().collect();
         let row = project_row(&fields, &[]);
         assert!(row.is_empty());
     }
@@ -608,8 +597,14 @@ mod tests {
     fn insights_result_rows_serialization_shape() {
         let result = InsightsResult::Rows {
             columns: vec![
-                ColumnInfo { name: "@timestamp".into(), ty: "string".into() },
-                ColumnInfo { name: "@message".into(), ty: "string".into() },
+                ColumnInfo {
+                    name: "@timestamp".into(),
+                    ty: "string".into(),
+                },
+                ColumnInfo {
+                    name: "@message".into(),
+                    ty: "string".into(),
+                },
             ],
             rows: vec![vec![
                 JsonValue::String("2024-01-01T00:00:00Z".into()),
@@ -637,7 +632,9 @@ mod tests {
     fn detects_limit_command() {
         // Present → true (so we skip the StartQuery limit param).
         assert!(has_limit_command("fields @timestamp, @message | limit 100"));
-        assert!(has_limit_command("fields @timestamp\n| sort @timestamp desc\n| limit 50"));
+        assert!(has_limit_command(
+            "fields @timestamp\n| sort @timestamp desc\n| limit 50"
+        ));
         assert!(has_limit_command("limit 5"));
         assert!(has_limit_command("FIELDS @x | LIMIT 20")); // case-insensitive
         assert!(has_limit_command("fields @x |limit 1"));

@@ -35,10 +35,9 @@ fn load_cloudwatch_input(
     db: &State<'_, DbState>,
     id: &Uuid,
 ) -> AppResult<(CloudwatchParams, Option<String>)> {
-    let guard = db
-        .0
-        .lock()
-        .map_err(|_| AppError::Internal("db lock poisoned".into()))?;
+    let guard =
+        db.0.lock()
+            .map_err(|_| AppError::Internal("db lock poisoned".into()))?;
     let row: Option<(String, String)> = guard
         .query_row(
             "SELECT kind, params_json FROM connections WHERE id = ?1",
@@ -276,8 +275,7 @@ pub async fn cloudwatch_disconnect_all(
     }
     emit_activity(
         &app,
-        ActivityLogEntryBuilder::new(ActivityKind::Disconnect, Origin::User, duration_ms)
-            .ok(None),
+        ActivityLogEntryBuilder::new(ActivityKind::Disconnect, Origin::User, duration_ms).ok(None),
     );
     Ok(count)
 }

@@ -2617,14 +2617,20 @@ mod tests {
 
     #[test]
     fn fold_log_group_name_replaces_slashes() {
-        assert_eq!(fold_log_group_name("/aws/lambda/my-fn"), "__aws__lambda__my-fn");
+        assert_eq!(
+            fold_log_group_name("/aws/lambda/my-fn"),
+            "__aws__lambda__my-fn"
+        );
         assert_eq!(fold_log_group_name("no-slashes"), "no-slashes");
         assert_eq!(fold_log_group_name("/single"), "__single");
     }
 
     #[test]
     fn unfold_log_group_name_reverses_fold() {
-        assert_eq!(unfold_log_group_name("__aws__lambda__my-fn"), "/aws/lambda/my-fn");
+        assert_eq!(
+            unfold_log_group_name("__aws__lambda__my-fn"),
+            "/aws/lambda/my-fn"
+        );
         assert_eq!(unfold_log_group_name("no-slashes"), "no-slashes");
         assert_eq!(unfold_log_group_name("__single"), "/single");
     }
@@ -2676,18 +2682,21 @@ mod tests {
         .unwrap();
 
         // Expect the folded path to be created.
-        let expected_path = dir.path()
+        let expected_path = dir
+            .path()
             .join("cloudwatch")
             .join("groups")
             .join("__aws__lambda__my-fn.md");
 
         assert!(
             expected_path.exists(),
-            "cloudwatch groups file should exist at folded path; report={:?}", report
+            "cloudwatch groups file should exist at folded path; report={:?}",
+            report
         );
         assert!(
             report.created.contains(&expected_path),
-            "path should be in report.created; report={:?}", report
+            "path should be in report.created; report={:?}",
+            report
         );
     }
 
@@ -2706,14 +2715,16 @@ mod tests {
         .await
         .unwrap();
 
-        let expected_path = dir.path()
+        let expected_path = dir
+            .path()
             .join("cloudwatch")
             .join("groups")
             .join("my-app-logs.md");
 
         assert!(
             expected_path.exists(),
-            "plain-named cloudwatch group should exist; report={:?}", report
+            "plain-named cloudwatch group should exist; report={:?}",
+            report
         );
     }
 
@@ -2734,18 +2745,14 @@ mod tests {
         .unwrap();
 
         // Second sync: group no longer exists.
-        let report = execute_sync(
-            dir.path(),
-            EngineKind::Cloudwatch,
-            vec![],
-            None,
-        )
-        .await
-        .unwrap();
+        let report = execute_sync(dir.path(), EngineKind::Cloudwatch, vec![], None)
+            .await
+            .unwrap();
 
         assert!(
             !report.marked_deleted.is_empty(),
-            "removed group should be marked deleted; report={:?}", report
+            "removed group should be marked deleted; report={:?}",
+            report
         );
     }
 

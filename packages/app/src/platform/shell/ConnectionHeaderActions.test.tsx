@@ -38,6 +38,12 @@ vi.mock("@/modules/dynamo/tables", () => ({
   DynamoRefreshButton: () => React.createElement("span", { "data-testid": "dynamo-refresh" }),
 }));
 
+vi.mock("@/modules/cloudwatch", () => ({
+  CLOUDWATCH_KIND: "cloudwatch",
+  CloudwatchInsightsPrimaryAction: () =>
+    React.createElement("span", { "data-testid": "cloudwatch-primary" }),
+}));
+
 // ---------------------------------------------------------------------------
 // Control what connections list the component sees.
 // ---------------------------------------------------------------------------
@@ -115,8 +121,16 @@ describe("ConnectionHeaderActions", () => {
     expect(queryByTestId("mysql-primary")).toBeNull();
   });
 
-  it("renders nothing for an unknown kind (e.g. cloudwatch)", () => {
+  it("renders the insights primary action for cloudwatch kind", () => {
     mockConnectionItems = [makeConnection("cloudwatch")];
+    const { getByTestId } = render(
+      React.createElement(ConnectionHeaderActions, { connectionId: "test-conn" })
+    );
+    expect(getByTestId("cloudwatch-primary")).toBeDefined();
+  });
+
+  it("renders nothing for an unknown kind", () => {
+    mockConnectionItems = [makeConnection("redis")];
     const { container } = render(
       React.createElement(ConnectionHeaderActions, { connectionId: "test-conn" })
     );

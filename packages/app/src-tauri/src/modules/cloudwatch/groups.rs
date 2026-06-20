@@ -87,9 +87,7 @@ pub async fn cloudwatch_list_log_groups(
 
     let limit = limit.unwrap_or(50).clamp(1, 50);
 
-    let mut req = client
-        .describe_log_groups()
-        .limit(limit);
+    let mut req = client.describe_log_groups().limit(limit);
 
     // Server-side substring search. Empty/whitespace patterns are ignored so
     // the call keeps its plain first-page behavior. `logGroupNamePattern`

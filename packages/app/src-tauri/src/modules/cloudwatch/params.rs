@@ -241,6 +241,9 @@ mod tests {
         // CloudwatchParams must not have a read_only field (CloudWatch is read-only by nature).
         let p = access_keys_params();
         let json = p.to_json().unwrap();
-        assert!(json.get("read_only").is_none(), "read_only should not be serialized");
+        assert!(
+            json.get("read_only").is_none(),
+            "read_only should not be serialized"
+        );
     }
 }
