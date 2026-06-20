@@ -285,9 +285,10 @@ pub async fn submit_feedback(
         )));
     }
 
-    let phase1: FeedbackResponse = resp.json().await.map_err(|e| {
-        AppError::Internal(format!("Failed to parse feedback response: {e}"))
-    })?;
+    let phase1: FeedbackResponse = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to parse feedback response: {e}")))?;
 
     info!(target: "feedback", id = %phase1.id, "feedback record created");
 

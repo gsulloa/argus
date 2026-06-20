@@ -54,6 +54,7 @@ use crate::modules::dynamo::edit::{dynamo_delete_item, dynamo_put_item, dynamo_u
 use crate::modules::dynamo::items::{dynamo_count_items, dynamo_query, dynamo_scan};
 use crate::modules::dynamo::partiql::{dynamo_run_partiql, dynamo_run_partiql_many};
 use crate::modules::dynamo::tables::commands::{dynamo_describe_table, dynamo_list_tables};
+use crate::modules::feedback::submit_feedback;
 use crate::modules::mssql::{
     mssql_apply_table_edits, mssql_connect, mssql_count_table, mssql_disconnect,
     mssql_disconnect_all, mssql_get_object_definition, mssql_get_routine_signature,
@@ -77,7 +78,6 @@ use crate::modules::postgres::{
     postgres_run_sql, postgres_run_sql_many, postgres_table_primary_key, postgres_table_structure,
     postgres_test_connection, PgPoolRegistry,
 };
-use crate::modules::feedback::submit_feedback;
 use crate::modules::query_history::{
     self,
     commands::{
