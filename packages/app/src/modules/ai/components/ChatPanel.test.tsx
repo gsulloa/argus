@@ -87,6 +87,20 @@ const NEEDS_CONTEXT: AiReadiness = {
   contextState: "none",
   level: "needs-context",
 };
+/** CloudWatch: context-optional, provider not yet configured. */
+const CW_NOT_CONFIGURED: AiReadiness = {
+  providerConfigured: false,
+  contextState: "none",
+  level: "not-configured",
+  contextOptional: true,
+};
+/** CloudWatch: context-optional and ready (no context folder). */
+const CW_READY: AiReadiness = {
+  providerConfigured: true,
+  contextState: "none",
+  level: "ready",
+  contextOptional: true,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -909,5 +923,131 @@ describe("ChatPanel — setup mode", () => {
       />,
     );
     expect(screen.getByRole("textbox")).toBeTruthy();
+  });
+});
+
+describe("ChatPanel — cwlogs block actions (GROUP 4)", () => {
+  beforeEach(() => {
+    mockSubscribe.mockReset();
+    mockGetSnapshot.mockReset();
+    mockSend.mockReset();
+    mockCancel.mockReset();
+    mockClose.mockReset();
+    mockCtor.mockReset();
+    mockUseAiSettings.mockReturnValue({
+      settings: DEFAULT_SETTINGS,
+      providers: [],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+  });
+
+  it("cwlogs block shows Apply and Insert buttons", () => {
+    const turns: ChatTurn[] = [
+      { role: "User", content: "q", tool_uses: [] },
+      {
+        role: "Assistant",
+        content:
+          "Here is the query:\n```cwlogs\nfields @timestamp, @message | filter @message like /ERROR/\n```\n",
+        tool_uses: [],
+      },
+    ];
+    setupSession({ turns });
+    renderPanel({ open: true, readiness: CW_READY });
+
+    expect(screen.getByTestId("btn-apply")).toBeTruthy();
+    expect(screen.getByTestId("btn-insert")).toBeTruthy();
+    expect(screen.getByTestId("btn-copy")).toBeTruthy();
+  });
+
+  it("Apply on a cwlogs block calls replaceBody with trimmed query", async () => {
+    const editorRef = makeEditorRef();
+    const turns: ChatTurn[] = [
+      { role: "User", content: "q", tool_uses: [] },
+      {
+        role: "Assistant",
+        content:
+          "```cwlogs\nfields @timestamp | filter @message like /ERROR/\n```\n",
+        tool_uses: [],
+      },
+    ];
+    setupSession({ turns });
+    renderPanel({ open: true, editorRef, readiness: CW_READY });
+
+    await waitFor(() => screen.getByTestId("btn-apply"));
+    fireEvent.click(screen.getByTestId("btn-apply"));
+
+    expect(editorRef.current.replaceBody).toHaveBeenCalledWith(
+      "fields @timestamp | filter @message like /ERROR/",
+    );
+  });
+
+  it("json block still has no Apply or Insert, only Copy", () => {
+    const turns: ChatTurn[] = [
+      { role: "User", content: "q", tool_uses: [] },
+      {
+        role: "Assistant",
+        content: "```json\n{\"key\": \"value\"}\n```\n",
+        tool_uses: [],
+      },
+    ];
+    setupSession({ turns });
+    renderPanel({ open: true, readiness: CW_READY });
+
+    expect(screen.queryByTestId("btn-apply")).toBeNull();
+    expect(screen.queryByTestId("btn-insert")).toBeNull();
+    expect(screen.getByTestId("btn-copy")).toBeTruthy();
+  });
+});
+
+describe("ChatPanel — context-optional checklist (GROUP 3)", () => {
+  beforeEach(() => {
+    mockSubscribe.mockReset();
+    mockGetSnapshot.mockReset();
+    mockSend.mockReset();
+    mockCancel.mockReset();
+    mockClose.mockReset();
+    mockCtor.mockReset();
+    mockUseAiSettings.mockReturnValue({
+      settings: DEFAULT_SETTINGS,
+      providers: [],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+  });
+
+  it("context-optional checklist shows only the AI provider item, not context folder", () => {
+    setupSession();
+    renderPanel({ open: true, readiness: CW_NOT_CONFIGURED });
+
+    expect(screen.getByText("AI provider")).toBeTruthy();
+    expect(screen.queryByText("Context folder")).toBeNull();
+  });
+
+  it("context-optional checklist intro copy does not say 'Two things'", () => {
+    setupSession();
+    renderPanel({ open: true, readiness: CW_NOT_CONFIGURED });
+
+    expect(screen.queryByText(/Two things/i)).toBeNull();
+    expect(screen.getByText(/One thing/i)).toBeTruthy();
+  });
+
+  it("context-required checklist still shows both items", () => {
+    setupSession();
+    renderPanel({ open: true, readiness: NOT_CONFIGURED });
+
+    expect(screen.getByText("AI provider")).toBeTruthy();
+    expect(screen.getByText("Context folder")).toBeTruthy();
+    expect(screen.getByText(/Two things/i)).toBeTruthy();
+  });
+
+  it("context-optional: chat input available when ready (no context folder needed)", () => {
+    setupSession();
+    renderPanel({ open: true, readiness: CW_READY });
+
+    expect(screen.getByRole("textbox")).toBeTruthy();
+    expect(screen.getByTestId("btn-send")).toBeTruthy();
   });
 });

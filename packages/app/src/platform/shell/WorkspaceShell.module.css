@@ -51,6 +51,14 @@
   color: var(--text-muted);
 }
 
+.identityActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
 .identityBody {
   display: flex;
   flex-direction: column;
@@ -72,6 +80,14 @@
   display: flex;
   align-items: center;
   gap: 5px;
+}
+
+/* Per-engine primary actions, right-aligned in the header. */
+.identityActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .identityEngine {

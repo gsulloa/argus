@@ -124,6 +124,9 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: Developer ID Application
+          # Baked into the binary at compile time via option_env! so the
+          # feedback form can authenticate to the intake endpoint.
+          ARGUS_FEEDBACK_APP_KEY: ${{ secrets.ARGUS_FEEDBACK_APP_KEY }}
         with:
           projectPath: packages/app
           args: --target ${{ matrix.target }}

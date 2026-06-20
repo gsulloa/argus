@@ -4,6 +4,7 @@ import styles from "./StatusBar.module.css";
 import { useFilteredCount } from "@/platform/activity-log/store";
 import { useSetting } from "@/platform/settings/useSetting";
 import { VersionIndicator } from "./VersionIndicator";
+import { FeedbackAffordance } from "@/platform/feedback";
 import { APP_DISPLAY_NAME } from "@/platform/app-identity";
 
 export function StatusBar() {
@@ -37,6 +38,7 @@ export function StatusBar() {
           <PanelRight size={12} />
           Inspector
         </button>
+        <FeedbackAffordance />
         <VersionIndicator />
       </div>
     </div>

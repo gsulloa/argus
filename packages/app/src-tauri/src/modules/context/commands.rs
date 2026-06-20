@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::athena::pool::AthenaClientRegistry;
+use crate::modules::cloudwatch::client::CloudwatchClientRegistry;
 use crate::modules::dynamo::client::DynamoClientRegistry;
 use crate::modules::mssql::pool::MssqlPoolRegistry;
 use crate::modules::mysql::pool::MysqlPoolRegistry;
@@ -681,6 +682,7 @@ pub async fn context_sync_schema(
     mssql: State<'_, MssqlPoolRegistry>,
     dynamo: State<'_, DynamoClientRegistry>,
     athena: State<'_, AthenaClientRegistry>,
+    cloudwatch: State<'_, CloudwatchClientRegistry>,
     registry: State<'_, Arc<ContextRegistry>>,
 ) -> AppResult<SyncReport> {
     let conn_id = parse_conn_id(&connection_id)?;
@@ -701,6 +703,7 @@ pub async fn context_sync_schema(
         mssql: &mssql,
         dynamo: &dynamo,
         athena: &athena,
+        cloudwatch: &cloudwatch,
     };
     let introspector = introspector_for(engine, pools);
     let shapes = introspector.introspect_for_context(conn_id).await?;

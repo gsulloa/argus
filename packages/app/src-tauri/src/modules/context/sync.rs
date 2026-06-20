@@ -39,13 +39,30 @@ use crate::modules::dynamo::params::TableMatch;
 
 // ---- Target-path computation ----
 
+/// Fold a CloudWatch log group name so it can be used as a flat filename stem.
+///
+/// `/` is replaced with `__` so that `/aws/lambda/my-fn` becomes
+/// `__aws__lambda__my-fn.md` (flat, no nested dirs).
+pub fn fold_log_group_name(name: &str) -> String {
+    name.replace('/', "__")
+}
+
+/// Reverse the fold applied by [`fold_log_group_name`]:
+/// `__` is replaced with `/` to recover the original log group name.
+pub fn unfold_log_group_name(folded: &str) -> String {
+    folded.replace("__", "/")
+}
+
 /// Compute the canonical target path for an `ObjectShape` within a folder root.
 ///
 /// | Engine       | Path |
 /// |---|---|
 /// | Postgres/MySQL/MSSQL | `<root>/<engine>/<schema>/<name>.md` |
 /// | Dynamo       | `<root>/dynamo/tables/<name>/table.md` |
-/// | CloudWatch   | `<root>/cloudwatch/groups/<name>.md` |
+/// | CloudWatch   | `<root>/cloudwatch/groups/<folded-name>.md` |
+///
+/// CloudWatch log group names may contain `/` (e.g. `/aws/lambda/fn`); they are
+/// folded to `__` so the path stays flat: `__aws__lambda__fn.md`.
 pub fn target_path_for(root: &Path, engine: EngineKind, shape: &ObjectShape) -> PathBuf {
     match engine {
         EngineKind::Postgres | EngineKind::Mysql | EngineKind::Mssql | EngineKind::Athena => {
@@ -59,10 +76,12 @@ pub fn target_path_for(root: &Path, engine: EngineKind, shape: &ObjectShape) -> 
             .join("tables")
             .join(&shape.name)
             .join("table.md"),
-        EngineKind::Cloudwatch => root
-            .join("cloudwatch")
-            .join("groups")
-            .join(format!("{}.md", shape.name)),
+        EngineKind::Cloudwatch => {
+            let folded = fold_log_group_name(&shape.name);
+            root.join("cloudwatch")
+                .join("groups")
+                .join(format!("{folded}.md"))
+        }
     }
 }
 
@@ -2590,6 +2609,149 @@ mod tests {
                 .iter()
                 .any(|p| p.to_str().unwrap_or("").contains(logical)),
             "logical table should not be in created; report={:?}",
+            report
+        );
+    }
+
+    // ---- CloudWatch filename folding round-trip (task 5.2) ----
+
+    #[test]
+    fn fold_log_group_name_replaces_slashes() {
+        assert_eq!(
+            fold_log_group_name("/aws/lambda/my-fn"),
+            "__aws__lambda__my-fn"
+        );
+        assert_eq!(fold_log_group_name("no-slashes"), "no-slashes");
+        assert_eq!(fold_log_group_name("/single"), "__single");
+    }
+
+    #[test]
+    fn unfold_log_group_name_reverses_fold() {
+        assert_eq!(
+            unfold_log_group_name("__aws__lambda__my-fn"),
+            "/aws/lambda/my-fn"
+        );
+        assert_eq!(unfold_log_group_name("no-slashes"), "no-slashes");
+        assert_eq!(unfold_log_group_name("__single"), "/single");
+    }
+
+    #[test]
+    fn fold_unfold_round_trip() {
+        let names = &[
+            "/aws/lambda/my-function",
+            "/aws/ecs/my-cluster",
+            "my-log-group",
+            "/",
+            "a/b/c/d",
+        ];
+        for name in names {
+            let folded = fold_log_group_name(name);
+            let unfolded = unfold_log_group_name(&folded);
+            assert_eq!(
+                &unfolded, name,
+                "round-trip failed for {name:?}: fold={folded:?}"
+            );
+        }
+    }
+
+    // ---- CloudWatch sync report shape (task 5.4) ----
+
+    fn cw_shape(name: &str) -> ObjectShape {
+        ObjectShape {
+            kind: "log_group".to_string(),
+            schema: None,
+            name: name.to_string(),
+            primary_key: vec![],
+            columns: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn cloudwatch_sync_creates_folded_filename() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        let group_name = "/aws/lambda/my-fn";
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Cloudwatch,
+            vec![cw_shape(group_name)],
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Expect the folded path to be created.
+        let expected_path = dir
+            .path()
+            .join("cloudwatch")
+            .join("groups")
+            .join("__aws__lambda__my-fn.md");
+
+        assert!(
+            expected_path.exists(),
+            "cloudwatch groups file should exist at folded path; report={:?}",
+            report
+        );
+        assert!(
+            report.created.contains(&expected_path),
+            "path should be in report.created; report={:?}",
+            report
+        );
+    }
+
+    #[tokio::test]
+    async fn cloudwatch_sync_no_slash_name_creates_plain_filename() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        let group_name = "my-app-logs";
+        let report = execute_sync(
+            dir.path(),
+            EngineKind::Cloudwatch,
+            vec![cw_shape(group_name)],
+            None,
+        )
+        .await
+        .unwrap();
+
+        let expected_path = dir
+            .path()
+            .join("cloudwatch")
+            .join("groups")
+            .join("my-app-logs.md");
+
+        assert!(
+            expected_path.exists(),
+            "plain-named cloudwatch group should exist; report={:?}",
+            report
+        );
+    }
+
+    #[tokio::test]
+    async fn cloudwatch_sync_marks_deleted_when_group_removed() {
+        let dir = TempDir::new().unwrap();
+        manifest(dir.path());
+
+        let group_name = "/aws/lambda/gone";
+        // First sync: create the file.
+        execute_sync(
+            dir.path(),
+            EngineKind::Cloudwatch,
+            vec![cw_shape(group_name)],
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Second sync: group no longer exists.
+        let report = execute_sync(dir.path(), EngineKind::Cloudwatch, vec![], None)
+            .await
+            .unwrap();
+
+        assert!(
+            !report.marked_deleted.is_empty(),
+            "removed group should be marked deleted; report={:?}",
             report
         );
     }

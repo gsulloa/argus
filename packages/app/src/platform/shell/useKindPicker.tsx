@@ -8,6 +8,7 @@ import { PostgresIcon } from "@/modules/postgres/icon";
 import { useMysqlForm, MysqlIcon, MYSQL_KIND } from "@/modules/mysql";
 import { useMssqlForm, MssqlIcon, MSSQL_KIND } from "@/modules/mssql";
 import { useAthenaForm, AthenaIcon, ATHENA_KIND } from "@/modules/athena";
+import { useCloudwatchForm, CloudwatchIcon, CLOUDWATCH_KIND } from "@/modules/cloudwatch";
 
 interface KindPickerControllerValue {
   open: () => void;
@@ -27,6 +28,7 @@ export function KindPickerProvider({
   const my = useMysqlForm();
   const ms = useMssqlForm();
   const at = useAthenaForm();
+  const cw = useCloudwatchForm();
 
   const kinds = React.useMemo<KindCard[]>(
     () => [
@@ -65,8 +67,15 @@ export function KindPickerProvider({
         Icon: AthenaIcon,
         onPick: () => at.openCreate(),
       },
+      {
+        kind: CLOUDWATCH_KIND,
+        label: "CloudWatch Logs",
+        description: "Browse and query Amazon CloudWatch Logs",
+        Icon: CloudwatchIcon,
+        onPick: () => cw.openCreate(),
+      },
     ],
-    [pg, my, ms, dy, at],
+    [pg, my, ms, dy, at, cw],
   );
 
   const value = React.useMemo<KindPickerControllerValue>(

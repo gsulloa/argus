@@ -74,7 +74,7 @@ impl AiProvider for CodexCli {
         )?;
 
         let cwd = req.context_path.clone().unwrap_or_else(std::env::temp_dir);
-        let system = build_cli_system_prompt(&cwd);
+        let system = build_cli_system_prompt(&cwd, None);
         // codex exec has no --system-prompt flag; prepend the system prompt to the user prompt.
         let prompt = format!("{system}\n\n{}", req.prompt);
 
@@ -149,7 +149,7 @@ impl AiProvider for CodexCli {
         let cwd = req.context_path.clone().unwrap_or_else(std::env::temp_dir);
         // codex exec has no --system-prompt flag; prepend the system prompt to the
         // flattened history so it is always the first thing the agent reads.
-        let system = build_cli_system_prompt(&cwd);
+        let system = build_cli_system_prompt(&cwd, req.context_engine);
         let history = flatten_history_for_cli(&req.turns, &req.attached_results);
         let prompt = format!("{system}\n\n{history}");
 
@@ -344,7 +344,7 @@ mod tests {
     fn chat_prompt_system_precedes_history() {
         // Verify the built chat prompt has the system prompt before the flattened history.
         let cwd = std::env::temp_dir();
-        let system = build_cli_system_prompt(&cwd);
+        let system = build_cli_system_prompt(&cwd, None);
         let turns = vec![
             ChatTurn {
                 role: ChatRole::User,
