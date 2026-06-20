@@ -58,10 +58,9 @@ pub struct AiSettings;
 impl AiSettings {
     /// Read the singleton row plus all overrides.
     pub fn get(db: &DbState) -> AppResult<(AiSettingsRow, Vec<ConnectionOverrideRow>)> {
-        let conn = db
-            .0
-            .lock()
-            .map_err(|_| AppError::Internal("db poisoned".into()))?;
+        let conn =
+            db.0.lock()
+                .map_err(|_| AppError::Internal("db poisoned".into()))?;
 
         let row = conn.query_row(
             "SELECT default_provider, claude_cli_model, codex_cli_model, \
@@ -79,9 +78,8 @@ impl AiSettings {
             },
         )?;
 
-        let mut stmt = conn.prepare(
-            "SELECT connection_id, provider_id, model FROM ai_connection_overrides",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT connection_id, provider_id, model FROM ai_connection_overrides")?;
         let overrides = stmt
             .query_map([], |r| {
                 let id_bytes: Vec<u8> = r.get(0)?;
@@ -112,9 +110,7 @@ impl AiSettings {
     pub fn set(db: &DbState, input: &AiSettingsInput) -> AppResult<()> {
         if let Some(ref p) = input.default_provider {
             if !KNOWN_PROVIDERS.contains(&p.as_str()) {
-                return Err(AppError::Validation(format!(
-                    "unknown provider: {p}"
-                )));
+                return Err(AppError::Validation(format!("unknown provider: {p}")));
             }
         }
         for ov in &input.overrides {
@@ -126,10 +122,9 @@ impl AiSettings {
             }
         }
 
-        let mut conn = db
-            .0
-            .lock()
-            .map_err(|_| AppError::Internal("db poisoned".into()))?;
+        let mut conn =
+            db.0.lock()
+                .map_err(|_| AppError::Internal("db poisoned".into()))?;
 
         let tx = conn.transaction()?;
         let now = chrono::Utc::now().to_rfc3339();
@@ -174,10 +169,9 @@ impl AiSettings {
     /// 2. Else if `default_provider` is `NULL` → `Err(Validation("no AI provider configured"))`.
     /// 3. Else return the default provider + the matching `<provider>_model` column (may be `None`).
     pub fn resolve(db: &DbState, connection_id: Option<Uuid>) -> AppResult<ResolvedProviderConfig> {
-        let conn = db
-            .0
-            .lock()
-            .map_err(|_| AppError::Internal("db poisoned".into()))?;
+        let conn =
+            db.0.lock()
+                .map_err(|_| AppError::Internal("db poisoned".into()))?;
 
         if let Some(uuid) = connection_id {
             let override_row: Option<(String, Option<String>)> = conn
@@ -252,13 +246,7 @@ mod tests {
         conn.execute(
             "INSERT INTO connections (id, name, kind, params_json, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![
-                id.as_bytes().to_vec(),
-                "test-conn",
-                "postgres",
-                "{}",
-                0_i64,
-            ],
+            params![id.as_bytes().to_vec(), "test-conn", "postgres", "{}", 0_i64,],
         )
         .expect("insert connection");
     }
@@ -347,7 +335,10 @@ mod tests {
 
         let resolved = AiSettings::resolve(&db, Some(conn_id)).unwrap();
         assert_eq!(resolved.provider_id, "anthropic-api");
-        assert_eq!(resolved.model, None, "retired override model should resolve to None");
+        assert_eq!(
+            resolved.model, None,
+            "retired override model should resolve to None"
+        );
     }
 
     #[test]

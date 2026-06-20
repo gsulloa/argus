@@ -11,18 +11,17 @@ use crate::modules::ai::chat_session::ChatSessionRegistry;
 use crate::modules::ai::factory;
 use crate::modules::ai::keys::{self, ACCOUNT_ANTHROPIC, ACCOUNT_OPENAI};
 use crate::modules::ai::settings::{
-    AiSettings, ConnectionOverrideRow,
-    AiSettingsInput as RawAiSettingsInput,
+    AiSettings, AiSettingsInput as RawAiSettingsInput, ConnectionOverrideRow,
 };
 use crate::modules::ai::types::{
     AiConnectionOverrideView, AiSettingsView, AttachedResult, ChatDelta, ChatRequest, ChatStream,
     ChatTurn, GenerateDelta, InspectDelta, InspectRequest, KeyPresence, ProviderId,
     ProviderListEntry, ToolUseRecord, ValidationResult,
 };
-use crate::modules::dynamo::client::DynamoClientRegistry;
 use crate::modules::ai::validation_cache::ValidationCache;
 use crate::modules::context::registry::ContextRegistry;
 use crate::modules::context::types::AiPayload;
+use crate::modules::dynamo::client::DynamoClientRegistry;
 use crate::platform::DbState;
 
 const SETTINGS_CHANGED_EVENT: &str = "ai-settings-changed";
@@ -36,11 +35,13 @@ pub async fn ai_list_providers(
     cache: State<'_, ValidationCache>,
 ) -> AppResult<Vec<ProviderListEntry>> {
     // Build all four providers (sync, cheap).
-    let providers: Vec<(ProviderId, Box<dyn crate::modules::ai::provider::AiProvider>)> =
-        ProviderId::ALL
-            .iter()
-            .map(|id| factory::build(&db, *id).map(|p| (*id, p)))
-            .collect::<AppResult<Vec<_>>>()?;
+    let providers: Vec<(
+        ProviderId,
+        Box<dyn crate::modules::ai::provider::AiProvider>,
+    )> = ProviderId::ALL
+        .iter()
+        .map(|id| factory::build(&db, *id).map(|p| (*id, p)))
+        .collect::<AppResult<Vec<_>>>()?;
 
     // For each provider: check cache, else probe (with 3 s timeout), else fall back to Misconfigured.
     let futures = providers.into_iter().map(|(id, provider)| {
@@ -95,7 +96,10 @@ pub async fn ai_validate_provider(
 #[tauri::command]
 pub fn ai_get_settings(db: State<'_, DbState>) -> AppResult<AiSettingsView> {
     let (row, overrides) = AiSettings::get(&db)?;
-    let default_provider = row.default_provider.as_deref().and_then(ProviderId::from_kebab);
+    let default_provider = row
+        .default_provider
+        .as_deref()
+        .and_then(ProviderId::from_kebab);
     let overrides_view = overrides
         .into_iter()
         .filter_map(|o| {
@@ -336,11 +340,19 @@ async fn drive_stream(
                 // Intercept internal sentinels before forwarding.
                 if let ChatDelta::Status(ref s) = delta {
                     if let Some(resume_id) = s.strip_prefix("__resume_id__:") {
-                        let _ = registry.set_provider_state(session_id, "resume_id", resume_id.to_string());
+                        let _ = registry.set_provider_state(
+                            session_id,
+                            "resume_id",
+                            resume_id.to_string(),
+                        );
                         continue;
                     }
                     if s == "__codex_warning_shown__" {
-                        let _ = registry.set_provider_state(session_id, "codex_warning_shown", "1".to_string());
+                        let _ = registry.set_provider_state(
+                            session_id,
+                            "codex_warning_shown",
+                            "1".to_string(),
+                        );
                         continue;
                     }
                 }
@@ -351,7 +363,11 @@ async fn drive_stream(
                     ChatDelta::ToolCallStarted { id, name, input } => {
                         current_tool = Some((id.clone(), name.clone(), input.clone()));
                     }
-                    ChatDelta::ToolCallFinished { id, output, is_error } => {
+                    ChatDelta::ToolCallFinished {
+                        id,
+                        output,
+                        is_error,
+                    } => {
                         if let Some((tid, tname, tinput)) = current_tool.take() {
                             if tid == *id {
                                 tool_uses.push(ToolUseRecord {
@@ -384,7 +400,12 @@ async fn drive_stream(
     }
     // Guarantee the frontend always receives a Done event on error paths.
     if errored {
-        let _ = app.emit(channel, ChatDelta::Done { finish_reason: None });
+        let _ = app.emit(
+            channel,
+            ChatDelta::Done {
+                finish_reason: None,
+            },
+        );
     }
 }
 
@@ -422,7 +443,8 @@ pub async fn ai_chat_send(
     let (context_path, context_engine) = if let Some(id) = conn_uuid {
         match crate::modules::context::commands::get_conn_kind_and_path(&db, id) {
             Ok((kind, path)) => {
-                let engine = crate::modules::context::engine::EngineKind::from_connection_kind(&kind);
+                let engine =
+                    crate::modules::context::engine::EngineKind::from_connection_kind(&kind);
                 let path_buf = path.map(std::path::PathBuf::from);
                 (path_buf, engine)
             }
@@ -433,12 +455,14 @@ pub async fn ai_chat_send(
     };
 
     // Load the Dynamo table-match rule for Dynamo connections (None for all others).
-    let dynamo_table_match = if let (Some(id), Some(crate::modules::context::engine::EngineKind::Dynamo)) = (conn_uuid, context_engine) {
-        crate::modules::context::commands::load_table_match(&db, id)
-            .unwrap_or(None)
-    } else {
-        None
-    };
+    let dynamo_table_match =
+        if let (Some(id), Some(crate::modules::context::engine::EngineKind::Dynamo)) =
+            (conn_uuid, context_engine)
+        {
+            crate::modules::context::commands::load_table_match(&db, id).unwrap_or(None)
+        } else {
+            None
+        };
 
     // Open or get session — existing sessions keep their bound provider.
     registry.open_or_get(&session_id, provider_id, conn_uuid, context_path.clone())?;
@@ -491,7 +515,12 @@ pub async fn ai_chat_send(
             }
             Err(e) => {
                 let _ = app_clone.emit(&channel, ChatDelta::Error(format!("{e:?}")));
-                let _ = app_clone.emit(&channel, ChatDelta::Done { finish_reason: None });
+                let _ = app_clone.emit(
+                    &channel,
+                    ChatDelta::Done {
+                        finish_reason: None,
+                    },
+                );
             }
         }
     });
@@ -511,7 +540,12 @@ pub fn ai_chat_cancel(
     registry.abort(&session_id)?;
     let channel = format!("ai-chat-delta:{session_id}");
     let _ = app.emit(&channel, ChatDelta::Error("cancelled".into()));
-    let _ = app.emit(&channel, ChatDelta::Done { finish_reason: Some("cancelled".into()) });
+    let _ = app.emit(
+        &channel,
+        ChatDelta::Done {
+            finish_reason: Some("cancelled".into()),
+        },
+    );
     Ok(())
 }
 
@@ -553,7 +587,10 @@ async fn drive_inspect_stream(mut stream: ChatStream, channel: &str, app: &AppHa
                 }
             }
             Ok(ChatDelta::ToolCallStarted { name, .. }) => {
-                let _ = app.emit(channel, InspectDelta::Status(format!("Reading repo ({name})…")));
+                let _ = app.emit(
+                    channel,
+                    InspectDelta::Status(format!("Reading repo ({name})…")),
+                );
             }
             Ok(ChatDelta::Error(e)) => {
                 errored = true;

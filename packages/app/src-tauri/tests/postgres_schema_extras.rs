@@ -37,7 +37,6 @@ WHERE n.nspname = $1
   AND NOT t.tgisinternal
 ORDER BY t.tgname";
 
-
 #[tokio::test]
 #[ignore]
 async fn list_table_extras_reserved_word_table_completes() {
@@ -74,19 +73,14 @@ async fn list_table_extras_reserved_word_table_completes() {
 
     client
         .execute(
-            &format!(
-                r#"CREATE TABLE {schema}."order" (id int primary key, ts timestamptz)"#
-            ),
+            &format!(r#"CREATE TABLE {schema}."order" (id int primary key, ts timestamptz)"#),
             &[],
         )
         .await
         .expect("create table");
 
     client
-        .execute(
-            &format!(r#"CREATE INDEX ON {schema}."order" (ts)"#),
-            &[],
-        )
+        .execute(&format!(r#"CREATE INDEX ON {schema}."order" (ts)"#), &[])
         .await
         .expect("create index");
 
@@ -151,10 +145,7 @@ async fn list_table_extras_reserved_word_table_completes() {
 
     // Verify the index name is present and non-empty.
     let index_name: String = index_rows[0].get(0);
-    assert!(
-        !index_name.is_empty(),
-        "index name should be non-empty"
-    );
+    assert!(!index_name.is_empty(), "index name should be non-empty");
 
     // Verify the trigger name matches what we created.
     let trigger_name: String = trigger_rows[0].get(0);
