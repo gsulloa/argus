@@ -5,7 +5,7 @@
  * deduplicated — the user may have many open).
  */
 
-import { ATHENA_QUERY_KIND } from "./sql/QueryTab";
+import { ATHENA_QUERY_KIND, type AthenaQueryOrigin } from "./sql/QueryTab";
 
 interface TabsMinimal {
   open: (input: {
@@ -21,12 +21,26 @@ export interface OpenAthenaQueryTabArgs {
   connectionId: string;
   connectionName?: string;
   sql?: string;
+  /**
+   * When set, the opened tab is linked to an existing NamedQuery.
+   * The toolbar will show "Update '<name>'" instead of "Save as Named Query".
+   */
+  origin?: AthenaQueryOrigin;
+  /**
+   * Pre-fills the "Save as Named Query" modal's database field when the tab
+   * was opened from a table/view leaf in a known database context.
+   */
+  defaultDatabase?: string;
 }
 
 let globalAthenaQueryCounter = 0;
 
 function nextTitle(args: OpenAthenaQueryTabArgs): string {
   globalAthenaQueryCounter += 1;
+  // If the tab is linked to a named query, use the query name as the title.
+  if (args.origin?.name) {
+    return args.origin.name;
+  }
   const base = args.connectionName ? `${args.connectionName} — ` : "";
   return `${base}Query ${globalAthenaQueryCounter}`;
 }
@@ -52,6 +66,10 @@ export function openAthenaQueryTab(
       connectionId: args.connectionId,
       connectionName: args.connectionName ?? args.connectionId,
       initialSql: args.sql ?? "",
+      // Optional fields — only included when provided so payload remains
+      // backward-compatible with persisted tabs that lack these keys.
+      ...(args.origin !== undefined ? { origin: args.origin } : {}),
+      ...(args.defaultDatabase !== undefined ? { defaultDatabase: args.defaultDatabase } : {}),
     },
   });
   return id;

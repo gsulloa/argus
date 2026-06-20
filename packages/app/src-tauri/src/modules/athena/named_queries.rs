@@ -36,6 +36,14 @@ pub struct NamedQueryDetail {
     pub query_string: String,
 }
 
+/// Identity returned by the create command (no query_string needed).
+#[derive(Debug, Clone, Serialize)]
+pub struct CreatedNamedQuery {
+    pub named_query_id: String,
+    pub work_group: String,
+    pub database: String,
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers (testable without AWS)
 // ---------------------------------------------------------------------------
@@ -218,6 +226,110 @@ pub async fn athena_get_named_query(
         .ok_or_else(|| AppError::NotFound(format!("named query {named_query_id} not found")))?;
 
     Ok(named_query_to_detail(nq))
+}
+
+// ---------------------------------------------------------------------------
+// athena_create_named_query
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn athena_create_named_query(
+    registry: State<'_, AthenaClientRegistry>,
+    id: Uuid,
+    name: String,
+    query_string: String,
+    database: String,
+    work_group: String,
+    description: Option<String>,
+) -> AppResult<CreatedNamedQuery> {
+    let acquired = registry.acquire(&id).await?;
+
+    if registry.read_only_for(&id).await == Some(true) {
+        return Err(AppError::Validation("connection is read-only".into()));
+    }
+
+    let athena = &acquired.athena;
+
+    let resp = athena
+        .create_named_query()
+        .name(&name)
+        .database(&database)
+        .query_string(&query_string)
+        .work_group(&work_group)
+        .set_description(description)
+        .send()
+        .await
+        .map_err(|e| sdk_err_to_app(&e))?;
+
+    let named_query_id = resp.named_query_id().unwrap_or_default().to_string();
+
+    Ok(CreatedNamedQuery {
+        named_query_id,
+        work_group,
+        database,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// athena_update_named_query
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn athena_update_named_query(
+    registry: State<'_, AthenaClientRegistry>,
+    id: Uuid,
+    named_query_id: String,
+    name: String,
+    query_string: String,
+    description: Option<String>,
+) -> AppResult<()> {
+    let acquired = registry.acquire(&id).await?;
+
+    if registry.read_only_for(&id).await == Some(true) {
+        return Err(AppError::Validation("connection is read-only".into()));
+    }
+
+    let athena = &acquired.athena;
+
+    athena
+        .update_named_query()
+        .named_query_id(&named_query_id)
+        .name(&name)
+        .query_string(&query_string)
+        .set_description(description)
+        .send()
+        .await
+        .map_err(|e| sdk_err_to_app(&e))?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// athena_delete_named_query
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn athena_delete_named_query(
+    registry: State<'_, AthenaClientRegistry>,
+    id: Uuid,
+    named_query_id: String,
+) -> AppResult<()> {
+    let acquired = registry.acquire(&id).await?;
+
+    if registry.read_only_for(&id).await == Some(true) {
+        return Err(AppError::Validation("connection is read-only".into()));
+    }
+
+    let athena = &acquired.athena;
+
+    athena
+        .delete_named_query()
+        .named_query_id(&named_query_id)
+        .send()
+        .await
+        .map_err(|e| sdk_err_to_app(&e))?;
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

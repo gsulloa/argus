@@ -19,7 +19,10 @@ use crate::modules::athena::commands::{
     athena_connect, athena_disconnect, athena_disconnect_all, athena_list_active,
     athena_test_connection,
 };
-use crate::modules::athena::named_queries::{athena_get_named_query, athena_list_named_queries};
+use crate::modules::athena::named_queries::{
+    athena_create_named_query, athena_delete_named_query, athena_get_named_query,
+    athena_list_named_queries, athena_update_named_query,
+};
 use crate::modules::athena::pool::AthenaClientRegistry;
 use crate::modules::athena::s3::{athena_list_s3_buckets, athena_list_s3_prefixes};
 use crate::modules::athena::schema_commands::{
@@ -352,6 +355,9 @@ pub fn run() {
             athena_list_columns,
             athena_list_named_queries,
             athena_get_named_query,
+            athena_create_named_query,
+            athena_update_named_query,
+            athena_delete_named_query,
             athena_run_sql,
             athena_run_sql_many,
             athena_cancel_query,

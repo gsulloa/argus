@@ -3,6 +3,7 @@ import { toAppError } from "@/platform/errors/AppError";
 import type {
   AthenaActiveConnection,
   AthenaColumnInfo,
+  AthenaCreatedNamedQuery,
   AthenaDatabaseInfo,
   AthenaMultiSqlResult,
   AthenaNamedQueryDetail,
@@ -86,6 +87,41 @@ export const athenaApi = {
 
   getNamedQuery: (id: string, namedQueryId: string): Promise<AthenaNamedQueryDetail> =>
     call<AthenaNamedQueryDetail>("athena_get_named_query", { id, namedQueryId }),
+
+  createNamedQuery: (
+    id: string,
+    name: string,
+    queryString: string,
+    database: string,
+    workGroup: string,
+    description?: string,
+  ): Promise<AthenaCreatedNamedQuery> =>
+    call<AthenaCreatedNamedQuery>("athena_create_named_query", {
+      id,
+      name,
+      queryString,
+      database,
+      workGroup,
+      description: description ?? null,
+    }),
+
+  updateNamedQuery: (
+    id: string,
+    namedQueryId: string,
+    name: string,
+    queryString: string,
+    description?: string,
+  ): Promise<void> =>
+    call<void>("athena_update_named_query", {
+      id,
+      namedQueryId,
+      name,
+      queryString,
+      description: description ?? null,
+    }),
+
+  deleteNamedQuery: (id: string, namedQueryId: string): Promise<void> =>
+    call<void>("athena_delete_named_query", { id, namedQueryId }),
 
   // ---------------------------------------------------------------------------
   // S3 browse — pick an output-location bucket with the form's credentials
