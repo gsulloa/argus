@@ -261,10 +261,7 @@ pub async fn athena_create_named_query(
         .await
         .map_err(|e| sdk_err_to_app(&e))?;
 
-    let named_query_id = resp
-        .named_query_id()
-        .unwrap_or_default()
-        .to_string();
+    let named_query_id = resp.named_query_id().unwrap_or_default().to_string();
 
     Ok(CreatedNamedQuery {
         named_query_id,
