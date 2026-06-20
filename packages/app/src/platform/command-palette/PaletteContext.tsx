@@ -9,11 +9,15 @@ import {
   type SetStateAction,
 } from "react";
 
+export type TableScope = "focused" | "all-open";
+
 type ActivePalette = "command" | "table" | null;
 
 interface CoordinatorState {
   active: ActivePalette;
   setActive: Dispatch<SetStateAction<ActivePalette>>;
+  tableScope: TableScope;
+  setTableScope: Dispatch<SetStateAction<TableScope>>;
 }
 
 interface PaletteCtx {
@@ -23,11 +27,22 @@ interface PaletteCtx {
   toggle: () => void;
 }
 
+export interface TablePaletteCtx extends PaletteCtx {
+  /** Current scope: "focused" (default, ⌘P) or "all-open" (⌥⌘P). */
+  tableScope: TableScope;
+  /** Open the table palette with a specific scope. */
+  show: (scope?: TableScope) => void;
+}
+
 const Coordinator = createContext<CoordinatorState | null>(null);
 
 export function PaletteProvider({ children }: { children: ReactNode }) {
   const [active, setActive] = useState<ActivePalette>(null);
-  const value = useMemo<CoordinatorState>(() => ({ active, setActive }), [active]);
+  const [tableScope, setTableScope] = useState<TableScope>("focused");
+  const value = useMemo<CoordinatorState>(
+    () => ({ active, setActive, tableScope, setTableScope }),
+    [active, tableScope],
+  );
   return <Coordinator.Provider value={value}>{children}</Coordinator.Provider>;
 }
 
@@ -56,9 +71,15 @@ export function usePalette(): PaletteCtx {
   );
 }
 
-export function useTablePalette(): PaletteCtx {
-  const { active, setActive } = useCoordinator("useTablePalette");
-  const show = useCallback(() => setActive("table"), [setActive]);
+export function useTablePalette(): TablePaletteCtx {
+  const { active, setActive, tableScope, setTableScope } = useCoordinator("useTablePalette");
+  const show = useCallback(
+    (scope: TableScope = "focused") => {
+      setTableScope(scope);
+      setActive("table");
+    },
+    [setActive, setTableScope],
+  );
   const hide = useCallback(
     () => setActive((a) => (a === "table" ? null : a)),
     [setActive],
@@ -68,7 +89,7 @@ export function useTablePalette(): PaletteCtx {
     [setActive],
   );
   return useMemo(
-    () => ({ open: active === "table", show, hide, toggle }),
-    [active, show, hide, toggle],
+    () => ({ open: active === "table", tableScope, show, hide, toggle }),
+    [active, tableScope, show, hide, toggle],
   );
 }

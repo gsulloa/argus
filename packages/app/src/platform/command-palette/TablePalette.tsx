@@ -1,9 +1,7 @@
 import { Command as Cmdk } from "cmdk";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTabs } from "@/platform/shell/tabs";
-import { useActiveConnections } from "@/modules/postgres/useActiveConnections";
-import { useActiveMysqlConnections } from "@/modules/mysql/useActiveConnections";
-import { useActiveMssqlConnections } from "@/modules/mssql/useActiveConnections";
+import { useOpenConnections } from "@/platform/connection-registry/useOpenConnections";
 import { openObjectTab } from "@/modules/postgres/schema/openObjectTab";
 import { openMysqlObjectTab } from "@/modules/mysql/schema/openObjectTab";
 import { openMssqlObjectTab } from "@/modules/mssql/schema/openObjectTab";
@@ -61,14 +59,13 @@ function TableRow({ entry, valuePrefix = "", onSelect }: RowProps) {
 }
 
 export function TablePalette() {
-  const { open, hide } = useTablePalette();
+  const { open, hide, tableScope } = useTablePalette();
   const listRef = useRef<HTMLDivElement>(null);
   const tabs = useTabs();
-  const { items: pgActives } = useActiveConnections();
-  const { items: myActives } = useActiveMysqlConnections();
-  const { items: msActives } = useActiveMssqlConnections();
-  const actives = useMemo(() => [...pgActives, ...myActives, ...msActives], [pgActives, myActives, msActives]);
-  const entries = useTableIndex(open);
+  // Use the consolidated open-connections registry as the single source of
+  // truth for "is anything open?" (8.4 repoint for this membership-only check).
+  const { items: openItems } = useOpenConnections();
+  const entries = useTableIndex(open, tableScope);
   const { recents, push: pushRecent } = useRecentTables();
   const [search, setSearch] = useState("");
 
@@ -82,15 +79,18 @@ export function TablePalette() {
     }
   }, [search, open]);
 
-  const activeIds = useMemo(() => new Set(actives.map((a) => a.id)), [actives]);
+  const openIds = useMemo(() => new Set(openItems.map((a) => a.id)), [openItems]);
   const visibleRecents = useMemo(
-    () => recents.filter((r) => activeIds.has(r.connectionId)),
-    [recents, activeIds],
+    () => recents.filter((r) => openIds.has(r.connectionId)),
+    [recents, openIds],
   );
 
-  const hasConnections = actives.length > 0;
+  const hasConnections = openItems.length > 0;
   const indexLoading = hasConnections && entries.length === 0;
   const showRecents = search === "" && visibleRecents.length > 0;
+
+  const scopeLabel =
+    tableScope === "focused" ? "This connection" : "All open connections";
 
   const tableFilter = useCallback<PaletteFilter>((_value, queryStr, keywords) => {
     const schema = keywords?.[0];
@@ -136,7 +136,7 @@ export function TablePalette() {
     <PaletteShell
       open={open}
       onOpenChange={(v) => !v && hide()}
-      title="Jump to table"
+      title={`Jump to table — ${scopeLabel}`}
       ariaLabel="Table quick switcher"
       placeholder={hasConnections ? "Jump to table…" : "No active connections"}
       search={search}
@@ -144,6 +144,7 @@ export function TablePalette() {
       shouldFilter={hasConnections && entries.length > 0 && search.length > 0}
       filter={tableFilter}
       listRef={listRef}
+      scopeLabel={scopeLabel}
     >
       {!hasConnections ? (
         <div className={paletteStyles.empty}>

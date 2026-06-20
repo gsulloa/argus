@@ -27,6 +27,12 @@ export interface PaletteShellProps {
   filter?: PaletteFilter;
   children: ReactNode;
   listRef?: Ref<HTMLDivElement>;
+  /**
+   * Optional scope indicator rendered inline with the search input.
+   * Used by the table palette to surface "This connection" vs "All open
+   * connections" (Decision 6 / Phase 7).
+   */
+  scopeLabel?: string;
 }
 
 /**
@@ -46,6 +52,7 @@ export function PaletteShell({
   filter,
   children,
   listRef,
+  scopeLabel,
 }: PaletteShellProps) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -62,13 +69,18 @@ export function PaletteShell({
             value={undefined}
             {...(filter ? { filter } : {})}
           >
-            <Cmdk.Input
-              autoFocus
-              className={styles.input}
-              placeholder={placeholder}
-              value={search}
-              onValueChange={onSearchChange}
-            />
+            <div className={styles.inputRow}>
+              <Cmdk.Input
+                autoFocus
+                className={styles.input}
+                placeholder={placeholder}
+                value={search}
+                onValueChange={onSearchChange}
+              />
+              {scopeLabel && (
+                <span className={styles.scopeChip}>{scopeLabel}</span>
+              )}
+            </div>
             <Cmdk.List ref={listRef} className={styles.list}>{children}</Cmdk.List>
           </Cmdk>
         </Dialog.Content>

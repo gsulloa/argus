@@ -352,20 +352,18 @@ export function TableViewer({
   );
 
   // Derive the array of selected rows (raw selection range, pre-filter).
-  const selectedRows = useMemo(() => {
-    if (selection.anchor === null) return [];
-    const lo = Math.min(selection.anchor, selection.active ?? selection.anchor);
-    const hi = Math.max(selection.anchor, selection.active ?? selection.anchor);
-    const out: Array<{
-      rowKey: string;
-      row: CellValue[];
-      pk: Record<string, EditValue>;
-      source: "insert" | "server";
-      isDeleted: boolean;
-    }> = [];
-    for (let i = lo; i <= hi; i++) {
+  type SelectedRow = {
+    rowKey: string;
+    row: CellValue[];
+    pk: Record<string, EditValue>;
+    source: "insert" | "server";
+    isDeleted: boolean;
+  };
+
+  const buildSelectedRow = useCallback(
+    (i: number): SelectedRow | null => {
       const r = unifiedRows[i];
-      if (!r) continue;
+      if (!r) return null;
       const pk: Record<string, EditValue> = {};
       if (pkColumns && r.source === "server") {
         for (const col of pkColumns) {
@@ -373,16 +371,42 @@ export function TableViewer({
           if (idx >= 0) pk[col] = (r.cells[idx] ?? null) as EditValue;
         }
       }
-      out.push({
+      return {
         rowKey: r.rowKey,
         row: r.cells,
         pk,
         source: r.source,
         isDeleted: r.rowKey ? buffer.isRowDeleted(r.rowKey) : false,
-      });
+      };
+    },
+    [unifiedRows, pkColumns, data.columns, buffer],
+  );
+
+  const selectedRows = useMemo(() => {
+    if (selection.anchor === null) return [];
+    const lo = Math.min(selection.anchor, selection.active ?? selection.anchor);
+    const hi = Math.max(selection.anchor, selection.active ?? selection.anchor);
+    const out: SelectedRow[] = [];
+    for (let i = lo; i <= hi; i++) {
+      const row = buildSelectedRow(i);
+      if (row) out.push(row);
     }
     return out;
-  }, [selection, unifiedRows, pkColumns, data.columns, buffer]);
+    // SelectedRow is a render-local type; buildSelectedRow carries the real deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, buildSelectedRow]);
+
+  // The Inspector reflects the active cell's row when there is no row-range
+  // selection, so a single click on a cell loads that row into the right panel.
+  // Row-range selection (drag) still takes precedence for multi-row / bulk edit.
+  const inspectorRows = useMemo(() => {
+    if (selectedRows.length > 0) return selectedRows;
+    if (activeCell) {
+      const row = buildSelectedRow(activeCell.row);
+      if (row) return [row];
+    }
+    return [];
+  }, [selectedRows, activeCell, buildSelectedRow]);
 
   // Count of eligible rows for bulk-edit (server, not deleted, has rowKey).
   const eligibleCount = useMemo(
@@ -753,7 +777,7 @@ export function TableViewer({
           >
             <Inspector
               columns={data.columns}
-              selectedRows={selectedRows}
+              selectedRows={inspectorRows}
               bulkEditAvailable={bulkEditAvailable}
               isReadOnly={isReadOnly}
               pkColumns={pkColumns}
