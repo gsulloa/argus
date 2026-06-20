@@ -145,6 +145,8 @@ vi.mock("@/modules/context/hooks", () => ({
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import type { ObjectListItem, ObjectDoc } from "@/modules/context/types";
+import { useEditBuffer } from "../useEditBuffer";
+import { useTableData } from "../useTableData";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -363,5 +365,149 @@ describe("MssqlTableViewerTab — context folder wiring", () => {
     // since structure is idle, the notes won't appear yet, but we can verify the
     // useContextObject hook was called with the identity when docs are available
     expect(useContextObjectMock).toHaveBeenCalledWith("conn-1", "dbo.users", "/some/folder");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §discard-pending-changes — guarded refresh tests
+// ---------------------------------------------------------------------------
+
+describe("MssqlTableViewerTab — guarded refresh (discard-pending-changes)", () => {
+  const useEditBufferMock = vi.mocked(useEditBuffer);
+  const useTableDataMock = vi.mocked(useTableData);
+
+  // Build a buffer object with the given hasDirty flag.
+  function makeBuffer(hasDirty: boolean) {
+    return {
+      // Partial stub — only the fields TableViewer touches in these tests.
+      rows: new Map(),
+      hasDirty,
+      dirtyCounts: {
+        updates: hasDirty ? 1 : 0,
+        inserts: 0,
+        deletes: 0,
+      },
+      addInsertRow: vi.fn(),
+      updateCell: vi.fn(),
+      deleteRow: vi.fn(),
+      bulkDeleteToggle: vi.fn(),
+      isRowDeleted: vi.fn(() => false),
+      toEditOps: vi.fn(() => []),
+      commitSuccess: vi.fn(),
+      clear: vi.fn(),
+      undo: vi.fn(),
+    } as unknown as ReturnType<typeof useEditBuffer>;
+  }
+
+  // Build a tableData stub with a fresh `refresh` spy each time.
+  function makeTableData() {
+    return {
+      columns: [{ name: "id", data_type: "int", ordinal_position: 1, is_nullable: false }],
+      rows: [],
+      isLoading: false,
+      isLoadingNext: false,
+      isReady: true,
+      error: null,
+      nextError: null,
+      reachedEnd: true,
+      pageSize: 200,
+      orderBy: [],
+      filterModel: { rows: [], combinator: "AND" },
+      queryMs: null,
+      setPageSize: vi.fn(),
+      setOrderBy: vi.fn(),
+      setFilterModel: vi.fn(),
+      refresh: vi.fn(),
+      loadNextPage: vi.fn(),
+      clearNextError: vi.fn(),
+    } as unknown as ReturnType<typeof useTableData>;
+  }
+
+  beforeEach(() => {
+    // Reset to clean state between tests.
+    useEditBufferMock.mockReturnValue(makeBuffer(false));
+    useTableDataMock.mockReturnValue(makeTableData());
+  });
+
+  it("⌘R with dirty buffer opens the discard dialog and does NOT refresh", () => {
+    const buffer = makeBuffer(true);
+    const tableData = makeTableData();
+    useEditBufferMock.mockReturnValue(buffer);
+    useTableDataMock.mockReturnValue(tableData);
+
+    renderViewer(makeTab());
+
+    // The dialog Cancel button should not exist before ⌘R.
+    expect(screen.queryByRole("button", { name: /cancel/i })).toBeNull();
+
+    // Fire ⌘R on the root element.
+    const region = screen.getByRole("region");
+    fireEvent.keyDown(region, { key: "r", metaKey: true });
+
+    // Dialog should now be visible — Cancel button is unique to the dialog.
+    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    // Refresh must NOT have been called yet.
+    expect(tableData.refresh).not.toHaveBeenCalled();
+  });
+
+  it("confirming the discard dialog clears the buffer and refreshes", () => {
+    const buffer = makeBuffer(true);
+    const tableData = makeTableData();
+    useEditBufferMock.mockReturnValue(buffer);
+    useTableDataMock.mockReturnValue(tableData);
+
+    renderViewer(makeTab());
+
+    // Open the dialog via the reload button in SubtabHeader.
+    const reloadBtn = screen.getByTitle(/reload/i);
+    fireEvent.click(reloadBtn);
+
+    // Dialog is open — Cancel button is unique to the dialog.
+    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+
+    // The dialog Discard button is the last "Discard" button (toolbar has one too).
+    const discardBtns = screen.getAllByRole("button", { name: /^Discard$/i });
+    const dialogDiscardBtn = discardBtns[discardBtns.length - 1]!;
+    fireEvent.click(dialogDiscardBtn);
+
+    expect(buffer.clear).toHaveBeenCalledTimes(1);
+    expect(tableData.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancelling the discard dialog leaves buffer intact and does not refresh", () => {
+    const buffer = makeBuffer(true);
+    const tableData = makeTableData();
+    useEditBufferMock.mockReturnValue(buffer);
+    useTableDataMock.mockReturnValue(tableData);
+
+    renderViewer(makeTab());
+
+    // Open the dialog via the reload button.
+    const reloadBtn = screen.getByTitle(/reload/i);
+    fireEvent.click(reloadBtn);
+
+    // Cancel.
+    const cancelBtn = screen.getByRole("button", { name: /cancel/i });
+    fireEvent.click(cancelBtn);
+
+    expect(buffer.clear).not.toHaveBeenCalled();
+    expect(tableData.refresh).not.toHaveBeenCalled();
+  });
+
+  it("⌘R with a clean buffer refreshes immediately without showing the dialog", () => {
+    const buffer = makeBuffer(false);
+    const tableData = makeTableData();
+    useEditBufferMock.mockReturnValue(buffer);
+    useTableDataMock.mockReturnValue(tableData);
+
+    renderViewer(makeTab());
+
+    const region = screen.getByRole("region");
+    fireEvent.keyDown(region, { key: "r", metaKey: true });
+
+    // No dialog.
+    expect(screen.queryByRole("button", { name: /^Discard$/i })).toBeNull();
+    // Refresh called immediately.
+    expect(tableData.refresh).toHaveBeenCalledTimes(1);
   });
 });

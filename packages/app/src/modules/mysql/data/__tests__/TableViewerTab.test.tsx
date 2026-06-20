@@ -145,6 +145,8 @@ import type { Tab } from "@/platform/shell/tabs/types";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import type { ObjectListItem, ObjectDoc } from "@/modules/context/types";
+import { useTableData } from "@/modules/mysql/data/useTableData";
+import { useEditBuffer } from "@/modules/mysql/data/useEditBuffer";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -331,5 +333,108 @@ describe("MysqlTableViewerTab — context folder wiring", () => {
     });
     renderViewer(makeTab());
     expect(useContextObjectMock).toHaveBeenCalledWith("conn-1", null, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guarded refresh tests (discard-pending-changes, MySQL)
+// ---------------------------------------------------------------------------
+
+describe("MysqlTableViewerTab — guarded refresh", () => {
+  const useConnectionsMock = vi.mocked(useConnections);
+  const useContextObjectsMock = vi.mocked(useContextObjects);
+  const useContextObjectMock = vi.mocked(useContextObject);
+  const useTableDataMock = vi.mocked(useTableData);
+  const useEditBufferMock = vi.mocked(useEditBuffer);
+
+  // Access the stable objects created inside the vi.mock factories so we can
+  // mutate them between tests without breaking the stable-reference invariant.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stableTableData: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stableBuffer: any;
+
+  beforeEach(() => {
+    useConnectionsMock.mockReturnValue(mockConnections(null));
+    useContextObjectsMock.mockReturnValue({
+      data: [],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+    useContextObjectMock.mockReturnValue({
+      data: null,
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+
+    // Capture the stable references returned by the mocked hooks so we can
+    // inspect spy calls and toggle hasDirty between tests.
+    stableTableData = useTableDataMock.getMockImplementation()?.({} as never);
+    stableBuffer = useEditBufferMock.getMockImplementation()?.();
+
+    // Reset spy call counts and default to a clean buffer.
+    vi.mocked(stableTableData.refresh).mockClear();
+    vi.mocked(stableBuffer.clear).mockClear();
+    stableBuffer.hasDirty = false;
+    stableBuffer.dirtyCounts = { updates: 0, inserts: 0, deletes: 0 };
+  });
+
+  it("⌘R with a clean buffer refreshes immediately and shows no dialog", () => {
+    stableBuffer.hasDirty = false;
+    renderViewer(makeTab());
+
+    const region = screen.getByRole("region");
+    fireEvent.keyDown(region, { key: "r", metaKey: true });
+
+    expect(stableTableData.refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Discard \d+ pending edit/)).toBeNull();
+  });
+
+  it("⌘R with a dirty buffer opens the discard dialog and does NOT call refresh", () => {
+    stableBuffer.hasDirty = true;
+    stableBuffer.dirtyCounts = { updates: 2, inserts: 0, deletes: 0 };
+    renderViewer(makeTab());
+
+    const region = screen.getByRole("region");
+    fireEvent.keyDown(region, { key: "r", metaKey: true });
+
+    expect(stableTableData.refresh).not.toHaveBeenCalled();
+    expect(screen.getByText(/Discard 2 pending edits\?/i)).toBeInTheDocument();
+  });
+
+  it("confirming the dialog clears the buffer and refreshes", () => {
+    stableBuffer.hasDirty = true;
+    stableBuffer.dirtyCounts = { updates: 1, inserts: 0, deletes: 0 };
+    renderViewer(makeTab());
+
+    const region = screen.getByRole("region");
+    fireEvent.keyDown(region, { key: "r", metaKey: true });
+
+    // Dialog is shown — click the confirm Discard button (last of the two
+    // "Discard" buttons; the first is the toolbar button).
+    const discardButtons = screen.getAllByRole("button", { name: /^Discard$/i });
+    fireEvent.click(discardButtons[discardButtons.length - 1]!);
+
+    expect(stableBuffer.clear).toHaveBeenCalledTimes(1);
+    expect(stableTableData.refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Discard \d+ pending edit/)).toBeNull();
+  });
+
+  it("cancelling the dialog leaves the buffer intact and does not refresh", () => {
+    stableBuffer.hasDirty = true;
+    stableBuffer.dirtyCounts = { updates: 1, inserts: 0, deletes: 0 };
+    renderViewer(makeTab());
+
+    const region = screen.getByRole("region");
+    fireEvent.keyDown(region, { key: "r", metaKey: true });
+
+    // Dialog is shown — click Cancel
+    fireEvent.click(screen.getByRole("button", { name: /Cancel/i }));
+
+    expect(stableBuffer.clear).not.toHaveBeenCalled();
+    expect(stableTableData.refresh).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Discard \d+ pending edit/)).toBeNull();
   });
 });

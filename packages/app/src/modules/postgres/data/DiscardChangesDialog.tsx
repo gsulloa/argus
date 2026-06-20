@@ -4,9 +4,11 @@ export interface DiscardChangesDialogProps {
   count: number;
   onCancel(): void;
   onDiscard(): void;
+  /** Controls header and body copy. Defaults to "close". */
+  action?: "close" | "refresh" | "discard";
 }
 
-export function DiscardChangesDialog({ count, onCancel, onDiscard }: DiscardChangesDialogProps) {
+export function DiscardChangesDialog({ count, onCancel, onDiscard, action = "close" }: DiscardChangesDialogProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -21,6 +23,19 @@ export function DiscardChangesDialog({ count, onCancel, onDiscard }: DiscardChan
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel, onDiscard]);
 
+  const plural = count === 1 ? "" : "s";
+  const header =
+    action === "refresh"
+      ? `Discard ${count} change${plural} and refresh?`
+      : `Discard ${count} change${plural}?`;
+
+  const body =
+    action === "refresh"
+      ? "Refreshing the table will lose your pending edits. They have not been committed to the database."
+      : action === "discard"
+      ? "Your pending edits have not been committed to the database."
+      : "Closing this tab will lose your pending edits. They have not been committed to the database.";
+
   return (
     <div
       style={backdropStyle}
@@ -30,11 +45,10 @@ export function DiscardChangesDialog({ count, onCancel, onDiscard }: DiscardChan
     >
       <div style={dialogStyle} role="alertdialog" aria-modal="true">
         <div style={headerStyle}>
-          Discard {count} change{count === 1 ? "" : "s"}?
+          {header}
         </div>
         <div style={bodyStyle}>
-          Closing this tab will lose your pending edits. They have not been
-          committed to the database.
+          {body}
         </div>
         <div style={footerStyle}>
           <button type="button" style={btnStyle} onClick={onCancel}>
