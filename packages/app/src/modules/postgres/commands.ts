@@ -7,7 +7,7 @@ import { POSTGRES_KIND } from "./types";
 import { postgresApi } from "./api";
 import { usePostgresForm } from "./FormController";
 import { useActiveConnections } from "./useActiveConnections";
-import { emitSchemaEvent } from "./schema/events";
+import { emitSchemaEvent, refreshConnection } from "./schema/events";
 import { openQueryTab } from "./sql";
 
 interface SelectionApi {
@@ -126,7 +126,7 @@ export function usePostgresCommands(selection: SelectionApi = NOOP_SELECTION) {
             console.warn("[argus] schema refresh: no active connection");
             return;
           }
-          emitSchemaEvent({ type: "invalidate", connectionId: c.id });
+          refreshConnection(c.id);
         },
       }),
     );

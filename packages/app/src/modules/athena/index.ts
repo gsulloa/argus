@@ -16,6 +16,7 @@ export {
   AthenaSchemaToolbar,
 } from "./schema/SchemaTree";
 export { athenaSchemaCache } from "./schema/globalSchemaCache";
+export { refreshConnection } from "./schema/refresh";
 
 // SQL editor query tab
 export { ATHENA_QUERY_KIND } from "./sql/QueryTab";

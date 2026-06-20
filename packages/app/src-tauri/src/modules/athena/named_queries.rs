@@ -56,7 +56,10 @@ pub fn chunk_ids(ids: &[String], size: usize) -> Vec<Vec<String>> {
 /// Sort a list of summaries by `(work_group, name)`, both case-insensitively, in place.
 pub fn sort_summaries_by_workgroup_then_name(summaries: &mut [NamedQuerySummary]) {
     summaries.sort_by(|a, b| {
-        let wg_cmp = a.work_group.to_lowercase().cmp(&b.work_group.to_lowercase());
+        let wg_cmp = a
+            .work_group
+            .to_lowercase()
+            .cmp(&b.work_group.to_lowercase());
         if wg_cmp != std::cmp::Ordering::Equal {
             wg_cmp
         } else {

@@ -95,7 +95,10 @@ impl TableMatch {
     /// True when the simple (`prefix`/`suffix_pattern`) form carries a value.
     pub fn has_simple(&self) -> bool {
         self.prefix.as_deref().map_or(false, |s| !s.is_empty())
-            || self.suffix_pattern.as_deref().map_or(false, |s| !s.is_empty())
+            || self
+                .suffix_pattern
+                .as_deref()
+                .map_or(false, |s| !s.is_empty())
     }
 
     /// Validate the rule:

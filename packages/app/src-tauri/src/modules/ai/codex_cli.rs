@@ -20,8 +20,8 @@ use crate::error::{AppError, AppResult};
 use crate::modules::ai::caps::{CODEX_CLI_DEFAULT_MODEL, CODEX_CLI_MODELS};
 use crate::modules::ai::claude_cli::{flatten_history_for_cli, resolve_model};
 use crate::modules::ai::cli_detect;
-use crate::modules::ai::types::{build_cli_system_prompt, build_inspector_system_prompt};
 use crate::modules::ai::provider::AiProvider;
+use crate::modules::ai::types::{build_cli_system_prompt, build_inspector_system_prompt};
 
 /// Resolve the `codex` binary path to use for validation and spawning.
 /// Honours `ARGUS_CODEX_BIN`, then the enriched PATH, then well-known install
@@ -30,8 +30,8 @@ fn codex_bin() -> std::path::PathBuf {
     cli_detect::resolve_cli_bin("codex", "ARGUS_CODEX_BIN")
 }
 use crate::modules::ai::types::{
-    Capabilities, ChatDelta, ChatRequest, ChatStream, GenerateDelta, GenerateRequest, GenerateStream,
-    InspectRequest, ProviderId, ValidationResult,
+    Capabilities, ChatDelta, ChatRequest, ChatStream, GenerateDelta, GenerateRequest,
+    GenerateStream, InspectRequest, ProviderId, ValidationResult,
 };
 
 pub struct CodexCli {
@@ -221,7 +221,9 @@ fn build_chat_stream(
         let status = child.wait().await;
         let stderr_text = stderr_handle.await.unwrap_or_default();
         match status {
-            Ok(s) if s.success() => Ok(ChatDelta::Done { finish_reason: None }),
+            Ok(s) if s.success() => Ok(ChatDelta::Done {
+                finish_reason: None,
+            }),
             Ok(s) => Err(AppError::Internal(format!(
                 "codex exited with {:?}: {}",
                 s.code(),
@@ -273,7 +275,9 @@ fn build_generate_stream(
         let status = child.wait().await;
         let stderr_text = stderr_handle.await.unwrap_or_default();
         match status {
-            Ok(s) if s.success() => Ok(GenerateDelta::Done { finish_reason: None }),
+            Ok(s) if s.success() => Ok(GenerateDelta::Done {
+                finish_reason: None,
+            }),
             Ok(s) => Err(AppError::Internal(format!(
                 "codex exited with {:?}: {}",
                 s.code(),
@@ -305,7 +309,12 @@ mod tests {
 
     #[test]
     fn resolve_model_accepts_known_codex_model() {
-        let result = resolve_model(&Some("gpt-5.1-codex".into()), &None, CODEX_CLI_MODELS, CODEX_CLI_DEFAULT_MODEL);
+        let result = resolve_model(
+            &Some("gpt-5.1-codex".into()),
+            &None,
+            CODEX_CLI_MODELS,
+            CODEX_CLI_DEFAULT_MODEL,
+        );
         assert_eq!(result.unwrap(), Some("gpt-5.1-codex".to_string()));
     }
 
@@ -337,15 +346,31 @@ mod tests {
         let cwd = std::env::temp_dir();
         let system = build_cli_system_prompt(&cwd);
         let turns = vec![
-            ChatTurn { role: ChatRole::User, content: "show tables".into(), tool_uses: vec![] },
-            ChatTurn { role: ChatRole::Assistant, content: "users, orders".into(), tool_uses: vec![] },
-            ChatTurn { role: ChatRole::User, content: "count users".into(), tool_uses: vec![] },
+            ChatTurn {
+                role: ChatRole::User,
+                content: "show tables".into(),
+                tool_uses: vec![],
+            },
+            ChatTurn {
+                role: ChatRole::Assistant,
+                content: "users, orders".into(),
+                tool_uses: vec![],
+            },
+            ChatTurn {
+                role: ChatRole::User,
+                content: "count users".into(),
+                tool_uses: vec![],
+            },
         ];
         let history = flatten_history_for_cli(&turns, &[]);
         let prompt = format!("{system}\n\n{history}");
 
-        let system_pos = prompt.find("Role and restrictions").expect("system prompt header not found");
-        let history_pos = prompt.find("User: show tables").expect("history content not found");
+        let system_pos = prompt
+            .find("Role and restrictions")
+            .expect("system prompt header not found");
+        let history_pos = prompt
+            .find("User: show tables")
+            .expect("history content not found");
         assert!(
             system_pos < history_pos,
             "system prompt (pos {system_pos}) must precede history (pos {history_pos})"
@@ -355,9 +380,21 @@ mod tests {
     #[test]
     fn flatten_history_multi_turn_codex() {
         let turns = vec![
-            ChatTurn { role: ChatRole::User, content: "show tables".into(), tool_uses: vec![] },
-            ChatTurn { role: ChatRole::Assistant, content: "users, orders".into(), tool_uses: vec![] },
-            ChatTurn { role: ChatRole::User, content: "count users".into(), tool_uses: vec![] },
+            ChatTurn {
+                role: ChatRole::User,
+                content: "show tables".into(),
+                tool_uses: vec![],
+            },
+            ChatTurn {
+                role: ChatRole::Assistant,
+                content: "users, orders".into(),
+                tool_uses: vec![],
+            },
+            ChatTurn {
+                role: ChatRole::User,
+                content: "count users".into(),
+                tool_uses: vec![],
+            },
         ];
         let result = flatten_history_for_cli(&turns, &[]);
         assert!(result.contains("User: show tables"));

@@ -10,6 +10,8 @@ import type { AthenaDatabaseInfo, AthenaNamedQuerySummary, AthenaRelationInfo } 
 
 interface ConnectionCache {
   databases: AthenaDatabaseInfo[];
+  /** Epoch-ms when `databases` was last recorded; drives the cache TTL. */
+  databasesFetchedAt?: number;
   relationsByDatabase: Map<string, AthenaRelationInfo[]>;
   namedQueries: AthenaNamedQuerySummary[] | null;
 }
@@ -38,7 +40,13 @@ export const athenaSchemaCache = {
   recordDatabases(connectionId: string, databases: AthenaDatabaseInfo[]) {
     const c = ensure(connectionId);
     c.databases = databases;
+    c.databasesFetchedAt = Date.now();
     notify();
+  },
+
+  /** Epoch-ms when this connection's databases were last recorded, or undefined. */
+  getDatabasesFetchedAt(connectionId: string): number | undefined {
+    return cache.get(connectionId)?.databasesFetchedAt;
   },
 
   recordRelations(connectionId: string, database: string, relations: AthenaRelationInfo[]) {

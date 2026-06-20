@@ -15,6 +15,7 @@ export type {
 } from "./types";
 export { SchemaTree, SchemaToolbar, SchemaPrimaryActions } from "./schema/SchemaTree";
 export { useSchemaTree } from "./schema/useSchemaTree";
+export { refreshConnection } from "./schema/events";
 export { useVisibleSchemas } from "./schema/useVisibleSchemas";
 export { schemaApi } from "./schema/api";
 export { openQueryTab, openSavedQueryInNewTab, POSTGRES_QUERY_KIND } from "./sql";

@@ -92,9 +92,7 @@ impl AthenaParams {
             },
             AthenaAuth::AccessKeys => {
                 let raw = secret.ok_or_else(|| {
-                    AppError::Validation(
-                        "credentials are required when auth = access_keys".into(),
-                    )
+                    AppError::Validation("credentials are required when auth = access_keys".into())
                 })?;
 
                 let payload: JsonValue = serde_json::from_str(raw).map_err(|_| {

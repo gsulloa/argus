@@ -1378,7 +1378,11 @@ mod tests {
             .expect("Order not found");
         assert_eq!(order.system.kind, "dynamo_model");
         assert_eq!(order.system.physical_table.as_deref(), Some("AppTable"));
-        let aps = order.system.access_patterns.as_ref().expect("access_patterns missing");
+        let aps = order
+            .system
+            .access_patterns
+            .as_ref()
+            .expect("access_patterns missing");
         assert_eq!(aps.len(), 1);
         assert_eq!(aps[0].index, "table");
         assert_eq!(aps[0].pk, "USER#${userId}");
@@ -1591,7 +1595,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.created.len(), 1);
-        assert_eq!(report.created[0], dir.path().join("dynamo/tables/Events/table.md"));
+        assert_eq!(
+            report.created[0],
+            dir.path().join("dynamo/tables/Events/table.md")
+        );
         assert_eq!(report.skipped.len(), 1, "one collision skipped");
         let s = &report.skipped[0];
         assert_eq!(s.logical, "Events");
@@ -1637,7 +1644,11 @@ mod tests {
 
         // Write a pre-existing model doc inside the table's models directory.
         let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: Order\n  access_patterns:\n    - index: table\n      pk: \"ORDER#${id}\"\n---\n# Order\n";
-        write_file(dir.path(), "dynamo/tables/Orders/models/Order.md", model_content);
+        write_file(
+            dir.path(),
+            "dynamo/tables/Orders/models/Order.md",
+            model_content,
+        );
 
         let report = execute_sync(
             dir.path(),
@@ -1650,29 +1661,53 @@ mod tests {
 
         // The legacy flat file must be gone.
         let legacy_path = dir.path().join("dynamo/tables/Orders.md");
-        assert!(!legacy_path.exists(), "legacy flat file should be removed after migration");
+        assert!(
+            !legacy_path.exists(),
+            "legacy flat file should be removed after migration"
+        );
 
         // The new folder-based table.md must exist.
         let new_path = dir.path().join("dynamo/tables/Orders/table.md");
-        assert!(new_path.exists(), "folder-based table.md must exist after migration");
+        assert!(
+            new_path.exists(),
+            "folder-based table.md must exist after migration"
+        );
 
         // The content must preserve the human block and body.
         let new_content = fs::read_to_string(&new_path).unwrap();
-        assert!(new_content.contains("important"), "human block should be preserved");
-        assert!(new_content.contains("Legacy notes."), "body should be preserved");
+        assert!(
+            new_content.contains("important"),
+            "human block should be preserved"
+        );
+        assert!(
+            new_content.contains("Legacy notes."),
+            "body should be preserved"
+        );
         // System block should be fresh.
-        assert!(new_content.contains("kind: dynamo_table"), "system block should be present");
-        assert!(new_content.contains("name: Orders"), "system name should match");
+        assert!(
+            new_content.contains("kind: dynamo_table"),
+            "system block should be present"
+        );
+        assert!(
+            new_content.contains("name: Orders"),
+            "system name should match"
+        );
 
         // The models file must be untouched.
         let model_path = dir.path().join("dynamo/tables/Orders/models/Order.md");
         assert!(model_path.exists(), "models file must be untouched");
         let model_read = fs::read_to_string(&model_path).unwrap();
-        assert_eq!(model_read, model_content, "model file content should be unchanged");
+        assert_eq!(
+            model_read, model_content,
+            "model file content should be unchanged"
+        );
 
         // The report should show the table as updated (migrated then rewritten).
-        assert!(report.created.is_empty() || report.updated.contains(&new_path),
-            "migrated table should appear in updated or created; report={:?}", report);
+        assert!(
+            report.created.is_empty() || report.updated.contains(&new_path),
+            "migrated table should appear in updated or created; report={:?}",
+            report
+        );
     }
 
     /// Re-sync after migration produces no spurious deletes (deleted_in_db not set for live tables).
@@ -1696,8 +1731,11 @@ mod tests {
         .unwrap();
 
         // Should update (not create), and definitely not mark deleted.
-        assert!(report1.marked_deleted.is_empty(),
-            "live table should not be marked deleted on first resync: {:?}", report1.marked_deleted);
+        assert!(
+            report1.marked_deleted.is_empty(),
+            "live table should not be marked deleted on first resync: {:?}",
+            report1.marked_deleted
+        );
 
         // Second sync (idempotent).
         let report2 = execute_sync(
@@ -1709,12 +1747,19 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(report2.marked_deleted.is_empty(),
-            "live table should not be marked deleted on second resync: {:?}", report2.marked_deleted);
+        assert!(
+            report2.marked_deleted.is_empty(),
+            "live table should not be marked deleted on second resync: {:?}",
+            report2.marked_deleted
+        );
 
         // Content should still have the human block.
-        let content = fs::read_to_string(dir.path().join("dynamo/tables/Products/table.md")).unwrap();
-        assert!(content.contains("live"), "human block preserved across resyncs");
+        let content =
+            fs::read_to_string(dir.path().join("dynamo/tables/Products/table.md")).unwrap();
+        assert!(
+            content.contains("live"),
+            "human block preserved across resyncs"
+        );
     }
 
     // ---- D6 bug-fix tests: consolidation + rule-aware canonical target ----
@@ -1745,7 +1790,8 @@ mod tests {
             &table_content,
         );
         // Model doc under the physical folder.
-        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: Order\nhuman: {}\n---\n# Order\n";
+        let model_content =
+            "---\nsystem:\n  kind: dynamo_model\n  name: Order\nhuman: {}\n---\n# Order\n";
         write_file(
             dir.path(),
             &format!("dynamo/tables/{physical}/models/Order.md"),
@@ -1764,20 +1810,35 @@ mod tests {
 
         // Physical folder must be gone.
         let physical_dir = dir.path().join(format!("dynamo/tables/{physical}"));
-        assert!(!physical_dir.exists(), "physical dir should be removed: {}", physical_dir.display());
+        assert!(
+            !physical_dir.exists(),
+            "physical dir should be removed: {}",
+            physical_dir.display()
+        );
 
         // Logical table.md must exist with logical system.name.
         let logical_table = dir.path().join(format!("dynamo/tables/{logical}/table.md"));
         assert!(logical_table.exists(), "logical table.md must exist");
         let content = fs::read_to_string(&logical_table).unwrap();
-        assert!(content.contains(&format!("name: {logical}")), "system.name should be logical");
-        assert!(!content.contains("deleted_in_db: true"), "must not be marked deleted");
+        assert!(
+            content.contains(&format!("name: {logical}")),
+            "system.name should be logical"
+        );
+        assert!(
+            !content.contains("deleted_in_db: true"),
+            "must not be marked deleted"
+        );
         // Human block and body preserved.
         assert!(content.contains("secure"), "human tags should be preserved");
-        assert!(content.contains("Pre-rule notes."), "body should be preserved");
+        assert!(
+            content.contains("Pre-rule notes."),
+            "body should be preserved"
+        );
 
         // Model moved to logical folder.
-        let logical_model = dir.path().join(format!("dynamo/tables/{logical}/models/Order.md"));
+        let logical_model = dir
+            .path()
+            .join(format!("dynamo/tables/{logical}/models/Order.md"));
         assert!(logical_model.exists(), "model must be in logical folder");
         let model_read = fs::read_to_string(&logical_model).unwrap();
         assert_eq!(model_read, model_content, "model content must be unchanged");
@@ -1785,15 +1846,24 @@ mod tests {
         // Report: table appears in updated, not marked_deleted, not created.
         assert!(
             report.updated.contains(&logical_table),
-            "table should be in updated; report={:?}", report
+            "table should be in updated; report={:?}",
+            report
         );
         assert!(
-            !report.marked_deleted.iter().any(|p| p.to_str().unwrap_or("").contains(logical)),
-            "table should not be in marked_deleted; report={:?}", report
+            !report
+                .marked_deleted
+                .iter()
+                .any(|p| p.to_str().unwrap_or("").contains(logical)),
+            "table should not be in marked_deleted; report={:?}",
+            report
         );
         assert!(
-            !report.created.iter().any(|p| p.to_str().unwrap_or("").contains(logical)),
-            "table should not be in created; report={:?}", report
+            !report
+                .created
+                .iter()
+                .any(|p| p.to_str().unwrap_or("").contains(logical)),
+            "table should not be in created; report={:?}",
+            report
         );
     }
 
@@ -1810,7 +1880,8 @@ mod tests {
         let logical = "OrdersTable";
 
         // Physical folder has only a models dir (no table.md).
-        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: Order\nhuman: {}\n---\n# Order\n";
+        let model_content =
+            "---\nsystem:\n  kind: dynamo_model\n  name: Order\nhuman: {}\n---\n# Order\n";
         write_file(
             dir.path(),
             &format!("dynamo/tables/{physical}/models/Order.md"),
@@ -1841,17 +1912,25 @@ mod tests {
         assert!(!physical_dir.exists(), "physical dir should be removed");
 
         // Model must exist in the logical folder.
-        let logical_model = dir.path().join(format!("dynamo/tables/{logical}/models/Order.md"));
+        let logical_model = dir
+            .path()
+            .join(format!("dynamo/tables/{logical}/models/Order.md"));
         assert!(logical_model.exists(), "model must be in logical folder");
         let model_read = fs::read_to_string(&logical_model).unwrap();
         assert_eq!(model_read, model_content, "model content must be unchanged");
 
         // Logical table.md should be updated (not created or deleted).
         let logical_table = dir.path().join(format!("dynamo/tables/{logical}/table.md"));
-        assert!(report.updated.contains(&logical_table),
-            "logical table should be in updated; report={:?}", report);
-        assert!(report.marked_deleted.is_empty(),
-            "nothing should be marked deleted; report={:?}", report);
+        assert!(
+            report.updated.contains(&logical_table),
+            "logical table should be in updated; report={:?}",
+            report
+        );
+        assert!(
+            report.marked_deleted.is_empty(),
+            "nothing should be marked deleted; report={:?}",
+            report
+        );
     }
 
     /// A legacy flat tables/<physical>.md (human block + body) is consolidated
@@ -1896,18 +1975,28 @@ mod tests {
         assert!(logical_table.exists(), "logical table.md must exist");
         let content = fs::read_to_string(&logical_table).unwrap();
         // system.name rewritten to logical.
-        assert!(content.contains(&format!("name: {logical}")), "system.name should be logical");
+        assert!(
+            content.contains(&format!("name: {logical}")),
+            "system.name should be logical"
+        );
         // Human block and body preserved.
         assert!(content.contains("legacy"), "human tags should be preserved");
-        assert!(content.contains("Flat file body."), "body should be preserved");
+        assert!(
+            content.contains("Flat file body."),
+            "body should be preserved"
+        );
 
         // Must appear in updated (migrated then rewritten) or created, not marked_deleted.
         assert!(
             report.updated.contains(&logical_table) || report.created.contains(&logical_table),
-            "logical table should be in updated or created; report={:?}", report
+            "logical table should be in updated or created; report={:?}",
+            report
         );
-        assert!(report.marked_deleted.is_empty(),
-            "nothing should be marked deleted; report={:?}", report);
+        assert!(
+            report.marked_deleted.is_empty(),
+            "nothing should be marked deleted; report={:?}",
+            report
+        );
     }
 
     /// Regression: D6 consolidation must strip the `.md` extension from legacy flat
@@ -1949,17 +2038,20 @@ mod tests {
 
         // tables/Sessions/table.md must exist.
         let logical_table = tables_dir.join(format!("{logical}/table.md"));
-        assert!(logical_table.exists(), "tables/{logical}/table.md must exist");
+        assert!(
+            logical_table.exists(),
+            "tables/{logical}/table.md must exist"
+        );
 
         // The flat file must be gone.
         let flat_file = tables_dir.join(format!("{physical}.md"));
-        assert!(!flat_file.exists(), "flat file {physical}.md must be removed");
+        assert!(
+            !flat_file.exists(),
+            "flat file {physical}.md must be removed"
+        );
 
         // No entry whose name ends with ".md" may exist as a DIRECTORY under tables/.
-        let entries: Vec<_> = fs::read_dir(&tables_dir)
-            .unwrap()
-            .flatten()
-            .collect();
+        let entries: Vec<_> = fs::read_dir(&tables_dir).unwrap().flatten().collect();
         for entry in &entries {
             let name = entry.file_name();
             let name_str = name.to_str().unwrap_or("");
@@ -1986,11 +2078,13 @@ mod tests {
         // Report: table should be in updated or created, not marked_deleted.
         assert!(
             report.updated.contains(&logical_table) || report.created.contains(&logical_table),
-            "logical table should be in updated or created; report={:?}", report
+            "logical table should be in updated or created; report={:?}",
+            report
         );
         assert!(
             report.marked_deleted.is_empty(),
-            "nothing should be marked deleted; report={:?}", report
+            "nothing should be marked deleted; report={:?}",
+            report
         );
     }
 
@@ -2004,8 +2098,13 @@ mod tests {
 
         let table_content = "---\nsystem:\n  kind: dynamo_table\n  name: Orders\nhuman:\n  tags:\n    - live\n---\n# Orders\n\nOrders table.\n";
         write_file(dir.path(), "dynamo/tables/Orders/table.md", table_content);
-        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: OrderItem\nhuman: {}\n---\n# OrderItem\n";
-        write_file(dir.path(), "dynamo/tables/Orders/models/OrderItem.md", model_content);
+        let model_content =
+            "---\nsystem:\n  kind: dynamo_model\n  name: OrderItem\nhuman: {}\n---\n# OrderItem\n";
+        write_file(
+            dir.path(),
+            "dynamo/tables/Orders/models/OrderItem.md",
+            model_content,
+        );
 
         let report = execute_sync(
             dir.path(),
@@ -2019,12 +2118,21 @@ mod tests {
         // Updated in place, nothing moved or deleted.
         let table_path = dir.path().join("dynamo/tables/Orders/table.md");
         assert!(table_path.exists(), "table.md should still exist");
-        assert!(report.updated.contains(&table_path),
-            "table should be in updated; report={:?}", report);
-        assert!(report.marked_deleted.is_empty(),
-            "nothing should be deleted; report={:?}", report);
-        assert!(report.created.is_empty(),
-            "nothing should be created; report={:?}", report);
+        assert!(
+            report.updated.contains(&table_path),
+            "table should be in updated; report={:?}",
+            report
+        );
+        assert!(
+            report.marked_deleted.is_empty(),
+            "nothing should be deleted; report={:?}",
+            report
+        );
+        assert!(
+            report.created.is_empty(),
+            "nothing should be created; report={:?}",
+            report
+        );
 
         // No extra folder created.
         let tables_dir = dir.path().join("dynamo/tables");
@@ -2033,13 +2141,21 @@ mod tests {
             .flatten()
             .map(|e| e.file_name().to_str().unwrap_or("").to_string())
             .collect();
-        assert_eq!(entries.len(), 1, "only Orders/ should exist, found: {:?}", entries);
+        assert_eq!(
+            entries.len(),
+            1,
+            "only Orders/ should exist, found: {:?}",
+            entries
+        );
 
         // Models file still in the same location, content unchanged.
         let model_path = dir.path().join("dynamo/tables/Orders/models/OrderItem.md");
         assert!(model_path.exists(), "model file should be untouched");
         let model_read = fs::read_to_string(&model_path).unwrap();
-        assert_eq!(model_read, model_content, "model content should be unchanged");
+        assert_eq!(
+            model_read, model_content,
+            "model content should be unchanged"
+        );
     }
 
     // ---- D6 live-logicals guard tests ----
@@ -2111,10 +2227,13 @@ mod tests {
         );
 
         // The stranded models were merged into the live logical folder.
-        let live_model = dir
-            .path()
-            .join(format!("dynamo/tables/{live_logical}/models/UserCredential.md"));
-        assert!(live_model.exists(), "stranded model must be merged into live logical folder");
+        let live_model = dir.path().join(format!(
+            "dynamo/tables/{live_logical}/models/UserCredential.md"
+        ));
+        assert!(
+            live_model.exists(),
+            "stranded model must be merged into live logical folder"
+        );
         let model_read = fs::read_to_string(&live_model).unwrap();
         assert_eq!(model_read, model_content, "model content must be unchanged");
 
@@ -2133,12 +2252,17 @@ mod tests {
 
         // The report must not have a `created` entry for this table (it's an update).
         assert!(
-            !report.created.iter().any(|p| p.to_str().unwrap_or("").contains(live_logical)),
-            "live logical table should not be in created (it's an update); report={:?}", report
+            !report
+                .created
+                .iter()
+                .any(|p| p.to_str().unwrap_or("").contains(live_logical)),
+            "live logical table should not be in created (it's an update); report={:?}",
+            report
         );
         assert!(
             report.updated.contains(&live_table),
-            "live logical table should be in updated; report={:?}", report
+            "live logical table should be in updated; report={:?}",
+            report
         );
     }
 
@@ -2197,10 +2321,7 @@ mod tests {
 
         // Everything must converge into a single CacheStack-CacheTable/ folder.
         let tables_dir = dir.path().join("dynamo/tables");
-        let entries: Vec<_> = fs::read_dir(&tables_dir)
-            .unwrap()
-            .flatten()
-            .collect();
+        let entries: Vec<_> = fs::read_dir(&tables_dir).unwrap().flatten().collect();
         assert_eq!(
             entries.len(),
             1,
@@ -2228,24 +2349,36 @@ mod tests {
 
         // models/UserCredential.md present in logical folder.
         let logical_model = tables_dir.join(format!("{logical}/models/UserCredential.md"));
-        assert!(logical_model.exists(), "models/UserCredential.md must be present in logical folder");
+        assert!(
+            logical_model.exists(),
+            "models/UserCredential.md must be present in logical folder"
+        );
 
         // Physical-named folder must be gone.
         let physical_dir = tables_dir.join(physical);
-        assert!(!physical_dir.exists(), "physical folder must be removed after consolidation");
+        assert!(
+            !physical_dir.exists(),
+            "physical folder must be removed after consolidation"
+        );
 
         // Report: updated, not created or marked_deleted.
         assert!(
             report.updated.contains(&logical_table),
-            "logical table should be in updated; report={:?}", report
+            "logical table should be in updated; report={:?}",
+            report
         );
         assert!(
             report.marked_deleted.is_empty(),
-            "nothing should be marked deleted; report={:?}", report
+            "nothing should be marked deleted; report={:?}",
+            report
         );
         assert!(
-            !report.created.iter().any(|p| p.to_str().unwrap_or("").contains(logical)),
-            "logical table should not be in created; report={:?}", report
+            !report
+                .created
+                .iter()
+                .any(|p| p.to_str().unwrap_or("").contains(logical)),
+            "logical table should not be in created; report={:?}",
+            report
         );
     }
 }
