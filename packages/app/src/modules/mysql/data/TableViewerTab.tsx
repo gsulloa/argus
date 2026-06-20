@@ -318,6 +318,15 @@ function MysqlTableViewer({
     tableData.refresh();
   }, [buffer, tableData]);
 
+  // Guarded refresh — shows the discard dialog when there are pending edits.
+  const requestRefresh = useCallback(() => {
+    if (buffer.hasDirty) {
+      setDiscardOpen(true);
+    } else {
+      tableData.refresh();
+    }
+  }, [buffer.hasDirty, tableData]);
+
   // Add row (§19.3)
   const handleAddRow = useCallback(() => {
     if (isReadOnly || isView) return;
@@ -353,10 +362,10 @@ function MysqlTableViewer({
       if (active && (e.metaKey || e.ctrlKey) && e.key === "r" && !e.shiftKey && !e.altKey) {
         if ((e.target as HTMLElement | null)?.closest(".cm-editor")) return;
         e.preventDefault();
-        tableData.refresh();
+        requestRefresh();
       }
     },
-    [active, selection, isReadOnly, unifiedRows, tableData, pkColumns, buffer],
+    [active, selection, isReadOnly, unifiedRows, requestRefresh, tableData.columns, pkColumns, buffer],
   );
 
   // ⌘S → apply the dirty buffer regardless of focus position (issue #88).
@@ -471,7 +480,7 @@ function MysqlTableViewer({
         filterBarVisible={filterVisible}
         onFilterToggle={subtab === "data" ? () => setFilterVisible((v) => !v) : undefined}
         visibleTabs={visibleTabs}
-        onReload={tableData.refresh}
+        onReload={requestRefresh}
         reloadDisabled={tableData.isLoading}
         reloading={tableData.isLoading}
       />
