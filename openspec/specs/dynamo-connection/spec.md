@@ -370,7 +370,7 @@ The row's primary click handler SHALL behave as follows: on an inactive row it i
 
 Disconnect MUST be reachable only from a dedicated `⏻` (power) button rendered on every active row, always visible (not hover-only), and sized to be a deliberate target distinct from the row body, or from the row's right-click context menu's `Disconnect` entry.
 
-Right-clicking a row opens a context menu. On an active row the menu includes `Disconnect`, then a separator, then `Edit`, `Duplicate`, and `Delete`. On an inactive row the menu includes only `Edit`, `Duplicate`, and `Delete`. (No `New SQL Query` entry: PartiQL editing lands in change #13.)
+Right-clicking a row opens a context menu. On an active row the menu includes `New PartiQL query`, then a separator, then `Disconnect`, then a separator, then `Edit`, `Duplicate`, and `Delete`. Choosing `New PartiQL query` opens a free-form PartiQL editor tab for that connection (see the `dynamo-partiql-editor` capability). On an inactive row the menu includes only `Edit`, `Duplicate`, and `Delete` (no `New PartiQL query` entry, since the editor requires an active client).
 
 The row's subtitle MUST display `region · <accountId>` when the connection is active and `region · <profile name>` or `region · access-keys` when the connection is inactive.
 
@@ -402,12 +402,17 @@ The row's subtitle MUST display `region · <accountId>` when the connection is a
 #### Scenario: Right-click context menu on active row
 
 - **WHEN** the user right-clicks an active Dynamo connection row
-- **THEN** a menu appears with `Disconnect`, `Edit`, `Duplicate`, and `Delete`
+- **THEN** a menu appears with `New PartiQL query`, `Disconnect`, `Edit`, `Duplicate`, and `Delete`
+
+#### Scenario: New PartiQL query opens the editor
+
+- **WHEN** the user chooses `New PartiQL query` from an active row's context menu
+- **THEN** a free-form PartiQL editor tab opens for that connection
 
 #### Scenario: Right-click context menu on inactive row
 
 - **WHEN** the user right-clicks an inactive Dynamo connection row
-- **THEN** a menu appears with `Edit`, `Duplicate`, and `Delete`
+- **THEN** a menu appears with `Edit`, `Duplicate`, and `Delete` (no `New PartiQL query` entry)
 
 #### Scenario: Delete confirmation
 

@@ -22,8 +22,8 @@ type EngineKind = "postgres" | "mysql" | "mssql" | "dynamo" | "cloudwatch";
 
 /**
  * Open a context-folder prefab query in the appropriate engine's editor tab.
- * Dispatches on `engine` to route to Postgres, MySQL, MSSQL, or Dynamo
- * (clipboard fallback). Fetches the full body via `contextApi.getQuery`.
+ * Dispatches on `engine` to route to Postgres, MySQL, MSSQL, or Dynamo.
+ * Fetches the full body via `contextApi.getQuery`.
  */
 export async function openContextQuery(
   tabs: TabsApi,
@@ -31,7 +31,6 @@ export async function openContextQuery(
   connectionName: string,
   engine: EngineKind,
   query: QueryListItem,
-  options?: { onCopied?: (queryName: string) => void },
 ): Promise<void> {
   switch (engine) {
     case "postgres": {
@@ -68,8 +67,7 @@ export async function openContextQuery(
       return;
     }
     case "dynamo":
-      // No native PartiQL editor in v1 — clipboard fallback (§11.3).
-      await openDynamoQuery(tabs, connectionId, connectionName, query, options?.onCopied);
+      await openDynamoQuery(tabs, connectionId, connectionName, query);
       return;
     default:
       throw new Error(`Unsupported engine for context queries: ${engine as string}`);

@@ -1,10 +1,12 @@
 import { useEffect } from "react";
 import { CommandRegistry } from "@/platform/command-palette";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useTabs } from "@/platform/shell/tabs";
 import { DYNAMO_KIND } from "./types";
 import { dynamoApi } from "./api";
 import { useDynamoForm } from "./FormController";
 import { useActiveDynamoConnections } from "./useActiveConnections";
+import { openDynamoPartiQLTab } from "./sql";
 
 interface SelectionApi {
   selectedConnectionId: string | null;
@@ -19,6 +21,7 @@ export function useDynamoCommands(selection: SelectionApi = NOOP_SELECTION) {
   const form = useDynamoForm();
   const { items } = useConnections();
   const { isActive } = useActiveDynamoConnections();
+  const tabs = useTabs();
 
   useEffect(() => {
     const dynamoConnections = items.filter((c) => c.kind === DYNAMO_KIND);
@@ -111,6 +114,28 @@ export function useDynamoCommands(selection: SelectionApi = NOOP_SELECTION) {
       }),
     );
 
+    // New PartiQL query for the focused/active DynamoDB connection
+    unregisters.push(
+      CommandRegistry.register({
+        id: "argus.dynamo.newPartiQLQuery",
+        label: "Dynamo: New PartiQL query",
+        group: "Dynamo",
+        keywords: ["partiql", "query", "dynamodb", "aws", "new", "editor", "sql"],
+        run: () => {
+          const c = pickConnection();
+          if (!c) {
+            console.warn("[argus] dynamo new PartiQL query: no connection selected");
+            return;
+          }
+          if (!isActive(c.id)) {
+            console.warn("[argus] dynamo new PartiQL query: connection not active");
+            return;
+          }
+          openDynamoPartiQLTab(tabs, c.id, c.name);
+        },
+      }),
+    );
+
     return () => unregisters.forEach((u) => u());
-  }, [form, items, selection.selectedConnectionId, isActive]);
+  }, [form, items, selection.selectedConnectionId, isActive, tabs]);
 }
