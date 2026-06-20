@@ -87,7 +87,7 @@ impl AiProvider for ClaudeCli {
         )?;
 
         let cwd = req.context_path.clone().unwrap_or_else(std::env::temp_dir);
-        let system_prompt = build_cli_system_prompt(&cwd);
+        let system_prompt = build_cli_system_prompt(&cwd, None);
 
         let mut cmd = Command::new(claude_bin());
         cmd.arg("-p");
@@ -152,7 +152,7 @@ impl AiProvider for ClaudeCli {
         )?;
 
         let cwd = req.context_path.clone().unwrap_or_else(std::env::temp_dir);
-        let system_prompt = build_cli_system_prompt(&cwd);
+        let system_prompt = build_cli_system_prompt(&cwd, req.context_engine);
         let resume_id = req.provider_state.get("resume_id").cloned();
 
         // Build the MCP doc-writer config only when the connection has a linked

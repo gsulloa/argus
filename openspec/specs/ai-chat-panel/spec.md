@@ -85,9 +85,9 @@ The session MUST persist for the lifetime of the query tab. Closing the tab MUST
 
 ### Requirement: Code block actions inside assistant messages
 
-When an Assistant turn's content contains one or more fenced code blocks (` ```sql `, ` ```json `, ` ``` `), the panel MUST render each block with three actions: **Apply** (replace editor buffer), **Insert** (insert at cursor), **Copy** (copy to clipboard). Only ` ```sql ` and unannotated ` ``` ` blocks receive Apply and Insert; other languages get only Copy.
+When an Assistant turn's content contains one or more fenced code blocks (` ```sql `, ` ```cwlogs `, ` ```json `, ` ``` `), the panel MUST render each block with three actions: **Apply** (replace editor buffer), **Insert** (insert at cursor), **Copy** (copy to clipboard). Only applicable query-language blocks — ` ```sql `, ` ```cwlogs `, and unannotated ` ``` ` — receive Apply and Insert; other languages (e.g. ` ```json `) get only Copy.
 
-The Apply path MUST call `editorHandle.replaceBody(trimmed_sql)` and move the cursor to the end. The Insert path MUST insert the SQL at the current cursor position, prefixing with a newline if the line is non-empty.
+The Apply path MUST call `editorHandle.replaceBody(trimmed_query)` and move the cursor to the end. The Insert path MUST insert the query at the current cursor position, prefixing with a newline if the line is non-empty.
 
 #### Scenario: Apply replaces the editor
 
@@ -102,7 +102,13 @@ The Apply path MUST call `editorHandle.replaceBody(trimmed_sql)` and move the cu
 - **WHEN** the user clicks **Insert** on a block containing `"SELECT 2;"`
 - **THEN** the editor contains `"SELECT 1;\nSELECT 2;"`
 
-#### Scenario: Non-SQL block has no Apply/Insert
+#### Scenario: Logs Insights block has Apply and Insert
+
+- **GIVEN** the assistant emits a ` ```cwlogs ` block containing a Logs Insights query
+- **WHEN** the panel renders that block
+- **THEN** the **Apply** and **Insert** actions are both present alongside **Copy**
+
+#### Scenario: Non-query block has no Apply/Insert
 
 - **GIVEN** the assistant emits a ` ```json {...} ``` ` block
 - **WHEN** the panel renders that block

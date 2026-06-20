@@ -1,13 +1,4 @@
-# ai-setup-readiness Specification
-
-## Purpose
-
-Derive and surface a single AI readiness state per connection, gating AI chat on
-its prerequisites (a configured AI provider and an available context folder) and
-guiding the user through setup via an always-visible entry point and an in-panel
-checklist.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: AI readiness state
 
@@ -61,39 +52,6 @@ Connections belong to one of two readiness profiles:
 
 - **WHEN** the user configures a provider or links a context folder while the readiness is being displayed
 - **THEN** the readiness state SHALL recompute and update its consumers without requiring a manual refresh
-
-### Requirement: Always-visible AI entry point
-
-The system SHALL always render the ✨ AI button in the Postgres SQL editor
-toolbar for every connection, regardless of readiness state. Clicking the button
-SHALL open the docked AI panel.
-
-#### Scenario: Button visible when not configured
-
-- **WHEN** the readiness state is `not-configured`
-- **THEN** the ✨ button SHALL be rendered and clickable
-
-#### Scenario: Button opens panel in any state
-
-- **WHEN** the user clicks the ✨ button in any readiness state
-- **THEN** the docked AI panel SHALL open
-
-### Requirement: AI entry point status indicator
-
-The ✨ button SHALL display a status indicator (a status dot) reflecting the
-current readiness state so the user can tell at a glance whether AI is ready or
-needs setup. The indicator SHALL distinguish `ready` from the unmet states
-(`not-configured`, `needs-context`).
-
-#### Scenario: Indicator shows setup needed
-
-- **WHEN** the readiness state is `not-configured` or `needs-context`
-- **THEN** the status indicator SHALL signal that setup is required
-
-#### Scenario: Indicator shows ready
-
-- **WHEN** the readiness state is `ready`
-- **THEN** the status indicator SHALL signal that AI is ready
 
 ### Requirement: Setup checklist in the AI panel
 
