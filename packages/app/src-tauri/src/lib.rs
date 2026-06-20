@@ -27,6 +27,15 @@ use crate::modules::athena::commands::{
     athena_test_connection,
 };
 use crate::modules::athena::pool::AthenaClientRegistry;
+use crate::modules::cloudwatch::client::CloudwatchClientRegistry;
+use crate::modules::cloudwatch::commands::{
+    cloudwatch_connect, cloudwatch_disconnect, cloudwatch_disconnect_all, cloudwatch_list_active,
+    cloudwatch_test_connection,
+};
+use crate::modules::cloudwatch::groups::{
+    cloudwatch_get_log_events, cloudwatch_list_log_groups, cloudwatch_list_log_streams,
+};
+use crate::modules::cloudwatch::insights::{cloudwatch_cancel_insights, cloudwatch_run_insights};
 use crate::modules::athena::s3::{athena_list_s3_buckets, athena_list_s3_prefixes};
 use crate::modules::athena::named_queries::{athena_get_named_query, athena_list_named_queries};
 use crate::modules::athena::schema_commands::{
@@ -190,6 +199,7 @@ pub fn run() {
             app.manage(MssqlPoolRegistry::new());
             app.manage(DynamoClientRegistry::new());
             app.manage(AthenaClientRegistry::new());
+            app.manage(CloudwatchClientRegistry::new());
             app.manage(OpenConnectionsRegistry::new());
             app.manage(platform::updater::UpdaterState::default());
 
@@ -369,6 +379,17 @@ pub fn run() {
             dynamo_put_item,
             dynamo_update_item,
             dynamo_delete_item,
+            // CloudWatch Logs commands
+            cloudwatch_test_connection,
+            cloudwatch_connect,
+            cloudwatch_disconnect,
+            cloudwatch_disconnect_all,
+            cloudwatch_list_active,
+            cloudwatch_list_log_groups,
+            cloudwatch_list_log_streams,
+            cloudwatch_get_log_events,
+            cloudwatch_run_insights,
+            cloudwatch_cancel_insights,
             // Updater commands
             updater_check_and_download,
             updater_install_and_restart,

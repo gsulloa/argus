@@ -46,6 +46,7 @@ import { useOpenConnections } from "@/platform/connection-registry/useOpenConnec
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useConnectionGroups } from "@/platform/connection-registry/useConnectionGroups";
 import { ConnectionRail, EngineIcon, deriveEnv, engineLabel } from "./ConnectionRail";
+import { CLOUDWATCH_KIND, CloudwatchInsightsPrimaryAction } from "@/modules/cloudwatch";
 import { ConnectionSubtree } from "./ConnectionSubtree";
 import { useFocusedConnection } from "./FocusedConnectionContext";
 import styles from "./WorkspaceShell.module.css";
@@ -335,6 +336,11 @@ function ConnectionIdentityHeader({ connectionId }: { connectionId: string }) {
           />
         </span>
       </span>
+      {connection.kind === CLOUDWATCH_KIND && (
+        <span className={styles.identityActions}>
+          <CloudwatchInsightsPrimaryAction connectionId={connection.id} />
+        </span>
+      )}
     </div>
   );
 }

@@ -74,6 +74,14 @@
   gap: 5px;
 }
 
+/* Per-engine primary actions, right-aligned in the header. */
+.identityActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .identityEngine {
   font-size: var(--text-xs, 11px);
   color: var(--text-subtle);

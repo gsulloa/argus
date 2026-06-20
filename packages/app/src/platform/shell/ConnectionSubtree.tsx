@@ -31,6 +31,10 @@ import {
   ATHENA_KIND,
   AthenaSchemaTree,
 } from "@/modules/athena";
+import {
+  CLOUDWATCH_KIND,
+  LogGroupsTree,
+} from "@/modules/cloudwatch";
 import { ContextQueriesBranch } from "@/modules/context/components/ContextQueriesBranch";
 import { openContextQuery } from "@/modules/context/openContextQuery";
 import { useTabs } from "@/platform/shell/tabs";
@@ -61,6 +65,7 @@ export function ConnectionSubtree({ connectionId }: Props) {
   const isMssql = kind === MSSQL_KIND;
   const isDynamo = kind === DYNAMO_KIND;
   const isAthena = kind === ATHENA_KIND;
+  const isCloudwatch = kind === CLOUDWATCH_KIND;
 
   return (
     <>
@@ -128,6 +133,12 @@ export function ConnectionSubtree({ connectionId }: Props) {
         <div className={sidebarStyles.subtree}>
           <AthenaSchemaTree connectionId={connectionId} />
           {/* Athena does not use ContextQueriesBranch — matches ConnectionRow behavior */}
+        </div>
+      )}
+      {isCloudwatch && (
+        <div className={sidebarStyles.subtree}>
+          <LogGroupsTree connectionId={connectionId} />
+          {/* CloudWatch does not use ContextQueriesBranch in v1 */}
         </div>
       )}
     </>

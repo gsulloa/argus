@@ -5,6 +5,8 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::modules::athena::pool::AthenaClientRegistry;
 use crate::modules::athena::schema_commands::fetch_table_columns;
+use crate::modules::cloudwatch::client::CloudwatchClientRegistry;
+use crate::modules::cloudwatch::errors::sdk_err_to_app as cw_sdk_err_to_app;
 use crate::modules::context::engine::EngineKind;
 use crate::modules::context::introspect::{IntrospectForContext, ObjectShape, ObjectShapeColumn};
 use crate::modules::dynamo::client::DynamoClientRegistry;
@@ -36,6 +38,7 @@ pub struct IntrospectorPools<'a> {
     pub mssql: &'a MssqlPoolRegistry,
     pub dynamo: &'a DynamoClientRegistry,
     pub athena: &'a AthenaClientRegistry,
+    pub cloudwatch: &'a CloudwatchClientRegistry,
 }
 
 // ---- Postgres adapter ----
@@ -490,6 +493,52 @@ impl<'a> IntrospectForContext for AthenaIntrospector<'a> {
     }
 }
 
+// ---- CloudWatch Logs adapter ----
+
+pub struct CloudwatchIntrospector<'a> {
+    pub registry: &'a CloudwatchClientRegistry,
+}
+
+#[async_trait]
+impl<'a> IntrospectForContext for CloudwatchIntrospector<'a> {
+    async fn introspect_for_context(&self, conn_id: Uuid) -> AppResult<Vec<ObjectShape>> {
+        let client = self.registry.acquire(&conn_id).await?;
+
+        let mut shapes: Vec<ObjectShape> = Vec::new();
+        let mut next_token: Option<String> = None;
+
+        loop {
+            let mut req = client.describe_log_groups().limit(50);
+            if let Some(tok) = next_token {
+                req = req.next_token(tok);
+            }
+
+            let resp = req.send().await.map_err(|e| cw_sdk_err_to_app(&e))?;
+
+            for group in resp.log_groups() {
+                let name = group.log_group_name().unwrap_or_default().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                shapes.push(ObjectShape {
+                    kind: "log_group".to_string(),
+                    schema: None,
+                    name,
+                    primary_key: vec![],
+                    columns: vec![],
+                });
+            }
+
+            next_token = resp.next_token().map(str::to_string);
+            if next_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(shapes)
+    }
+}
+
 // ---- Not-yet-implemented stub ----
 
 pub struct NotImplementedIntrospector {
@@ -523,7 +572,9 @@ pub fn introspector_for<'a>(
         EngineKind::Athena => Box::new(AthenaIntrospector {
             registry: pools.athena,
         }),
-        e => Box::new(NotImplementedIntrospector { engine: e }),
+        EngineKind::Cloudwatch => Box::new(CloudwatchIntrospector {
+            registry: pools.cloudwatch,
+        }),
     }
 }
 
@@ -539,6 +590,7 @@ mod tests {
         mssql: &'a MssqlPoolRegistry,
         dynamo: &'a DynamoClientRegistry,
         athena: &'a AthenaClientRegistry,
+        cloudwatch: &'a CloudwatchClientRegistry,
     ) -> IntrospectorPools<'a> {
         IntrospectorPools {
             pg,
@@ -546,6 +598,7 @@ mod tests {
             mssql,
             dynamo,
             athena,
+            cloudwatch,
         }
     }
 
@@ -560,7 +613,8 @@ mod tests {
         let mssql = MssqlPoolRegistry::new();
         let dynamo = DynamoClientRegistry::new();
         let athena = AthenaClientRegistry::new();
-        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena);
+        let cloudwatch = CloudwatchClientRegistry::new();
+        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena, &cloudwatch);
 
         let adapter = introspector_for(EngineKind::Mysql, pools);
         let err = adapter
@@ -581,7 +635,8 @@ mod tests {
         let mssql = MssqlPoolRegistry::new();
         let dynamo = DynamoClientRegistry::new();
         let athena = AthenaClientRegistry::new();
-        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena);
+        let cloudwatch = CloudwatchClientRegistry::new();
+        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena, &cloudwatch);
 
         let adapter = introspector_for(EngineKind::Mssql, pools);
         let err = adapter
@@ -602,7 +657,8 @@ mod tests {
         let mssql = MssqlPoolRegistry::new();
         let dynamo = DynamoClientRegistry::new();
         let athena = AthenaClientRegistry::new();
-        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena);
+        let cloudwatch = CloudwatchClientRegistry::new();
+        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena, &cloudwatch);
 
         let adapter = introspector_for(EngineKind::Dynamo, pools);
         let err = adapter
@@ -623,7 +679,8 @@ mod tests {
         let mssql = MssqlPoolRegistry::new();
         let dynamo = DynamoClientRegistry::new();
         let athena = AthenaClientRegistry::new();
-        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena);
+        let cloudwatch = CloudwatchClientRegistry::new();
+        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena, &cloudwatch);
 
         let adapter = introspector_for(EngineKind::Athena, pools);
         let err = adapter
@@ -637,30 +694,33 @@ mod tests {
         );
     }
 
-    // §12.2 — Cloudwatch still returns "not yet wired".
+    // §5.1 — Cloudwatch introspector dispatches to CloudwatchIntrospector (not NotImplemented).
+    // With an empty registry (no active client), it returns NotFound — not an "not yet wired" error.
     #[tokio::test]
-    async fn cloudwatch_returns_not_yet_wired() {
+    async fn cloudwatch_introspector_is_not_not_implemented() {
         let pg = PgPoolRegistry::new();
         let mysql = MysqlPoolRegistry::new();
         let mssql = MssqlPoolRegistry::new();
         let dynamo = DynamoClientRegistry::new();
         let athena = AthenaClientRegistry::new();
-        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena);
+        let cloudwatch = CloudwatchClientRegistry::new();
+        let pools = make_pools(&pg, &mysql, &mssql, &dynamo, &athena, &cloudwatch);
 
         let adapter = introspector_for(EngineKind::Cloudwatch, pools);
         let err = adapter
             .introspect_for_context(Uuid::nil())
             .await
             .unwrap_err();
-        match err {
-            AppError::Internal(msg) => {
-                assert!(
-                    msg.contains("not yet wired"),
-                    "cloudwatch error should contain 'not yet wired'; got: {msg}"
-                );
-            }
-            other => panic!("expected AppError::Internal, got: {other:?}"),
-        }
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("not yet wired"),
+            "cloudwatch adapter should not be NotImplemented; got: {msg}"
+        );
+        // It should be NotFound (no active client for Uuid::nil()).
+        assert!(
+            matches!(err, AppError::NotFound(_)),
+            "cloudwatch adapter should return NotFound for unknown conn id; got: {msg}"
+        );
     }
 
     #[tokio::test]

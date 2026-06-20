@@ -15,6 +15,7 @@ import { MysqlFormProvider } from "@/modules/mysql";
 import { MssqlFormProvider } from "@/modules/mssql";
 import { DynamoFormProvider, CredentialsRefreshedListener } from "@/modules/dynamo";
 import { AthenaFormProvider } from "@/modules/athena";
+import { CloudwatchFormProvider } from "@/modules/cloudwatch";
 import { DynamoTablesCacheProvider } from "@/modules/dynamo/tables";
 import { KindPickerProvider } from "@/platform/shell/useKindPicker";
 
@@ -43,12 +44,14 @@ export function AppProviders({ children }: { children: ReactNode }) {
                         <MssqlFormProvider>
                           <DynamoFormProvider>
                             <AthenaFormProvider>
-                              <DynamoTablesCacheProvider>
-                                <KindPickerProvider>
-                                  {children}
-                                  <CredentialsRefreshedListener />
-                                </KindPickerProvider>
-                              </DynamoTablesCacheProvider>
+                              <CloudwatchFormProvider>
+                                <DynamoTablesCacheProvider>
+                                  <KindPickerProvider>
+                                    {children}
+                                    <CredentialsRefreshedListener />
+                                  </KindPickerProvider>
+                                </DynamoTablesCacheProvider>
+                              </CloudwatchFormProvider>
                             </AthenaFormProvider>
                           </DynamoFormProvider>
                         </MssqlFormProvider>
