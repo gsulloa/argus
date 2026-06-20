@@ -11,6 +11,8 @@ import type { RelationsResult, SchemaInfo, StructureResult, TableExtrasResult } 
 
 interface ConnectionCache {
   schemas: SchemaInfo[];
+  /** Epoch-ms when `schemas` was last recorded; drives the cache TTL. */
+  schemasFetchedAt?: number;
   relationsBySchema: Map<string, RelationsResult>;
   structureBySchema: Map<string, StructureResult>;
   tableExtrasByKey: Map<string, TableExtrasResult>; // key = `${schema}::${relation}`
@@ -59,7 +61,12 @@ export const mssqlSchemaCache = {
   recordSchemas(connectionId: string, schemas: SchemaInfo[]) {
     const c = ensure(connectionId);
     c.schemas = schemas;
+    c.schemasFetchedAt = Date.now();
     notify();
+  },
+  /** Epoch-ms when this connection's schemas were last recorded, or undefined. */
+  getSchemasFetchedAt(connectionId: string): number | undefined {
+    return cache.get(connectionId)?.schemasFetchedAt;
   },
   recordRelations(connectionId: string, schema: string, relations: RelationsResult) {
     const c = ensure(connectionId);

@@ -128,14 +128,7 @@ pub fn coerce_cell(raw: Option<&str>, col_type: &str) -> JsonValue {
             // Numeric types → JSON number
             if matches!(
                 lower.as_str(),
-                "tinyint"
-                    | "smallint"
-                    | "integer"
-                    | "int"
-                    | "bigint"
-                    | "float"
-                    | "double"
-                    | "real"
+                "tinyint" | "smallint" | "integer" | "int" | "bigint" | "float" | "double" | "real"
             ) || lower.starts_with("decimal")
             {
                 if let Ok(n) = s.parse::<i64>() {
@@ -193,10 +186,7 @@ async fn run_athena_query(
         }
     }
 
-    let start_resp = start_req
-        .send()
-        .await
-        .map_err(|e| sdk_err_to_app(&e))?;
+    let start_resp = start_req.send().await.map_err(|e| sdk_err_to_app(&e))?;
 
     let query_execution_id = start_resp
         .query_execution_id
@@ -217,7 +207,10 @@ async fn run_athena_query(
         if poll_start.elapsed() >= QUERY_POLL_TIMEOUT {
             return Err(AppError::aws(
                 "QueryTimeout",
-                format!("Query exceeded {} second timeout", QUERY_POLL_TIMEOUT.as_secs()),
+                format!(
+                    "Query exceeded {} second timeout",
+                    QUERY_POLL_TIMEOUT.as_secs()
+                ),
                 true,
             ));
         }
@@ -319,10 +312,7 @@ async fn run_athena_query(
 
     // Process first page rows.
     process_page_rows(
-        first_page
-            .result_set()
-            .map(|rs| rs.rows())
-            .unwrap_or(&[]),
+        first_page.result_set().map(|rs| rs.rows()).unwrap_or(&[]),
         &col_names,
         &col_types,
         &mut all_rows,
@@ -343,9 +333,7 @@ async fn run_athena_query(
             .map_err(|e| sdk_err_to_app(&e))?;
 
         process_page_rows(
-            page.result_set()
-                .map(|rs| rs.rows())
-                .unwrap_or(&[]),
+            page.result_set().map(|rs| rs.rows()).unwrap_or(&[]),
             &col_names,
             &col_types,
             &mut all_rows,
@@ -631,11 +619,11 @@ mod tests {
 
     #[test]
     fn coerce_double_cell() {
-        let v = coerce_cell(Some("3.14"), "double");
+        let v = coerce_cell(Some("2.5"), "double");
         match v {
             JsonValue::Number(n) => {
                 let f = n.as_f64().unwrap();
-                assert!((f - 3.14_f64).abs() < 1e-10);
+                assert!((f - 2.5_f64).abs() < 1e-10);
             }
             other => panic!("expected number, got {other:?}"),
         }
@@ -711,15 +699,22 @@ mod tests {
         // First row: header (column names as values).
         // Second row: real data.
         let rows = vec![
-            make_row(&["id", "name"]),    // header
-            make_row(&["1", "Alice"]),     // data
-            make_row(&["2", "Bob"]),       // data
+            make_row(&["id", "name"]), // header
+            make_row(&["1", "Alice"]), // data
+            make_row(&["2", "Bob"]),   // data
         ];
 
         let mut all_rows: Vec<Vec<JsonValue>> = Vec::new();
         let mut truncated = false;
 
-        process_page_rows(&rows, &col_names, &col_types, &mut all_rows, &mut truncated, true);
+        process_page_rows(
+            &rows,
+            &col_names,
+            &col_types,
+            &mut all_rows,
+            &mut truncated,
+            true,
+        );
 
         assert_eq!(all_rows.len(), 2, "header should be dropped");
         assert_eq!(all_rows[0][0], JsonValue::Number(1.into()));
@@ -739,7 +734,14 @@ mod tests {
         let mut all_rows: Vec<Vec<JsonValue>> = Vec::new();
         let mut truncated = false;
 
-        process_page_rows(&rows, &col_names, &col_types, &mut all_rows, &mut truncated, false);
+        process_page_rows(
+            &rows,
+            &col_names,
+            &col_types,
+            &mut all_rows,
+            &mut truncated,
+            false,
+        );
 
         // Both rows should be kept since it's not the first page.
         assert_eq!(all_rows.len(), 2);
@@ -755,7 +757,14 @@ mod tests {
         let mut truncated = false;
 
         let rows = vec![make_row(&["1"])];
-        process_page_rows(&rows, &col_names, &col_types, &mut all_rows, &mut truncated, false);
+        process_page_rows(
+            &rows,
+            &col_names,
+            &col_types,
+            &mut all_rows,
+            &mut truncated,
+            false,
+        );
 
         assert!(truncated);
         assert_eq!(all_rows.len(), RESULT_ROW_CAP);
@@ -767,15 +776,19 @@ mod tests {
         let col_types = vec!["integer".to_string(), "varchar".to_string()];
 
         // First row is NOT a header (different values).
-        let rows = vec![
-            make_row(&["100", "something"]),
-            make_row(&["200", "other"]),
-        ];
+        let rows = vec![make_row(&["100", "something"]), make_row(&["200", "other"])];
 
         let mut all_rows: Vec<Vec<JsonValue>> = Vec::new();
         let mut truncated = false;
 
-        process_page_rows(&rows, &col_names, &col_types, &mut all_rows, &mut truncated, true);
+        process_page_rows(
+            &rows,
+            &col_names,
+            &col_types,
+            &mut all_rows,
+            &mut truncated,
+            true,
+        );
 
         assert_eq!(all_rows.len(), 2, "no row should be dropped");
     }

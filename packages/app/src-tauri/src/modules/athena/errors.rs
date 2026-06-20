@@ -37,7 +37,9 @@ pub fn maybe_sso_specialized(app_err: AppError, profile: Option<&str>) -> AppErr
 /// Map any Athena/Glue/STS `SdkError` to `AppError::Aws`.
 ///
 /// Generic over the error type; works for athena, glue, and sts SDK errors.
-pub fn sdk_err_to_app<E, R>(err: &aws_smithy_runtime_api::client::result::SdkError<E, R>) -> AppError
+pub fn sdk_err_to_app<E, R>(
+    err: &aws_smithy_runtime_api::client::result::SdkError<E, R>,
+) -> AppError
 where
     E: aws_sdk_sts::error::ProvideErrorMetadata + std::fmt::Debug,
     R: std::fmt::Debug,
