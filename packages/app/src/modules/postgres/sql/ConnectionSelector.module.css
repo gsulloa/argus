@@ -117,6 +117,14 @@
   white-space: nowrap;
 }
 
+/* Engine type label — muted, right-aligned, neutral (no accent). */
+.itemType {
+  flex-shrink: 0;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--text-subtle);
+}
+
 .separator {
   height: 1px;
   background: var(--border);
