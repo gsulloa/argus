@@ -12,13 +12,19 @@ pub struct ValidationCache {
 
 impl ValidationCache {
     pub fn new() -> Self {
-        Self { entries: Mutex::new(HashMap::new()) }
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn peek(&self, id: ProviderId) -> Option<ValidationResult> {
         let map = self.entries.lock().ok()?;
         let (res, at) = map.get(&id)?;
-        if at.elapsed() < TTL { Some(res.clone()) } else { None }
+        if at.elapsed() < TTL {
+            Some(res.clone())
+        } else {
+            None
+        }
     }
 
     pub fn insert(&self, id: ProviderId, result: ValidationResult) {

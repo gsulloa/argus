@@ -31,6 +31,9 @@ export type {
   DynamoTableCacheHook,
 } from "./CacheProvider";
 
+// Forced-reload entry point (toolbar / global Cmd+R)
+export { refreshConnection, DYNAMO_TABLES_REFRESH_EVENT } from "./refresh";
+
 // Sidebar subtree
 export { DynamoConnectionSubtree } from "./DynamoConnectionSubtree";
 

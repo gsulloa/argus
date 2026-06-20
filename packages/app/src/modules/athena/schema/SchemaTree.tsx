@@ -21,8 +21,10 @@ import { useSidebarScrollRef } from "@/platform/shell/sidebarScroll";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { ContextFolderBanner } from "@/modules/context/components/ContextFolderBanner";
 import { SchemaSearch } from "@/modules/postgres/schema/SchemaSearch";
+import { isStale } from "@/platform/cache/ttl";
 import { athenaApi } from "../api";
 import { athenaSchemaCache } from "./globalSchemaCache";
+import { refreshConnection } from "./refresh";
 import { athenaColumnsCache } from "../sql/columnsCache";
 import { openAthenaQueryTab } from "../openAthenaQueryTab";
 import type { AthenaDatabaseInfo, AthenaNamedQuerySummary, AthenaRelationInfo, AthenaColumnInfo } from "../types";
@@ -114,28 +116,54 @@ export function AthenaSchemaTree({ connectionId }: Props) {
   const [dbState, setDbState] = useState<LoadState>("idle");
   const [dbError, setDbError] = useState<string | undefined>();
 
-  const loadDatabases = useCallback(async () => {
-    setDbState("loading");
-    setDbError(undefined);
-    try {
-      const dbs = await athenaApi.listDatabases(connectionId);
-      athenaSchemaCache.recordDatabases(connectionId, dbs);
-      setDbState("loaded");
-    } catch (e) {
-      setDbError((e as Error).message ?? "Failed to load databases.");
-      setDbState("error");
-    }
-  }, [connectionId]);
+  const loadDatabases = useCallback(
+    async (opts?: { background?: boolean }) => {
+      const background = opts?.background ?? false;
+      // On a background (stale) refresh keep showing the cached tree — no flash.
+      if (!background) setDbState("loading");
+      setDbError(undefined);
+      try {
+        const dbs = await athenaApi.listDatabases(connectionId);
+        athenaSchemaCache.recordDatabases(connectionId, dbs);
+        setDbState("loaded");
+      } catch (e) {
+        if (background) {
+          console.warn(
+            "[argus.athena.schema] background listDatabases refresh failed; keeping cache for",
+            connectionId,
+            e,
+          );
+          return;
+        }
+        setDbError((e as Error).message ?? "Failed to load databases.");
+        setDbState("error");
+      }
+    },
+    [connectionId],
+  );
 
+  // Seed from the process-wide cache on (re)focus, then fetch only when there
+  // is no cache or the cached entry is stale (TTL). A focus switch updates the
+  // connectionId prop on the same instance, so this re-runs per connection.
   useEffect(() => {
+    const cached = athenaSchemaCache.getDatabases(connectionId);
+    if (cached.length > 0) {
+      setDbState("loaded");
+      if (isStale(athenaSchemaCache.getDatabasesFetchedAt(connectionId))) {
+        void loadDatabases({ background: true });
+      }
+      return;
+    }
     void loadDatabases();
-  }, [loadDatabases]);
+  }, [connectionId, loadDatabases]);
 
-  // Sync from cache
+  // Sync databases from cache; also re-seed immediately on connectionId change
+  // so a focus switch never shows the previous connection's tree.
   const [databases, setDatabases] = useState<AthenaDatabaseInfo[]>(
     () => athenaSchemaCache.getDatabases(connectionId),
   );
   useEffect(() => {
+    setDatabases(athenaSchemaCache.getDatabases(connectionId));
     const unsub = athenaSchemaCache.subscribe(() => {
       setDatabases(athenaSchemaCache.getDatabases(connectionId));
     });
@@ -245,6 +273,54 @@ export function AthenaSchemaTree({ connectionId }: Props) {
     },
     [connectionId],
   );
+
+  // Seed relations/columns from the process-wide caches on (re)focus so
+  // previously-expanded nodes render without re-issuing list IPCs, and so a
+  // focus switch never shows the previous connection's relations.
+  useEffect(() => {
+    const cachedDbs = athenaSchemaCache.getDatabases(connectionId);
+    const relMap = new Map<string, AthenaRelationInfo[]>();
+    const relStateMap = new Map<string, LoadState>();
+    const colMap = new Map<string, AthenaColumnInfo[]>();
+    const colStateMap = new Map<string, LoadState>();
+    for (const db of cachedDbs) {
+      const rels = athenaSchemaCache.getRelations(connectionId, db.name);
+      if (!rels) continue;
+      relMap.set(db.name, rels);
+      relStateMap.set(db.name, "loaded");
+      for (const rel of rels) {
+        const cols = athenaColumnsCache.getColumns(connectionId, db.name, rel.name);
+        if (cols) {
+          const k = colKey(db.name, rel.name);
+          colMap.set(k, cols);
+          colStateMap.set(k, "loaded");
+        }
+      }
+    }
+    setRelations(relMap);
+    setRelState(relStateMap);
+    setColumns(colMap);
+    setColState(colStateMap);
+  }, [connectionId]);
+
+  // Manual refresh (toolbar button / Cmd+R) — the cache was already invalidated
+  // by refreshConnection(); reset local relations/columns/databases and reload.
+  useEffect(() => {
+    function onRefresh(e: Event) {
+      const ev = e as CustomEvent<string>;
+      if (ev.detail !== connectionId) return;
+      setRelations(new Map());
+      setRelState(new Map());
+      setRelError(new Map());
+      setColumns(new Map());
+      setColState(new Map());
+      setColError(new Map());
+      setDbState("idle");
+      void loadDatabases();
+    }
+    window.addEventListener("athena:schema-refresh", onRefresh);
+    return () => window.removeEventListener("athena:schema-refresh", onRefresh);
+  }, [connectionId, loadDatabases]);
 
   // ---------------------------------------------------------------------------
   // Tree building
@@ -750,9 +826,7 @@ export function AthenaSchemaToolbar({ connectionId }: ToolbarProps) {
       title="Refresh databases"
       onClick={(e) => {
         e.stopPropagation();
-        athenaSchemaCache.invalidate(connectionId);
-        // Force reload by refreshing the component; parent ConnectionRow re-renders tree
-        window.dispatchEvent(new CustomEvent("athena:schema-refresh", { detail: connectionId }));
+        refreshConnection(connectionId);
       }}
       className={styles.toolbarBtn}
     >

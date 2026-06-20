@@ -7,7 +7,6 @@
 /// GitHub Desktop. It is a no-op on non-macOS platforms.
 ///
 /// Safety: never panics, never blocks for more than 2 seconds.
-
 use crate::modules::ai::cli_detect::{record_enrichment_outcome, EnrichmentOutcome};
 
 #[cfg(not(target_os = "macos"))]
@@ -71,9 +70,7 @@ pub fn fix_macos_path() {
     let shell_entries = match parse_shell_path(&stdout) {
         Some(entries) => entries,
         None => {
-            tracing::warn!(
-                "fix_macos_path: could not parse PATH markers from login shell output"
-            );
+            tracing::warn!("fix_macos_path: could not parse PATH markers from login shell output");
             record_enrichment_outcome(EnrichmentOutcome::SkippedNoEntries);
             return;
         }
@@ -84,9 +81,7 @@ pub fn fix_macos_path() {
         .iter()
         .any(|e| std::path::Path::new(e.as_str()).exists());
     if !any_valid {
-        tracing::warn!(
-            "fix_macos_path: no existing paths found in login shell PATH — skipping"
-        );
+        tracing::warn!("fix_macos_path: no existing paths found in login shell PATH — skipping");
         record_enrichment_outcome(EnrichmentOutcome::SkippedNoEntries);
         return;
     }
@@ -239,7 +234,10 @@ mod tests {
     fn probe_posix_shell_uses_dollar_path() {
         let (_, args) = shell_probe_command("/bin/bash");
         let body = args.last().unwrap();
-        assert!(body.contains("$PATH"), "posix body should expand $PATH: {body}");
+        assert!(
+            body.contains("$PATH"),
+            "posix body should expand $PATH: {body}"
+        );
         assert!(!body.contains("string join"));
         assert!(body.contains("__ARGUS_PATH_START__"));
         assert!(body.contains("__ARGUS_PATH_END__"));

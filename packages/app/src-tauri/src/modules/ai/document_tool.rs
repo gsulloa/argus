@@ -154,7 +154,10 @@ pub fn run_document_object(
                 BodyMode::Append => "appended note",
                 BodyMode::Replace => "replaced body",
             };
-            format!("Documented body of {} ({}) → {}", object_label, mode_label, rel_path)
+            format!(
+                "Documented body of {} ({}) → {}",
+                object_label, mode_label, rel_path
+            )
         }
         WriteTarget::ColumnNote { column } => {
             format!(
@@ -170,7 +173,10 @@ pub fn run_document_object(
                 .filter(|s| !s.is_empty())
                 .collect();
             let tag_list = tags.join(", ");
-            format!("Added tags to {}: {} → {}", object_label, tag_list, rel_path)
+            format!(
+                "Added tags to {}: {} → {}",
+                object_label, tag_list, rel_path
+            )
         }
     };
 
@@ -230,7 +236,10 @@ mod tests {
         );
         // No file should have been written.
         let doc_path = dir.path().join("postgres/public/users.md");
-        assert!(!doc_path.exists(), "no file should be written on validation error");
+        assert!(
+            !doc_path.exists(),
+            "no file should be written on validation error"
+        );
     }
 
     #[test]
@@ -309,8 +318,14 @@ mod tests {
         assert!(content.contains("This table tracks all orders."));
         assert!(content.contains("## Notes from chat 2026-06-15"));
 
-        assert!(result.contains("public.orders"), "result should mention object");
-        assert!(result.contains("appended note"), "result should mention mode");
+        assert!(
+            result.contains("public.orders"),
+            "result should mention object"
+        );
+        assert!(
+            result.contains("appended note"),
+            "result should mention mode"
+        );
     }
 
     // ── Valid: body replace ───────────────────────────────────────────────────
@@ -337,7 +352,10 @@ mod tests {
         let content = fs::read_to_string(&doc_path).unwrap();
         assert!(content.contains("Replacement body content."));
 
-        assert!(result.contains("replaced body"), "result should mention replace mode");
+        assert!(
+            result.contains("replaced body"),
+            "result should mention replace mode"
+        );
     }
 
     // ── Valid: column_note ────────────────────────────────────────────────────
@@ -366,7 +384,10 @@ mod tests {
 
         assert!(result.contains("public.users"), "result mentions object");
         assert!(result.contains("status"), "result mentions column");
-        assert!(result.contains("Set column note"), "result describes action");
+        assert!(
+            result.contains("Set column note"),
+            "result describes action"
+        );
     }
 
     // ── Valid: tags ───────────────────────────────────────────────────────────
@@ -416,7 +437,10 @@ mod tests {
         };
 
         let result = run_document_object(&ctx, inp, "2026-06-15");
-        assert!(result.is_ok(), "mode should be ignored for column_note, got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "mode should be ignored for column_note, got: {result:?}"
+        );
     }
 
     #[test]
@@ -471,7 +495,10 @@ mod tests {
             // The content written would start with ---\n (seed minimal file);
             // if the file is readable its content must not be the Argus seed.
             let c = fs::read_to_string(passwd).unwrap_or_default();
-            assert!(!c.contains("---\nsystem:"), "/etc/passwd must not have been overwritten");
+            assert!(
+                !c.contains("---\nsystem:"),
+                "/etc/passwd must not have been overwritten"
+            );
         }
     }
 
@@ -502,6 +529,9 @@ mod tests {
             !result.starts_with('.'),
             "result string must not start with dot for schemaless engine"
         );
-        assert!(result.contains("EventsTable"), "result must mention table name");
+        assert!(
+            result.contains("EventsTable"),
+            "result must mention table name"
+        );
     }
 }

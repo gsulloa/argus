@@ -580,10 +580,7 @@ fn system_block_unchanged(existing: &ObjectSystem, shape: &ObjectShape) -> bool 
         return false;
     }
     // primary_key — normalize empty Vec ↔ None
-    let existing_pk: &[String] = existing
-        .primary_key
-        .as_deref()
-        .unwrap_or(&[]);
+    let existing_pk: &[String] = existing.primary_key.as_deref().unwrap_or(&[]);
     let shape_pk: &[String] = &shape.primary_key;
     if existing_pk != shape_pk {
         return false;
@@ -642,10 +639,8 @@ fn diff_system(old: &ObjectSystem, shape: &ObjectShape) -> Vec<String> {
         .collect();
 
     // Build name→ty maps for add/remove/type-change detection.
-    let old_by_name: HashMap<&str, &str> =
-        old_cols.iter().map(|&(n, t)| (n, t)).collect();
-    let shape_by_name: HashMap<&str, &str> =
-        shape_cols.iter().map(|&(n, t)| (n, t)).collect();
+    let old_by_name: HashMap<&str, &str> = old_cols.iter().map(|&(n, t)| (n, t)).collect();
+    let shape_by_name: HashMap<&str, &str> = shape_cols.iter().map(|&(n, t)| (n, t)).collect();
 
     let mut structural_change = false;
 
@@ -1034,8 +1029,7 @@ pub async fn execute_sync(
             }
 
             // Orphan detection (D6 — run on all rewrite paths too).
-            let col_names: HashSet<String> =
-                shape.columns.iter().map(|c| c.name.clone()).collect();
+            let col_names: HashSet<String> = shape.columns.iter().map(|c| c.name.clone()).collect();
             let orphan_keys = find_orphaned_note_keys(&col_names, &doc.human);
             for key in orphan_keys {
                 orphaned_notes.push(OrphanedNote {
@@ -1599,7 +1593,11 @@ mod tests {
             .expect("Order not found");
         assert_eq!(order.system.kind, "dynamo_model");
         assert_eq!(order.system.physical_table.as_deref(), Some("AppTable"));
-        let aps = order.system.access_patterns.as_ref().expect("access_patterns missing");
+        let aps = order
+            .system
+            .access_patterns
+            .as_ref()
+            .expect("access_patterns missing");
         assert_eq!(aps.len(), 1);
         assert_eq!(aps[0].index, "table");
         assert_eq!(aps[0].pk, "USER#${userId}");
@@ -1812,7 +1810,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.created.len(), 1);
-        assert_eq!(report.created[0], dir.path().join("dynamo/tables/Events/table.md"));
+        assert_eq!(
+            report.created[0],
+            dir.path().join("dynamo/tables/Events/table.md")
+        );
         assert_eq!(report.skipped.len(), 1, "one collision skipped");
         let s = &report.skipped[0];
         assert_eq!(s.logical, "Events");
@@ -1858,7 +1859,11 @@ mod tests {
 
         // Write a pre-existing model doc inside the table's models directory.
         let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: Order\n  access_patterns:\n    - index: table\n      pk: \"ORDER#${id}\"\n---\n# Order\n";
-        write_file(dir.path(), "dynamo/tables/Orders/models/Order.md", model_content);
+        write_file(
+            dir.path(),
+            "dynamo/tables/Orders/models/Order.md",
+            model_content,
+        );
 
         let report = execute_sync(
             dir.path(),
@@ -1871,29 +1876,53 @@ mod tests {
 
         // The legacy flat file must be gone.
         let legacy_path = dir.path().join("dynamo/tables/Orders.md");
-        assert!(!legacy_path.exists(), "legacy flat file should be removed after migration");
+        assert!(
+            !legacy_path.exists(),
+            "legacy flat file should be removed after migration"
+        );
 
         // The new folder-based table.md must exist.
         let new_path = dir.path().join("dynamo/tables/Orders/table.md");
-        assert!(new_path.exists(), "folder-based table.md must exist after migration");
+        assert!(
+            new_path.exists(),
+            "folder-based table.md must exist after migration"
+        );
 
         // The content must preserve the human block and body.
         let new_content = fs::read_to_string(&new_path).unwrap();
-        assert!(new_content.contains("important"), "human block should be preserved");
-        assert!(new_content.contains("Legacy notes."), "body should be preserved");
+        assert!(
+            new_content.contains("important"),
+            "human block should be preserved"
+        );
+        assert!(
+            new_content.contains("Legacy notes."),
+            "body should be preserved"
+        );
         // System block should be fresh.
-        assert!(new_content.contains("kind: dynamo_table"), "system block should be present");
-        assert!(new_content.contains("name: Orders"), "system name should match");
+        assert!(
+            new_content.contains("kind: dynamo_table"),
+            "system block should be present"
+        );
+        assert!(
+            new_content.contains("name: Orders"),
+            "system name should match"
+        );
 
         // The models file must be untouched.
         let model_path = dir.path().join("dynamo/tables/Orders/models/Order.md");
         assert!(model_path.exists(), "models file must be untouched");
         let model_read = fs::read_to_string(&model_path).unwrap();
-        assert_eq!(model_read, model_content, "model file content should be unchanged");
+        assert_eq!(
+            model_read, model_content,
+            "model file content should be unchanged"
+        );
 
         // The report should show the table as updated (migrated then rewritten).
-        assert!(report.created.is_empty() || report.updated.iter().any(|u| u.path == new_path),
-            "migrated table should appear in updated or created; report={:?}", report);
+        assert!(
+            report.created.is_empty() || report.updated.iter().any(|u| u.path == new_path),
+            "migrated table should appear in updated or created; report={:?}",
+            report
+        );
     }
 
     /// Re-sync after migration produces no spurious deletes (deleted_in_db not set for live tables).
@@ -1917,8 +1946,11 @@ mod tests {
         .unwrap();
 
         // Should update (not create), and definitely not mark deleted.
-        assert!(report1.marked_deleted.is_empty(),
-            "live table should not be marked deleted on first resync: {:?}", report1.marked_deleted);
+        assert!(
+            report1.marked_deleted.is_empty(),
+            "live table should not be marked deleted on first resync: {:?}",
+            report1.marked_deleted
+        );
 
         // Second sync (idempotent).
         let report2 = execute_sync(
@@ -1930,12 +1962,19 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(report2.marked_deleted.is_empty(),
-            "live table should not be marked deleted on second resync: {:?}", report2.marked_deleted);
+        assert!(
+            report2.marked_deleted.is_empty(),
+            "live table should not be marked deleted on second resync: {:?}",
+            report2.marked_deleted
+        );
 
         // Content should still have the human block.
-        let content = fs::read_to_string(dir.path().join("dynamo/tables/Products/table.md")).unwrap();
-        assert!(content.contains("live"), "human block preserved across resyncs");
+        let content =
+            fs::read_to_string(dir.path().join("dynamo/tables/Products/table.md")).unwrap();
+        assert!(
+            content.contains("live"),
+            "human block preserved across resyncs"
+        );
     }
 
     // ---- D6 bug-fix tests: consolidation + rule-aware canonical target ----
@@ -1966,7 +2005,8 @@ mod tests {
             &table_content,
         );
         // Model doc under the physical folder.
-        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: Order\nhuman: {}\n---\n# Order\n";
+        let model_content =
+            "---\nsystem:\n  kind: dynamo_model\n  name: Order\nhuman: {}\n---\n# Order\n";
         write_file(
             dir.path(),
             &format!("dynamo/tables/{physical}/models/Order.md"),
@@ -1985,20 +2025,35 @@ mod tests {
 
         // Physical folder must be gone.
         let physical_dir = dir.path().join(format!("dynamo/tables/{physical}"));
-        assert!(!physical_dir.exists(), "physical dir should be removed: {}", physical_dir.display());
+        assert!(
+            !physical_dir.exists(),
+            "physical dir should be removed: {}",
+            physical_dir.display()
+        );
 
         // Logical table.md must exist with logical system.name.
         let logical_table = dir.path().join(format!("dynamo/tables/{logical}/table.md"));
         assert!(logical_table.exists(), "logical table.md must exist");
         let content = fs::read_to_string(&logical_table).unwrap();
-        assert!(content.contains(&format!("name: {logical}")), "system.name should be logical");
-        assert!(!content.contains("deleted_in_db: true"), "must not be marked deleted");
+        assert!(
+            content.contains(&format!("name: {logical}")),
+            "system.name should be logical"
+        );
+        assert!(
+            !content.contains("deleted_in_db: true"),
+            "must not be marked deleted"
+        );
         // Human block and body preserved.
         assert!(content.contains("secure"), "human tags should be preserved");
-        assert!(content.contains("Pre-rule notes."), "body should be preserved");
+        assert!(
+            content.contains("Pre-rule notes."),
+            "body should be preserved"
+        );
 
         // Model moved to logical folder.
-        let logical_model = dir.path().join(format!("dynamo/tables/{logical}/models/Order.md"));
+        let logical_model = dir
+            .path()
+            .join(format!("dynamo/tables/{logical}/models/Order.md"));
         assert!(logical_model.exists(), "model must be in logical folder");
         let model_read = fs::read_to_string(&logical_model).unwrap();
         assert_eq!(model_read, model_content, "model content must be unchanged");
@@ -2006,15 +2061,24 @@ mod tests {
         // Report: table appears in updated, not marked_deleted, not created.
         assert!(
             report.updated.iter().any(|u| u.path == logical_table),
-            "table should be in updated; report={:?}", report
+            "table should be in updated; report={:?}",
+            report
         );
         assert!(
-            !report.marked_deleted.iter().any(|p| p.to_str().unwrap_or("").contains(logical)),
-            "table should not be in marked_deleted; report={:?}", report
+            !report
+                .marked_deleted
+                .iter()
+                .any(|p| p.to_str().unwrap_or("").contains(logical)),
+            "table should not be in marked_deleted; report={:?}",
+            report
         );
         assert!(
-            !report.created.iter().any(|p| p.to_str().unwrap_or("").contains(logical)),
-            "table should not be in created; report={:?}", report
+            !report
+                .created
+                .iter()
+                .any(|p| p.to_str().unwrap_or("").contains(logical)),
+            "table should not be in created; report={:?}",
+            report
         );
     }
 
@@ -2031,7 +2095,8 @@ mod tests {
         let logical = "OrdersTable";
 
         // Physical folder has only a models dir (no table.md).
-        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: Order\nhuman: {}\n---\n# Order\n";
+        let model_content =
+            "---\nsystem:\n  kind: dynamo_model\n  name: Order\nhuman: {}\n---\n# Order\n";
         write_file(
             dir.path(),
             &format!("dynamo/tables/{physical}/models/Order.md"),
@@ -2062,17 +2127,25 @@ mod tests {
         assert!(!physical_dir.exists(), "physical dir should be removed");
 
         // Model must exist in the logical folder.
-        let logical_model = dir.path().join(format!("dynamo/tables/{logical}/models/Order.md"));
+        let logical_model = dir
+            .path()
+            .join(format!("dynamo/tables/{logical}/models/Order.md"));
         assert!(logical_model.exists(), "model must be in logical folder");
         let model_read = fs::read_to_string(&logical_model).unwrap();
         assert_eq!(model_read, model_content, "model content must be unchanged");
 
         // Logical table.md should be updated (not created or deleted).
         let logical_table = dir.path().join(format!("dynamo/tables/{logical}/table.md"));
-        assert!(report.updated.iter().any(|u| u.path == logical_table),
-            "logical table should be in updated; report={:?}", report);
-        assert!(report.marked_deleted.is_empty(),
-            "nothing should be marked deleted; report={:?}", report);
+        assert!(
+            report.updated.iter().any(|u| u.path == logical_table),
+            "logical table should be in updated; report={:?}",
+            report
+        );
+        assert!(
+            report.marked_deleted.is_empty(),
+            "nothing should be marked deleted; report={:?}",
+            report
+        );
     }
 
     /// A legacy flat tables/<physical>.md (human block + body) is consolidated
@@ -2117,18 +2190,24 @@ mod tests {
         assert!(logical_table.exists(), "logical table.md must exist");
         let content = fs::read_to_string(&logical_table).unwrap();
         // system.name rewritten to logical.
-        assert!(content.contains(&format!("name: {logical}")), "system.name should be logical");
+        assert!(
+            content.contains(&format!("name: {logical}")),
+            "system.name should be logical"
+        );
         // Human block and body preserved.
         assert!(content.contains("legacy"), "human tags should be preserved");
-        assert!(content.contains("Flat file body."), "body should be preserved");
+        assert!(
+            content.contains("Flat file body."),
+            "body should be preserved"
+        );
 
         // Must appear in updated (migrated then rewritten) or created, not marked_deleted.
         assert!(
-            report.updated.iter().any(|u| u.path == logical_table) || report.created.contains(&logical_table),
-            "logical table should be in updated or created; report={:?}", report
+            report.updated.iter().any(|u| u.path == logical_table)
+                || report.created.contains(&logical_table),
+            "logical table should be in updated or created; report={:?}",
+            report
         );
-        assert!(report.marked_deleted.is_empty(),
-            "nothing should be marked deleted; report={:?}", report);
     }
 
     /// Regression: D6 consolidation must strip the `.md` extension from legacy flat
@@ -2170,17 +2249,20 @@ mod tests {
 
         // tables/Sessions/table.md must exist.
         let logical_table = tables_dir.join(format!("{logical}/table.md"));
-        assert!(logical_table.exists(), "tables/{logical}/table.md must exist");
+        assert!(
+            logical_table.exists(),
+            "tables/{logical}/table.md must exist"
+        );
 
         // The flat file must be gone.
         let flat_file = tables_dir.join(format!("{physical}.md"));
-        assert!(!flat_file.exists(), "flat file {physical}.md must be removed");
+        assert!(
+            !flat_file.exists(),
+            "flat file {physical}.md must be removed"
+        );
 
         // No entry whose name ends with ".md" may exist as a DIRECTORY under tables/.
-        let entries: Vec<_> = fs::read_dir(&tables_dir)
-            .unwrap()
-            .flatten()
-            .collect();
+        let entries: Vec<_> = fs::read_dir(&tables_dir).unwrap().flatten().collect();
         for entry in &entries {
             let name = entry.file_name();
             let name_str = name.to_str().unwrap_or("");
@@ -2206,12 +2288,15 @@ mod tests {
 
         // Report: table should be in updated or created, not marked_deleted.
         assert!(
-            report.updated.iter().any(|u| u.path == logical_table) || report.created.contains(&logical_table),
-            "logical table should be in updated or created; report={:?}", report
+            report.updated.iter().any(|u| u.path == logical_table)
+                || report.created.contains(&logical_table),
+            "logical table should be in updated or created; report={:?}",
+            report
         );
         assert!(
             report.marked_deleted.is_empty(),
-            "nothing should be marked deleted; report={:?}", report
+            "nothing should be marked deleted; report={:?}",
+            report
         );
     }
 
@@ -2225,8 +2310,13 @@ mod tests {
 
         let table_content = "---\nsystem:\n  kind: dynamo_table\n  name: Orders\nhuman:\n  tags:\n    - live\n---\n# Orders\n\nOrders table.\n";
         write_file(dir.path(), "dynamo/tables/Orders/table.md", table_content);
-        let model_content = "---\nsystem:\n  kind: dynamo_model\n  name: OrderItem\nhuman: {}\n---\n# OrderItem\n";
-        write_file(dir.path(), "dynamo/tables/Orders/models/OrderItem.md", model_content);
+        let model_content =
+            "---\nsystem:\n  kind: dynamo_model\n  name: OrderItem\nhuman: {}\n---\n# OrderItem\n";
+        write_file(
+            dir.path(),
+            "dynamo/tables/Orders/models/OrderItem.md",
+            model_content,
+        );
 
         let report = execute_sync(
             dir.path(),
@@ -2240,12 +2330,21 @@ mod tests {
         // Updated in place, nothing moved or deleted.
         let table_path = dir.path().join("dynamo/tables/Orders/table.md");
         assert!(table_path.exists(), "table.md should still exist");
-        assert!(report.updated.iter().any(|u| u.path == table_path),
-            "table should be in updated; report={:?}", report);
-        assert!(report.marked_deleted.is_empty(),
-            "nothing should be deleted; report={:?}", report);
-        assert!(report.created.is_empty(),
-            "nothing should be created; report={:?}", report);
+        assert!(
+            report.updated.iter().any(|u| u.path == table_path),
+            "table should be in updated; report={:?}",
+            report
+        );
+        assert!(
+            report.marked_deleted.is_empty(),
+            "nothing should be deleted; report={:?}",
+            report
+        );
+        assert!(
+            report.created.is_empty(),
+            "nothing should be created; report={:?}",
+            report
+        );
 
         // No extra folder created.
         let tables_dir = dir.path().join("dynamo/tables");
@@ -2254,13 +2353,21 @@ mod tests {
             .flatten()
             .map(|e| e.file_name().to_str().unwrap_or("").to_string())
             .collect();
-        assert_eq!(entries.len(), 1, "only Orders/ should exist, found: {:?}", entries);
+        assert_eq!(
+            entries.len(),
+            1,
+            "only Orders/ should exist, found: {:?}",
+            entries
+        );
 
         // Models file still in the same location, content unchanged.
         let model_path = dir.path().join("dynamo/tables/Orders/models/OrderItem.md");
         assert!(model_path.exists(), "model file should be untouched");
         let model_read = fs::read_to_string(&model_path).unwrap();
-        assert_eq!(model_read, model_content, "model content should be unchanged");
+        assert_eq!(
+            model_read, model_content,
+            "model content should be unchanged"
+        );
     }
 
     // ---- D6 live-logicals guard tests ----
@@ -2332,10 +2439,13 @@ mod tests {
         );
 
         // The stranded models were merged into the live logical folder.
-        let live_model = dir
-            .path()
-            .join(format!("dynamo/tables/{live_logical}/models/UserCredential.md"));
-        assert!(live_model.exists(), "stranded model must be merged into live logical folder");
+        let live_model = dir.path().join(format!(
+            "dynamo/tables/{live_logical}/models/UserCredential.md"
+        ));
+        assert!(
+            live_model.exists(),
+            "stranded model must be merged into live logical folder"
+        );
         let model_read = fs::read_to_string(&live_model).unwrap();
         assert_eq!(model_read, model_content, "model content must be unchanged");
 
@@ -2354,12 +2464,17 @@ mod tests {
 
         // The report must not have a `created` entry for this table (it's an update).
         assert!(
-            !report.created.iter().any(|p| p.to_str().unwrap_or("").contains(live_logical)),
-            "live logical table should not be in created (it's an update); report={:?}", report
+            !report
+                .created
+                .iter()
+                .any(|p| p.to_str().unwrap_or("").contains(live_logical)),
+            "live logical table should not be in created (it's an update); report={:?}",
+            report
         );
         assert!(
             report.updated.iter().any(|u| u.path == live_table),
-            "live logical table should be in updated; report={:?}", report
+            "live logical table should be in updated; report={:?}",
+            report
         );
     }
 
@@ -2418,10 +2533,7 @@ mod tests {
 
         // Everything must converge into a single CacheStack-CacheTable/ folder.
         let tables_dir = dir.path().join("dynamo/tables");
-        let entries: Vec<_> = fs::read_dir(&tables_dir)
-            .unwrap()
-            .flatten()
-            .collect();
+        let entries: Vec<_> = fs::read_dir(&tables_dir).unwrap().flatten().collect();
         assert_eq!(
             entries.len(),
             1,
@@ -2449,41 +2561,62 @@ mod tests {
 
         // models/UserCredential.md present in logical folder.
         let logical_model = tables_dir.join(format!("{logical}/models/UserCredential.md"));
-        assert!(logical_model.exists(), "models/UserCredential.md must be present in logical folder");
+        assert!(
+            logical_model.exists(),
+            "models/UserCredential.md must be present in logical folder"
+        );
 
         // Physical-named folder must be gone.
         let physical_dir = tables_dir.join(physical);
-        assert!(!physical_dir.exists(), "physical folder must be removed after consolidation");
+        assert!(
+            !physical_dir.exists(),
+            "physical folder must be removed after consolidation"
+        );
 
         // Report: updated, not created or marked_deleted.
         assert!(
             report.updated.iter().any(|u| u.path == logical_table),
-            "logical table should be in updated; report={:?}", report
+            "logical table should be in updated; report={:?}",
+            report
         );
         assert!(
             report.marked_deleted.is_empty(),
-            "nothing should be marked deleted; report={:?}", report
+            "nothing should be marked deleted; report={:?}",
+            report
         );
         assert!(
-            !report.created.iter().any(|p| p.to_str().unwrap_or("").contains(logical)),
-            "logical table should not be in created; report={:?}", report
+            !report
+                .created
+                .iter()
+                .any(|p| p.to_str().unwrap_or("").contains(logical)),
+            "logical table should not be in created; report={:?}",
+            report
         );
     }
 
     // ---- system_block_unchanged unit tests (task 3.3) ----
 
-    fn make_system(kind: &str, name: &str, pk: Option<Vec<&str>>, cols: Vec<(&str, &str)>) -> ObjectSystem {
+    fn make_system(
+        kind: &str,
+        name: &str,
+        pk: Option<Vec<&str>>,
+        cols: Vec<(&str, &str)>,
+    ) -> ObjectSystem {
         use crate::modules::context::types::ObjectColumn;
         ObjectSystem {
             kind: kind.to_string(),
             schema: Some("public".to_string()),
             name: name.to_string(),
             primary_key: pk.map(|v| v.iter().map(|s| s.to_string()).collect()),
-            columns: Some(cols.into_iter().map(|(n, t)| ObjectColumn {
-                name: n.to_string(),
-                ty: t.to_string(),
-                extras: Default::default(),
-            }).collect()),
+            columns: Some(
+                cols.into_iter()
+                    .map(|(n, t)| ObjectColumn {
+                        name: n.to_string(),
+                        ty: t.to_string(),
+                        extras: Default::default(),
+                    })
+                    .collect(),
+            ),
             last_synced: None,
             deleted_in_db: None,
             access_patterns: None,
@@ -2498,30 +2631,51 @@ mod tests {
             schema: Some("public".to_string()),
             name: name.to_string(),
             primary_key: pk.iter().map(|s| s.to_string()).collect(),
-            columns: cols.into_iter().map(|(n, t)| ObjectShapeColumn {
-                name: n.to_string(),
-                ty: t.to_string(),
-            }).collect(),
+            columns: cols
+                .into_iter()
+                .map(|(n, t)| ObjectShapeColumn {
+                    name: n.to_string(),
+                    ty: t.to_string(),
+                })
+                .collect(),
         }
     }
 
     #[test]
     fn system_block_unchanged_identical() {
-        let sys = make_system("table", "users", Some(vec!["id"]), vec![("id", "integer"), ("email", "text")]);
-        let shape = make_shape_with("users", vec!["id"], vec![("id", "integer"), ("email", "text")]);
+        let sys = make_system(
+            "table",
+            "users",
+            Some(vec!["id"]),
+            vec![("id", "integer"), ("email", "text")],
+        );
+        let shape = make_shape_with(
+            "users",
+            vec!["id"],
+            vec![("id", "integer"), ("email", "text")],
+        );
         assert!(system_block_unchanged(&sys, &shape));
     }
 
     #[test]
     fn system_block_unchanged_added_col() {
         let sys = make_system("table", "users", Some(vec!["id"]), vec![("id", "integer")]);
-        let shape = make_shape_with("users", vec!["id"], vec![("id", "integer"), ("email", "text")]);
+        let shape = make_shape_with(
+            "users",
+            vec!["id"],
+            vec![("id", "integer"), ("email", "text")],
+        );
         assert!(!system_block_unchanged(&sys, &shape));
     }
 
     #[test]
     fn system_block_unchanged_removed_col() {
-        let sys = make_system("table", "users", Some(vec!["id"]), vec![("id", "integer"), ("email", "text")]);
+        let sys = make_system(
+            "table",
+            "users",
+            Some(vec!["id"]),
+            vec![("id", "integer"), ("email", "text")],
+        );
         let shape = make_shape_with("users", vec!["id"], vec![("id", "integer")]);
         assert!(!system_block_unchanged(&sys, &shape));
     }
@@ -2543,8 +2697,17 @@ mod tests {
     #[test]
     fn system_block_unchanged_reorder_only() {
         // Same columns, different order → NOT unchanged (order-sensitive per D1)
-        let sys = make_system("table", "users", Some(vec!["id"]), vec![("id", "integer"), ("email", "text")]);
-        let shape = make_shape_with("users", vec!["id"], vec![("email", "text"), ("id", "integer")]);
+        let sys = make_system(
+            "table",
+            "users",
+            Some(vec!["id"]),
+            vec![("id", "integer"), ("email", "text")],
+        );
+        let shape = make_shape_with(
+            "users",
+            vec!["id"],
+            vec![("email", "text"), ("id", "integer")],
+        );
         assert!(!system_block_unchanged(&sys, &shape));
     }
 
@@ -2560,23 +2723,45 @@ mod tests {
 
     #[test]
     fn diff_system_identical_no_changes() {
-        let sys = make_system("table", "users", Some(vec!["id"]), vec![("id", "integer"), ("email", "text")]);
-        let shape = make_shape_with("users", vec!["id"], vec![("id", "integer"), ("email", "text")]);
+        let sys = make_system(
+            "table",
+            "users",
+            Some(vec!["id"]),
+            vec![("id", "integer"), ("email", "text")],
+        );
+        let shape = make_shape_with(
+            "users",
+            vec!["id"],
+            vec![("id", "integer"), ("email", "text")],
+        );
         let changes = diff_system(&sys, &shape);
-        assert!(changes.is_empty(), "expected no changes, got: {:?}", changes);
+        assert!(
+            changes.is_empty(),
+            "expected no changes, got: {:?}",
+            changes
+        );
     }
 
     #[test]
     fn diff_system_added_col() {
         let sys = make_system("table", "users", Some(vec!["id"]), vec![("id", "integer")]);
-        let shape = make_shape_with("users", vec!["id"], vec![("id", "integer"), ("email", "text")]);
+        let shape = make_shape_with(
+            "users",
+            vec!["id"],
+            vec![("id", "integer"), ("email", "text")],
+        );
         let changes = diff_system(&sys, &shape);
         assert_eq!(changes, vec!["added column email"]);
     }
 
     #[test]
     fn diff_system_removed_col() {
-        let sys = make_system("table", "users", Some(vec!["id"]), vec![("id", "integer"), ("email", "text")]);
+        let sys = make_system(
+            "table",
+            "users",
+            Some(vec!["id"]),
+            vec![("id", "integer"), ("email", "text")],
+        );
         let shape = make_shape_with("users", vec!["id"], vec![("id", "integer")]);
         let changes = diff_system(&sys, &shape);
         assert_eq!(changes, vec!["removed column email"]);
@@ -2600,8 +2785,17 @@ mod tests {
 
     #[test]
     fn diff_system_reorder_only() {
-        let sys = make_system("table", "users", Some(vec!["id"]), vec![("id", "integer"), ("email", "text")]);
-        let shape = make_shape_with("users", vec!["id"], vec![("email", "text"), ("id", "integer")]);
+        let sys = make_system(
+            "table",
+            "users",
+            Some(vec!["id"]),
+            vec![("id", "integer"), ("email", "text")],
+        );
+        let shape = make_shape_with(
+            "users",
+            vec!["id"],
+            vec![("email", "text"), ("id", "integer")],
+        );
         let changes = diff_system(&sys, &shape);
         assert_eq!(changes, vec!["column order changed"]);
     }
@@ -2612,7 +2806,11 @@ mod tests {
         let sys = make_system("table", "users", None, vec![("id", "integer")]);
         let shape = make_shape_with("users", vec![], vec![("id", "integer")]);
         let changes = diff_system(&sys, &shape);
-        assert!(changes.is_empty(), "expected no changes for empty-vs-None PK, got: {:?}", changes);
+        assert!(
+            changes.is_empty(),
+            "expected no changes for empty-vs-None PK, got: {:?}",
+            changes
+        );
     }
 
     // ---- execute_sync diff-awareness tests (tasks 6.1 – 6.7) ----
@@ -2645,16 +2843,25 @@ mod tests {
             .unwrap();
 
         assert!(r2.created.is_empty(), "no new files expected");
-        assert!(r2.updated.is_empty(), "no updates expected on identical schema");
+        assert!(
+            r2.updated.is_empty(),
+            "no updates expected on identical schema"
+        );
         assert!(r2.marked_deleted.is_empty(), "no deletions expected");
         assert_eq!(r2.unchanged, 1, "file should be counted as unchanged");
 
         // File content must be byte-identical.
         let bytes_after_second = fs::read(&path).unwrap();
-        assert_eq!(bytes_after_first, bytes_after_second, "file bytes must be identical");
+        assert_eq!(
+            bytes_after_first, bytes_after_second,
+            "file bytes must be identical"
+        );
         // mtime must not have changed (no write occurred).
         let mtime_after_second = fs::metadata(&path).unwrap().modified().unwrap();
-        assert_eq!(mtime_after_first, mtime_after_second, "mtime must not change on no-op sync");
+        assert_eq!(
+            mtime_after_first, mtime_after_second,
+            "mtime must not change on no-op sync"
+        );
     }
 
     /// 6.2: Add one column → exactly one UpdatedObject with correct changes;
@@ -2667,9 +2874,14 @@ mod tests {
         // Create two tables with first sync.
         let shape_a = simple_shape("public", "users");
         let shape_b = simple_shape("public", "orders");
-        let r1 = execute_sync(dir.path(), EngineKind::Postgres, vec![shape_a.clone(), shape_b.clone()], None)
-            .await
-            .unwrap();
+        let r1 = execute_sync(
+            dir.path(),
+            EngineKind::Postgres,
+            vec![shape_a.clone(), shape_b.clone()],
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(r1.created.len(), 2);
 
         let orders_path = dir.path().join("postgres/public/orders.md");
@@ -2683,27 +2895,51 @@ mod tests {
             name: "orders".to_string(),
             primary_key: vec!["id".to_string()],
             columns: vec![
-                ObjectShapeColumn { name: "id".to_string(), ty: "integer".to_string() },
-                ObjectShapeColumn { name: "email".to_string(), ty: "text".to_string() },
-                ObjectShapeColumn { name: "total".to_string(), ty: "numeric".to_string() },
+                ObjectShapeColumn {
+                    name: "id".to_string(),
+                    ty: "integer".to_string(),
+                },
+                ObjectShapeColumn {
+                    name: "email".to_string(),
+                    ty: "text".to_string(),
+                },
+                ObjectShapeColumn {
+                    name: "total".to_string(),
+                    ty: "numeric".to_string(),
+                },
             ],
         };
-        let r2 = execute_sync(dir.path(), EngineKind::Postgres, vec![shape_a, shape_b_new], None)
-            .await
-            .unwrap();
+        let r2 = execute_sync(
+            dir.path(),
+            EngineKind::Postgres,
+            vec![shape_a, shape_b_new],
+            None,
+        )
+        .await
+        .unwrap();
 
         assert!(r2.created.is_empty(), "no new files");
         assert_eq!(r2.updated.len(), 1, "exactly one update");
-        assert_eq!(r2.updated[0].path, orders_path, "orders.md should be updated");
+        assert_eq!(
+            r2.updated[0].path, orders_path,
+            "orders.md should be updated"
+        );
         assert!(
-            r2.updated[0].changes.iter().any(|c| c.contains("added column total")),
-            "expected 'added column total' in changes, got: {:?}", r2.updated[0].changes
+            r2.updated[0]
+                .changes
+                .iter()
+                .any(|c| c.contains("added column total")),
+            "expected 'added column total' in changes, got: {:?}",
+            r2.updated[0].changes
         );
         assert_eq!(r2.unchanged, 1, "users.md should be unchanged");
 
         // users.md must be byte-identical.
         let users_bytes_new = fs::read(&users_path).unwrap();
-        assert_eq!(users_bytes_orig, users_bytes_new, "users.md must be byte-identical");
+        assert_eq!(
+            users_bytes_orig, users_bytes_new,
+            "users.md must be byte-identical"
+        );
     }
 
     /// 6.3: Add one new table → exactly one `created`, others untouched/unchanged.
@@ -2715,9 +2951,14 @@ mod tests {
         // Sync two tables first.
         let shape_a = simple_shape("public", "users");
         let shape_b = simple_shape("public", "orders");
-        let r1 = execute_sync(dir.path(), EngineKind::Postgres, vec![shape_a.clone(), shape_b.clone()], None)
-            .await
-            .unwrap();
+        let r1 = execute_sync(
+            dir.path(),
+            EngineKind::Postgres,
+            vec![shape_a.clone(), shape_b.clone()],
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(r1.created.len(), 2);
 
         let users_bytes_orig = fs::read(dir.path().join("postgres/public/users.md")).unwrap();
@@ -2725,18 +2966,32 @@ mod tests {
 
         // Second sync: adds a third table.
         let shape_c = simple_shape("public", "invoices");
-        let r2 = execute_sync(dir.path(), EngineKind::Postgres, vec![shape_a, shape_b, shape_c], None)
-            .await
-            .unwrap();
+        let r2 = execute_sync(
+            dir.path(),
+            EngineKind::Postgres,
+            vec![shape_a, shape_b, shape_c],
+            None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(r2.created.len(), 1, "exactly one file created");
-        assert_eq!(r2.created[0], dir.path().join("postgres/public/invoices.md"));
+        assert_eq!(
+            r2.created[0],
+            dir.path().join("postgres/public/invoices.md")
+        );
         assert!(r2.updated.is_empty(), "no updates");
         assert_eq!(r2.unchanged, 2, "two existing files unchanged");
 
         // Existing files must be byte-identical.
-        assert_eq!(users_bytes_orig, fs::read(dir.path().join("postgres/public/users.md")).unwrap());
-        assert_eq!(orders_bytes_orig, fs::read(dir.path().join("postgres/public/orders.md")).unwrap());
+        assert_eq!(
+            users_bytes_orig,
+            fs::read(dir.path().join("postgres/public/users.md")).unwrap()
+        );
+        assert_eq!(
+            orders_bytes_orig,
+            fs::read(dir.path().join("postgres/public/orders.md")).unwrap()
+        );
     }
 
     /// 6.4: Already-`deleted_in_db: true` table re-synced → not rewritten, not in
@@ -2760,8 +3015,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(r.marked_deleted.is_empty(), "already-deleted file should not appear in marked_deleted");
-        assert!(r.updated.is_empty(), "already-deleted file should not appear in updated");
+        assert!(
+            r.marked_deleted.is_empty(),
+            "already-deleted file should not appear in marked_deleted"
+        );
+        assert!(
+            r.updated.is_empty(),
+            "already-deleted file should not appear in updated"
+        );
         assert_eq!(r.unchanged, 1, "should be counted as unchanged");
 
         // File must be byte-identical.
@@ -2783,9 +3044,10 @@ mod tests {
             schema: Some("public".to_string()),
             name: "crlf_match".to_string(),
             primary_key: vec!["id".to_string()],
-            columns: vec![
-                ObjectShapeColumn { name: "id".to_string(), ty: "integer".to_string() },
-            ],
+            columns: vec![ObjectShapeColumn {
+                name: "id".to_string(),
+                ty: "integer".to_string(),
+            }],
         };
         let r1 = execute_sync(dir.path(), EngineKind::Postgres, vec![shape.clone()], None)
             .await
@@ -2808,7 +3070,10 @@ mod tests {
             .unwrap();
 
         // The file was NOT rewritten (it's unchanged after CRLF repair).
-        assert!(r2.updated.is_empty(), "CRLF file with matching schema must not be rewritten");
+        assert!(
+            r2.updated.is_empty(),
+            "CRLF file with matching schema must not be rewritten"
+        );
         assert_eq!(r2.unchanged, 1, "should be counted as unchanged");
         let bytes_after = fs::read(&path).unwrap();
         assert_eq!(bytes_before, bytes_after, "CRLF file bytes must not change");
@@ -2826,9 +3091,10 @@ mod tests {
             schema: Some("public".to_string()),
             name: "crlf_change".to_string(),
             primary_key: vec!["id".to_string()],
-            columns: vec![
-                ObjectShapeColumn { name: "id".to_string(), ty: "integer".to_string() },
-            ],
+            columns: vec![ObjectShapeColumn {
+                name: "id".to_string(),
+                ty: "integer".to_string(),
+            }],
         };
         let r1 = execute_sync(dir.path(), EngineKind::Postgres, vec![shape_v1], None)
             .await
@@ -2849,8 +3115,14 @@ mod tests {
             name: "crlf_change".to_string(),
             primary_key: vec!["id".to_string()],
             columns: vec![
-                ObjectShapeColumn { name: "id".to_string(), ty: "integer".to_string() },
-                ObjectShapeColumn { name: "name".to_string(), ty: "text".to_string() },
+                ObjectShapeColumn {
+                    name: "id".to_string(),
+                    ty: "integer".to_string(),
+                },
+                ObjectShapeColumn {
+                    name: "name".to_string(),
+                    ty: "text".to_string(),
+                },
             ],
         };
         let r2 = execute_sync(dir.path(), EngineKind::Postgres, vec![shape_v2], None)
@@ -2859,14 +3131,21 @@ mod tests {
 
         assert_eq!(r2.updated.len(), 1, "changed CRLF file should be rewritten");
         assert!(
-            r2.updated[0].changes.iter().any(|c| c.contains("added column name")),
-            "change list should mention added column; got: {:?}", r2.updated[0].changes
+            r2.updated[0]
+                .changes
+                .iter()
+                .any(|c| c.contains("added column name")),
+            "change list should mention added column; got: {:?}",
+            r2.updated[0].changes
         );
 
         // The rewritten file must use LF (the rewrite normalises to LF).
         let new_bytes = fs::read(&path).unwrap();
         assert!(new_bytes.contains(&b'\n'), "rewritten file must have LF");
-        assert!(new_bytes.windows(4).any(|w| w == b"name"), "new column must be in file");
+        assert!(
+            new_bytes.windows(4).any(|w| w == b"name"),
+            "new column must be in file"
+        );
     }
 
     /// 6.6: Corrupt (unparseable even after CRLF normalize) file → skipped,
@@ -2894,13 +3173,25 @@ mod tests {
             .unwrap();
 
         // The corrupt file must not appear in any report list.
-        assert!(!r.updated.iter().any(|u| u.path == path), "corrupt file must not be in updated");
-        assert!(!r.marked_deleted.contains(&path), "corrupt file must not be in marked_deleted");
-        assert!(!r.created.contains(&path), "corrupt file must not be in created");
+        assert!(
+            !r.updated.iter().any(|u| u.path == path),
+            "corrupt file must not be in updated"
+        );
+        assert!(
+            !r.marked_deleted.contains(&path),
+            "corrupt file must not be in marked_deleted"
+        );
+        assert!(
+            !r.created.contains(&path),
+            "corrupt file must not be in created"
+        );
 
         // File bytes must be byte-for-byte identical.
         let bytes_after = fs::read(&path).unwrap();
-        assert_eq!(bytes_before, bytes_after, "corrupt file must be left intact");
+        assert_eq!(
+            bytes_before, bytes_after,
+            "corrupt file must be left intact"
+        );
     }
 
     /// 6.7: Verify the existing Dynamo synthetic-shape harness still exercises
@@ -2924,7 +3215,10 @@ mod tests {
             .unwrap();
 
         assert!(r2.created.is_empty(), "no new file expected");
-        assert!(r2.updated.is_empty(), "no update expected on identical schema");
+        assert!(
+            r2.updated.is_empty(),
+            "no update expected on identical schema"
+        );
         assert_eq!(r2.unchanged, 1, "Dynamo table must be counted as unchanged");
     }
 }

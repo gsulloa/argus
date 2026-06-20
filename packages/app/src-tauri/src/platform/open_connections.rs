@@ -89,9 +89,7 @@ impl OpenConnectionsRegistry {
         let (name, kind) = match row {
             Some(pair) => pair,
             None => {
-                tracing::warn!(
-                    "open_connections: mark_open for id {id} — row not found, skipping"
-                );
+                tracing::warn!("open_connections: mark_open for id {id} — row not found, skipping");
                 return;
             }
         };
@@ -348,9 +346,7 @@ pub async fn disconnect_all_connections(
             if mssql_dropped > 0 {
                 let mut guard = open_registry.inner.write().await;
                 guard.retain(|_, v| v.kind != "mssql");
-                tracing::info!(
-                    "disconnect_all_connections: dropped {mssql_dropped} mssql pool(s)"
-                );
+                tracing::info!("disconnect_all_connections: dropped {mssql_dropped} mssql pool(s)");
             }
         }
         Err(e) => {

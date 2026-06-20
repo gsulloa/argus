@@ -1,8 +1,8 @@
+use futures::Stream;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use futures::Stream;
-use serde_json::Value as JsonValue;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::context::engine::EngineKind;
@@ -366,11 +366,22 @@ pub fn render_attached_result(att: &AttachedResult) -> String {
     out.push_str(&att.columns.join(" | "));
     out.push_str(" |\n");
     out.push_str("| ");
-    out.push_str(&att.columns.iter().map(|_| "---").collect::<Vec<_>>().join(" | "));
+    out.push_str(
+        &att.columns
+            .iter()
+            .map(|_| "---")
+            .collect::<Vec<_>>()
+            .join(" | "),
+    );
     out.push_str(" |\n");
     for row in &att.rows {
         out.push_str("| ");
-        out.push_str(&row.iter().map(|c| escape_md_cell(c)).collect::<Vec<_>>().join(" | "));
+        out.push_str(
+            &row.iter()
+                .map(|c| escape_md_cell(c))
+                .collect::<Vec<_>>()
+                .join(" | "),
+        );
         out.push_str(" |\n");
     }
     out
@@ -723,7 +734,8 @@ mod tests {
             "expected body target described"
         );
         assert!(
-            prompt.contains("target=\"column_note\"") || prompt.contains("target=\\\"column_note\\\""),
+            prompt.contains("target=\"column_note\"")
+                || prompt.contains("target=\\\"column_note\\\""),
             "expected column_note target described"
         );
         assert!(
@@ -798,7 +810,9 @@ mod tests {
 
     #[test]
     fn validation_result_round_trips() {
-        let r = ValidationResult::Missing { hint: "install".into() };
+        let r = ValidationResult::Missing {
+            hint: "install".into(),
+        };
         let s = serde_json::to_string(&r).unwrap();
         let back: ValidationResult = serde_json::from_str(&s).unwrap();
         match back {
@@ -837,7 +851,9 @@ mod tests {
         let prompt = build_inspector_system_prompt("{}");
         let lower = prompt.to_lowercase();
         assert!(
-            lower.contains("must not write") || lower.contains("forbidden") || lower.contains("writing"),
+            lower.contains("must not write")
+                || lower.contains("forbidden")
+                || lower.contains("writing"),
             "prompt must contain forbid-writing clause"
         );
     }
@@ -995,7 +1011,10 @@ Here are the models:
         assert!(evicted >= 1, "expected at least one eviction");
         // The newest attachment is the one most likely to survive; oldest dropped first.
         if let Some(first) = atts.first() {
-            assert_ne!(first.id, "oldest", "oldest should be evicted before newer ones");
+            assert_ne!(
+                first.id, "oldest",
+                "oldest should be evicted before newer ones"
+            );
         }
     }
 
@@ -1014,8 +1033,12 @@ Here are the models:
                 is_error: false,
             },
             ChatDelta::Status("Thinking...".into()),
-            ChatDelta::Done { finish_reason: Some("end_turn".into()) },
-            ChatDelta::Done { finish_reason: None },
+            ChatDelta::Done {
+                finish_reason: Some("end_turn".into()),
+            },
+            ChatDelta::Done {
+                finish_reason: None,
+            },
             ChatDelta::Error("something went wrong".into()),
         ];
         for variant in variants {
