@@ -54,6 +54,7 @@ use crate::modules::dynamo::edit::{dynamo_delete_item, dynamo_put_item, dynamo_u
 use crate::modules::dynamo::items::{dynamo_count_items, dynamo_query, dynamo_scan};
 use crate::modules::dynamo::partiql::{dynamo_run_partiql, dynamo_run_partiql_many};
 use crate::modules::dynamo::tables::commands::{dynamo_describe_table, dynamo_list_tables};
+use crate::modules::feedback::submit_feedback;
 use crate::modules::mssql::{
     mssql_apply_table_edits, mssql_connect, mssql_count_table, mssql_disconnect,
     mssql_disconnect_all, mssql_get_object_definition, mssql_get_routine_signature,
@@ -425,6 +426,8 @@ pub fn run() {
             context_delete_model,
             context_get_project_source,
             context_set_project_source,
+            // Feedback command
+            submit_feedback,
             // AI provider commands
             ai_list_providers,
             ai_validate_provider,

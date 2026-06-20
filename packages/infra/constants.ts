@@ -16,3 +16,17 @@ export const RELEASES_LOG_PREFIX = "releases/";
 export const ANALYTICS_GLUE_DATABASE = "argus_analytics";
 export const ANALYTICS_WORKGROUP = "argus-analytics";
 export const ANALYTICS_LOG_RETENTION_DAYS = 90;
+
+// ── Feedback ───────────────────────────────────────────────────────────────
+export const FEEDBACK_SUBDOMAIN = `feedback.${DOMAIN_NAME}`;
+export const FEEDBACK_PUBLIC_URL = `https://${FEEDBACK_SUBDOMAIN}`;
+
+/** SSM path for the rotatable app-key (stored as a SecureString by the operator). */
+export const FEEDBACK_APP_KEY_SSM = "/Argus/feedback/app-key";
+
+/** Maximum bytes per attachment file (5 MB). */
+export const FEEDBACK_MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5 MB
+/** Maximum number of attachment files per submission. */
+export const FEEDBACK_MAX_ATTACHMENTS = 3;
+/** Maximum characters in the feedback message body. */
+export const FEEDBACK_MAX_MESSAGE_CHARS = 5000;

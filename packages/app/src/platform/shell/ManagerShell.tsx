@@ -4,6 +4,7 @@ import { Palette } from "@/platform/command-palette";
 import { usePalette, useCommandHotkeys } from "@/platform/command-palette";
 import { useShortcuts } from "@/platform/shell/useShortcuts";
 import { VersionIndicator } from "@/platform/shell/VersionIndicator";
+import { FeedbackHost, FeedbackAffordance } from "@/platform/feedback";
 import { ConnectionsSection } from "@/platform/shell/Sidebar";
 import { SidebarScrollContext } from "@/platform/shell/sidebarScroll";
 import { APP_DISPLAY_NAME } from "@/platform/app-identity";
@@ -76,6 +77,7 @@ export function ManagerShell() {
 
         {/* ── Footer ──────────────────────────────────────── */}
         <footer className={styles.footer}>
+          <FeedbackAffordance />
           <VersionIndicator />
         </footer>
       </div>
@@ -83,6 +85,9 @@ export function ManagerShell() {
       {/* Shortcuts and palette mounted outside the scroll to avoid layout issues. */}
       <ManagerShortcuts />
       <Palette />
+      {/* Feedback form host: registers the "Send feedback" palette command,
+          listens for the affordance event, and renders the dialog. */}
+      <FeedbackHost />
     </SidebarScrollContext.Provider>
   );
 }
