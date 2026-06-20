@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Lock, Save } from "lucide-react";
+import { Bookmark, Lock, Save } from "lucide-react";
 import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { getSetting, setSetting } from "@/platform/settings/api";
@@ -28,6 +28,8 @@ import { useAiReadiness } from "@/modules/ai/useAiReadiness";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { ChatPanel } from "@/modules/ai/components/ChatPanel";
 import { useAthenaForm } from "../FormController";
+import { athenaApi } from "../api";
+import { NamedQueryModal, type NamedQueryModalResult } from "./NamedQueryModal";
 import styles from "@/modules/mysql/sql/QueryTab.module.css";
 
 export const ATHENA_QUERY_KIND = "athena-query";
@@ -43,10 +45,26 @@ const RECONFIGURE_DEBOUNCE_MS = 100;
 // Payload
 // ---------------------------------------------------------------------------
 
+/** Origin describes the NamedQuery a tab was opened from (D4). */
+export interface AthenaQueryOrigin {
+  namedQueryId: string;
+  name: string;
+  description?: string;
+  database: string;
+  workGroup: string;
+}
+
 export interface AthenaQueryPayload {
   connectionId: string;
   connectionName: string;
   initialSql: string;
+  /** When set, the tab is linked to an existing NamedQuery. */
+  origin?: AthenaQueryOrigin;
+  /**
+   * Used to pre-fill the "Save as Named Query" modal's database field
+   * when the tab was opened from a table/view leaf in a known database.
+   */
+  defaultDatabase?: string;
 }
 
 function isPayload(v: unknown): v is AthenaQueryPayload {
@@ -56,6 +74,7 @@ function isPayload(v: unknown): v is AthenaQueryPayload {
     typeof o.connectionId === "string" &&
     typeof o.connectionName === "string" &&
     typeof o.initialSql === "string"
+    // origin and defaultDatabase are optional — backward compatible
   );
 }
 
@@ -80,7 +99,7 @@ interface InnerProps {
 }
 
 function AthenaQueryTab({ tabId, payload }: InnerProps) {
-  const { connectionId, connectionName, initialSql } = payload;
+  const { connectionId, connectionName, initialSql, defaultDatabase } = payload;
   const { getActive } = useActiveAthenaConnections();
   const editorRef = useRef<QueryEditorHandle | null>(null);
   const runner = useAthenaQueryRun();
@@ -88,6 +107,23 @@ function AthenaQueryTab({ tabId, payload }: InnerProps) {
   const { items: allConnections } = useConnections();
 
   const isReadOnly = getActive(connectionId)?.read_only ?? false;
+
+  // -------------------------------------------------------------------------
+  // Named-Query origin state (GROUP 4.4):
+  //
+  // The tabs registry does NOT expose a setPayload/updatePayload method —
+  // only setTabTitle and setTabDirty are available. Therefore we hold the
+  // resolved `origin` in component-local state. It is seeded from
+  // `payload.origin` on mount. After a successful Create, we call setOrigin
+  // with the new identity so the toolbar flips to "Update '<name>'" without
+  // needing to mutate the registry's immutable payload.
+  //
+  // Consequence: if the tab is unmounted and remounted (e.g. switched away and
+  // back in the same session) the payload.origin is still null/undefined for a
+  // tab that was created in the same session; the re-link is session-scoped.
+  // This is acceptable per D4 ("small implementation detail").
+  // -------------------------------------------------------------------------
+  const [origin, setOrigin] = useState<AthenaQueryOrigin | null>(payload.origin ?? null);
 
   // -------------------------------------------------------------------------
   // AI chat panel state
@@ -296,6 +332,73 @@ function AthenaQueryTab({ tabId, payload }: InnerProps) {
   );
 
   // -------------------------------------------------------------------------
+  // §Named-Query save/update flow (GROUP 4.1 - 4.5).
+  // -------------------------------------------------------------------------
+  const [showNamedQueryModal, setShowNamedQueryModal] = useState(false);
+
+  // Source the connection's workgroup so the Create modal's workGroup field
+  // can be pre-filled. Falls back to "primary" (the Athena default).
+  const connectionWorkgroup = (() => {
+    const conn = allConnections.find((c) => c.id === connectionId);
+    const params = (conn?.params ?? {}) as Record<string, unknown>;
+    return typeof params.workgroup === "string" && params.workgroup
+      ? params.workgroup
+      : "primary";
+  })();
+
+  const handleNamedQueryConfirm = useCallback(
+    async (result: NamedQueryModalResult) => {
+      const currentSql = editorRef.current?.getSql() ?? "";
+      setShowNamedQueryModal(false);
+      try {
+        if (result.mode === "create") {
+          const created = await athenaApi.createNamedQuery(
+            connectionId,
+            result.name,
+            currentSql,
+            result.database,
+            result.workGroup,
+            result.description || undefined,
+          );
+          // Re-link the tab so the next save performs an Update (GROUP 4.4).
+          setOrigin({
+            namedQueryId: created.named_query_id,
+            name: result.name,
+            description: result.description || undefined,
+            database: created.database,
+            workGroup: created.work_group,
+          });
+          // Invalidate the schema cache so the branch refetches on next expand.
+          athenaSchemaCache.invalidate(connectionId);
+          toast.show(`Named query "${result.name}" created`, "success");
+        } else {
+          // Update — origin is guaranteed to be set when mode === "update"
+          if (!origin) return;
+          await athenaApi.updateNamedQuery(
+            connectionId,
+            origin.namedQueryId,
+            result.name,
+            currentSql,
+            result.description || undefined,
+          );
+          // Update local origin state with the new name/description.
+          setOrigin((prev) =>
+            prev
+              ? { ...prev, name: result.name, description: result.description || undefined }
+              : prev,
+          );
+          // Invalidate cache so the branch listing is refreshed.
+          athenaSchemaCache.invalidate(connectionId);
+          toast.show(`Named query updated`, "success");
+        }
+      } catch (e) {
+        toast.show(`Failed: ${(e as Error).message ?? String(e)}`, "error");
+      }
+    },
+    [connectionId, origin, toast],
+  );
+
+  // -------------------------------------------------------------------------
   // Resizable result panel (persisted per tab).
   // -------------------------------------------------------------------------
   const [resultHeight, setResultHeight] = useState(280);
@@ -419,6 +522,36 @@ function AthenaQueryTab({ tabId, payload }: InnerProps) {
             <Save size={11} />
             Save
           </button>
+          {/* Named Query Save/Update action (GROUP 4.2–4.3).
+              Hidden when read-only per isReadOnly. */}
+          {!isReadOnly && (
+            <>
+              <span className={styles.toolbarDivider} aria-hidden="true" />
+              {origin == null ? (
+                <button
+                  type="button"
+                  className={styles.toolbarButton}
+                  onClick={() => setShowNamedQueryModal(true)}
+                  title="Save as a new Athena Named Query"
+                  aria-label="Save as Named Query"
+                >
+                  <Bookmark size={11} />
+                  Save as Named Query
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={styles.toolbarButton}
+                  onClick={() => setShowNamedQueryModal(true)}
+                  title={`Update named query "${origin.name}"`}
+                  aria-label={`Update named query "${origin.name}"`}
+                >
+                  <Bookmark size={11} />
+                  Update &ldquo;{origin.name}&rdquo;
+                </button>
+              )}
+            </>
+          )}
         </div>
 
         <div className={styles.editorRow}>
@@ -490,6 +623,30 @@ function AthenaQueryTab({ tabId, payload }: InnerProps) {
         onClose={() => setShowSaveAs(false)}
         onConfirm={(result) => void handleSaveAsConfirm(result)}
       />
+
+      {/* Named Query modal — Create or Update depending on origin state */}
+      {showNamedQueryModal && origin == null && (
+        <NamedQueryModal
+          open={showNamedQueryModal}
+          mode="create"
+          connectionId={connectionId}
+          defaultDatabase={defaultDatabase}
+          defaultWorkGroup={connectionWorkgroup}
+          onClose={() => setShowNamedQueryModal(false)}
+          onConfirm={(result) => void handleNamedQueryConfirm(result)}
+        />
+      )}
+      {showNamedQueryModal && origin != null && (
+        <NamedQueryModal
+          open={showNamedQueryModal}
+          mode="update"
+          origin={origin}
+          initialName={origin.name}
+          initialDescription={origin.description ?? ""}
+          onClose={() => setShowNamedQueryModal(false)}
+          onConfirm={(result) => void handleNamedQueryConfirm(result)}
+        />
+      )}
     </div>
   );
 }

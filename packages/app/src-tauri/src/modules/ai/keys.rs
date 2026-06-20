@@ -45,32 +45,37 @@ mod backend {
 }
 
 // In tests we use an in-memory store so tests are hermetic and deterministic.
+//
+// The store is **thread-local**, not a shared global: the libtest harness runs
+// each test on its own thread, and `#[tokio::test]` uses a current-thread
+// runtime that keeps all tasks (including `tokio::spawn`ed ones) on that thread.
+// A thread-local store therefore gives every test its own isolated keychain, so
+// tests that mutate the same account (e.g. `ai:anthropic`) in parallel cannot
+// race on each other's `set`/`delete`.
 #[cfg(test)]
 mod backend {
     use super::*;
+    use std::cell::RefCell;
     use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
 
-    static STORE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-
-    fn store() -> &'static Mutex<HashMap<String, String>> {
-        STORE.get_or_init(|| Mutex::new(HashMap::new()))
+    thread_local! {
+        static STORE: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     }
 
     pub fn get(account: &str) -> AppResult<Option<String>> {
-        Ok(store().lock().unwrap().get(account).cloned())
+        Ok(STORE.with(|s| s.borrow().get(account).cloned()))
     }
 
     pub fn set(account: &str, secret: &str) -> AppResult<()> {
-        store()
-            .lock()
-            .unwrap()
-            .insert(account.to_string(), secret.to_string());
+        STORE.with(|s| {
+            s.borrow_mut()
+                .insert(account.to_string(), secret.to_string())
+        });
         Ok(())
     }
 
     pub fn delete(account: &str) -> AppResult<()> {
-        store().lock().unwrap().remove(account);
+        STORE.with(|s| s.borrow_mut().remove(account));
         Ok(())
     }
 }

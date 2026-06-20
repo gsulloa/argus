@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { contextApi } from "@/modules/context/api";
-import type { SyncReport } from "@/modules/context/types";
+import type { SyncReport, UpdatedObject } from "@/modules/context/types";
 import styles from "./SyncReportModal.module.css";
 
 export interface SyncReportModalProps {
@@ -104,7 +104,7 @@ export function SyncReportModal({ open, onOpenChange, connectionId, onSynced }: 
                   <h3 className={styles.sectionTitle}>
                     Updated ({state.report.updated.length})
                   </h3>
-                  <PathList paths={state.report.updated} />
+                  <UpdatedList items={state.report.updated} />
                 </section>
               )}
               {state.report.marked_deleted.length > 0 && (
@@ -135,6 +135,11 @@ export function SyncReportModal({ open, onOpenChange, connectionId, onSynced }: 
                     ))}
                   </ul>
                 </section>
+              )}
+              {state.report.unchanged > 0 && (
+                <p className={styles.unchangedLine}>
+                  Unchanged ({state.report.unchanged})
+                </p>
               )}
               {state.report.created.length === 0 &&
                 state.report.updated.length === 0 &&
@@ -177,6 +182,36 @@ function PathList({ paths, chip, chipClass }: PathListProps) {
         <li key={i} className={styles.pathItem}>
           <span className={styles.mono}>{p}</span>
           {chip && <span className={`${styles.chip} ${chipClass ?? ""}`}>{chip}</span>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Updated object list helper
+// ---------------------------------------------------------------------------
+
+interface UpdatedListProps {
+  items: UpdatedObject[];
+}
+
+function UpdatedList({ items }: UpdatedListProps) {
+  return (
+    <ul className={styles.pathList}>
+      {items.map((item, i) => (
+        <li key={i} className={styles.updatedItem}>
+          <span className={styles.mono}>{item.path}</span>
+          {item.changes.length > 0 && (
+            <ul className={styles.changeList}>
+              {item.changes.map((change, j) => (
+                <li key={j} className={styles.changeItem}>
+                  <span className={styles.changeDash}>—</span>
+                  <span className={styles.changeText}>{change}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </li>
       ))}
     </ul>

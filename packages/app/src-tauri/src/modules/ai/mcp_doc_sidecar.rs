@@ -24,7 +24,9 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value as JsonValue};
 
-use crate::modules::ai::document_tool::{run_document_object, DocWriteContext, DocumentObjectInput};
+use crate::modules::ai::document_tool::{
+    run_document_object, DocWriteContext, DocumentObjectInput,
+};
 use crate::modules::context::engine::EngineKind;
 use crate::modules::dynamo::params::TableMatch;
 
@@ -68,15 +70,15 @@ fn document_object_tool_def() -> JsonValue {
     json!({
         "name": "document_object",
         "description": "\
-Persist documentation about a database object (table, view, or DynamoDB table) \
-into its context-folder doc file. Use this whenever the user corrects or teaches \
-you something about a schema object. Three targets are available:\n\
-  - target=\"body\": append or replace the freeform prose body of the object's doc.\n\
-  - target=\"column_note\": set the note for a specific column (requires column=<name>).\n\
-  - target=\"tags\": merge tags into the object's tag set (case-insensitive dedup, never removes).\n\
-IMPORTANT: this tool writes ONLY to the body, column_note, or tags regions. \
-It CANNOT write to or modify the system: frontmatter block, execute SQL, run any \
-database CLI, or write outside the connection's context root.",
+    Persist documentation about a database object (table, view, or DynamoDB table) \
+    into its context-folder doc file. Use this whenever the user corrects or teaches \
+    you something about a schema object. Three targets are available:\n\
+    - target=\"body\": append or replace the freeform prose body of the object's doc.\n\
+    - target=\"column_note\": set the note for a specific column (requires column=<name>).\n\
+    - target=\"tags\": merge tags into the object's tag set (case-insensitive dedup, never removes).\n\
+    IMPORTANT: this tool writes ONLY to the body, column_note, or tags regions. \
+    It CANNOT write to or modify the system: frontmatter block, execute SQL, run any \
+    database CLI, or write outside the connection's context root.",
         "inputSchema": {
             "type": "object",
             "required": ["name", "target", "content"],
@@ -179,10 +181,7 @@ pub fn handle_request(cfg: &SidecarConfig, req: &JsonValue, today: &str) -> Opti
                 }
             };
 
-            let tool_name = params
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
             if tool_name != "document_object" {
                 return Some(jsonrpc_error(
@@ -273,7 +272,8 @@ pub fn run_stdio_loop(cfg: SidecarConfig) -> ! {
             Ok(v) => v,
             Err(e) => {
                 // Parse error — id is unknown, use null.
-            let response = jsonrpc_error(&JsonValue::Null, -32700, &format!("parse error: {e}"));
+                let response =
+                    jsonrpc_error(&JsonValue::Null, -32700, &format!("parse error: {e}"));
                 let mut out = stdout.lock();
                 let _ = writeln!(out, "{}", response);
                 let _ = out.flush();
@@ -328,7 +328,10 @@ mod tests {
         let result = &resp["result"];
         assert_eq!(result["protocolVersion"], "2024-11-05");
         let caps = &result["capabilities"];
-        assert!(caps.get("tools").is_some(), "capabilities must contain tools");
+        assert!(
+            caps.get("tools").is_some(),
+            "capabilities must contain tools"
+        );
         let server_info = &result["serverInfo"];
         assert_eq!(server_info["name"], "argus");
     }
@@ -398,21 +401,36 @@ mod tests {
         // Input schema must carry the required fields.
         let schema = &tool["inputSchema"];
         let props = &schema["properties"];
-        assert!(props.get("name").is_some(), "schema must have name property");
-        assert!(props.get("target").is_some(), "schema must have target property");
-        assert!(props.get("content").is_some(), "schema must have content property");
-        assert!(props.get("column").is_some(), "schema must have column property");
-        assert!(props.get("mode").is_some(), "schema must have mode property");
-        assert!(props.get("schema").is_some(), "schema must have schema property");
+        assert!(
+            props.get("name").is_some(),
+            "schema must have name property"
+        );
+        assert!(
+            props.get("target").is_some(),
+            "schema must have target property"
+        );
+        assert!(
+            props.get("content").is_some(),
+            "schema must have content property"
+        );
+        assert!(
+            props.get("column").is_some(),
+            "schema must have column property"
+        );
+        assert!(
+            props.get("mode").is_some(),
+            "schema must have mode property"
+        );
+        assert!(
+            props.get("schema").is_some(),
+            "schema must have schema property"
+        );
 
         // Required array must include name, target, content.
         let required = schema["required"]
             .as_array()
             .expect("required must be an array");
-        let req_strs: Vec<&str> = required
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
+        let req_strs: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
         assert!(req_strs.contains(&"name"), "name must be required");
         assert!(req_strs.contains(&"target"), "target must be required");
         assert!(req_strs.contains(&"content"), "content must be required");
@@ -492,11 +510,17 @@ mod tests {
             resp["result"]["isError"], true,
             "column_note without column must return isError: true"
         );
-        assert!(resp.get("error").is_none(), "must NOT use JSON-RPC error for tool errors");
+        assert!(
+            resp.get("error").is_none(),
+            "must NOT use JSON-RPC error for tool errors"
+        );
 
         // No file should have been created.
         let doc_path = dir.path().join("postgres/public/users.md");
-        assert!(!doc_path.exists(), "no file should be written on validation error");
+        assert!(
+            !doc_path.exists(),
+            "no file should be written on validation error"
+        );
     }
 
     // ── unknown method → -32601 ───────────────────────────────────────────────
@@ -514,7 +538,10 @@ mod tests {
 
         let resp = handle_request(&cfg, &req, "2026-06-15").unwrap();
         assert_eq!(resp["error"]["code"], -32601);
-        assert!(resp.get("result").is_none(), "error response must not have result");
+        assert!(
+            resp.get("result").is_none(),
+            "error response must not have result"
+        );
     }
 
     // ── unknown tool → -32602 ─────────────────────────────────────────────────

@@ -442,7 +442,7 @@ export function TableViewer({
   // dismissable banner above the grid.
   const [saveError, setSaveError] = useState<{ message: string } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [discardConfirm, setDiscardConfirm] = useState<null | "close" | "refresh" | "discard">(null);
   const tabs = useTabs();
 
   const onSave = useCallback(() => {
@@ -489,7 +489,7 @@ export function TableViewer({
     tabId,
     useCallback(async () => {
       if (!buffer.hasDirty) return true;
-      setShowDiscardConfirm(true);
+      setDiscardConfirm("close");
       // Resolve `false` so TabStrip's close is cancelled. The user
       // re-confirms via the dialog, which calls tabs.close directly.
       return false;
@@ -498,13 +498,23 @@ export function TableViewer({
 
   function discardAndClose() {
     buffer.clear();
-    setShowDiscardConfirm(false);
+    setDiscardConfirm(null);
     tabs.close(tabId);
   }
 
   // Reload: bump applyToken to unconditionally refetch the current first page
   // while preserving the applied filter model, sort order, and page size.
   const onReload = useCallback(() => setApplyToken((t) => t + 1), []);
+
+  // Guard the reload path: if the buffer has dirty entries, show a confirm
+  // dialog first. Otherwise, reload immediately.
+  const requestReload = useCallback(() => {
+    if (buffer.hasDirty) {
+      setDiscardConfirm("refresh");
+    } else {
+      onReload();
+    }
+  }, [buffer.hasDirty, onReload]);
 
   // Keyboard shortcuts at the tab root. Only attach when this tab is active
   // so multiple mounted tabs don't double-fire window-level shortcuts.
@@ -566,7 +576,7 @@ export function TableViewer({
       if ((e.metaKey || e.ctrlKey) && e.key === "r" && !e.shiftKey && !e.altKey) {
         if (document.activeElement?.closest(".cm-editor")) return;
         e.preventDefault();
-        onReload();
+        requestReload();
       }
       // ⌘F / Ctrl+F → D2 state machine (Data subtab only).
       // hidden + focus outside → show + focus first row.
@@ -599,7 +609,7 @@ export function TableViewer({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, buffer, activeSubtab, filterBarVisible, setFilterBarVisible, onReload]);
+  }, [active, buffer, activeSubtab, filterBarVisible, setFilterBarVisible, requestReload]);
 
   // ⌘S → save the dirty buffer regardless of focus position within the tab
   // (issue #88). Shared with the MySQL / MSSQL viewers.
@@ -671,7 +681,7 @@ export function TableViewer({
         filterBarVisible={filterBarVisible}
         onFilterToggle={() => setFilterBarVisible(!filterBarVisible)}
         visibleTabs={visibleTabs}
-        onReload={onReload}
+        onReload={requestReload}
         reloadDisabled={
           data.status === "loading-first" || data.status === "loading-first-retrying"
         }
@@ -812,6 +822,7 @@ export function TableViewer({
           onClearFilters={onClearFiltersFromBottomBar}
           onAddRow={onAddRow}
           onSave={onSave}
+          onDiscard={() => setDiscardConfirm("discard")}
           onClearSelection={() => setSelection({ anchor: null, active: null })}
         />
       </div>
@@ -841,15 +852,22 @@ export function TableViewer({
           identity={identity}
         />
       )}
-      {showDiscardConfirm && (
+      {discardConfirm !== null && (
         <DiscardChangesDialog
           count={
             buffer.dirtyCounts.updates +
             buffer.dirtyCounts.inserts +
             buffer.dirtyCounts.deletes
           }
-          onCancel={() => setShowDiscardConfirm(false)}
-          onDiscard={discardAndClose}
+          action={discardConfirm}
+          onCancel={() => setDiscardConfirm(null)}
+          onDiscard={
+            discardConfirm === "close"
+              ? discardAndClose
+              : discardConfirm === "refresh"
+              ? () => { buffer.clear(); setDiscardConfirm(null); onReload(); }
+              : () => { buffer.clear(); setDiscardConfirm(null); }
+          }
         />
       )}
     </div>

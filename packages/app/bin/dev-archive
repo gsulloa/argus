@@ -7,18 +7,25 @@
 # Usage: bin/dev-archive
 set -u
 
-WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
+# Anchor at the repo root, not packages/app — this is a pnpm monorepo and
+# dependencies are hoisted to the root node_modules, outside packages/app.
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+WORKSPACE="$(git -C "$APP_DIR" rev-parse --show-toplevel 2>/dev/null || cd "$APP_DIR/../.." && pwd)"
 
-# Paths relative to $WORKSPACE that should be removed if present.
+# Paths relative to $WORKSPACE (repo root) that should be removed if present.
 TARGETS=(
   node_modules
-  dist
-  dist-ssr
-  src-tauri/target
-  src-tauri/gen/schemas
-  staging
-  latest.json
-  .env.release
+  packages/app/node_modules
+  packages/app/dist
+  packages/app/dist-ssr
+  packages/app/src-tauri/target
+  packages/app/src-tauri/gen/schemas
+  packages/app/staging
+  packages/app/latest.json
+  packages/app/.env.release
+  packages/infra/node_modules
+  packages/infra/cdk.out
+  cdk.out
 )
 
 human_size() {

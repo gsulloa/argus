@@ -10,22 +10,31 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
   type MouseEvent,
 } from "react";
-import { Loader2, RotateCw, Terminal } from "lucide-react";
+import { Loader2, MoreHorizontal, RotateCw, Terminal, Trash2 } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import * as Dialog from "@radix-ui/react-dialog";
 import { useTabs } from "@/platform/shell/tabs";
 import { SidebarTree, type TreeNode } from "@/platform/shell/SidebarTree";
 import { useSidebarScrollRef } from "@/platform/shell/sidebarScroll";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useActiveAthenaConnections } from "../useActiveConnections";
 import { ContextFolderBanner } from "@/modules/context/components/ContextFolderBanner";
 import { SchemaSearch } from "@/modules/postgres/schema/SchemaSearch";
+import { useToast } from "@/platform/toast";
+import { isStale } from "@/platform/cache/ttl";
 import { athenaApi } from "../api";
 import { athenaSchemaCache } from "./globalSchemaCache";
+import { refreshConnection } from "./refresh";
 import { athenaColumnsCache } from "../sql/columnsCache";
 import { openAthenaQueryTab } from "../openAthenaQueryTab";
 import type { AthenaDatabaseInfo, AthenaNamedQuerySummary, AthenaRelationInfo, AthenaColumnInfo } from "../types";
+import sidebarStyles from "@/platform/shell/Sidebar.module.css";
+import dialogStyles from "@/platform/shell/Dialog.module.css";
 import styles from "@/modules/mysql/schema/SchemaTree.module.css";
 
 interface Props {
@@ -102,11 +111,26 @@ function highlightLabel(label: string, query: string): ReactNode {
 export function AthenaSchemaTree({ connectionId }: Props) {
   const tabs = useTabs();
   const { items: connections } = useConnections();
+  const { getActive } = useActiveAthenaConnections();
   const connection = connections.find((c) => c.id === connectionId);
   const connectionName = connection?.name ?? connectionId;
   const contextPath = connection?.context_path ?? null;
+  const isReadOnly = getActive(connectionId)?.read_only ?? false;
+  const toast = useToast();
   const sidebarScrollRef = useSidebarScrollRef();
   const [query, setQuery] = useState("");
+
+  // ---------------------------------------------------------------------------
+  // Delete named-query state (GROUP 5.2)
+  // ---------------------------------------------------------------------------
+  const [deleteTarget, setDeleteTarget] = useState<{
+    namedQueryId: string;
+    name: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  // Ref so handleDeleteConfirm can call loadNamedQueries without a dependency
+  // cycle (loadNamedQueries is defined below via useCallback).
+  const loadNamedQueriesRef = useRef<(() => Promise<void>) | null>(null);
 
   // ---------------------------------------------------------------------------
   // Databases
@@ -114,28 +138,54 @@ export function AthenaSchemaTree({ connectionId }: Props) {
   const [dbState, setDbState] = useState<LoadState>("idle");
   const [dbError, setDbError] = useState<string | undefined>();
 
-  const loadDatabases = useCallback(async () => {
-    setDbState("loading");
-    setDbError(undefined);
-    try {
-      const dbs = await athenaApi.listDatabases(connectionId);
-      athenaSchemaCache.recordDatabases(connectionId, dbs);
-      setDbState("loaded");
-    } catch (e) {
-      setDbError((e as Error).message ?? "Failed to load databases.");
-      setDbState("error");
-    }
-  }, [connectionId]);
+  const loadDatabases = useCallback(
+    async (opts?: { background?: boolean }) => {
+      const background = opts?.background ?? false;
+      // On a background (stale) refresh keep showing the cached tree — no flash.
+      if (!background) setDbState("loading");
+      setDbError(undefined);
+      try {
+        const dbs = await athenaApi.listDatabases(connectionId);
+        athenaSchemaCache.recordDatabases(connectionId, dbs);
+        setDbState("loaded");
+      } catch (e) {
+        if (background) {
+          console.warn(
+            "[argus.athena.schema] background listDatabases refresh failed; keeping cache for",
+            connectionId,
+            e,
+          );
+          return;
+        }
+        setDbError((e as Error).message ?? "Failed to load databases.");
+        setDbState("error");
+      }
+    },
+    [connectionId],
+  );
 
+  // Seed from the process-wide cache on (re)focus, then fetch only when there
+  // is no cache or the cached entry is stale (TTL). A focus switch updates the
+  // connectionId prop on the same instance, so this re-runs per connection.
   useEffect(() => {
+    const cached = athenaSchemaCache.getDatabases(connectionId);
+    if (cached.length > 0) {
+      setDbState("loaded");
+      if (isStale(athenaSchemaCache.getDatabasesFetchedAt(connectionId))) {
+        void loadDatabases({ background: true });
+      }
+      return;
+    }
     void loadDatabases();
-  }, [loadDatabases]);
+  }, [connectionId, loadDatabases]);
 
-  // Sync from cache
+  // Sync databases from cache; also re-seed immediately on connectionId change
+  // so a focus switch never shows the previous connection's tree.
   const [databases, setDatabases] = useState<AthenaDatabaseInfo[]>(
     () => athenaSchemaCache.getDatabases(connectionId),
   );
   useEffect(() => {
+    setDatabases(athenaSchemaCache.getDatabases(connectionId));
     const unsub = athenaSchemaCache.subscribe(() => {
       setDatabases(athenaSchemaCache.getDatabases(connectionId));
     });
@@ -164,6 +214,31 @@ export function AthenaSchemaTree({ connectionId }: Props) {
       setNqState("error");
     }
   }, [connectionId]);
+
+  // Keep the ref up to date so handleDeleteConfirm can call the latest version.
+  loadNamedQueriesRef.current = loadNamedQueries;
+
+  // handleDeleteConfirm — defined here so it can access setNqState/setNamedQueries
+  // which are defined just above.
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await athenaApi.deleteNamedQuery(connectionId, deleteTarget.namedQueryId);
+      // Invalidate cache AND immediately reset the branch so the deleted node
+      // disappears without waiting for the next expand (GROUP 5.4).
+      athenaSchemaCache.invalidate(connectionId);
+      setNqState("idle");
+      setNamedQueries([]);
+      void loadNamedQueriesRef.current?.();
+      toast.show(`Named query "${deleteTarget.name}" deleted`, "success");
+    } catch (e) {
+      toast.show(`Delete failed: ${(e as Error).message ?? String(e)}`, "error");
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
+    }
+  }, [connectionId, deleteTarget, toast]);
 
   // Sync named queries from cache (e.g. after invalidation + reload)
   useEffect(() => {
@@ -245,6 +320,54 @@ export function AthenaSchemaTree({ connectionId }: Props) {
     },
     [connectionId],
   );
+
+  // Seed relations/columns from the process-wide caches on (re)focus so
+  // previously-expanded nodes render without re-issuing list IPCs, and so a
+  // focus switch never shows the previous connection's relations.
+  useEffect(() => {
+    const cachedDbs = athenaSchemaCache.getDatabases(connectionId);
+    const relMap = new Map<string, AthenaRelationInfo[]>();
+    const relStateMap = new Map<string, LoadState>();
+    const colMap = new Map<string, AthenaColumnInfo[]>();
+    const colStateMap = new Map<string, LoadState>();
+    for (const db of cachedDbs) {
+      const rels = athenaSchemaCache.getRelations(connectionId, db.name);
+      if (!rels) continue;
+      relMap.set(db.name, rels);
+      relStateMap.set(db.name, "loaded");
+      for (const rel of rels) {
+        const cols = athenaColumnsCache.getColumns(connectionId, db.name, rel.name);
+        if (cols) {
+          const k = colKey(db.name, rel.name);
+          colMap.set(k, cols);
+          colStateMap.set(k, "loaded");
+        }
+      }
+    }
+    setRelations(relMap);
+    setRelState(relStateMap);
+    setColumns(colMap);
+    setColState(colStateMap);
+  }, [connectionId]);
+
+  // Manual refresh (toolbar button / Cmd+R) — the cache was already invalidated
+  // by refreshConnection(); reset local relations/columns/databases and reload.
+  useEffect(() => {
+    function onRefresh(e: Event) {
+      const ev = e as CustomEvent<string>;
+      if (ev.detail !== connectionId) return;
+      setRelations(new Map());
+      setRelState(new Map());
+      setRelError(new Map());
+      setColumns(new Map());
+      setColState(new Map());
+      setColError(new Map());
+      setDbState("idle");
+      void loadDatabases();
+    }
+    window.addEventListener("athena:schema-refresh", onRefresh);
+    return () => window.removeEventListener("athena:schema-refresh", onRefresh);
+  }, [connectionId, loadDatabases]);
 
   // ---------------------------------------------------------------------------
   // Tree building
@@ -463,22 +586,34 @@ export function AthenaSchemaTree({ connectionId }: Props) {
       const data = node.data as NodeData | undefined;
       if (!data || data.kind !== "leaf") return;
       if (data.objectKind === "table" || data.objectKind === "view") {
-        // D8: open SQL editor pre-filled with SELECT preview, unexecuted
+        // D8: open SQL editor pre-filled with SELECT preview, unexecuted.
+        // Pass defaultDatabase so the "Save as Named Query" modal can pre-fill
+        // the database field (GROUP 3.3).
         const sql = `SELECT * FROM "${data.database}"."${data.name}" LIMIT 100`;
         openAthenaQueryTab(tabs, {
           connectionId,
           connectionName,
           sql,
+          defaultDatabase: data.database,
         });
         return;
       }
       if (data.objectKind === "named-query" && data.namedQueryId) {
-        // Task 4.4: fetch query body then open in a new tab
+        // Fetch query body then open in a linked tab (GROUP 3.3).
         void athenaApi.getNamedQuery(connectionId, data.namedQueryId).then((detail) => {
           openAthenaQueryTab(tabs, {
             connectionId,
             connectionName,
             sql: detail.query_string,
+            // Link the tab to the NamedQuery origin so the toolbar shows
+            // "Update '<name>'" instead of "Save as Named Query".
+            origin: {
+              namedQueryId: detail.named_query_id,
+              name: detail.name,
+              description: detail.description ?? undefined,
+              database: detail.database,
+              workGroup: detail.work_group,
+            },
           });
         });
       }
@@ -587,6 +722,67 @@ export function AthenaSchemaTree({ connectionId }: Props) {
   const renderBadge = (n: TreeNode): ReactNode => {
     const data = n.data as NodeData | undefined;
     if (!data) return null;
+
+    // Named-query leaf: render the ⋯ context menu (GROUP 5.1).
+    if (data.kind === "leaf" && data.objectKind === "named-query" && data.namedQueryId) {
+      const nqId = data.namedQueryId;
+      const nqName = data.name;
+      return (
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button
+              type="button"
+              className={styles.retryButton}
+              aria-label={`Actions for ${nqName}`}
+              title="Actions"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreHorizontal size={12} />
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content className={sidebarStyles.contextMenu} align="end" sideOffset={4}>
+              {/* Edit = open/focus a linked tab — same as clicking the leaf */}
+              <DropdownMenu.Item
+                className={sidebarStyles.contextItem}
+                onSelect={() => {
+                  // Fetch body and open linked tab (same as onActivate).
+                  void athenaApi.getNamedQuery(connectionId, nqId).then((detail) => {
+                    openAthenaQueryTab(tabs, {
+                      connectionId,
+                      connectionName,
+                      sql: detail.query_string,
+                      origin: {
+                        namedQueryId: detail.named_query_id,
+                        name: detail.name,
+                        description: detail.description ?? undefined,
+                        database: detail.database,
+                        workGroup: detail.work_group,
+                      },
+                    });
+                  });
+                }}
+              >
+                Edit
+              </DropdownMenu.Item>
+              {/* Delete — only shown when the connection is writable (GROUP 5.3) */}
+              {!isReadOnly && (
+                <DropdownMenu.Item
+                  className={`${sidebarStyles.contextItem} ${sidebarStyles.contextItemDanger}`}
+                  onSelect={() =>
+                    setDeleteTarget({ namedQueryId: nqId, name: nqName })
+                  }
+                >
+                  <Trash2 size={11} style={{ marginRight: 4 }} />
+                  Delete
+                </DropdownMenu.Item>
+              )}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      );
+    }
+
     if (data.kind === "group") {
       if (data.spinner) {
         return (
@@ -698,6 +894,32 @@ export function AthenaSchemaTree({ connectionId }: Props) {
           scrollElementRef={sidebarScrollRef ?? undefined}
         />
       </div>
+
+      {/* Delete named-query confirmation dialog (GROUP 5.2) */}
+      <Dialog.Root open={deleteTarget !== null} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className={dialogStyles.overlay} />
+          <Dialog.Content className={dialogStyles.content}>
+            <Dialog.Title className={dialogStyles.title}>Delete Named Query</Dialog.Title>
+            <Dialog.Description className={dialogStyles.description}>
+              Delete <strong>{deleteTarget?.name}</strong>? This cannot be undone.
+            </Dialog.Description>
+            <div className={dialogStyles.footer}>
+              <button type="button" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={dialogStyles.danger}
+                disabled={deleting}
+                onClick={() => void handleDeleteConfirm()}
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }
@@ -750,9 +972,7 @@ export function AthenaSchemaToolbar({ connectionId }: ToolbarProps) {
       title="Refresh databases"
       onClick={(e) => {
         e.stopPropagation();
-        athenaSchemaCache.invalidate(connectionId);
-        // Force reload by refreshing the component; parent ConnectionRow re-renders tree
-        window.dispatchEvent(new CustomEvent("athena:schema-refresh", { detail: connectionId }));
+        refreshConnection(connectionId);
       }}
       className={styles.toolbarBtn}
     >

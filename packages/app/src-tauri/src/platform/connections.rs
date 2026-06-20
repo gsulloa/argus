@@ -1031,7 +1031,10 @@ mod tests {
         .unwrap();
         assert_eq!(made.project_source_path.as_deref(), Some("/Users/me/app"));
         let listed = list(&c).unwrap();
-        assert_eq!(listed[0].project_source_path.as_deref(), Some("/Users/me/app"));
+        assert_eq!(
+            listed[0].project_source_path.as_deref(),
+            Some("/Users/me/app")
+        );
     }
 
     #[test]

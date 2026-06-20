@@ -53,7 +53,9 @@ pub async fn athena_list_databases(
             .map_err(|e| sdk_err_to_app(&e))?;
 
         for db in resp.database_list() {
-            databases.push(DatabaseInfo { name: db.name().to_string() });
+            databases.push(DatabaseInfo {
+                name: db.name().to_string(),
+            });
         }
 
         next_token = resp.next_token().map(str::to_string);

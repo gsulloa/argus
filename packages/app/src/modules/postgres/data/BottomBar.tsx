@@ -29,6 +29,7 @@ interface Props {
   onClearFilters(): void;
   onAddRow(): void;
   onSave(): void;
+  onDiscard(): void;
   onClearSelection(): void;
 }
 
@@ -59,6 +60,7 @@ export function BottomBar(props: Props) {
     onClearFilters,
     onAddRow,
     onSave,
+    onDiscard,
     onClearSelection,
   } = props;
 
@@ -122,6 +124,16 @@ export function BottomBar(props: Props) {
         >
           <Plus size={11} />
           Add row
+        </button>
+      )}
+      {editable && dirtyCount > 0 && (
+        <button
+          type="button"
+          className={styles.btn}
+          onClick={onDiscard}
+          title="Discard pending edits"
+        >
+          Discard
         </button>
       )}
       {editable && (

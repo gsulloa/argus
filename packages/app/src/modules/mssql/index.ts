@@ -14,6 +14,7 @@ export { default as MssqlIcon } from "./icon";
 
 // Phase F2 — schema browser
 export { MssqlSchemaTree, MssqlSchemaPrimaryActions, MssqlSchemaToolbar } from "./schema/SchemaTree";
+export { refreshConnection } from "./schema/events";
 export { MssqlObjectPlaceholderTabRoot as MssqlObjectPlaceholderTab } from "./MssqlObjectPlaceholderTab";
 
 // Phase F2 — data grid

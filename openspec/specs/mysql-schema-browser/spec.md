@@ -55,7 +55,13 @@ The frontend SHALL render the top-level schema-grouping label as "Databases" (no
 
 ### Requirement: Schema cache and invalidation
 
-The frontend SHALL cache schema-browser data in memory keyed by `(connectionId, schema)` with sub-keys for each lazy group. The per-schema cache MUST hold three independent slots: `relations` (eager), `structure` (lazy), and a `Map<relation, tableExtras>` (lazy per-table). Each slot MUST be populated on first need and MUST be served on subsequent reads without re-fetching. The cache MUST be invalidated for an entire connection when (a) the user invokes `Schema: Refresh` from the palette or the connection row's refresh button, or (b) a `mysql:active-changed` event reports the connection as no longer active. Individual group slots MAY be invalidated independently when the user activates an inline retry button on a failed group. The cache MUST NOT be persisted to disk.
+The frontend SHALL cache schema-browser data in a **process-wide** store keyed by `(connectionId, schema)` with sub-keys for each lazy group. The per-schema cache MUST hold three independent slots: `relations` (eager), `structure` (lazy), and a `Map<relation, tableExtras>` (lazy per-table). Each slot MUST be populated on first need and MUST be served on subsequent reads without re-fetching.
+
+The cache MUST survive unmount/remount of the connection's subtree. On mount, `useSchemaTree` MUST seed its local state machine from the process-wide cache: if a non-stale schemas entry exists for the connection, the tree MUST initialize to a loaded state (and seed any cached `relations` slots as loaded) **without** issuing `mysql.listSchemas` or `mysql.listRelations`. Switching focus away from and back to a connection MUST NOT, by itself, drop the cache or trigger a refetch.
+
+Each connection's schemas-level cache entry MUST record a `fetchedAt` timestamp. An entry is **stale** when it is older than the TTL (`SCHEMA_CACHE_TTL_MS`, 1 hour). When a connection is mounted (e.g. refocused) and its entry is stale, the tree MUST render the cached data immediately and refresh in the background (`mysql.listSchemas` followed by eager `mysql.listRelations` for visible schemas); on success the cache is replaced and the tree re-renders; on failure the stale data is retained.
+
+The cache MUST be invalidated for an entire connection when (a) the user invokes `Schema: Refresh` from the palette, the connection row's refresh button, or the global `Cmd+R` / `Ctrl+R` accelerator while the connection is focused, or (b) a `mysql:active-changed` event reports the connection as no longer active. Individual group slots MAY be invalidated independently when the user activates an inline retry button on a failed group. The cache MUST NOT be persisted to disk.
 
 #### Scenario: First relations expand fetches; second does not
 
@@ -69,6 +75,18 @@ The frontend SHALL cache schema-browser data in memory keyed by `(connectionId, 
 - **WHEN** the `relations` slot has loaded successfully and the `structure` slot is in error state
 - **AND** the user activates the inline retry button on the `structure` group
 - **THEN** only `mysql.listStructure` is re-invoked; the relations slot is not touched
+
+#### Scenario: Refocusing a loaded connection serves cache without refetch
+
+- **WHEN** a connection's schemas (and visible-schema relations) have loaded and the user switches focus to another connection in the rail and then back within the TTL window
+- **THEN** the schema tree renders immediately from the cache
+- **AND** neither `mysql.listSchemas` nor `mysql.listRelations` is invoked again on the refocus
+
+#### Scenario: Stale entry past TTL refreshes in the background
+
+- **WHEN** the user refocuses a connection whose cached schemas entry is older than `SCHEMA_CACHE_TTL_MS`
+- **THEN** the tree renders the stale cached data immediately
+- **AND** `mysql.listSchemas` is re-invoked in the background and the tree re-renders on success without an intervening blank/loading state
 
 #### Scenario: Refresh palette command clears the connection's full cache
 

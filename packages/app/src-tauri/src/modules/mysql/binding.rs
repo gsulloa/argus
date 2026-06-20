@@ -991,14 +991,14 @@ mod tests {
     #[test]
     fn bind_float_from_number() {
         let q = empty_query();
-        let result = bind_edit_value(q, &serde_json::json!(3.14), &BindKind::Float);
+        let result = bind_edit_value(q, &serde_json::json!(2.5), &BindKind::Float);
         assert!(result.is_ok());
     }
 
     #[test]
     fn bind_double_from_number() {
         let q = empty_query();
-        let result = bind_edit_value(q, &serde_json::json!(3.141592653589793), &BindKind::Double);
+        let result = bind_edit_value(q, &serde_json::json!(1.234567890123456), &BindKind::Double);
         assert!(result.is_ok());
     }
 

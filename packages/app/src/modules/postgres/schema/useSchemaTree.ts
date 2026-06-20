@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { AppError } from "@/platform/errors/AppError";
+import { isStale } from "@/platform/cache/ttl";
 import { isPostgresTimeout } from "../errors";
 import { schemaApi } from "./api";
 import { subscribeSchemaEvent } from "./events";
@@ -86,6 +87,7 @@ interface CacheState {
 
 type Action =
   | { type: "schemasLoading" }
+  | { type: "seedFromCache"; schemas: SchemaSummary[]; objects: Map<string, GroupCacheEntry> }
   | { type: "schemasLoaded"; schemas: SchemaSummary[] }
   | { type: "schemasFailed"; error: AppError }
   | { type: "relationsLoading"; schema: string }
@@ -111,6 +113,29 @@ function emptyEntry(): GroupCacheEntry {
   };
 }
 
+/**
+ * Build the reducer's `objects` map by seeding each schema's `relations` slot
+ * from any payload already in the process-wide cache. Structure and per-table
+ * extras stay lazy (idle) — they are only fetched on user expansion.
+ */
+function buildSeededObjects(
+  connectionId: string,
+  schemas: SchemaSummary[],
+): Map<string, GroupCacheEntry> {
+  const objects = new Map<string, GroupCacheEntry>();
+  for (const s of schemas) {
+    const relations = globalSchemaCache.getRelations(connectionId, s.name);
+    if (relations) {
+      objects.set(s.name, {
+        relations: { state: "loaded", payload: relations },
+        structure: { state: "idle" },
+        tableExtras: new Map(),
+      });
+    }
+  }
+  return objects;
+}
+
 function withEntry(
   state: CacheState,
   schema: string,
@@ -126,6 +151,18 @@ function reducer(state: CacheState, action: Action): CacheState {
   switch (action.type) {
     case "schemasLoading":
       return { ...state, schemasState: "loading", schemasError: null };
+    case "seedFromCache":
+      // Seed local state from the process-wide cache on (re)focus, so an
+      // already-loaded connection renders instantly without a refetch. Resets
+      // any prior connection's objects map. Does NOT bump `generation` (that
+      // would re-trigger the fetch effect).
+      return {
+        ...state,
+        schemasState: "loaded",
+        schemas: action.schemas,
+        schemasError: null,
+        objects: action.objects,
+      };
     case "schemasLoaded":
       return {
         ...state,
@@ -290,30 +327,74 @@ export function useSchemaTree(connectionId: string | null): UseSchemaTreeResult 
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // Schemas: kick off a fetch when (re)connected or after invalidate.
+  /**
+   * Which connection the current reducer state was seeded/loaded for. Because
+   * `<SchemaTree>` is not keyed by connectionId, a focus switch updates the
+   * `connectionId` prop on the same hook instance rather than remounting; this
+   * ref lets us tell a same-connection re-run (skip) from a focus switch
+   * (re-seed from cache or fetch).
+   */
+  const loadedForRef = useRef<string | null>(null);
+
+  /**
+   * Background-refreshes every already-loaded `relations` slot via the
+   * retrying path, which keeps the previous payload visible (no per-schema
+   * loading flash). Held in a ref so the schemas effect can call it without
+   * taking `runFetchRelations` as a dependency. Assigned below, after
+   * `runFetchRelations` is defined.
+   */
+  const backgroundRefreshRelationsRef = useRef<() => void>(() => {});
+
+  // Schemas: seed from the process-wide cache on (re)focus, then fetch only
+  // when there is no cache or the cached entry is stale (TTL).
   // NOTE: deps are intentionally only [connectionId, generation]. Including
   // `state.schemasState` would cause the effect to re-run on the
   // `schemasLoading` dispatch, cancel the in-flight request, and leave state
-  // stuck on "loading". The `idle` guard inside the body prevents duplicate
-  // fetches when this effect happens to re-mount.
+  // stuck on "loading".
   useEffect(() => {
     if (!connectionId) {
       dispatch({ type: "invalidate" });
+      loadedForRef.current = null;
       return;
     }
     if (!isTauriRuntime()) return;
-    if (stateRef.current.schemasState !== "idle") {
-      console.debug(
-        "[argus.schema] listSchemas skipped — current state:",
-        stateRef.current.schemasState,
-        "for connection",
-        connectionId,
-      );
-      return;
-    }
+
+    const sameConn = loadedForRef.current === connectionId;
+    const settled =
+      stateRef.current.schemasState === "loaded" ||
+      stateRef.current.schemasState === "error";
+    const cachedSchemas = globalSchemaCache.getSchemas(connectionId);
+    const hasCache = cachedSchemas.length > 0;
+    const stale = isStale(globalSchemaCache.getSchemasFetchedAt(connectionId));
+
+    // Same connection, already settled, and fresh → nothing to do (guards
+    // StrictMode double-invoke and incidental re-runs).
+    if (sameConn && settled && !stale) return;
+
     let cancelled = false;
-    console.debug("[argus.schema] listSchemas → fetching for", connectionId);
-    dispatch({ type: "schemasLoading" });
+
+    // Seed instantly from cache on a focus switch so the tree never blanks.
+    if (!sameConn && hasCache) {
+      console.debug("[argus.schema] seeding from cache for", connectionId);
+      dispatch({
+        type: "seedFromCache",
+        schemas: cachedSchemas,
+        objects: buildSeededObjects(connectionId, cachedSchemas),
+      });
+      loadedForRef.current = connectionId;
+      if (!stale) return; // fresh cache → no refetch
+      // stale → fall through to a background refresh (no loading flash)
+    }
+
+    // Show the loading state only when we have nothing to render yet.
+    const showLoading = !hasCache && !(sameConn && settled);
+    if (showLoading) dispatch({ type: "schemasLoading" });
+
+    console.debug(
+      "[argus.schema] listSchemas → fetching for",
+      connectionId,
+      stale && hasCache ? "(stale background refresh)" : "",
+    );
     schemaApi
       .listSchemas(connectionId)
       .then((schemas) => {
@@ -329,9 +410,22 @@ export function useSchemaTree(connectionId: string | null): UseSchemaTreeResult 
         );
         globalSchemaCache.recordSchemas(connectionId, schemas);
         dispatch({ type: "schemasLoaded", schemas });
+        loadedForRef.current = connectionId;
+        // On a stale refresh, also refresh the relation slots we just seeded
+        // as loaded, so the tree reflects current relations without a flash.
+        if (stale && hasCache) backgroundRefreshRelationsRef.current();
       })
       .catch((e: unknown) => {
         if (cancelled) return;
+        // A stale background refresh that fails keeps the cached data visible.
+        if (stale && hasCache) {
+          console.warn(
+            "[argus.schema] background listSchemas refresh failed; keeping cache for",
+            connectionId,
+            e,
+          );
+          return;
+        }
         const err = e instanceof AppError ? e : new AppError("Internal", String(e));
         console.error("[argus.schema] listSchemas failed for", connectionId, err);
         dispatch({ type: "schemasFailed", error: err });
@@ -341,12 +435,14 @@ export function useSchemaTree(connectionId: string | null): UseSchemaTreeResult 
     };
   }, [connectionId, state.generation]);
 
-  // Drop the cache when the connection becomes inactive.
+  // Drop the cache when the connection becomes inactive. Clear the
+  // process-wide cache too so a later reconnect cannot seed stale data.
   useEffect(() => {
     if (!connectionId || !isTauriRuntime()) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     listen<unknown>(ACTIVE_EVENT, () => {
+      globalSchemaCache.invalidate(connectionId);
       dispatch({ type: "invalidate" });
     }).then((u) => {
       if (cancelled) {
@@ -432,6 +528,16 @@ export function useSchemaTree(connectionId: string | null): UseSchemaTreeResult 
     },
     [connectionId],
   );
+
+  // Keep the background relations-refresh closure current. Re-runs each render
+  // so it always closes over the latest `runFetchRelations`.
+  backgroundRefreshRelationsRef.current = () => {
+    for (const [schema, entry] of stateRef.current.objects) {
+      if (entry.relations.state === "loaded") {
+        void runFetchRelations(schema, true);
+      }
+    }
+  };
 
   const triggerRelationsFetch = useCallback(
     (schema: string) => {
