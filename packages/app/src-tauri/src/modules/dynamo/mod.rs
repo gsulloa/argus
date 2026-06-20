@@ -5,4 +5,5 @@ pub mod edit;
 pub mod errors;
 pub mod items;
 pub mod params;
+pub mod partiql;
 pub mod tables;

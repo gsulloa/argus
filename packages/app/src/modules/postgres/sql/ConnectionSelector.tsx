@@ -9,6 +9,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { ChevronDown } from "lucide-react";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useConnectionGroups } from "@/platform/connection-registry/useConnectionGroups";
+import { engineLabel } from "@/platform/shell/ConnectionRail";
 import { useActiveConnections } from "../useActiveConnections";
 import type { Connection } from "@/platform/connection-registry/types";
 import styles from "./ConnectionSelector.module.css";
@@ -117,6 +118,7 @@ export function ConnectionSelector({
                       aria-label={active ? "connected" : "disconnected"}
                     />
                     <span className={styles.itemName}>{conn.name}</span>
+                    <span className={styles.itemType}>{engineLabel(conn.kind)}</span>
                   </DropdownMenu.Item>
                 );
               })}

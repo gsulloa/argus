@@ -317,12 +317,17 @@ The frontend SHALL respond to activation (Enter, single click, or double click â
 
 ### Requirement: Right-click context menu on a table leaf
 
-Right-clicking a table leaf SHALL open a context menu with three items in this order: `Open` (equivalent to activation), `Copy table name` (copies `tableName` to the clipboard), `Copy ARN` (copies the table ARN to the clipboard). `Copy ARN` MUST prefer the cached `describe.tableArn` when available; if the describe has not loaded, `Copy ARN` MUST reconstruct the ARN locally from the connection's `region` and `accountId` (both available from the active client envelope) and the leaf's `tableName`, using the format `arn:aws:dynamodb:<region>:<accountId>:table/<tableName>`.
+Right-clicking a table leaf SHALL open a context menu with these items in order: `Open` (equivalent to activation), `Open in PartiQL editor`, `Copy table name` (copies `tableName` to the clipboard), `Copy ARN` (copies the table ARN to the clipboard). `Open in PartiQL editor` MUST open a free-form PartiQL editor tab for the leaf's connection pre-filled with `SELECT * FROM "<tableName>"` (see the `dynamo-partiql-editor` capability). `Copy ARN` MUST prefer the cached `describe.tableArn` when available; if the describe has not loaded, `Copy ARN` MUST reconstruct the ARN locally from the connection's `region` and `accountId` (both available from the active client envelope) and the leaf's `tableName`, using the format `arn:aws:dynamodb:<region>:<accountId>:table/<tableName>`.
 
 #### Scenario: Open item is equivalent to activation
 
 - **WHEN** the user right-clicks a leaf and chooses `Open`
 - **THEN** the same placeholder tab opens or is focused as a click would have done
+
+#### Scenario: Open in PartiQL editor pre-fills a SELECT
+
+- **WHEN** the user right-clicks the leaf `events` and chooses `Open in PartiQL editor`
+- **THEN** a PartiQL editor tab opens for that connection with its body pre-filled with `SELECT * FROM "events"`
 
 #### Scenario: Copy table name
 
