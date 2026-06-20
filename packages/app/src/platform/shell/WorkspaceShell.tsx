@@ -48,6 +48,7 @@ import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useConnectionGroups } from "@/platform/connection-registry/useConnectionGroups";
 import { ConnectionRail, EngineIcon, deriveEnv, engineLabel } from "./ConnectionRail";
 import { ConnectionSubtree } from "./ConnectionSubtree";
+import { ConnectionHeaderActions } from "./ConnectionHeaderActions";
 import { useFocusedConnection } from "./FocusedConnectionContext";
 import styles from "./WorkspaceShell.module.css";
 
@@ -335,6 +336,9 @@ function ConnectionIdentityHeader({ connectionId }: { connectionId: string }) {
             title={env === "prod" ? "Production" : "Non-production"}
           />
         </span>
+      </span>
+      <span className={styles.identityActions}>
+        <ConnectionHeaderActions connectionId={connectionId} />
       </span>
     </div>
   );
