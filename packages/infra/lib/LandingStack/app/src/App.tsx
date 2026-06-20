@@ -1,4 +1,4 @@
-import { type ReactNode, type ComponentType, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /* ── Release manifest ──────────────────────────────────────────────────── */
 
@@ -11,33 +11,10 @@ type Manifest = {
   installers: Record<string, Installer>;
 };
 
-// Embedded fallback so the CTA is never empty even if the manifest fetch fails.
-const FALLBACK: Manifest = {
-  version: "0.1.39",
-  pub_date: "2026-06-16T16:10:26Z",
-  installers: {
-    "darwin-aarch64": {
-      url: "https://releases.argusdb.app/Argus_0.1.39_aarch64.dmg",
-      filename: "Argus_0.1.39_aarch64.dmg",
-      size: 9656463,
-    },
-    "darwin-x86_64": {
-      url: "https://releases.argusdb.app/Argus_0.1.39_x64.dmg",
-      filename: "Argus_0.1.39_x64.dmg",
-      size: 10578504,
-    },
-    "windows-x86_64": {
-      url: "https://releases.argusdb.app/Argus_0.1.39_x64.msi",
-      filename: "Argus_0.1.39_x64.msi",
-      size: 9814016,
-    },
-    "linux-x86_64": {
-      url: "https://releases.argusdb.app/Argus_0.1.39_x64.AppImage",
-      filename: "Argus_0.1.39_x64.AppImage",
-      size: 87362040,
-    },
-  },
-};
+type ManifestState =
+  | { status: "loading" }
+  | { status: "ready"; manifest: Manifest }
+  | { status: "error" };
 
 function fmtSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -190,6 +167,41 @@ function platformMeta(key: string): { label: string; ext: string } {
   return { label: key, ext: "" };
 }
 
+/* ── Skeleton helpers ──────────────────────────────────────────────────── */
+
+function Skel({ w, h, className }: { w?: string; h?: string; className?: string }) {
+  return (
+    <span
+      className={`skeleton${className ? ` ${className}` : ""}`}
+      style={{ width: w, height: h }}
+    />
+  );
+}
+
+function DownloadCardSkeleton() {
+  return (
+    <div className="dl-card">
+      {/* arch line */}
+      <div className="arch">
+        <Skel w="18px" h="18px" />
+        <Skel w="120px" h="16px" />
+      </div>
+      {/* sub */}
+      <Skel w="90px" h="13px" className="dl-card-skel-sub" />
+      {/* meta */}
+      <div className="meta" style={{ gap: 6 }}>
+        <Skel w="160px" h="11px" />
+        <Skel w="100px" h="11px" />
+      </div>
+      {/* button footprint */}
+      <span className="dl-btn dl-btn-skeleton" aria-hidden="true">
+        <Skel w="16px" h="16px" />
+        <Skel w="64px" h="14px" />
+      </span>
+    </div>
+  );
+}
+
 /* ── Content data ──────────────────────────────────────────────────────── */
 
 const SOURCES = [
@@ -228,39 +240,51 @@ function useReveal() {
 /* ── App ───────────────────────────────────────────────────────────────── */
 
 export default function App() {
-  const [manifest, setManifest] = useState<Manifest>(FALLBACK);
+  const [state, setState] = useState<ManifestState>({ status: "loading" });
   const isArm = useRef<boolean>(true);
   const os = useRef<OsFamily>("mac");
   useReveal();
 
-  useEffect(() => {
-    os.current = detectOS();
-    isArm.current = prefersAppleSilicon();
+  const loadManifest = useCallback(() => {
+    setState({ status: "loading" });
     let cancelled = false;
     fetch(MANIFEST_URL, { cache: "no-cache" })
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((m: Manifest) => {
-        if (!cancelled && m?.installers) setManifest(m);
+        if (!cancelled && m?.installers) setState({ status: "ready", manifest: m });
+        else if (!cancelled) setState({ status: "error" });
       })
-      .catch(() => {/* keep fallback */});
+      .catch(() => {
+        if (!cancelled) setState({ status: "error" });
+      });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  useEffect(() => {
+    os.current = detectOS();
+    isArm.current = prefersAppleSilicon();
+    return loadManifest();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Derive manifest only when ready
+  const manifest = state.status === "ready" ? state.manifest : null;
+
   // Derive the list of present installers in display order (only those in manifest)
   const PLATFORM_ORDER = ["darwin-aarch64", "darwin-x86_64", "windows-x86_64", "linux-x86_64"];
   const presentInstallers = useMemo(
-    () => PLATFORM_ORDER.filter((k) => !!manifest.installers[k]),
+    () => PLATFORM_ORDER.filter((k) => !!(manifest?.installers ?? {})[k]),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [manifest.installers],
+    [manifest?.installers],
   );
 
   // Resolve the primary (recommended) installer for hero CTA
   const primaryResult = useMemo(
-    () => pickPrimary(manifest.installers, os.current, isArm.current),
+    () => pickPrimary(manifest?.installers ?? {}, os.current, isArm.current),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [manifest.installers],
+    [manifest?.installers],
   );
   const primary = primaryResult?.installer;
   const primaryKey = primaryResult?.key ?? "darwin-aarch64";
@@ -298,7 +322,11 @@ export default function App() {
               <a href="#console">The console</a>
               <a href="#features">Features</a>
               <span className="version-pill">
-                <span className="dot" />v{manifest.version}
+                <span className="dot" />
+                {state.status === "ready"
+                  ? `v${manifest!.version}`
+                  : <Skel w="48px" h="11px" />
+                }
               </span>
               <a className="nav-cta" href="#download">
                 Download
@@ -329,15 +357,25 @@ export default function App() {
               </p>
 
               <div className="cta-row">
-                <a className="btn-download" href={primary?.url}>
-                  <HeroGlyph />
-                  <span className="bd-text">
-                    Download for {primaryLabel}
-                    <span className="bd-meta">
-                      {primaryExt} · {primary ? fmtSize(primary.size) : "—"}
+                {state.status === "ready" ? (
+                  <a className="btn-download" href={primary?.url}>
+                    <HeroGlyph />
+                    <span className="bd-text">
+                      Download for {primaryLabel}
+                      <span className="bd-meta">
+                        {primaryExt} · {primary ? fmtSize(primary.size) : "—"}
+                      </span>
+                    </span>
+                  </a>
+                ) : (
+                  <span className="btn-download btn-download-skeleton" aria-hidden="true">
+                    <Skel w="18px" h="18px" />
+                    <span className="bd-text">
+                      <Skel w="160px" h="15px" />
+                      <Skel w="100px" h="11px" className="bd-meta-skel" />
                     </span>
                   </span>
-                </a>
+                )}
                 <a className="btn-ghost" href="#download">
                   All downloads <Arrow />
                 </a>
@@ -346,9 +384,19 @@ export default function App() {
               <div className="cta-note">
                 <span>Free</span>
                 <span className="sep" />
-                <span>v{manifest.version}</span>
-                <span className="sep" />
-                <span>Built {fmtDate(manifest.pub_date)}</span>
+                {state.status === "ready" ? (
+                  <>
+                    <span>v{manifest!.version}</span>
+                    <span className="sep" />
+                    <span>Built {fmtDate(manifest!.pub_date)}</span>
+                  </>
+                ) : (
+                  <>
+                    <Skel w="48px" h="11px" />
+                    <span className="sep" />
+                    <Skel w="96px" h="11px" />
+                  </>
+                )}
               </div>
             </div>
 
@@ -500,13 +548,23 @@ export default function App() {
               </span>
               <h2>Get Argus.</h2>
               <p>
-                Signed installers for macOS, Windows, and Linux. Free,
-                version {manifest.version}.
+                {state.status === "ready"
+                  ? <>Signed installers for macOS, Windows, and Linux. Free, version {manifest!.version}.</>
+                  : <>Signed installers for macOS, Windows, and Linux. Free.</>
+                }
               </p>
             </div>
 
             <div className="dl-cards reveal">
-              {presentInstallers.map((key) => {
+              {state.status === "loading" && (
+                <>
+                  <DownloadCardSkeleton />
+                  <DownloadCardSkeleton />
+                  <DownloadCardSkeleton />
+                  <DownloadCardSkeleton />
+                </>
+              )}
+              {state.status === "ready" && presentInstallers.map((key) => {
                 const { title, sub, Glyph, ext } = cardMeta(key);
                 return (
                   <DownloadCard
@@ -515,18 +573,41 @@ export default function App() {
                     sub={sub}
                     glyph={<Glyph size={18} />}
                     ext={ext}
-                    installer={manifest.installers[key]}
+                    installer={manifest!.installers[key]}
                     recommended={key === primaryKey}
                   />
                 );
               })}
+              {state.status === "error" && (
+                <div className="dl-error">
+                  <p>Downloads are currently unavailable — please refresh or try again.</p>
+                  <button
+                    className="dl-retry-btn"
+                    onClick={() => loadManifest()}
+                    type="button"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="dl-foot">
-              <span>v{manifest.version}</span>
-              <span>·</span>
-              <span>Released {fmtDate(manifest.pub_date)}</span>
-              <span>·</span>
+              {state.status === "ready" ? (
+                <>
+                  <span>v{manifest!.version}</span>
+                  <span>·</span>
+                  <span>Released {fmtDate(manifest!.pub_date)}</span>
+                  <span>·</span>
+                </>
+              ) : (
+                <>
+                  <Skel w="48px" h="11px" className="dl-foot-skel" />
+                  <span>·</span>
+                  <Skel w="100px" h="11px" className="dl-foot-skel" />
+                  <span>·</span>
+                </>
+              )}
               <span>macOS 11+ · Windows 10+ · glibc 2.17+</span>
             </div>
           </div>
@@ -544,7 +625,10 @@ export default function App() {
               <a href="#console">Console</a>
               <a href="#features">Features</a>
               <a href="#download">Download</a>
-              <span>v{manifest.version}</span>
+              {state.status === "ready"
+                ? <span>v{manifest!.version}</span>
+                : <Skel w="40px" h="11px" />
+              }
               <span>© 2026</span>
             </div>
           </div>

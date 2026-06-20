@@ -1094,6 +1094,93 @@ a {
   transform: none;
 }
 
+/* ─── Skeleton / loader ───────────────────────────────────────────────── */
+.skeleton {
+  display: inline-block;
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  vertical-align: middle;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+    animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  }
+  @keyframes skeleton-shimmer {
+    100% { transform: translateX(100%); }
+  }
+}
+
+/* Skeleton hero button — same metrics as .btn-download (padding 13px 20px) */
+.btn-download-skeleton {
+  cursor: default;
+  pointer-events: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+}
+
+/* Skeleton card sub-line vertical alignment */
+.dl-card-skel-sub {
+  margin-top: 2px;
+}
+
+/* Skeleton button inside a card — non-interactive, inherits .dl-btn layout */
+.dl-btn-skeleton {
+  cursor: default;
+  pointer-events: none;
+}
+
+/* dl-foot skeleton lines: inline-block already from .skeleton, add block display */
+.dl-foot-skel {
+  display: inline-block;
+}
+
+/* Error state */
+.dl-error {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--elevated);
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+}
+.dl-error p {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+.dl-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 9px 18px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color var(--duration-instant) var(--ease-out),
+    background var(--duration-instant) var(--ease-out);
+}
+.dl-retry-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     animation: none !important;
