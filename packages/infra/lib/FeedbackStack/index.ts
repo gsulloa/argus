@@ -18,12 +18,10 @@ import { Construct } from "constructs";
 
 import {
   FEEDBACK_APP_KEY_SSM,
-  FEEDBACK_ATTACHMENTS_BUCKET_ID,
   FEEDBACK_MAX_ATTACHMENT_BYTES,
   FEEDBACK_MAX_ATTACHMENTS,
   FEEDBACK_MAX_MESSAGE_CHARS,
   FEEDBACK_SUBDOMAIN,
-  FEEDBACK_TABLE_NAME,
   PROJECT_NAME,
 } from "@/constants";
 import { NodejsFunctionBuilder } from "@/builders/NodejsFunctionBuilder";
@@ -38,7 +36,6 @@ export class FeedbackStack extends cdk.Stack {
     // Single partition "FEEDBACK" with ULID sort key for chronological ordering.
     // On-demand billing; RETAIN so feedback survives a stack teardown.
     const table = new dynamodb.Table(this, "FeedbackTable", {
-      tableName: FEEDBACK_TABLE_NAME,
       partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -49,7 +46,7 @@ export class FeedbackStack extends cdk.Stack {
     //
     // All objects are private. The intake Lambda mints presigned PUT URLs so
     // the Rust client can upload directly, keeping blobs out of the API payload.
-    const attachmentsBucket = new s3.Bucket(this, FEEDBACK_ATTACHMENTS_BUCKET_ID, {
+    const attachmentsBucket = new s3.Bucket(this, "FeedbackAttachmentsBucket", {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       encryption: s3.BucketEncryption.S3_MANAGED,

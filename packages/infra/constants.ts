@@ -18,8 +18,6 @@ export const ANALYTICS_WORKGROUP = "argus-analytics";
 export const ANALYTICS_LOG_RETENTION_DAYS = 90;
 
 // ── Feedback ───────────────────────────────────────────────────────────────
-export const FEEDBACK_TABLE_NAME = "ArgusFeedback";
-export const FEEDBACK_ATTACHMENTS_BUCKET_ID = "FeedbackAttachmentsBucket";
 export const FEEDBACK_SUBDOMAIN = `feedback.${DOMAIN_NAME}`;
 export const FEEDBACK_PUBLIC_URL = `https://${FEEDBACK_SUBDOMAIN}`;
 
