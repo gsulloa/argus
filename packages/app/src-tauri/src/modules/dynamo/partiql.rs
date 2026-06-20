@@ -31,9 +31,7 @@ fn skip_partiql_leading(stmt: &str) -> &str {
     let mut i = 0;
     loop {
         // Skip whitespace.
-        while i < bytes.len()
-            && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r')
-        {
+        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
             i += 1;
         }
         if i >= bytes.len() {
@@ -248,7 +246,8 @@ async fn run_partiql_statement(
     let query_ms = started.elapsed().as_millis() as u64;
 
     // Serialize consumed capacity as a simple JSON value.
-    let consumed_capacity = total_capacity.map(|units| serde_json::json!({ "capacity_units": units }));
+    let consumed_capacity =
+        total_capacity.map(|units| serde_json::json!({ "capacity_units": units }));
 
     if mutating {
         let stmt_type = first_partiql_keyword(skip_partiql_leading(statement));
@@ -288,10 +287,7 @@ pub async fn dynamo_run_partiql(
     let snapshot = match registry.snapshot(&req.connection_id).await {
         Some(s) => s,
         None => {
-            let e = AppError::NotFound(format!(
-                "dynamo client {} not active",
-                req.connection_id
-            ));
+            let e = AppError::NotFound(format!("dynamo client {} not active", req.connection_id));
             let duration_ms = started.elapsed().as_millis() as u64;
             emit_activity(
                 &app,
@@ -378,10 +374,7 @@ pub async fn dynamo_run_partiql_many(
     let snapshot = match registry.snapshot(&req.connection_id).await {
         Some(s) => s,
         None => {
-            let e = AppError::NotFound(format!(
-                "dynamo client {} not active",
-                req.connection_id
-            ));
+            let e = AppError::NotFound(format!("dynamo client {} not active", req.connection_id));
             let duration_ms = started.elapsed().as_millis() as u64;
             let joined = req.statements.join(";\n");
             emit_activity(
@@ -460,10 +453,9 @@ pub async fn dynamo_run_partiql_many(
     let duration_ms = started.elapsed().as_millis() as u64;
     let joined_sql = req.statements.join(";\n");
 
-    let builder =
-        ActivityLogEntryBuilder::new(ActivityKind::RunSqlMany, origin, duration_ms)
-            .connection(req.connection_id)
-            .sql(&joined_sql);
+    let builder = ActivityLogEntryBuilder::new(ActivityKind::RunSqlMany, origin, duration_ms)
+        .connection(req.connection_id)
+        .sql(&joined_sql);
 
     if errored {
         let err = AppError::aws("BatchFailed", "one or more statements failed", false);
