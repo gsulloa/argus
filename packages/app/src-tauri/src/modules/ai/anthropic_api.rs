@@ -175,9 +175,7 @@ impl AiProvider for AnthropicApi {
         if !status.is_success() {
             return Err(AppError::Internal(format!(
                 "anthropic returned {status}: {}",
-                json.get("error")
-                    .map(|e| e.to_string())
-                    .unwrap_or_default()
+                json.get("error").map(|e| e.to_string()).unwrap_or_default()
             )));
         }
 
@@ -230,8 +228,12 @@ impl AiProvider for AnthropicApi {
         // 3a. Oldest-first attachment eviction BEFORE composing the system prompt.
         let mut attachments = req.attached_results.clone();
         let turn_chars: usize = req.turns.iter().map(|t| t.content.len()).sum();
-        let evicted =
-            evict_attachments_oldest_first(&mut attachments, &req.context_payload, turn_chars, threshold)?;
+        let evicted = evict_attachments_oldest_first(
+            &mut attachments,
+            &req.context_payload,
+            turn_chars,
+            threshold,
+        )?;
 
         // 3b. Build system prompt with the surviving attachments as the trailing section.
         let system_prompt = build_api_system_prompt(&req.context_payload, &attachments)?;
@@ -289,9 +291,7 @@ impl AiProvider for AnthropicApi {
         if !status.is_success() {
             return Err(AppError::Internal(format!(
                 "anthropic returned {status}: {}",
-                json.get("error")
-                    .map(|e| e.to_string())
-                    .unwrap_or_default()
+                json.get("error").map(|e| e.to_string()).unwrap_or_default()
             )));
         }
 
@@ -350,7 +350,11 @@ fn trim_turns_to_fit(
         turns.remove(0);
         trimmed += 1;
     }
-    if trimmed > 0 { Some(trimmed) } else { None }
+    if trimmed > 0 {
+        Some(trimmed)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -578,9 +582,7 @@ mod tests {
         let server = MockServer::start().await;
 
         // Capture the request body to assert message count.
-        let request_body = std::sync::Arc::new(std::sync::Mutex::new(
-            serde_json::Value::Null,
-        ));
+        let request_body = std::sync::Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
         let rb_clone = request_body.clone();
 
         Mock::given(method("POST"))
@@ -594,21 +596,43 @@ mod tests {
 
         keys::set(ACCOUNT_ANTHROPIC, "multi-turn-key").unwrap();
         let turns = vec![
-            ChatTurn { role: ChatRole::User, content: "hello".into(), tool_uses: vec![] },
-            ChatTurn { role: ChatRole::Assistant, content: "hi".into(), tool_uses: vec![] },
-            ChatTurn { role: ChatRole::User, content: "list tables".into(), tool_uses: vec![] },
+            ChatTurn {
+                role: ChatRole::User,
+                content: "hello".into(),
+                tool_uses: vec![],
+            },
+            ChatTurn {
+                role: ChatRole::Assistant,
+                content: "hi".into(),
+                tool_uses: vec![],
+            },
+            ChatTurn {
+                role: ChatRole::User,
+                content: "list tables".into(),
+                tool_uses: vec![],
+            },
         ];
         let (provider, req) = make_chat_req(turns, &server.uri());
         let stream = provider.chat(req).await.unwrap();
         let deltas = collect_chat(stream).await;
 
-        let texts: Vec<_> = deltas.iter().filter(|d| matches!(d, ChatDelta::Text(_))).collect();
-        let dones: Vec<_> = deltas.iter().filter(|d| matches!(d, ChatDelta::Done { .. })).collect();
+        let texts: Vec<_> = deltas
+            .iter()
+            .filter(|d| matches!(d, ChatDelta::Text(_)))
+            .collect();
+        let dones: Vec<_> = deltas
+            .iter()
+            .filter(|d| matches!(d, ChatDelta::Done { .. }))
+            .collect();
         assert!(!texts.is_empty(), "expected Text delta");
         assert_eq!(dones.len(), 1, "expected one Done");
         // No tool events ever.
-        assert!(!deltas.iter().any(|d| matches!(d, ChatDelta::ToolCallStarted { .. })));
-        assert!(!deltas.iter().any(|d| matches!(d, ChatDelta::ToolCallFinished { .. })));
+        assert!(!deltas
+            .iter()
+            .any(|d| matches!(d, ChatDelta::ToolCallStarted { .. })));
+        assert!(!deltas
+            .iter()
+            .any(|d| matches!(d, ChatDelta::ToolCallFinished { .. })));
         let _ = rb_clone; // suppress unused warning
     }
 
@@ -625,12 +649,18 @@ mod tests {
             .await;
 
         keys::set(ACCOUNT_ANTHROPIC, "success-key").unwrap();
-        let turns = vec![ChatTurn { role: ChatRole::User, content: "select 42".into(), tool_uses: vec![] }];
+        let turns = vec![ChatTurn {
+            role: ChatRole::User,
+            content: "select 42".into(),
+            tool_uses: vec![],
+        }];
         let (provider, req) = make_chat_req(turns, &server.uri());
         let deltas = collect_chat(provider.chat(req).await.unwrap()).await;
 
         assert!(matches!(&deltas[0], ChatDelta::Text(t) if t == "SELECT 42;"));
-        assert!(matches!(&deltas[1], ChatDelta::Done { finish_reason: Some(r) } if r == "end_turn"));
+        assert!(
+            matches!(&deltas[1], ChatDelta::Done { finish_reason: Some(r) } if r == "end_turn")
+        );
     }
 
     #[tokio::test]
@@ -639,7 +669,11 @@ mod tests {
         keys::set(ACCOUNT_ANTHROPIC, "key").unwrap();
         let provider = AnthropicApi::with_base_url(None, "http://127.0.0.1:1".into());
         let req = ChatRequest {
-            turns: vec![ChatTurn { role: ChatRole::User, content: "x".into(), tool_uses: vec![] }],
+            turns: vec![ChatTurn {
+                role: ChatRole::User,
+                content: "x".into(),
+                tool_uses: vec![],
+            }],
             context_path: None,
             context_payload: empty_payload(),
             model: Some("gpt-9000".into()),
@@ -671,13 +705,21 @@ mod tests {
         let long_content = "x".repeat(4000);
         let mut turns: Vec<ChatTurn> = (0..199)
             .map(|i| ChatTurn {
-                role: if i % 2 == 0 { ChatRole::User } else { ChatRole::Assistant },
+                role: if i % 2 == 0 {
+                    ChatRole::User
+                } else {
+                    ChatRole::Assistant
+                },
                 content: long_content.clone(),
                 tool_uses: vec![],
             })
             .collect();
         // Final turn must be User.
-        turns.push(ChatTurn { role: ChatRole::User, content: long_content.clone(), tool_uses: vec![] });
+        turns.push(ChatTurn {
+            role: ChatRole::User,
+            content: long_content.clone(),
+            tool_uses: vec![],
+        });
 
         let (provider, req) = make_chat_req(turns, &server.uri());
         let deltas = collect_chat(provider.chat(req).await.unwrap()).await;
@@ -712,7 +754,11 @@ mod tests {
             truncated: false,
             row_count: 100,
         };
-        let turns = vec![ChatTurn { role: ChatRole::User, content: "hi".into(), tool_uses: vec![] }];
+        let turns = vec![ChatTurn {
+            role: ChatRole::User,
+            content: "hi".into(),
+            tool_uses: vec![],
+        }];
         let provider = AnthropicApi::with_base_url(None, server.uri());
         let req = ChatRequest {
             turns,
@@ -727,7 +773,9 @@ mod tests {
         };
         let deltas = collect_chat(provider.chat(req).await.unwrap()).await;
         assert!(
-            deltas.iter().any(|d| matches!(d, ChatDelta::Status(s) if s.contains("attachment"))),
+            deltas
+                .iter()
+                .any(|d| matches!(d, ChatDelta::Status(s) if s.contains("attachment"))),
             "expected an eviction Status delta, got: {deltas:?}"
         );
     }
@@ -738,19 +786,31 @@ mod tests {
 
         let mut turns: Vec<ChatTurn> = (0..10)
             .map(|i| ChatTurn {
-                role: if i % 2 == 0 { ChatRole::User } else { ChatRole::Assistant },
+                role: if i % 2 == 0 {
+                    ChatRole::User
+                } else {
+                    ChatRole::Assistant
+                },
                 content: "x".repeat(1000),
                 tool_uses: vec![],
             })
             .collect();
         // Last must be User.
-        turns.push(ChatTurn { role: ChatRole::User, content: "x".repeat(1000), tool_uses: vec![] });
+        turns.push(ChatTurn {
+            role: ChatRole::User,
+            content: "x".repeat(1000),
+            tool_uses: vec![],
+        });
 
         let original_last = turns.last().unwrap().content.clone();
         // Set threshold very low to force trimming.
         let count = trim_turns_to_fit(&mut turns, 0, 100);
         assert!(count.is_some(), "expected some trimming");
         assert!(turns.len() >= 1, "must always have at least one turn");
-        assert_eq!(turns.last().unwrap().content, original_last, "last turn preserved");
+        assert_eq!(
+            turns.last().unwrap().content,
+            original_last,
+            "last turn preserved"
+        );
     }
 }

@@ -1,8 +1,5 @@
-# ci-pr-validation Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-ci-pr-gate. Update Purpose after archive.
-## Requirements
 ### Requirement: PR validation workflow runs typecheck, lint, and tests on PRs to dev and master
 
 The repository SHALL include a GitHub Actions workflow at `.github/workflows/ci.yml` triggered on `pull_request` events targeting the `dev` and `master` branches. The workflow MUST run a JS/TS validation job on `ubuntu-latest` and execute these steps in order, failing the job on the first non-zero exit:
@@ -42,6 +39,8 @@ The workflow MUST NOT build Rust/Tauri artifacts, sign, notarize, or publish any
 - **WHEN** a pull request changes `package.json` without updating `pnpm-lock.yaml`
 - **THEN** `pnpm install --frozen-lockfile` fails the job, surfacing the lockfile drift before merge
 
+## ADDED Requirements
+
 ### Requirement: PR validation workflow validates the Rust/Tauri backend
 
 The `.github/workflows/ci.yml` workflow SHALL include a Rust validation job that runs on `ubuntu-latest` for `pull_request` events targeting `dev` and `master`. The job MUST:
@@ -73,28 +72,3 @@ The Rust job MUST report a stable check name distinct from the JS/TS job so it c
 
 - **WHEN** the crate emits clippy style warnings that are not deny-by-default errors and the PR introduces no clippy errors, formatting drift, or test failures
 - **THEN** the Rust job completes successfully, because clippy runs without `-D warnings`
-
-### Requirement: Release script waits for green PR checks before merging to master
-
-`packages/app/scripts/release.sh` SHALL, after opening the release pull request to `master`, block until that PR's CI checks complete and merge only on success — it MUST NOT merge immediately and unconditionally. The script MUST: (1) poll until at least one check is registered on the PR (bounded retries, to absorb the post-creation registration race), failing with a clear message if none appear; (2) wait for the checks to finish via `gh pr checks "$RELEASE_BRANCH" --watch --fail-fast`; (3) on success, merge synchronously with `gh pr merge --merge --delete-branch` (preserving the merge-commit-not-squash behavior) and continue to the existing resolve-SHA → tag → back-merge steps. The script MUST NOT use `gh pr merge --auto`, because that returns before the merge completes and would cause the script to tag the pre-merge `master` HEAD. The whole wait+merge block MUST be skipped under `--dry-run` (printing the intended commands instead). On any failed check or a failed merge, the script MUST abort with a clear message, leave the release branch and PR open, and MUST NOT push a tag.
-
-#### Scenario: Release PR merges once CI is green
-
-- **WHEN** `release.sh` opens the release PR to `master` and the `ci.yml` checks subsequently pass
-- **THEN** `gh pr checks --watch` exits successfully, the script merges the PR as a merge commit and deletes the branch, then resolves the real merge commit SHA, tags it, and pushes the tag
-
-#### Scenario: Release PR with failing CI does not merge or tag
-
-- **WHEN** `release.sh` opens the release PR to `master` but a `ci.yml` check fails
-- **THEN** `gh pr checks --watch --fail-fast` exits non-zero, the script aborts, no merge happens, no tag is pushed (so `release.yml` never fires), and the release branch and PR remain open for investigation
-
-#### Scenario: Checks never register on the PR
-
-- **WHEN** `release.sh` opens the release PR but no CI check appears within the bounded retry window
-- **THEN** the script aborts with a clear message, pushes no tag, and leaves the release branch and PR open
-
-#### Scenario: Dry run does not poll or merge
-
-- **WHEN** `release.sh` is run with `--dry-run`
-- **THEN** the wait-for-checks and merge commands are printed but not executed, and no GitHub API calls are made against a (nonexistent) PR
-

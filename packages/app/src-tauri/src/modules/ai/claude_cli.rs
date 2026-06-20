@@ -158,30 +158,29 @@ impl AiProvider for ClaudeCli {
         // Build the MCP doc-writer config only when the connection has a linked
         // context folder AND we know the engine.  Without a context folder the
         // agent stays read-only (guardrails scenario D6).
-        let mcp_config_owned: Option<String> =
-            if req.context_path.is_some() {
-                if let Some(engine) = req.context_engine {
-                    match std::env::current_exe() {
-                        Ok(exe) => {
-                            let config = build_doc_mcp_config_json(
-                                &exe,
-                                &cwd,
-                                engine,
-                                req.dynamo_table_match.as_ref(),
-                            );
-                            Some(config)
-                        }
-                        Err(e) => {
-                            tracing::warn!("could not determine current_exe for MCP sidecar: {e}");
-                            None
-                        }
+        let mcp_config_owned: Option<String> = if req.context_path.is_some() {
+            if let Some(engine) = req.context_engine {
+                match std::env::current_exe() {
+                    Ok(exe) => {
+                        let config = build_doc_mcp_config_json(
+                            &exe,
+                            &cwd,
+                            engine,
+                            req.dynamo_table_match.as_ref(),
+                        );
+                        Some(config)
                     }
-                } else {
-                    None
+                    Err(e) => {
+                        tracing::warn!("could not determine current_exe for MCP sidecar: {e}");
+                        None
+                    }
                 }
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
         let mcp_config = mcp_config_owned.as_deref();
 
         // If we have a resume id, try to use --resume first.
@@ -231,7 +230,9 @@ impl AiProvider for ClaudeCli {
         // If we had a resume_id but are falling back, prepend a status notice.
         if resume_id.is_some() {
             let notice = stream::once(async {
-                Ok(ChatDelta::Status("session-resume unavailable, replaying history".into()))
+                Ok(ChatDelta::Status(
+                    "session-resume unavailable, replaying history".into(),
+                ))
             });
             Ok(Box::pin(notice.chain(base_stream)))
         } else {
@@ -441,7 +442,10 @@ pub(crate) fn flatten_history_for_cli(
         // into the "User's new request:" line. The table prefix appears BEFORE
         // the user's natural-language question so the agent sees the data first.
         // When attachments is empty, attachment_prefix is "" → byte-identical output.
-        parts.push(format!("User's new request: {attachment_prefix}{}", last.content));
+        parts.push(format!(
+            "User's new request: {attachment_prefix}{}",
+            last.content
+        ));
     } else {
         // First turn — just the content directly.
         // ── #62 insertion point ──────────────────────────────────────────────
@@ -472,7 +476,9 @@ fn build_chat_stream(
 
     let mapped = stdout_lines.flat_map(|line_res| {
         let deltas = match line_res {
-            Err(e) => vec![Err(AppError::Internal(format!("claude stdout read failed: {e}")))],
+            Err(e) => vec![Err(AppError::Internal(format!(
+                "claude stdout read failed: {e}"
+            )))],
             Ok(line) if line.trim().is_empty() => vec![],
             Ok(line) => parse_stream_json_line(&line),
         };
@@ -535,10 +541,7 @@ pub(crate) fn parse_stream_json_line(line: &str) -> Vec<AppResult<ChatDelta>> {
 
     match event_type.as_str() {
         "system" => {
-            let subtype = value
-                .get("subtype")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
             if subtype == "init" {
                 let model = value.get("model").and_then(|v| v.as_str()).unwrap_or("");
                 out.push(Ok(ChatDelta::Status(if model.is_empty() {
@@ -622,7 +625,11 @@ pub(crate) fn parse_stream_json_line(line: &str) -> Vec<AppResult<ChatDelta>> {
                             .get("is_error")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        out.push(Ok(ChatDelta::ToolCallFinished { id, output, is_error }));
+                        out.push(Ok(ChatDelta::ToolCallFinished {
+                            id,
+                            output,
+                            is_error,
+                        }));
                     }
                 }
             }
@@ -640,20 +647,19 @@ pub(crate) fn parse_stream_json_line(line: &str) -> Vec<AppResult<ChatDelta>> {
                 .get("subtype")
                 .and_then(|v| v.as_str())
                 .map(String::from);
-            out.push(Ok(ChatDelta::Done { finish_reason: subtype }));
+            out.push(Ok(ChatDelta::Done {
+                finish_reason: subtype,
+            }));
         }
         // Legacy / SDK-style events kept for fixture compatibility.
         "content_block_delta" => {
-            if let Some(t) = value
-                .get("delta")
-                .and_then(|d| {
-                    if d.get("type").and_then(|t| t.as_str()) == Some("text_delta") {
-                        d.get("text").and_then(|t| t.as_str())
-                    } else {
-                        None
-                    }
-                })
-            {
+            if let Some(t) = value.get("delta").and_then(|d| {
+                if d.get("type").and_then(|t| t.as_str()) == Some("text_delta") {
+                    d.get("text").and_then(|t| t.as_str())
+                } else {
+                    None
+                }
+            }) {
                 if !t.is_empty() {
                     out.push(Ok(ChatDelta::Text(t.to_string())));
                 }
@@ -691,7 +697,11 @@ pub(crate) fn parse_stream_json_line(line: &str) -> Vec<AppResult<ChatDelta>> {
                 .get("is_error")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            out.push(Ok(ChatDelta::ToolCallFinished { id, output, is_error }));
+            out.push(Ok(ChatDelta::ToolCallFinished {
+                id,
+                output,
+                is_error,
+            }));
         }
         "message_stop" => {
             let finish_reason = value
@@ -700,8 +710,12 @@ pub(crate) fn parse_stream_json_line(line: &str) -> Vec<AppResult<ChatDelta>> {
                 .map(String::from);
             out.push(Ok(ChatDelta::Done { finish_reason }));
         }
-        "message_start" | "content_block_start" | "content_block_stop"
-        | "message_delta" | "ping" | "session_id" => {
+        "message_start"
+        | "content_block_start"
+        | "content_block_stop"
+        | "message_delta"
+        | "ping"
+        | "session_id" => {
             // Informational / structural — silent. session_id payload, if any,
             // was already captured by the top-level extraction above.
         }
@@ -769,7 +783,9 @@ fn build_generate_stream(
         let status = child.wait().await;
         let stderr_text = stderr_handle.await.unwrap_or_default();
         match status {
-            Ok(s) if s.success() => Ok(GenerateDelta::Done { finish_reason: None }),
+            Ok(s) if s.success() => Ok(GenerateDelta::Done {
+                finish_reason: None,
+            }),
             Ok(s) => Err(AppError::Internal(format!(
                 "claude exited with {:?}: {}",
                 s.code(),
@@ -797,7 +813,10 @@ mod tests {
         // This test is kept simple intentionally; if flakiness is observed in CI,
         // wrap with a Mutex or add `serial_test` crate.
         std::env::set_var("ARGUS_CLAUDE_BIN", "/custom/path/claude");
-        assert_eq!(claude_bin(), std::path::PathBuf::from("/custom/path/claude"));
+        assert_eq!(
+            claude_bin(),
+            std::path::PathBuf::from("/custom/path/claude")
+        );
         std::env::remove_var("ARGUS_CLAUDE_BIN");
     }
 
@@ -849,29 +868,59 @@ mod tests {
         // keep old behavior identical.
         let argv = build_claude_argv("SELECT 1", None, None, sp, "Read Glob Grep", None, None);
         assert!(argv.contains(&"-p".to_string()), "must contain -p");
-        assert!(argv.contains(&"--verbose".to_string()), "must contain --verbose");
+        assert!(
+            argv.contains(&"--verbose".to_string()),
+            "must contain --verbose"
+        );
         assert!(argv.contains(&"--output-format".to_string()));
         assert!(argv.contains(&"stream-json".to_string()));
-        assert!(argv.contains(&"--strict-mcp-config".to_string()), "must ignore external MCP servers");
+        assert!(
+            argv.contains(&"--strict-mcp-config".to_string()),
+            "must ignore external MCP servers"
+        );
         // --system-prompt with SQL-only text
-        let sp_idx = argv.iter().position(|a| a == "--system-prompt")
+        let sp_idx = argv
+            .iter()
+            .position(|a| a == "--system-prompt")
             .expect("--system-prompt flag not found");
-        assert_eq!(argv[sp_idx + 1], sp, "--system-prompt value must follow the flag");
-        assert!(argv[sp_idx + 1].contains("MUST NOT execute SQL"), "system prompt must contain no-execution clause");
+        assert_eq!(
+            argv[sp_idx + 1],
+            sp,
+            "--system-prompt value must follow the flag"
+        );
+        assert!(
+            argv[sp_idx + 1].contains("MUST NOT execute SQL"),
+            "system prompt must contain no-execution clause"
+        );
         // --tools with read-only set
-        let tools_idx = argv.iter().position(|a| a == "--tools")
+        let tools_idx = argv
+            .iter()
+            .position(|a| a == "--tools")
             .expect("--tools flag not found");
         assert_eq!(argv[tools_idx + 1], "Read Glob Grep");
         // `--` terminator must sit right before the positional prompt so the
         // variadic --tools cannot swallow it.
-        assert_eq!(argv[argv.len() - 2], "--", "`--` must precede the positional prompt");
+        assert_eq!(
+            argv[argv.len() - 2],
+            "--",
+            "`--` must precede the positional prompt"
+        );
         // positional prompt is last
         assert_eq!(argv.last().unwrap(), "SELECT 1");
         // --resume must NOT be present
-        assert!(!argv.contains(&"--resume".to_string()), "no --resume for None resume_id");
+        assert!(
+            !argv.contains(&"--resume".to_string()),
+            "no --resume for None resume_id"
+        );
         // --mcp-config must NOT be present when mcp_config is None
-        assert!(!argv.contains(&"--mcp-config".to_string()), "no --mcp-config when None");
-        assert!(!argv.contains(&"--allowedTools".to_string()), "no --allowedTools when None");
+        assert!(
+            !argv.contains(&"--mcp-config".to_string()),
+            "no --mcp-config when None"
+        );
+        assert!(
+            !argv.contains(&"--allowedTools".to_string()),
+            "no --allowedTools when None"
+        );
     }
 
     #[test]
@@ -886,19 +935,33 @@ mod tests {
             None,
             None,
         );
-        let resume_idx = argv.iter().position(|a| a == "--resume")
+        let resume_idx = argv
+            .iter()
+            .position(|a| a == "--resume")
             .expect("--resume flag not found");
         assert_eq!(argv[resume_idx + 1], "sess-abc");
         // --system-prompt still present on resume path
-        assert!(argv.contains(&"--system-prompt".to_string()), "--system-prompt must be present on resume path");
+        assert!(
+            argv.contains(&"--system-prompt".to_string()),
+            "--system-prompt must be present on resume path"
+        );
         // --tools still present
-        assert!(argv.contains(&"--tools".to_string()), "--tools must be present on resume path");
+        assert!(
+            argv.contains(&"--tools".to_string()),
+            "--tools must be present on resume path"
+        );
         // model present
-        let model_idx = argv.iter().position(|a| a == "--model")
+        let model_idx = argv
+            .iter()
+            .position(|a| a == "--model")
             .expect("--model flag not found");
         assert_eq!(argv[model_idx + 1], "claude-sonnet-4-6");
         // `--` terminator right before the positional prompt
-        assert_eq!(argv[argv.len() - 2], "--", "`--` must precede the positional prompt");
+        assert_eq!(
+            argv[argv.len() - 2],
+            "--",
+            "`--` must precede the positional prompt"
+        );
         // positional prompt is last
         assert_eq!(argv.last().unwrap(), "follow up");
     }
@@ -920,19 +983,26 @@ mod tests {
         );
 
         // --mcp-config and value must be present.
-        let mcp_idx = argv.iter().position(|a| a == "--mcp-config")
+        let mcp_idx = argv
+            .iter()
+            .position(|a| a == "--mcp-config")
             .expect("--mcp-config flag not found");
         assert_eq!(argv[mcp_idx + 1], mcp_json);
 
         // --allowedTools and value must be present.
-        let allowed_idx = argv.iter().position(|a| a == "--allowedTools")
+        let allowed_idx = argv
+            .iter()
+            .position(|a| a == "--allowedTools")
             .expect("--allowedTools flag not found");
         assert_eq!(argv[allowed_idx + 1], "mcp__argus__document_object");
 
         // Both must appear BEFORE the `--` terminator.
         let terminator_idx = argv.iter().position(|a| a == "--").expect("-- not found");
         assert!(mcp_idx < terminator_idx, "--mcp-config must be before --");
-        assert!(allowed_idx < terminator_idx, "--allowedTools must be before --");
+        assert!(
+            allowed_idx < terminator_idx,
+            "--allowedTools must be before --"
+        );
 
         // --strict-mcp-config still present (guardrail).
         assert!(argv.contains(&"--strict-mcp-config".to_string()));
@@ -963,14 +1033,26 @@ mod tests {
         // Args must contain subcommand + --root + root + --engine + subtree.
         let args = server["args"].as_array().expect("args must be array");
         let arg_strs: Vec<&str> = args.iter().filter_map(|v| v.as_str()).collect();
-        assert!(arg_strs.contains(&"__mcp-doc-writer"), "args must contain subcommand");
+        assert!(
+            arg_strs.contains(&"__mcp-doc-writer"),
+            "args must contain subcommand"
+        );
         assert!(arg_strs.contains(&"--root"), "args must contain --root");
-        assert!(arg_strs.contains(&"/home/user/my-project"), "args must contain root path");
+        assert!(
+            arg_strs.contains(&"/home/user/my-project"),
+            "args must contain root path"
+        );
         assert!(arg_strs.contains(&"--engine"), "args must contain --engine");
-        assert!(arg_strs.contains(&"postgres"), "args must contain engine subtree");
+        assert!(
+            arg_strs.contains(&"postgres"),
+            "args must contain engine subtree"
+        );
 
         // --table-match must NOT be present when dynamo_rule is None.
-        assert!(!arg_strs.contains(&"--table-match"), "--table-match must be absent when None");
+        assert!(
+            !arg_strs.contains(&"--table-match"),
+            "--table-match must be absent when None"
+        );
     }
 
     #[test]
@@ -987,12 +1069,13 @@ mod tests {
         let json_str = build_doc_mcp_config_json(exe, root, EngineKind::Dynamo, Some(&rule));
 
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        let args = parsed["mcpServers"]["argus"]["args"]
-            .as_array()
-            .unwrap();
+        let args = parsed["mcpServers"]["argus"]["args"].as_array().unwrap();
         let arg_strs: Vec<&str> = args.iter().filter_map(|v| v.as_str()).collect();
 
-        assert!(arg_strs.contains(&"--table-match"), "--table-match must be present when Some");
+        assert!(
+            arg_strs.contains(&"--table-match"),
+            "--table-match must be present when Some"
+        );
         // The JSON for the table_match must be present somewhere in the args.
         assert!(
             arg_strs.iter().any(|s| s.contains("MyApp-prod-")),
@@ -1008,11 +1091,12 @@ mod tests {
         let root = std::path::Path::new("/tmp/ctx");
         let json_str = build_doc_mcp_config_json(exe, root, EngineKind::Mysql, None);
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        let args = parsed["mcpServers"]["argus"]["args"]
-            .as_array()
-            .unwrap();
+        let args = parsed["mcpServers"]["argus"]["args"].as_array().unwrap();
         let arg_strs: Vec<&str> = args.iter().filter_map(|v| v.as_str()).collect();
-        assert!(!arg_strs.contains(&"--table-match"), "--table-match must be absent when None");
+        assert!(
+            !arg_strs.contains(&"--table-match"),
+            "--table-match must be absent when None"
+        );
         assert!(arg_strs.contains(&"mysql"), "engine must be mysql");
     }
 
@@ -1039,12 +1123,27 @@ mod tests {
     #[test]
     fn fixture_text_only_yields_text_and_done() {
         let deltas = collect_fixture(&fixture("text_only.jsonl"));
-        let texts: Vec<_> = deltas.iter().filter(|d| matches!(d, ChatDelta::Text(_))).collect();
-        let dones: Vec<_> = deltas.iter().filter(|d| matches!(d, ChatDelta::Done { .. })).collect();
+        let texts: Vec<_> = deltas
+            .iter()
+            .filter(|d| matches!(d, ChatDelta::Text(_)))
+            .collect();
+        let dones: Vec<_> = deltas
+            .iter()
+            .filter(|d| matches!(d, ChatDelta::Done { .. }))
+            .collect();
         assert!(!texts.is_empty(), "expected at least one Text delta");
         assert_eq!(dones.len(), 1, "expected exactly one Done");
         // Concatenated text should be "SELECT 1;"
-        let full: String = texts.iter().filter_map(|d| if let ChatDelta::Text(t) = d { Some(t.as_str()) } else { None }).collect();
+        let full: String = texts
+            .iter()
+            .filter_map(|d| {
+                if let ChatDelta::Text(t) = d {
+                    Some(t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert!(full.contains("SELECT"), "text should contain SELECT");
         if let ChatDelta::Done { finish_reason } = dones[0] {
             assert_eq!(finish_reason.as_deref(), Some("end_turn"));
@@ -1054,9 +1153,18 @@ mod tests {
     #[test]
     fn fixture_tool_use_sequence_yields_started_finished_done() {
         let deltas = collect_fixture(&fixture("tool_use_sequence.jsonl"));
-        let started: Vec<_> = deltas.iter().filter(|d| matches!(d, ChatDelta::ToolCallStarted { .. })).collect();
-        let finished: Vec<_> = deltas.iter().filter(|d| matches!(d, ChatDelta::ToolCallFinished { .. })).collect();
-        let dones: Vec<_> = deltas.iter().filter(|d| matches!(d, ChatDelta::Done { .. })).collect();
+        let started: Vec<_> = deltas
+            .iter()
+            .filter(|d| matches!(d, ChatDelta::ToolCallStarted { .. }))
+            .collect();
+        let finished: Vec<_> = deltas
+            .iter()
+            .filter(|d| matches!(d, ChatDelta::ToolCallFinished { .. }))
+            .collect();
+        let dones: Vec<_> = deltas
+            .iter()
+            .filter(|d| matches!(d, ChatDelta::Done { .. }))
+            .collect();
         assert_eq!(started.len(), 1, "expected one ToolCallStarted");
         assert_eq!(finished.len(), 1, "expected one ToolCallFinished");
         assert_eq!(dones.len(), 1, "expected one Done");
@@ -1071,11 +1179,20 @@ mod tests {
     #[test]
     fn fixture_unknown_event_yields_status() {
         let deltas = collect_fixture(&fixture("unknown_event.jsonl"));
-        let statuses: Vec<_> = deltas.iter()
-            .filter_map(|d| if let ChatDelta::Status(s) = d { Some(s.as_str()) } else { None })
+        let statuses: Vec<_> = deltas
+            .iter()
+            .filter_map(|d| {
+                if let ChatDelta::Status(s) = d {
+                    Some(s.as_str())
+                } else {
+                    None
+                }
+            })
             .collect();
         assert!(
-            statuses.iter().any(|s| s.starts_with("event: something_new")),
+            statuses
+                .iter()
+                .any(|s| s.starts_with("event: something_new")),
             "expected event status, got: {statuses:?}"
         );
     }
@@ -1083,11 +1200,20 @@ mod tests {
     #[test]
     fn fixture_malformed_yields_non_json_status() {
         let deltas = collect_fixture(&fixture("malformed.jsonl"));
-        let statuses: Vec<_> = deltas.iter()
-            .filter_map(|d| if let ChatDelta::Status(s) = d { Some(s.as_str()) } else { None })
+        let statuses: Vec<_> = deltas
+            .iter()
+            .filter_map(|d| {
+                if let ChatDelta::Status(s) = d {
+                    Some(s.as_str())
+                } else {
+                    None
+                }
+            })
             .collect();
         assert!(
-            statuses.iter().any(|s| s.starts_with("non-json line from claude:")),
+            statuses
+                .iter()
+                .any(|s| s.starts_with("non-json line from claude:")),
             "expected non-json status, got: {statuses:?}"
         );
     }
@@ -1095,8 +1221,15 @@ mod tests {
     #[test]
     fn fixture_with_session_id_yields_resume_sentinel() {
         let deltas = collect_fixture(&fixture("with_session_id.jsonl"));
-        let statuses: Vec<_> = deltas.iter()
-            .filter_map(|d| if let ChatDelta::Status(s) = d { Some(s.as_str()) } else { None })
+        let statuses: Vec<_> = deltas
+            .iter()
+            .filter_map(|d| {
+                if let ChatDelta::Status(s) = d {
+                    Some(s.as_str())
+                } else {
+                    None
+                }
+            })
             .collect();
         assert!(
             statuses.iter().any(|s| *s == "__resume_id__:abc-123"),
@@ -1120,14 +1253,35 @@ mod tests {
     fn flatten_history_multi_turn() {
         use crate::modules::ai::types::{ChatRole, ChatTurn};
         let turns = vec![
-            ChatTurn { role: ChatRole::User, content: "first".into(), tool_uses: vec![] },
-            ChatTurn { role: ChatRole::Assistant, content: "reply".into(), tool_uses: vec![] },
-            ChatTurn { role: ChatRole::User, content: "follow up".into(), tool_uses: vec![] },
+            ChatTurn {
+                role: ChatRole::User,
+                content: "first".into(),
+                tool_uses: vec![],
+            },
+            ChatTurn {
+                role: ChatRole::Assistant,
+                content: "reply".into(),
+                tool_uses: vec![],
+            },
+            ChatTurn {
+                role: ChatRole::User,
+                content: "follow up".into(),
+                tool_uses: vec![],
+            },
         ];
         let result = flatten_history_for_cli(&turns, &[]);
-        assert!(result.contains("User: first"), "should contain prior user turn");
-        assert!(result.contains("Assistant: reply"), "should contain assistant turn");
-        assert!(result.contains("User's new request: follow up"), "should contain new request");
+        assert!(
+            result.contains("User: first"),
+            "should contain prior user turn"
+        );
+        assert!(
+            result.contains("Assistant: reply"),
+            "should contain assistant turn"
+        );
+        assert!(
+            result.contains("User's new request: follow up"),
+            "should contain new request"
+        );
     }
 
     #[test]
@@ -1146,7 +1300,9 @@ mod tests {
             row_count: 1,
         };
         let result = flatten_history_for_cli(&turns, &[att]);
-        let table_pos = result.find("# Attached result").expect("table header present");
+        let table_pos = result
+            .find("# Attached result")
+            .expect("table header present");
         let q_pos = result.find("summarise this").expect("question present");
         assert!(table_pos < q_pos, "table must precede the user question");
         assert!(result.contains("| alice |"));
@@ -1155,7 +1311,10 @@ mod tests {
     #[test]
     fn parse_text_delta() {
         let line = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}"#;
-        let deltas: Vec<_> = parse_stream_json_line(line).into_iter().filter_map(|r| r.ok()).collect();
+        let deltas: Vec<_> = parse_stream_json_line(line)
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .collect();
         assert_eq!(deltas.len(), 1);
         assert!(matches!(&deltas[0], ChatDelta::Text(t) if t == "hello"));
     }
@@ -1163,7 +1322,10 @@ mod tests {
     #[test]
     fn parse_message_stop() {
         let line = r#"{"type":"message_stop","stop_reason":"end_turn"}"#;
-        let deltas: Vec<_> = parse_stream_json_line(line).into_iter().filter_map(|r| r.ok()).collect();
+        let deltas: Vec<_> = parse_stream_json_line(line)
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .collect();
         assert_eq!(deltas.len(), 1);
         assert!(matches!(
             &deltas[0],
@@ -1174,7 +1336,10 @@ mod tests {
     #[test]
     fn parse_session_id_event() {
         let line = r#"{"type":"session_id","session_id":"sess-xyz"}"#;
-        let deltas: Vec<_> = parse_stream_json_line(line).into_iter().filter_map(|r| r.ok()).collect();
+        let deltas: Vec<_> = parse_stream_json_line(line)
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .collect();
         assert_eq!(deltas.len(), 1);
         assert!(matches!(&deltas[0], ChatDelta::Status(s) if s == "__resume_id__:sess-xyz"));
     }
@@ -1182,7 +1347,10 @@ mod tests {
     #[test]
     fn parse_tool_use() {
         let line = r#"{"type":"tool_use","id":"tu-1","name":"Read","input":{"path":"foo.txt"}}"#;
-        let deltas: Vec<_> = parse_stream_json_line(line).into_iter().filter_map(|r| r.ok()).collect();
+        let deltas: Vec<_> = parse_stream_json_line(line)
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .collect();
         assert_eq!(deltas.len(), 1);
         assert!(matches!(&deltas[0], ChatDelta::ToolCallStarted { name, .. } if name == "Read"));
     }
@@ -1190,7 +1358,10 @@ mod tests {
     #[test]
     fn parse_tool_result() {
         let line = r#"{"type":"tool_result","tool_use_id":"tu-1","content":"file contents","is_error":false}"#;
-        let deltas: Vec<_> = parse_stream_json_line(line).into_iter().filter_map(|r| r.ok()).collect();
+        let deltas: Vec<_> = parse_stream_json_line(line)
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .collect();
         assert_eq!(deltas.len(), 1);
         assert!(matches!(&deltas[0], ChatDelta::ToolCallFinished { id, .. } if id == "tu-1"));
     }

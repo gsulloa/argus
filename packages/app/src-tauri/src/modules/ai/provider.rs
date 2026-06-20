@@ -2,8 +2,8 @@ use async_trait::async_trait;
 
 use crate::error::{AppError, AppResult};
 use crate::modules::ai::types::{
-    Capabilities, ChatDelta, ChatRequest, ChatStream, ChatRole, ChatTurn,
-    GenerateDelta, GenerateRequest, GenerateStream, InspectRequest, ProviderId, ValidationResult,
+    Capabilities, ChatDelta, ChatRequest, ChatRole, ChatStream, ChatTurn, GenerateDelta,
+    GenerateRequest, GenerateStream, InspectRequest, ProviderId, ValidationResult,
 };
 
 #[async_trait]
@@ -61,7 +61,10 @@ async fn default_generate_via_chat<P: AiProvider + ?Sized>(
     while let Some(item) = stream.next().await {
         match item? {
             ChatDelta::Text(t) => text.push_str(&t),
-            ChatDelta::Done { finish_reason } => { finish = finish_reason; break; }
+            ChatDelta::Done { finish_reason } => {
+                finish = finish_reason;
+                break;
+            }
             ChatDelta::Error(e) => return Err(AppError::Internal(e)),
             // Ignore tool-call and status events in the legacy path.
             _ => {}
@@ -69,7 +72,9 @@ async fn default_generate_via_chat<P: AiProvider + ?Sized>(
     }
     let s = futures::stream::iter(vec![
         Ok(GenerateDelta::Text(text)),
-        Ok(GenerateDelta::Done { finish_reason: finish }),
+        Ok(GenerateDelta::Done {
+            finish_reason: finish,
+        }),
     ]);
     Ok(Box::pin(s))
 }

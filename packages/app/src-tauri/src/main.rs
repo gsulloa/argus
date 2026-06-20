@@ -70,9 +70,7 @@ fn run_mcp_doc_writer_subcommand() -> ! {
     };
     let context_root = std::path::PathBuf::from(&root_str);
     if !context_root.exists() {
-        eprintln!(
-            "argus __mcp-doc-writer: context root does not exist: {root_str}"
-        );
+        eprintln!("argus __mcp-doc-writer: context root does not exist: {root_str}");
         std::process::exit(1);
     }
 

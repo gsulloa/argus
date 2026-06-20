@@ -76,7 +76,12 @@ pub enum WriteTarget {
 /// `today` is the date string used for the body heading (`YYYY-MM-DD`).
 /// It is passed as a parameter so unit tests can inject a fixed value without
 /// relying on the system clock.
-pub fn apply_doc_write(path: &Path, target: &WriteTarget, content: &str, today: &str) -> AppResult<()> {
+pub fn apply_doc_write(
+    path: &Path,
+    target: &WriteTarget,
+    content: &str,
+    today: &str,
+) -> AppResult<()> {
     if !path.exists() {
         // Seed a minimal file so the splice logic below can work uniformly.
         seed_minimal_file(path, target, content, today)?;
@@ -92,7 +97,11 @@ pub fn apply_doc_write(path: &Path, target: &WriteTarget, content: &str, today: 
             atomic_write(path, &out)
         }
         WriteTarget::ColumnNote { column } => {
-            let out = apply_human_write(&raw_bytes, HumanEdit::ColumnNote(column.clone(), content.to_string()), path)?;
+            let out = apply_human_write(
+                &raw_bytes,
+                HumanEdit::ColumnNote(column.clone(), content.to_string()),
+                path,
+            )?;
             atomic_write(path, &out)
         }
         WriteTarget::Tags => {
@@ -147,14 +156,18 @@ fn apply_body_write(
             if let Some(heading_pos) = existing_body.find(&heading) {
                 // Find the end of this section (next `## ` heading or EOF).
                 let after_heading = heading_pos + heading.len();
-                let section_end = find_next_h2(&existing_body, after_heading)
-                    .unwrap_or(existing_body.len());
+                let section_end =
+                    find_next_h2(&existing_body, after_heading).unwrap_or(existing_body.len());
 
                 // Build the new body: everything up to and including current section,
                 // then append content, then the rest.
                 let section_content = &existing_body[after_heading..section_end];
                 // Ensure section_content ends with a newline before appending.
-                let sep = if section_content.ends_with('\n') { "" } else { "\n" };
+                let sep = if section_content.ends_with('\n') {
+                    ""
+                } else {
+                    "\n"
+                };
                 let content_to_add = if content.ends_with('\n') {
                     content.to_string()
                 } else {
@@ -238,11 +251,7 @@ enum HumanEdit {
 /// 5. Reconstruct the full file: `---\n<new_frontmatter>---\n<body_verbatim>`.
 ///
 /// Body bytes and `system:` bytes are never modified.
-fn apply_human_write(
-    raw_bytes: &[u8],
-    edit: HumanEdit,
-    path: &Path,
-) -> AppResult<Vec<u8>> {
+fn apply_human_write(raw_bytes: &[u8], edit: HumanEdit, path: &Path) -> AppResult<Vec<u8>> {
     let is_crlf = has_crlf(raw_bytes);
     let raw_str = String::from_utf8_lossy(raw_bytes);
     let normalised = raw_str.replace("\r\n", "\n");
@@ -280,9 +289,8 @@ fn apply_human_write(
     };
 
     // Parse current human block.
-    let fm_map: HashMap<String, serde_yaml::Value> =
-        serde_yaml::from_str(frontmatter)
-            .map_err(|e| AppError::Internal(format!("write: parse frontmatter: {e}")))?;
+    let fm_map: HashMap<String, serde_yaml::Value> = serde_yaml::from_str(frontmatter)
+        .map_err(|e| AppError::Internal(format!("write: parse frontmatter: {e}")))?;
 
     let mut human: ObjectHuman = match fm_map.get("human") {
         Some(v) => serde_yaml::from_value(v.clone())
@@ -309,8 +317,7 @@ fn apply_human_write(
 
             // Set union with case-insensitive dedupe: preserve original casing
             // of the first occurrence of each tag.
-            let existing_lower: Vec<String> =
-                existing.iter().map(|t| t.to_lowercase()).collect();
+            let existing_lower: Vec<String> = existing.iter().map(|t| t.to_lowercase()).collect();
 
             for tag in incoming {
                 if !existing_lower.iter().any(|l| *l == tag.to_lowercase()) {
@@ -448,7 +455,13 @@ fn seed_minimal_file(
     // Indent under `system:`.
     let indented_sys: String = sys_yaml
         .lines()
-        .map(|l| if l.is_empty() { String::new() } else { format!("  {l}") })
+        .map(|l| {
+            if l.is_empty() {
+                String::new()
+            } else {
+                format!("  {l}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
         + "\n";
@@ -505,10 +518,7 @@ pub fn resolve_doc_path(
     // Safety check: reject any `..` components in the resolved path before
     // canonicalization (defensive — target_path_for should never emit them, but
     // belt-and-suspenders).
-    if resolved
-        .components()
-        .any(|c| c == Component::ParentDir)
-    {
+    if resolved.components().any(|c| c == Component::ParentDir) {
         return Err(AppError::Validation(format!(
             "resolve_doc_path: path traversal rejected: {}",
             resolved.display()
@@ -643,7 +653,10 @@ mod tests {
     fn system_bytes(raw: &[u8]) -> Vec<u8> {
         let s = String::from_utf8_lossy(raw).replace("\r\n", "\n");
         let after_open = &s[4..]; // skip "---\n"
-        let fm_end = after_open.find("\n---\n").map(|p| p + 1).unwrap_or(after_open.len());
+        let fm_end = after_open
+            .find("\n---\n")
+            .map(|p| p + 1)
+            .unwrap_or(after_open.len());
         let frontmatter = &after_open[..fm_end];
         let range = find_top_level_value_range(frontmatter, "system").expect("system block");
         // Include the `system:\n` header as well (range.start is after the key line).
@@ -660,18 +673,35 @@ mod tests {
 
         let before_system = system_bytes(&fs::read(&path).unwrap());
 
-        apply_doc_write(&path, &WriteTarget::Body { mode: BodyMode::Append }, "Some chat note.", "2024-06-01").unwrap();
+        apply_doc_write(
+            &path,
+            &WriteTarget::Body {
+                mode: BodyMode::Append,
+            },
+            "Some chat note.",
+            "2024-06-01",
+        )
+        .unwrap();
 
         let after_bytes = fs::read(&path).unwrap();
         let after_system = system_bytes(&after_bytes);
-        assert_eq!(before_system, after_system, "system: block must be byte-for-byte identical");
+        assert_eq!(
+            before_system, after_system,
+            "system: block must be byte-for-byte identical"
+        );
 
         let content = String::from_utf8(after_bytes).unwrap();
-        assert!(content.contains("## Notes from chat 2024-06-01"), "dated heading should appear");
+        assert!(
+            content.contains("## Notes from chat 2024-06-01"),
+            "dated heading should appear"
+        );
         assert!(content.contains("Some chat note."), "content should appear");
         // human: preserved
         assert!(content.contains("pii"), "human.tags preserved");
-        assert!(content.contains("surrogate key"), "human.column_notes preserved");
+        assert!(
+            content.contains("surrogate key"),
+            "human.column_notes preserved"
+        );
     }
 
     #[test]
@@ -679,7 +709,15 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_file(dir.path(), "test.md", standard_doc());
 
-        apply_doc_write(&path, &WriteTarget::Body { mode: BodyMode::Append }, "First note.", "2024-06-15").unwrap();
+        apply_doc_write(
+            &path,
+            &WriteTarget::Body {
+                mode: BodyMode::Append,
+            },
+            "First note.",
+            "2024-06-15",
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("## Notes from chat 2024-06-15"));
@@ -691,8 +729,24 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_file(dir.path(), "test.md", standard_doc());
 
-        apply_doc_write(&path, &WriteTarget::Body { mode: BodyMode::Append }, "First note.", "2024-06-15").unwrap();
-        apply_doc_write(&path, &WriteTarget::Body { mode: BodyMode::Append }, "Second note.", "2024-06-15").unwrap();
+        apply_doc_write(
+            &path,
+            &WriteTarget::Body {
+                mode: BodyMode::Append,
+            },
+            "First note.",
+            "2024-06-15",
+        )
+        .unwrap();
+        apply_doc_write(
+            &path,
+            &WriteTarget::Body {
+                mode: BodyMode::Append,
+            },
+            "Second note.",
+            "2024-06-15",
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         // Only one heading for this date
@@ -703,7 +757,10 @@ mod tests {
         // Second note should appear after first
         let first_pos = content.find("First note.").unwrap();
         let second_pos = content.find("Second note.").unwrap();
-        assert!(second_pos > first_pos, "second note should come after first");
+        assert!(
+            second_pos > first_pos,
+            "second note should come after first"
+        );
     }
 
     #[test]
@@ -711,8 +768,24 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_file(dir.path(), "test.md", standard_doc());
 
-        apply_doc_write(&path, &WriteTarget::Body { mode: BodyMode::Append }, "Day 1.", "2024-06-14").unwrap();
-        apply_doc_write(&path, &WriteTarget::Body { mode: BodyMode::Append }, "Day 2.", "2024-06-15").unwrap();
+        apply_doc_write(
+            &path,
+            &WriteTarget::Body {
+                mode: BodyMode::Append,
+            },
+            "Day 1.",
+            "2024-06-14",
+        )
+        .unwrap();
+        apply_doc_write(
+            &path,
+            &WriteTarget::Body {
+                mode: BodyMode::Append,
+            },
+            "Day 2.",
+            "2024-06-15",
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("## Notes from chat 2024-06-14"));
@@ -730,16 +803,33 @@ mod tests {
         let body_start = find_body_start_in_raw(&before_bytes).unwrap();
         let fm_bytes_before = before_bytes[..body_start].to_vec();
 
-        apply_doc_write(&path, &WriteTarget::Body { mode: BodyMode::Replace }, "New body content.\n", "2024-06-01").unwrap();
+        apply_doc_write(
+            &path,
+            &WriteTarget::Body {
+                mode: BodyMode::Replace,
+            },
+            "New body content.\n",
+            "2024-06-01",
+        )
+        .unwrap();
 
         let after_bytes = fs::read(&path).unwrap();
         let body_start_after = find_body_start_in_raw(&after_bytes).unwrap();
         let fm_bytes_after = after_bytes[..body_start_after].to_vec();
 
-        assert_eq!(fm_bytes_before, fm_bytes_after, "frontmatter bytes must be identical after body replace");
+        assert_eq!(
+            fm_bytes_before, fm_bytes_after,
+            "frontmatter bytes must be identical after body replace"
+        );
         let content = String::from_utf8(after_bytes).unwrap();
-        assert!(content.contains("New body content."), "new body content should be present");
-        assert!(!content.contains("The users table."), "old body should be gone");
+        assert!(
+            content.contains("New body content."),
+            "new body content should be present"
+        );
+        assert!(
+            !content.contains("The users table."),
+            "old body should be gone"
+        );
     }
 
     #[test]
@@ -749,7 +839,15 @@ mod tests {
 
         let before_system = system_bytes(&fs::read(&path).unwrap());
 
-        apply_doc_write(&path, &WriteTarget::Body { mode: BodyMode::Replace }, "Replaced.", "2024-06-01").unwrap();
+        apply_doc_write(
+            &path,
+            &WriteTarget::Body {
+                mode: BodyMode::Replace,
+            },
+            "Replaced.",
+            "2024-06-01",
+        )
+        .unwrap();
 
         let after_system = system_bytes(&fs::read(&path).unwrap());
         assert_eq!(before_system, after_system);
@@ -769,22 +867,34 @@ mod tests {
 
         apply_doc_write(
             &path,
-            &WriteTarget::ColumnNote { column: "email".to_string() },
+            &WriteTarget::ColumnNote {
+                column: "email".to_string(),
+            },
             "user email address",
             "2024-06-01",
-        ).unwrap();
+        )
+        .unwrap();
 
         let raw_after = fs::read(&path).unwrap();
         let body_start_after = find_body_start_in_raw(&raw_after).unwrap();
         let body_after = raw_after[body_start_after..].to_vec();
         let system_after = system_bytes(&raw_after);
 
-        assert_eq!(system_before, system_after, "system: block must be unchanged");
+        assert_eq!(
+            system_before, system_after,
+            "system: block must be unchanged"
+        );
         assert_eq!(body_before, body_after, "body bytes must be unchanged");
 
         let content = String::from_utf8(raw_after).unwrap();
-        assert!(content.contains("user email address"), "new note should be present");
-        assert!(content.contains("email:"), "column key should be in human block");
+        assert!(
+            content.contains("user email address"),
+            "new note should be present"
+        );
+        assert!(
+            content.contains("email:"),
+            "column key should be in human block"
+        );
     }
 
     #[test]
@@ -794,15 +904,24 @@ mod tests {
 
         apply_doc_write(
             &path,
-            &WriteTarget::ColumnNote { column: "id".to_string() },
+            &WriteTarget::ColumnNote {
+                column: "id".to_string(),
+            },
             "primary key (overwritten)",
             "2024-06-01",
-        ).unwrap();
+        )
+        .unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("primary key (overwritten)"), "new note should be present");
+        assert!(
+            content.contains("primary key (overwritten)"),
+            "new note should be present"
+        );
         // Old note for `id` should be gone.
-        assert!(!content.contains("surrogate key"), "old note should be replaced");
+        assert!(
+            !content.contains("surrogate key"),
+            "old note should be replaced"
+        );
     }
 
     #[test]
@@ -814,10 +933,13 @@ mod tests {
 
         apply_doc_write(
             &path,
-            &WriteTarget::ColumnNote { column: "new_col".to_string() },
+            &WriteTarget::ColumnNote {
+                column: "new_col".to_string(),
+            },
             "some note",
             "2024-06-01",
-        ).unwrap();
+        )
+        .unwrap();
 
         let after_system = system_bytes(&fs::read(&path).unwrap());
         assert_eq!(before_system, after_system);
@@ -896,7 +1018,10 @@ mod tests {
         let body_start_after = find_body_start_in_raw(&raw_after).unwrap();
         let body_after = raw_after[body_start_after..].to_vec();
 
-        assert_eq!(body_before, body_after, "body must be unchanged after tags write");
+        assert_eq!(
+            body_before, body_after,
+            "body must be unchanged after tags write"
+        );
     }
 
     // ---- CRLF round-trip tests ----
@@ -908,7 +1033,15 @@ mod tests {
         let crlf = lf.replace('\n', "\r\n");
         let path = write_file_bytes(dir.path(), "test.md", crlf.as_bytes());
 
-        apply_doc_write(&path, &WriteTarget::Body { mode: BodyMode::Append }, "Note.", "2024-06-01").unwrap();
+        apply_doc_write(
+            &path,
+            &WriteTarget::Body {
+                mode: BodyMode::Append,
+            },
+            "Note.",
+            "2024-06-01",
+        )
+        .unwrap();
 
         let out = fs::read(&path).unwrap();
         assert!(has_crlf(&out), "output must still be CRLF");
@@ -923,10 +1056,13 @@ mod tests {
 
         apply_doc_write(
             &path,
-            &WriteTarget::ColumnNote { column: "col".to_string() },
+            &WriteTarget::ColumnNote {
+                column: "col".to_string(),
+            },
             "note",
             "2024-06-01",
-        ).unwrap();
+        )
+        .unwrap();
 
         let out = fs::read(&path).unwrap();
         assert!(has_crlf(&out), "output must still be CRLF");
@@ -953,7 +1089,15 @@ mod tests {
         let path = dir.path().join("postgres/public/users.md");
         assert!(!path.exists());
 
-        apply_doc_write(&path, &WriteTarget::Body { mode: BodyMode::Append }, "Initial note.", "2024-06-01").unwrap();
+        apply_doc_write(
+            &path,
+            &WriteTarget::Body {
+                mode: BodyMode::Append,
+            },
+            "Initial note.",
+            "2024-06-01",
+        )
+        .unwrap();
 
         assert!(path.exists(), "file should be created");
         // Round-trip through parse_object_doc.
@@ -961,7 +1105,10 @@ mod tests {
         assert_eq!(doc.system.kind, "object");
         // Content should be present in the body.
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("Initial note."), "content should be in body");
+        assert!(
+            content.contains("Initial note."),
+            "content should be in body"
+        );
     }
 
     #[test]
@@ -971,15 +1118,22 @@ mod tests {
 
         apply_doc_write(
             &path,
-            &WriteTarget::ColumnNote { column: "total".to_string() },
+            &WriteTarget::ColumnNote {
+                column: "total".to_string(),
+            },
             "order total in cents",
             "2024-06-01",
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(path.exists());
         let doc = crate::modules::context::parser::parse_object_doc(&path).unwrap();
         assert!(
-            doc.human.column_notes.as_ref().map(|m| m.contains_key("total")).unwrap_or(false),
+            doc.human
+                .column_notes
+                .as_ref()
+                .map(|m| m.contains_key("total"))
+                .unwrap_or(false),
             "column note should be present"
         );
     }
@@ -1004,9 +1158,20 @@ mod tests {
     fn resolve_postgres_public_users() {
         let dir = TempDir::new().unwrap();
         // Write context.yaml so the root dir exists and is canonicalizable.
-        write_file(dir.path(), "context.yaml", "schema_version: 1\nname: Test\n");
+        write_file(
+            dir.path(),
+            "context.yaml",
+            "schema_version: 1\nname: Test\n",
+        );
 
-        let result = resolve_doc_path(dir.path(), EngineKind::Postgres, Some("public"), "users", None).unwrap();
+        let result = resolve_doc_path(
+            dir.path(),
+            EngineKind::Postgres,
+            Some("public"),
+            "users",
+            None,
+        )
+        .unwrap();
         let expected = dir.path().join("postgres/public/users.md");
         assert_eq!(result, expected);
     }
@@ -1014,7 +1179,11 @@ mod tests {
     #[test]
     fn resolve_dynamo_with_table_match_rule_folds_name() {
         let dir = TempDir::new().unwrap();
-        write_file(dir.path(), "context.yaml", "schema_version: 1\nname: Test\n");
+        write_file(
+            dir.path(),
+            "context.yaml",
+            "schema_version: 1\nname: Test\n",
+        );
 
         let rule = TableMatch {
             prefix: Some("MyApp-prod-".to_string()),
@@ -1028,7 +1197,8 @@ mod tests {
             None,
             "MyApp-prod-EventsTable-3M4N",
             Some(&rule),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Should fold to `EventsTable` and land at dynamo/tables/EventsTable/table.md
         let expected = dir.path().join("dynamo/tables/EventsTable/table.md");
@@ -1038,7 +1208,11 @@ mod tests {
     #[test]
     fn resolve_traversal_attempt_rejected() {
         let dir = TempDir::new().unwrap();
-        write_file(dir.path(), "context.yaml", "schema_version: 1\nname: Test\n");
+        write_file(
+            dir.path(),
+            "context.yaml",
+            "schema_version: 1\nname: Test\n",
+        );
 
         // Attempt path traversal via a crafted name.
         // `target_path_for` does a simple join, so if name contains ".." we'd
@@ -1083,13 +1257,8 @@ mod tests {
         // Practical rejection test: resolve with the *parent* dir as root, then
         // verify the *child* root returns a path that IS inside the parent
         // (which is fine and expected — that test ensures no false positives).
-        let result = resolve_doc_path(
-            parent,
-            EngineKind::Postgres,
-            Some("public"),
-            "users",
-            None,
-        ).unwrap();
+        let result =
+            resolve_doc_path(parent, EngineKind::Postgres, Some("public"), "users", None).unwrap();
         assert!(result.starts_with(parent));
     }
 
@@ -1102,7 +1271,10 @@ mod tests {
             "users",
             None,
         );
-        assert!(result.is_err(), "should fail when context root doesn't exist");
+        assert!(
+            result.is_err(),
+            "should fail when context root doesn't exist"
+        );
     }
 
     // ---- system: block never mutated — across all targets ----
@@ -1111,9 +1283,24 @@ mod tests {
     fn system_block_unchanged_across_all_targets() {
         let doc = standard_doc();
         let targets: Vec<(&str, WriteTarget)> = vec![
-            ("body_append", WriteTarget::Body { mode: BodyMode::Append }),
-            ("body_replace", WriteTarget::Body { mode: BodyMode::Replace }),
-            ("column_note", WriteTarget::ColumnNote { column: "col".to_string() }),
+            (
+                "body_append",
+                WriteTarget::Body {
+                    mode: BodyMode::Append,
+                },
+            ),
+            (
+                "body_replace",
+                WriteTarget::Body {
+                    mode: BodyMode::Replace,
+                },
+            ),
+            (
+                "column_note",
+                WriteTarget::ColumnNote {
+                    column: "col".to_string(),
+                },
+            ),
             ("tags", WriteTarget::Tags),
         ];
 

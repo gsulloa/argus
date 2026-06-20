@@ -1,13 +1,15 @@
 // Default models and curated lists per Decision 8 of design.md.
 
 pub const CLAUDE_CLI_DEFAULT_MODEL: &str = "claude-opus-4-8";
-pub const CLAUDE_CLI_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"];
+pub const CLAUDE_CLI_MODELS: &[&str] =
+    &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"];
 
 pub const CODEX_CLI_DEFAULT_MODEL: &str = "gpt-5.1";
 pub const CODEX_CLI_MODELS: &[&str] = &["gpt-5.1", "gpt-5.1-codex"];
 
 pub const ANTHROPIC_API_DEFAULT_MODEL: &str = "claude-opus-4-8";
-pub const ANTHROPIC_API_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"];
+pub const ANTHROPIC_API_MODELS: &[&str] =
+    &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"];
 
 pub const OPENAI_API_DEFAULT_MODEL: &str = "gpt-5.1";
 pub const OPENAI_API_MODELS: &[&str] = &["gpt-5.1", "gpt-5.1-mini", "gpt-4o"];
@@ -55,14 +57,20 @@ mod tests {
     #[test]
     fn claude_cli_default_and_list() {
         assert_eq!(CLAUDE_CLI_DEFAULT_MODEL, "claude-opus-4-8");
-        assert_eq!(CLAUDE_CLI_MODELS, &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]);
+        assert_eq!(
+            CLAUDE_CLI_MODELS,
+            &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
+        );
         assert!(CLAUDE_CLI_MODELS.contains(&CLAUDE_CLI_DEFAULT_MODEL));
     }
 
     #[test]
     fn anthropic_api_default_and_list() {
         assert_eq!(ANTHROPIC_API_DEFAULT_MODEL, "claude-opus-4-8");
-        assert_eq!(ANTHROPIC_API_MODELS, &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]);
+        assert_eq!(
+            ANTHROPIC_API_MODELS,
+            &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
+        );
         assert!(ANTHROPIC_API_MODELS.contains(&ANTHROPIC_API_DEFAULT_MODEL));
     }
 
@@ -107,7 +115,10 @@ mod tests {
 
     #[test]
     fn sanitize_model_retired_returns_none() {
-        assert_eq!(sanitize_model("openai-api", Some("gpt-4o-mini".into())), None);
+        assert_eq!(
+            sanitize_model("openai-api", Some("gpt-4o-mini".into())),
+            None
+        );
     }
 
     #[test]
@@ -126,17 +137,32 @@ mod tests {
     #[test]
     fn sanitize_model_unknown_provider_returns_none() {
         // Unknown provider has empty model list, so any model is "retired".
-        assert_eq!(sanitize_model("unknown-provider", Some("gpt-5.1".into())), None);
+        assert_eq!(
+            sanitize_model("unknown-provider", Some("gpt-5.1".into())),
+            None
+        );
     }
 
     #[test]
     fn retired_ids_not_in_any_list() {
         let retired = ["claude-opus-4-7", "gpt-4o-mini", "gpt-4-turbo", "o3-mini"];
         for id in &retired {
-            assert!(!CLAUDE_CLI_MODELS.contains(id), "{id} should not be in CLAUDE_CLI_MODELS");
-            assert!(!CODEX_CLI_MODELS.contains(id), "{id} should not be in CODEX_CLI_MODELS");
-            assert!(!ANTHROPIC_API_MODELS.contains(id), "{id} should not be in ANTHROPIC_API_MODELS");
-            assert!(!OPENAI_API_MODELS.contains(id), "{id} should not be in OPENAI_API_MODELS");
+            assert!(
+                !CLAUDE_CLI_MODELS.contains(id),
+                "{id} should not be in CLAUDE_CLI_MODELS"
+            );
+            assert!(
+                !CODEX_CLI_MODELS.contains(id),
+                "{id} should not be in CODEX_CLI_MODELS"
+            );
+            assert!(
+                !ANTHROPIC_API_MODELS.contains(id),
+                "{id} should not be in ANTHROPIC_API_MODELS"
+            );
+            assert!(
+                !OPENAI_API_MODELS.contains(id),
+                "{id} should not be in OPENAI_API_MODELS"
+            );
         }
     }
 }

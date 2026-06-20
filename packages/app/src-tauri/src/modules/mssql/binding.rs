@@ -870,7 +870,7 @@ mod tests {
     #[test]
     fn bind_float_from_number_ok() {
         let mut q = make_query();
-        let result = bind_edit_value(&mut q, &serde_json::json!(3.14), BindKind::Float);
+        let result = bind_edit_value(&mut q, &serde_json::json!(2.5), BindKind::Float);
         assert!(result.is_ok());
     }
 
