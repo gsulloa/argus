@@ -1,0 +1,158 @@
+/* ConnectionRail — vertical strip (Decision 2, Phase 4; widened in Phase 11) */
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 72px;
+  flex-shrink: 0;
+  height: 100%;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 6px 0;
+  gap: 2px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Individual rail item button — vertical stack: icon on top, label beneath */
+.item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 64px;
+  min-height: 44px;
+  padding: 5px 4px 4px;
+  border-radius: var(--radius-sm, 3px);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--duration-instant, 80ms) ease-out,
+              color var(--duration-instant, 80ms) ease-out;
+}
+
+.item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* Focused/selected rail item — accent left stripe + soft tint */
+.item[data-focused="true"] {
+  background: var(--accent-soft, rgba(168, 85, 247, 0.12));
+  color: var(--text);
+  border-color: transparent;
+}
+
+/* Accent left-edge stripe for focused item */
+.item[data-focused="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 0 1px 1px 0;
+  background: var(--accent, #a855f7);
+}
+
+/* Small connection-name label beneath the engine icon */
+.itemLabel {
+  font-size: var(--text-xs, 11px);
+  color: var(--text-subtle);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 56px;
+  text-align: center;
+  user-select: none;
+}
+
+.item[data-focused="true"] .itemLabel {
+  color: var(--text-muted);
+}
+
+.item:hover .itemLabel {
+  color: var(--text-muted);
+}
+
+/* Environment color indicator — small dot in the bottom-right corner of the item */
+.envDot {
+  position: absolute;
+  bottom: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--surface);
+  flex-shrink: 0;
+}
+
+/* prod heuristic → warning/danger color */
+.envDot[data-env="prod"] {
+  background: var(--warning, #fbbf24);
+}
+
+/* neutral / local */
+.envDot[data-env="neutral"] {
+  background: var(--text-subtle, #6b6e7b);
+}
+
+/* Plus button — trailing "+" affordance to open the Manager */
+.addButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm, 3px);
+  border: 1px dashed var(--border-strong, #2e2f3a);
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--duration-instant, 80ms) ease-out,
+              color var(--duration-instant, 80ms) ease-out,
+              border-color var(--duration-instant, 80ms) ease-out;
+  margin-top: 4px;
+}
+
+.addButton:hover {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border-color: var(--text-subtle);
+}
+
+/* Context menu styles (Radix ContextMenu inside the rail) */
+.contextMenu {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  min-width: 150px;
+  z-index: 60;
+}
+
+.contextItem {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  outline: none;
+  color: var(--text);
+}
+
+.contextItem:hover,
+.contextItem[data-highlighted] {
+  background: var(--bg-hover, var(--surface-2));
+}
+
+.contextItemDanger {
+  color: var(--danger);
+}

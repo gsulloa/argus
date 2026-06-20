@@ -12,6 +12,7 @@ use crate::modules::athena::client::build_athena_clients;
 use crate::modules::athena::errors::maybe_sso_specialized;
 use crate::modules::athena::params::AthenaParams;
 use crate::modules::athena::pool::{ActiveAthenaClient, ActivePoolSummary, AthenaClientRegistry};
+use crate::platform::open_connections::OpenConnectionsRegistry;
 use crate::platform::{secrets, DbState};
 
 // ---------------------------------------------------------------------------
@@ -144,6 +145,7 @@ pub async fn athena_connect(
     app: tauri::AppHandle,
     db: State<'_, DbState>,
     registry: State<'_, AthenaClientRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
     id: String,
 ) -> AppResult<serde_json::Value> {
     let id = Uuid::parse_str(&id)
@@ -187,6 +189,7 @@ pub async fn athena_connect(
             };
             registry.insert(id, active).await;
             let _ = app.emit(ACTIVE_CHANGED_EVENT, ());
+            open_registry.mark_open(&app, &db, id).await;
             let metric = Metric::AwsIdentity {
                 value: format!("{}:{}", built.account_id, built.identity_arn),
             };
@@ -234,6 +237,7 @@ pub async fn athena_connect(
 pub async fn athena_disconnect(
     app: tauri::AppHandle,
     registry: State<'_, AthenaClientRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
     id: String,
 ) -> AppResult<()> {
     let id = Uuid::parse_str(&id)
@@ -243,6 +247,7 @@ pub async fn athena_disconnect(
     let duration_ms = started.elapsed().as_millis() as u64;
     if removed {
         let _ = app.emit(ACTIVE_CHANGED_EVENT, ());
+        open_registry.mark_closed(&app, id).await;
     }
     emit_activity(
         &app,
@@ -261,12 +266,14 @@ pub async fn athena_disconnect(
 pub async fn athena_disconnect_all(
     app: tauri::AppHandle,
     registry: State<'_, AthenaClientRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
 ) -> AppResult<usize> {
     let started = Instant::now();
     let count = registry.disconnect_all().await;
     let duration_ms = started.elapsed().as_millis() as u64;
     if count > 0 {
         let _ = app.emit(ACTIVE_CHANGED_EVENT, ());
+        open_registry.mark_kind_closed(&app, "athena").await;
     }
     emit_activity(
         &app,

@@ -395,3 +395,95 @@
 .contextItemDanger {
   color: var(--danger);
 }
+
+/* ── Manager-mode row overrides (Decision 10) ───────────────────────────── */
+/* Scoped to [data-mode="manager"] so workspace-mode rows are untouched.     */
+
+/* Outer row container: more breathing room */
+.row[data-mode="manager"] {
+  padding: 0 12px;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+}
+.row[data-mode="manager"]:last-child {
+  border-bottom: none;
+}
+
+/* The clickable item button: taller, comfortable padding */
+.item[data-mode="manager"] {
+  padding: 10px 8px;
+  gap: 12px;
+  align-items: center;
+  border-radius: 0;
+  font-size: var(--text-md, 13px);
+  transition: background var(--duration-instant, 80ms) ease-out;
+}
+
+.item[data-mode="manager"]:hover {
+  background: var(--surface-2);
+  border-radius: var(--radius-md, 5px);
+}
+
+/* Manager icon: slightly more prominent */
+.item[data-mode="manager"] .icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* Two-line name + host layout */
+.managerItemBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 1px;
+}
+
+/* Primary: connection name */
+.item[data-mode="manager"] .itemName {
+  font-size: var(--text-md, 13px);
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Secondary: host/region in mono */
+.managerHostLine {
+  font-family: "Geist Mono", "Menlo", "Consolas", monospace;
+  font-size: var(--text-xs, 11px);
+  color: var(--text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-feature-settings: "zero" on;
+}
+
+/* Active dot: slightly larger in manager for scannability */
+.item[data-mode="manager"] .activeDot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+}
+
+/* Manager section header: no top-level section borders when in picker */
+.section[data-manager="true"] {
+  border-bottom: none;
+}
+
+/* Manager section header text: keep the label style */
+.section[data-manager="true"] .sectionHeader {
+  padding: 16px 20px 6px;
+  font-size: var(--text-xs, 11px);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-subtle);
+}
+
+/* Connections list area in manager: no extra section padding */
+.section[data-manager="true"] .empty {
+  padding: 12px 20px;
+  color: var(--text-subtle);
+  font-size: var(--text-sm, 12px);
+}

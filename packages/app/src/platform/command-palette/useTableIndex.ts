@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { schemaApi } from "@/modules/postgres/schema/api";
 import { globalSchemaCache, isSystemSchema } from "@/modules/postgres/schema/globalSchemaCache";
 import { useActiveConnections } from "@/modules/postgres/useActiveConnections";
@@ -11,7 +11,10 @@ import { mssqlSchemaCache, isMssqlSystemSchema } from "@/modules/mssql/schema/gl
 import { mssqlBulkColumnsCache } from "@/modules/mssql/columns/columnsCache";
 import { schemaApi as mssqlSchemaApi } from "@/modules/mssql/schema/api";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useOpenConnections } from "@/platform/connection-registry/useOpenConnections";
+import { FocusedConnectionCtxRef } from "@/platform/shell/FocusedConnectionContext";
 import type { RelationKind } from "@/modules/postgres/data/types";
+import type { TableScope } from "@/platform/command-palette/PaletteContext";
 
 /** Connection kind tag — determines how to open the tab. */
 export type TableEntryKind = "postgres" | "mysql" | "mssql";
@@ -166,16 +169,20 @@ function compareEntries(a: TableEntry, b: TableEntry): number {
 }
 
 /**
- * Reactive index of tables / views / materialized views across all active
- * Postgres and MySQL connections. Re-derives on cache notifications,
- * active-connection changes, and connection-name changes.
+ * Reactive index of tables / views / materialized views scoped to either the
+ * focused connection or all open connections.
+ *
+ * - `scope: "focused"` — only the focused connection's relations (Decision 6).
+ *   Used by ⌘P.  Index rebuilds reactively when `focusedConnectionId` changes
+ *   or a connection closes.
+ * - `scope: "all-open"` — every currently-open connection, bounded to the
+ *   cross-engine open registry.  Used by ⌥⌘P.
  *
  * When `enabled` flips to true for the first time, fans out `listRelations`
- * for every (active connection, cached schema) where relations aren't yet
- * loaded. For MySQL, also lazy-loads the bulk columns cache for connections
- * whose schemas are warm but columns haven't been fetched.
+ * for every (scoped connection, cached schema) where relations aren't yet
+ * loaded. Eager fan-out is bounded to the active scope.
  */
-export function useTableIndex(enabled: boolean): TableEntry[] {
+export function useTableIndex(enabled: boolean, scope: TableScope = "all-open"): TableEntry[] {
   // Force re-derive when any schema cache notifies.
   const [pgCacheVersion, setPgCacheVersion] = useState(0);
   const [myCacheVersion, setMyCacheVersion] = useState(0);
@@ -205,6 +212,14 @@ export function useTableIndex(enabled: boolean): TableEntry[] {
   const { items: myActives } = useActiveMysqlConnections();
   const { items: msActives } = useActiveMssqlConnections();
   const { items: connections } = useConnections();
+  // Open-connections registry: used to constrain "all-open" to only live connections.
+  const { isOpen } = useOpenConnections();
+  // FocusedConnectionContext: drives the "focused" scope filter.
+  // Read the context directly (not through useFocusedConnection) so that this
+  // hook is safe outside of FocusedConnectionProvider (e.g. Manager window,
+  // tests). When the context is absent, scope="focused" degrades to empty.
+  const focusedCtx = useContext(FocusedConnectionCtxRef);
+  const focusedConnectionId = focusedCtx?.focusedConnectionId ?? null;
 
   const nameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -212,19 +227,36 @@ export function useTableIndex(enabled: boolean): TableEntry[] {
     return m;
   }, [connections]);
 
+  // Compute the set of connection ids that are in scope.
+  const scopedIds = useMemo<Set<string>>(() => {
+    if (scope === "focused") {
+      return focusedConnectionId ? new Set([focusedConnectionId]) : new Set();
+    }
+    // "all-open": all per-engine active connections that are also in the open registry.
+    const ids = new Set<string>();
+    for (const a of pgActives) if (isOpen(a.id)) ids.add(a.id);
+    for (const a of myActives) if (isOpen(a.id)) ids.add(a.id);
+    for (const a of msActives) if (isOpen(a.id)) ids.add(a.id);
+    return ids;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, focusedConnectionId, pgActives, myActives, msActives, isOpen]);
+
   const entries = useMemo<TableEntry[]>(() => {
     const out: TableEntry[] = [];
     for (const a of pgActives) {
+      if (!scopedIds.has(a.id)) continue;
       const name = nameById.get(a.id);
       if (!name) continue;
       out.push(...flattenPostgres(a.id, name, globalSchemaCache));
     }
     for (const a of myActives) {
+      if (!scopedIds.has(a.id)) continue;
       const name = nameById.get(a.id);
       if (!name) continue;
       out.push(...flattenMysql(a.id, name));
     }
     for (const a of msActives) {
+      if (!scopedIds.has(a.id)) continue;
       const name = nameById.get(a.id);
       if (!name) continue;
       out.push(...flattenMssql(a.id, name));
@@ -233,16 +265,17 @@ export function useTableIndex(enabled: boolean): TableEntry[] {
     return out;
     // pgCacheVersion, myCacheVersion, msCacheVersion are invalidation signals.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pgActives, myActives, msActives, nameById, pgCacheVersion, myCacheVersion, msCacheVersion]);
+  }, [pgActives, myActives, msActives, nameById, scopedIds, pgCacheVersion, myCacheVersion, msCacheVersion]);
 
-  // Eager-load on first enable for Postgres connections.
+  // Eager-load on first enable — bounded to the active scope.
   const eagerLoadedRef = useRef(false);
   useEffect(() => {
     if (!enabled || eagerLoadedRef.current) return;
     eagerLoadedRef.current = true;
 
-    // Postgres: lazy-load uncached relations.
+    // Postgres: lazy-load uncached relations (scoped).
     for (const a of pgActives) {
+      if (!scopedIds.has(a.id)) continue;
       const schemas = globalSchemaCache.getSchemas(a.id);
       for (const s of schemas) {
         if (isSystemSchema(s.name)) continue;
@@ -260,8 +293,9 @@ export function useTableIndex(enabled: boolean): TableEntry[] {
       }
     }
 
-    // MySQL: lazy-load bulk columns cache for warm schemas without bulk data.
+    // MySQL: lazy-load bulk columns cache for warm schemas without bulk data (scoped).
     for (const a of myActives) {
+      if (!scopedIds.has(a.id)) continue;
       for (const s of mysqlSchemaCache.getSchemas(a.id)) {
         if (isMysqlSystemSchema(s.name)) continue;
         if (mysqlBulkColumnsCache.isPopulatedOrInFlight(a.id, s.name)) continue;
@@ -293,8 +327,9 @@ export function useTableIndex(enabled: boolean): TableEntry[] {
       }
     }
 
-    // MSSQL: lazy-load bulk columns cache for warm schemas without bulk data.
+    // MSSQL: lazy-load bulk columns cache for warm schemas without bulk data (scoped).
     for (const a of msActives) {
+      if (!scopedIds.has(a.id)) continue;
       for (const s of mssqlSchemaCache.getSchemas(a.id)) {
         if (isMssqlSystemSchema(s.name)) continue;
         if (mssqlBulkColumnsCache.isPopulatedOrInFlight(a.id, s.name)) continue;
@@ -325,7 +360,7 @@ export function useTableIndex(enabled: boolean): TableEntry[] {
           .finally(() => mssqlInflight.delete(key));
       }
     }
-  }, [enabled, pgActives, myActives, msActives]);
+  }, [enabled, pgActives, myActives, msActives, scopedIds]);
 
   return entries;
 }

@@ -1,5 +1,5 @@
 // Side-effect imports: registering built-in tab renderers.
-import "./welcome";
+// NOTE: welcome.tsx is intentionally omitted — the Manager is the welcome surface (Phase 5, task 5.5).
 import "./settings-placeholder";
 import "./postgres-object-placeholder";
 import "@/modules/postgres/data/TableViewerTab";
@@ -11,7 +11,6 @@ export { TabRegistry } from "./TabRegistry";
 export { TabsProvider, useTabs } from "./TabsContext";
 export { TabStrip } from "./TabStrip";
 export { TabContent } from "./TabContent";
-export { WELCOME_KIND } from "./welcome";
 export { SETTINGS_PLACEHOLDER_KIND, SETTINGS_PLACEHOLDER_TAB_ID } from "./settings-placeholder";
 export {
   POSTGRES_OBJECT_PLACEHOLDER_KIND,

@@ -18,6 +18,7 @@ use crate::modules::mysql::pool::{
 };
 use crate::modules::mysql::tls::apply_to_connect_options;
 use crate::modules::mysql::url::parse_mysql_url as do_parse_url;
+use crate::platform::open_connections::OpenConnectionsRegistry;
 use crate::platform::DbState;
 
 /// Hard cap on a single test or eager-handshake operation.
@@ -128,6 +129,7 @@ pub async fn mysql_connect(
     app: AppHandle,
     db: State<'_, DbState>,
     registry: State<'_, MysqlPoolRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
     id: String,
 ) -> AppResult<ConnectResult> {
     let started = Instant::now();
@@ -173,6 +175,7 @@ pub async fn mysql_connect(
                     })),
             );
             let _ = app.emit("mysql:active-changed", ());
+            open_registry.mark_open(&app, &db, parsed).await;
         }
         Err(e) => {
             emit_activity(
@@ -190,6 +193,7 @@ pub async fn mysql_connect(
 pub async fn mysql_disconnect(
     app: AppHandle,
     registry: State<'_, MysqlPoolRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
     id: String,
 ) -> AppResult<()> {
     let started = Instant::now();
@@ -211,6 +215,7 @@ pub async fn mysql_disconnect(
     };
     registry.disconnect(parsed).await?;
     let _ = app.emit("mysql:active-changed", ());
+    open_registry.mark_closed(&app, parsed).await;
     emit_activity(
         &app,
         ActivityLogEntryBuilder::new(
@@ -228,12 +233,14 @@ pub async fn mysql_disconnect(
 pub async fn mysql_disconnect_all(
     app: AppHandle,
     registry: State<'_, MysqlPoolRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
 ) -> AppResult<u32> {
     let started = Instant::now();
     let dropped = registry.disconnect_all().await;
     let dropped_u32 = u32::try_from(dropped).unwrap_or(u32::MAX);
     if dropped > 0 {
         let _ = app.emit("mysql:active-changed", ());
+        open_registry.mark_kind_closed(&app, "mysql").await;
         emit_activity(
             &app,
             ActivityLogEntryBuilder::new(

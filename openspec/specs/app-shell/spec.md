@@ -5,16 +5,24 @@ TBD - created by archiving change bootstrap-tauri-shell. Update Purpose after ar
 ## Requirements
 ### Requirement: Application window
 
-The system SHALL launch a single main desktop window on application start, titled "Argus", sized to a sensible default (1280x800), and positioned with native window decorations on the host operating system.
+The system SHALL launch the **Connection Manager** window on application start, titled "Argus", with native window decorations on the host operating system. The application SHALL additionally create, on demand, a single **Workspace** window (see the `dual-window-shell` and `connection-rail` capabilities). The two windows have fixed roles determined by their window label (`manager`, `workspace`). Each window's size and position MUST persist across launches, keyed by its window label. On first launch (no persisted geometry) the Manager SHALL open at a compact, picker-appropriate default size, and the Workspace SHALL open at a larger work-appropriate default size.
 
-#### Scenario: First launch shows the main window
+#### Scenario: First launch shows the Manager window
 
 - **WHEN** the user launches Argus for the first time
-- **THEN** a window titled "Argus" appears at 1280x800 with the system-default chrome and an empty shell
+- **THEN** a window titled "Argus" appears with the system-default chrome showing the Connection Manager
+- **AND** it opens at a compact, picker-appropriate default size (not the larger workspace size)
+- **AND** no Workspace window exists until the user opens a connection
 
-#### Scenario: Closing the window quits the application
+#### Scenario: Window geometry persists per window
 
-- **WHEN** the user closes the only main window on macOS, Linux, or Windows
+- **WHEN** the user resizes or moves either the Manager or the Workspace and quits
+- **AND** relaunches Argus
+- **THEN** each window reopens at its previously chosen size and position
+
+#### Scenario: Closing the last window quits the application
+
+- **WHEN** the user closes the Manager while no Workspace exists, on Windows or Linux
 - **THEN** the application terminates cleanly (no orphan processes, SQLite handle closed)
 
 ### Requirement: Four-region layout
@@ -44,27 +52,28 @@ The shell SHALL present four primary regions: a left sidebar, a center work area
 
 ### Requirement: Center tab system
 
-The center work area SHALL host a tab strip. Tabs MUST be opened, switched, closed, and reordered by drag. Each tab is rendered by a registered renderer keyed on the tab's `kind`. The platform SHALL ship with a single built-in `welcome` tab kind that shows a static welcome view; module-specific kinds are registered by other capabilities.
+The **Workspace** center work area SHALL host a tab strip. Tabs MUST be opened, switched, closed, and reordered by drag. Each tab is rendered by a registered renderer keyed on the tab's `kind`. Tabs SHALL be **scoped to the focused connection**: each open connection has its own tab set, and the visible tab strip is the focused connection's set. Opening, closing, cycling, and ⌘W operate within the focused connection's set. There is no `welcome` tab kind — the Connection Manager is the welcome surface.
 
-#### Scenario: Default welcome tab on first launch
+#### Scenario: Tabs are scoped per connection
 
-- **WHEN** the user launches Argus with no saved tab state
-- **THEN** the center area shows a single tab of kind `welcome` with a static welcome view
+- **WHEN** connection A is focused and the user opens two object tabs, then focuses connection B in the rail
+- **THEN** the tab strip shows B's tab set (not A's)
+- **AND** focusing A again restores A's two tabs and its active tab
 
-#### Scenario: Closing the last tab
+#### Scenario: Closing the last tab of the focused connection
 
-- **WHEN** the user closes the only open tab
-- **THEN** the center area shows an empty placeholder with a hint to open the command palette (⌘K)
+- **WHEN** the user closes the only open tab of the focused connection
+- **THEN** the Workspace center area shows an empty placeholder for that connection with a hint to open an object or the command palette (⌘K)
 
 #### Scenario: Switching tabs with keyboard
 
-- **WHEN** more than one tab is open and the user presses ⌃Tab (Ctrl+Tab) or ⌃⇧Tab
-- **THEN** focus moves to the next or previous tab respectively
+- **WHEN** more than one tab is open for the focused connection and the user presses ⌃Tab (Ctrl+Tab) or ⌃⇧Tab
+- **THEN** focus moves to the next or previous tab within the focused connection's set
 
 #### Scenario: Closing a tab with keyboard
 
-- **WHEN** any tab is focused and the user presses ⌘W (Cmd+W) or Ctrl+W
-- **THEN** that tab closes; if it was the active tab, the previous tab becomes active
+- **WHEN** any tab of the focused connection is active and the user presses ⌘W (Cmd+W) or Ctrl+W
+- **THEN** that tab closes; if it was the active tab, the previous tab in the same connection's set becomes active
 
 ### Requirement: Theming
 
@@ -88,19 +97,28 @@ The shell SHALL support `light`, `dark`, and `system` theme modes. The active th
 
 ### Requirement: Base keyboard shortcuts
 
-The shell SHALL register the following base shortcuts at startup, available globally inside the application window: ⌘K (Cmd+K) opens the command palette, ⌘⇧P is a synonym for ⌘K, ⌘P opens the table quick-switcher, ⌘W closes the active tab, ⌘\ toggles the right inspector, ⌘, opens settings (no settings UI yet — opens an empty placeholder tab).
+The shell SHALL register base shortcuts at startup, partitioned by window role.
 
-These shortcuts MUST fire regardless of the focused element. In particular, they MUST work when focus is inside a CodeMirror SQL editor surface (whose `.cm-content` element is `contenteditable`), inside a native `<input>`, `<textarea>`, or `<select>`, or inside any other contenteditable region. The handler MUST call `event.preventDefault()` on match so the keystroke does not also reach the underlying editor or input as a textual command.
+The **Workspace** SHALL register: ⌘K (Cmd+K) opens the command palette, ⌘⇧P is a synonym for ⌘K, ⌘P opens the table quick-switcher **scoped to the focused connection**, ⌥⌘P opens the table quick-switcher **scoped to all open connections**, ⌘W closes the active tab of the focused connection, ⌘\ toggles the right inspector, ⌘, opens settings.
+
+The **Manager** SHALL register: ⌘K (Cmd+K) opens the command palette and ⌘⇧P as its synonym, and ⌘, opens settings. ⌘P / ⌥⌘P and ⌘W have no effect in the Manager (no tabs, no per-connection table index).
+
+These shortcuts MUST fire regardless of the focused element, including inside a CodeMirror SQL editor surface (`.cm-content` contenteditable), a native `<input>`, `<textarea>`, `<select>`, or any other contenteditable region. The handler MUST call `event.preventDefault()` on match so the keystroke does not also reach the underlying editor or input.
 
 #### Scenario: Opening the palette with ⌘K
 
-- **WHEN** the user presses ⌘K (or Ctrl+K on non-macOS)
-- **THEN** the command palette opens centered over the window
+- **WHEN** the user presses ⌘K (or Ctrl+K on non-macOS) in either window
+- **THEN** the command palette opens centered over that window
 
-#### Scenario: Settings shortcut
+#### Scenario: ⌘P scopes to the focused connection
 
-- **WHEN** the user presses ⌘, (or Ctrl+, on non-macOS)
-- **THEN** a tab of kind `settings-placeholder` opens (or focuses if already open)
+- **WHEN** the Workspace has connections A and B open with A focused, and the user presses ⌘P
+- **THEN** the table quick-switcher opens listing only A's relations
+
+#### Scenario: ⌥⌘P scopes to all open connections
+
+- **WHEN** the Workspace has connections A and B open and the user presses ⌥⌘P
+- **THEN** the table quick-switcher opens listing relations from both A and B
 
 #### Scenario: Shortcuts fire from inside the SQL editor
 
@@ -109,17 +127,11 @@ These shortcuts MUST fire regardless of the focused element. In particular, they
 - **THEN** the command palette opens
 - **AND** the editor document is unchanged (no character inserted, no edit transaction dispatched)
 
-#### Scenario: ⌘P opens the table quick-switcher from the SQL editor
-
-- **WHEN** the user has focus inside the SQL editor
-- **AND** the user presses ⌘P
-- **THEN** the table quick-switcher opens
-
 #### Scenario: Tab close shortcut fires from a focused input
 
-- **WHEN** the user has focus inside any `<input>` or `<textarea>` (e.g. the connection name field, a filter bar, the palette search)
+- **WHEN** the user has focus inside any `<input>` or `<textarea>` in the Workspace
 - **AND** the user presses ⌘W
-- **THEN** the active tab is closed
+- **THEN** the active tab of the focused connection is closed
 - **AND** no character is inserted into the input
 
 ### Requirement: Native edit menu
@@ -163,44 +175,36 @@ The shell SHALL provide a reusable `SidebarTree` primitive that renders a hierar
 
 ### Requirement: Sidebar sections may host hierarchical subtrees
 
-The sidebar SHALL allow each section (for example "Connections", or future module-specific sections) to host a `SidebarTree` underneath one or more of its rows. The sidebar MUST provide a single vertical scroll context that contains every section and every embedded `SidebarTree` below the brand header; embedded trees MUST grow to their natural content height and contribute to that shared scroll rather than scrolling independently. Embedded trees MUST respect the persisted sidebar width.
+In the **Workspace**, the level-2 area SHALL host a `SidebarTree` for the **focused connection only**. The Workspace MUST provide a single vertical scroll context containing the focused connection's tree; the tree MUST grow to its natural content height and contribute to that scroll rather than scrolling independently, and MUST respect the persisted Workspace sidebar width. Trees for non-focused open connections MUST NOT be rendered at level 2 (their existence is represented only by their rail item).
 
-Embedded subtrees MAY be of any depth from 1 to N. A **flat subtree** (depth 1 — all children of the row are leaf nodes with no intermediate group nodes) is a fully supported shape and MUST receive the same scroll-context, width, virtualization, keyboard, and ARIA behavior as a deeper subtree. Module owners pick the depth that fits the underlying data model: the Postgres module renders a multi-level subtree (schema → groups → relations → indexes/triggers); the Dynamo module renders a flat subtree (one leaf per table); future modules MAY render either shape without changes to the sidebar primitive.
+Embedded subtrees MAY be of any depth from 1 to N. A **flat subtree** (depth 1) is a fully supported shape and MUST receive the same scroll-context, width, virtualization, keyboard, and ARIA behavior as a deeper subtree. Module owners pick the depth that fits the underlying data model: the Postgres module renders a multi-level subtree (schema → groups → relations → indexes/triggers); the Dynamo module renders a flat subtree (one leaf per table).
+
+#### Scenario: Only the focused connection's tree renders
+
+- **WHEN** connections A and B are open and A is focused
+- **THEN** the level-2 area renders A's `SidebarTree`
+- **AND** B's tree is not rendered at level 2
 
 #### Scenario: Sidebar provides a single scroll context
 
-- **WHEN** the combined height of the sidebar's sections and embedded trees exceeds the visible sidebar height
-- **THEN** the sidebar exposes one vertical scrollbar that scrolls every section and embedded tree as a single column
-- **AND** the brand header at the top of the sidebar remains visible (does not scroll out of view)
+- **WHEN** the focused connection's tree exceeds the visible level-2 height
+- **THEN** the Workspace exposes one vertical scrollbar for that tree
 
-#### Scenario: Multiple trees scroll together
+#### Scenario: Sidebar width applies to the focused tree
 
-- **WHEN** two connections in the "Connections" section are both active and each renders its own subtree
-- **THEN** both trees are rendered in document order under their respective rows
-- **AND** scrolling the sidebar moves through both trees as part of the same scroll context (no independent per-tree scrollbars)
+- **WHEN** the user resizes the Workspace sidebar to a new width
+- **THEN** the focused connection's `SidebarTree` lays out within the new width, truncating long labels with an ellipsis and exposing them via tooltip on hover
 
-#### Scenario: Sidebar width applies to embedded trees
+#### Scenario: Virtualized tree uses the sidebar scroll context
 
-- **WHEN** the user resizes the sidebar to a new width
-- **THEN** every visible `SidebarTree` lays out within the new width, truncating long labels with an ellipsis and exposing them via tooltip on hover
-
-#### Scenario: Virtualized trees use the sidebar scroll context
-
-- **WHEN** an embedded `SidebarTree` exceeds its virtualization threshold (more than 500 visible nodes)
-- **THEN** the tree's virtualizer measures and positions rows against the sidebar's shared scroll element
-- **AND** scrolling the sidebar reveals additional virtualized rows as they enter the viewport
+- **WHEN** the focused connection's `SidebarTree` exceeds its virtualization threshold (more than 500 visible nodes)
+- **THEN** the tree's virtualizer measures and positions rows against the Workspace sidebar's shared scroll element
 
 #### Scenario: Flat subtree is a supported shape
 
-- **WHEN** a module embeds a `SidebarTree` whose nodes are all leaves at depth 1 (no group nodes)
-- **THEN** the tree renders without any intermediate group rows
-- **AND** keyboard navigation, virtualization above the 500-node threshold, ARIA `tree`/`treeitem` semantics, and the shared sidebar scroll context behave identically to multi-level trees
-
-#### Scenario: Heterogeneous depths coexist in the same sidebar
-
-- **WHEN** the sidebar simultaneously hosts a multi-level Postgres subtree under one connection row and a flat Dynamo subtree under another connection row
-- **THEN** both subtrees render in document order under their respective rows and participate in the single sidebar scroll context
-- **AND** neither subtree's behavior interferes with the other
+- **WHEN** the focused connection is a Dynamo connection whose nodes are all leaves at depth 1
+- **THEN** the tree renders without intermediate group rows
+- **AND** keyboard navigation, virtualization above the 500-node threshold, ARIA `tree`/`treeitem` semantics, and the shared scroll context behave identically to multi-level trees
 
 ### Requirement: Bottom panel slot
 
@@ -283,7 +287,6 @@ Clicking the version string in the status bar MUST open a dropdown menu with the
 - **WHEN** the user clicks "Check for updates now"
 - **THEN** the updater immediately performs a check (without waiting for the 4-hour interval) and the menu closes
 
-
 ### Requirement: Inactive tab content remains mounted
 
 The center tab system SHALL keep every tab that has been activated at least once mounted in the DOM for the lifetime of the tab. Switching between tabs MUST change visibility only — it MUST NOT unmount or remount tab renderers. Tab renderers MAY rely on this guarantee to retain component state (data, scroll, selection, edit buffers) across activations without external persistence.
@@ -326,44 +329,28 @@ Each tab renderer SHALL receive an `active: boolean` prop indicating whether it 
 
 ### Requirement: Sidebar connection kind picker
 
-The sidebar's "+" affordance in the "Connections" section SHALL open a small menu whose first item, "New connection", opens a **kind picker** rather than going directly to a kind-specific form. The kind picker MUST render one selectable card per supported connection kind, currently `postgres` and `dynamodb`, each card showing the kind's icon, its display name ("PostgreSQL" / "DynamoDB"), and a one-line description. Activating a card MUST open that kind's connection form (the Postgres form for `postgres`, the Dynamo form for `dynamodb`). The picker MUST be dismissable with `Escape` and via a Cancel affordance, in which case no form is opened.
+The **Connection Manager** SHALL own connection creation. Its "+" affordance in the connections list opens a small menu whose first item, "New connection", opens a **kind picker** rather than going directly to a kind-specific form. The kind picker MUST render one selectable card per supported connection kind (currently `postgres` and `dynamodb`), each showing the kind's icon, display name, and a one-line description. Activating a card MUST open that kind's connection form. The picker MUST be dismissable with `Escape` and via Cancel, in which case no form is opened.
 
-Connection rows in the "Connections" section SHALL dispatch their icon and primary click handler by the row's `kind` value: `postgres` rows render the Postgres icon and use the Postgres connect/disconnect path; `dynamodb` rows render the Dynamo icon and use the Dynamo connect/disconnect path; rows with an unknown `kind` SHALL fall back to rendering the kind value as plain text (existing behavior) and SHALL have no primary-click handler.
+Connection rows in the Manager SHALL dispatch their icon by the row's `kind`: `postgres` rows render the Postgres icon, `dynamodb` rows render the Dynamo icon, and rows with an unknown `kind` fall back to rendering the kind value as plain text. The primary action of a Manager connection row is **open in the Workspace** (per the `dual-window-shell` open-and-focus coordination), not an inline connect that expands a subtree.
 
 #### Scenario: Plus button opens kind picker
 
-- **WHEN** the user clicks the "+" button in the Connections section header and activates "New connection"
+- **WHEN** the user clicks the "+" button in the Manager's connections list and activates "New connection"
 - **THEN** a kind picker dialog opens with at least one card per supported kind (`postgres`, `dynamodb`)
 
-#### Scenario: Picking Postgres opens the Postgres form
+#### Scenario: Picking a kind opens its form
 
 - **WHEN** the kind picker is open and the user activates the PostgreSQL card
-- **THEN** the Postgres connection form opens in "Form" view with empty fields
-- **AND** the kind picker closes
-
-#### Scenario: Picking DynamoDB opens the Dynamo form
-
-- **WHEN** the kind picker is open and the user activates the DynamoDB card
-- **THEN** the Dynamo connection form opens with empty fields
-- **AND** the kind picker closes
+- **THEN** the Postgres connection form opens with empty fields and the kind picker closes
 
 #### Scenario: Escape cancels the kind picker
 
 - **WHEN** the kind picker is open and the user presses Escape (or clicks Cancel)
 - **THEN** the picker closes and no form opens
 
-#### Scenario: Postgres row dispatches to Postgres handlers
+#### Scenario: Manager row opens the connection in the Workspace
 
-- **WHEN** the sidebar renders a connection row with `kind: "postgres"`
-- **THEN** the row renders the Postgres icon and clicking the inactive row invokes `postgres.connect(id)`
-
-#### Scenario: Dynamo row dispatches to Dynamo handlers
-
-- **WHEN** the sidebar renders a connection row with `kind: "dynamodb"`
-- **THEN** the row renders the Dynamo icon and clicking the inactive row invokes `dynamo.connect(id)`
-
-#### Scenario: Unknown kind falls back to plain text
-
-- **WHEN** the sidebar renders a connection row whose `kind` is neither `postgres` nor `dynamodb`
-- **THEN** the row renders the `kind` value as plain text in the icon slot and clicking the row has no effect
+- **WHEN** the user activates a connection row in the Manager
+- **THEN** the connection is opened into the Workspace and focused there (per `dual-window-shell`)
+- **AND** the row does not expand an inline schema subtree in the Manager
 
