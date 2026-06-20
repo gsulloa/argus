@@ -1,4 +1,12 @@
+// Side-effect import: ensures TabRegistry.register(DYNAMO_QUERY_KIND, ...) runs
+// at module load. Must be a value import (not `export type`) so the side effect
+// is not erased by the bundler.
+import "./sql";
+
 export { DYNAMO_KIND } from "./types";
+// Re-export as a value (not type) so the constant is available to consumers
+// and the side effect import above is not the only reference.
+export { DYNAMO_QUERY_KIND } from "./sql";
 export type {
   ActiveDynamoConnection,
   AwsCredentials,

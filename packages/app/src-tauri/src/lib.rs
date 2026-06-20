@@ -40,6 +40,7 @@ use crate::modules::dynamo::commands::{
 };
 use crate::modules::dynamo::edit::{dynamo_delete_item, dynamo_put_item, dynamo_update_item};
 use crate::modules::dynamo::items::{dynamo_count_items, dynamo_query, dynamo_scan};
+use crate::modules::dynamo::partiql::{dynamo_run_partiql, dynamo_run_partiql_many};
 use crate::modules::dynamo::tables::commands::{dynamo_describe_table, dynamo_list_tables};
 use crate::modules::mssql::{
     mssql_apply_table_edits, mssql_connect, mssql_count_table, mssql_disconnect,
@@ -369,6 +370,8 @@ pub fn run() {
             dynamo_put_item,
             dynamo_update_item,
             dynamo_delete_item,
+            dynamo_run_partiql,
+            dynamo_run_partiql_many,
             // Updater commands
             updater_check_and_download,
             updater_install_and_restart,

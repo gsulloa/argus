@@ -31,6 +31,7 @@ import {
   type DynamoParams,
   type ActiveDynamoConnection,
 } from "@/modules/dynamo";
+import { openDynamoPartiQLTab } from "@/modules/dynamo/sql";
 import { DynamoConnectionSubtree, useDynamoTableCache } from "@/modules/dynamo/tables";
 import {
   MYSQL_KIND,
@@ -661,6 +662,15 @@ export function ConnectionRow({
               <>
                 <ContextMenu.Item
                   className={styles.contextItem}
+                  onSelect={() =>
+                    openDynamoPartiQLTab(tabs, connection.id, connection.name)
+                  }
+                >
+                  New PartiQL query
+                </ContextMenu.Item>
+                <ContextMenu.Separator className={styles.contextSeparator} />
+                <ContextMenu.Item
+                  className={styles.contextItem}
                   onSelect={() => setConfirmDisconnect(true)}
                 >
                   Disconnect
@@ -913,12 +923,7 @@ export function ConnectionRow({
             contextPath={connection.context_path}
             engine="dynamo"
             onActivate={(q) => {
-              void openContextQuery(tabs, connection.id, connection.name, "dynamo", q, {
-                onCopied: (name) => {
-                  // TODO: wire up a toast notification system when available
-                  console.log(`[argus] context query copied to clipboard: ${name}`);
-                },
-              });
+              void openContextQuery(tabs, connection.id, connection.name, "dynamo", q);
             }}
           />
         </div>
