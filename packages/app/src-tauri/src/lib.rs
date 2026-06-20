@@ -447,15 +447,13 @@ pub fn run() {
                 // ---------------------------------------------------------------
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen {
-                    has_visible_windows,
+                    has_visible_windows: false,
                     ..
                 } => {
-                    if !has_visible_windows {
-                        let app = app_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let _ = platform::open_connections::ensure_manager_window(app).await;
-                        });
-                    }
+                    let app = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = platform::open_connections::ensure_manager_window(app).await;
+                    });
                 }
 
                 // ---------------------------------------------------------------

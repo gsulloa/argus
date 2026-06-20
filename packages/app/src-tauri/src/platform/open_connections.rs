@@ -53,6 +53,12 @@ pub struct OpenConnectionsRegistry {
     inner: RwLock<HashMap<Uuid, OpenConnection>>,
 }
 
+impl Default for OpenConnectionsRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpenConnectionsRegistry {
     pub fn new() -> Self {
         Self {

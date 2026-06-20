@@ -172,7 +172,7 @@ function WorkspaceLifecycle() {
               `Closing the workspace will disconnect ${openCount} connections. Continue?`,
               { title: "Close workspace", kind: "warning" },
             );
-          } catch (e) {
+          } catch {
             // Dialog failed (e.g. non-Tauri env); fall back to browser confirm.
             confirmed = window.confirm(
               `Closing the workspace will disconnect ${openCount} connections. Continue?`,
