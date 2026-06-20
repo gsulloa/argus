@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cloudwatchApi } from "../api";
+import type { AiReadiness } from "@/modules/ai/useAiReadiness";
 import type { LogGroupItem, RelativePreset, TimeRange } from "../types";
 import styles from "@/modules/mysql/sql/QueryTab.module.css";
 
@@ -65,6 +66,12 @@ export interface ToolbarProps {
   onRun: () => void;
   running: boolean;
   onCancel?: () => void;
+  /** Whether the AI chat panel is currently open. */
+  panelOpen: boolean;
+  /** Callback to toggle the AI chat panel open/closed. */
+  onTogglePanel: () => void;
+  /** AI readiness state for the connection. */
+  readiness: AiReadiness;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +87,9 @@ export function InsightsToolbar({
   onRun,
   running,
   onCancel,
+  panelOpen,
+  onTogglePanel,
+  readiness,
 }: ToolbarProps) {
   const [availableGroups, setAvailableGroups] = useState<LogGroupItem[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
@@ -443,6 +453,32 @@ export function InsightsToolbar({
           </div>
         )}
       </div>
+
+      {/* Divider */}
+      <span className={styles.toolbarDivider} aria-hidden="true" />
+
+      {/* ✨ AI chat panel toggle */}
+      <button
+        type="button"
+        className={`${styles.toolbarButton} ${styles.aiButton}`}
+        onClick={onTogglePanel}
+        title={
+          readiness.level === "ready"
+            ? "Open AI chat panel"
+            : "Set up AI to start chatting"
+        }
+        aria-label="Open AI chat panel"
+        aria-pressed={panelOpen}
+      >
+        <span>✨</span>
+        <span>Generate</span>
+        <span
+          className={`${styles.aiDot} ${
+            readiness.level === "ready" ? styles.aiDotReady : styles.aiDotSetup
+          }`}
+          aria-hidden="true"
+        />
+      </button>
 
       {/* Divider */}
       <span className={styles.toolbarDivider} aria-hidden="true" />

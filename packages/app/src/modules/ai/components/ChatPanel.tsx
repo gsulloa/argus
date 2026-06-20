@@ -91,8 +91,9 @@ function parseSegments(text: string): Segment[] {
   return segments;
 }
 
+/** Returns true for languages that support Apply/Insert (SQL dialects and cwlogs). */
 function isSqlLike(lang: string | null): boolean {
-  return lang === null || lang === "sql" || lang === "SQL";
+  return lang === null || lang === "sql" || lang === "SQL" || lang === "cwlogs";
 }
 
 
@@ -513,11 +514,14 @@ function SetupChecklist({
   const providerOk = readiness.providerConfigured;
   const contextOk = readiness.contextState === "available";
   const contextMissing = readiness.contextState === "missing";
+  const contextOptional = readiness.contextOptional ?? false;
 
   return (
     <div className={styles.setup}>
       <p className={styles.setupIntro}>
-        Two things are needed before you can chat about your data:
+        {contextOptional
+          ? "One thing is needed before you can chat:"
+          : "Two things are needed before you can chat about your data:"}
       </p>
       <ul className={styles.checklist}>
         <li className={styles.checkItem}>
@@ -545,33 +549,35 @@ function SetupChecklist({
             )}
           </div>
         </li>
-        <li className={styles.checkItem}>
-          <span
-            className={contextOk ? styles.checkMarkOk : styles.checkMarkTodo}
-            aria-hidden="true"
-          >
-            {contextOk ? "✓" : "○"}
-          </span>
-          <div className={styles.checkBody}>
-            <span className={styles.checkLabel}>Context folder</span>
-            <span className={styles.checkHint}>
-              {contextOk
-                ? "Linked"
-                : contextMissing
-                  ? "The linked context folder is missing on disk."
-                  : "Link a context folder so AI can understand your schema."}
+        {!contextOptional && (
+          <li className={styles.checkItem}>
+            <span
+              className={contextOk ? styles.checkMarkOk : styles.checkMarkTodo}
+              aria-hidden="true"
+            >
+              {contextOk ? "✓" : "○"}
             </span>
-            {!contextOk && (
-              <button
-                type="button"
-                className={styles.checkCta}
-                onClick={onLinkContext}
-              >
-                {contextMissing ? "Locate context folder" : "Link context folder"}
-              </button>
-            )}
-          </div>
-        </li>
+            <div className={styles.checkBody}>
+              <span className={styles.checkLabel}>Context folder</span>
+              <span className={styles.checkHint}>
+                {contextOk
+                  ? "Linked"
+                  : contextMissing
+                    ? "The linked context folder is missing on disk."
+                    : "Link a context folder so AI can understand your schema."}
+              </span>
+              {!contextOk && (
+                <button
+                  type="button"
+                  className={styles.checkCta}
+                  onClick={onLinkContext}
+                >
+                  {contextMissing ? "Locate context folder" : "Link context folder"}
+                </button>
+              )}
+            </div>
+          </li>
+        )}
       </ul>
     </div>
   );

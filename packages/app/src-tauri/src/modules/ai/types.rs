@@ -421,7 +421,7 @@ pub fn evict_attachments_oldest_first(
 ) -> AppResult<usize> {
     let mut evicted = 0usize;
     while !attachments.is_empty() {
-        let system = build_api_system_prompt(payload, attachments)?;
+        let system = build_api_system_prompt(payload, attachments, None)?;
         let est = (system.len() + turn_chars) / 4;
         if est <= threshold {
             break;
@@ -440,19 +440,46 @@ pub fn evict_attachments_oldest_first(
 ///   2. Database context (serialised AiPayload)           ← this change
 ///   3. Attached query results (when present)             ← #62 (AttachedResult)
 ///
+/// When `context_engine` is `Some(EngineKind::Cloudwatch)`, the role section instructs
+/// the agent to emit a CloudWatch Logs Insights query in a `cwlogs` fenced block.
+/// For every other engine — and for `None` — the existing SQL prompt text is returned
+/// unchanged (byte-identical).
+///
 /// API providers have NO disk access; this prompt deliberately contains no filesystem
 /// or directory-read language.
 pub fn build_api_system_prompt(
     payload: &AiPayload,
     attachments: &[AttachedResult],
+    context_engine: Option<EngineKind>,
 ) -> AppResult<String> {
     let mut sections: Vec<String> = Vec::new();
 
     // ── Section 1: Role + hard restrictions ─────────────────────────────────
-    // MUST be the first section. Contains the SQL-only mandate, the single-fenced-
+    // MUST be the first section. Contains the query-language mandate, the single-fenced-
     // block output format, and an explicit prohibition on self-execution via any
     // shell, Bash, MCP, or database CLI tool.
-    sections.push(
+    let role_section = if matches!(context_engine, Some(EngineKind::Cloudwatch)) {
+        "# Role and restrictions\n\
+You are a CloudWatch Logs Insights query generation assistant embedded in Argus, a \
+database inspection tool.\n\
+\n\
+**Your only job is to generate CloudWatch Logs Insights queries.** Respond with a single \
+fenced ```cwlogs code block containing the Logs Insights query that answers the user's \
+request. Do not include any prose, explanation, or commentary outside that block.\n\
+\n\
+Use CloudWatch Logs Insights pipe syntax. Valid commands include: `fields`, `filter`, \
+`stats`, `sort`, `limit`, `parse`. Use `@`-fields such as `@timestamp`, `@message`, \
+`@logStream`, `@log` where appropriate.\n\
+\n\
+**You MUST NOT execute the query yourself.** You are strictly forbidden from running \
+queries or interacting with AWS via any mechanism, including but not limited to:\n\
+- Shell or Bash commands\n\
+- MCP tools\n\
+- AWS CLIs: `aws logs`, `aws cloudwatch`, or any equivalent\n\
+\n\
+Argus will execute the Logs Insights query you emit. Your role ends at generation."
+            .to_string()
+    } else {
         "# Role and restrictions\n\
 You are a SQL generation assistant embedded in Argus, a database inspection tool.\n\
 \n\
@@ -467,8 +494,9 @@ interacting with databases via any mechanism, including but not limited to:\n\
 - Database CLIs: `psql`, `mysql`, `mariadb`, `sqlcmd`, `aws dynamodb`, `aws logs`, or any equivalent\n\
 \n\
 Argus will execute the SQL you emit. Your role ends at generation."
-            .to_string(),
-    );
+            .to_string()
+    };
+    sections.push(role_section);
 
     // ── Section 2: Database context (serialised AiPayload) ──────────────────
     // MUST follow section 1. This is the authoritative source of schema information
@@ -501,16 +529,80 @@ you are generating SQL for. Use it as your primary information source.\n\
 /// this prompt names that folder as the primary information source and the
 /// parent directory (`../`) as secondary.
 ///
+/// When `context_engine` is `Some(EngineKind::Cloudwatch)`, the role section instructs
+/// the agent to emit a CloudWatch Logs Insights query in a `cwlogs` fenced block.
+/// For every other engine — and for `None` — the existing SQL prompt text is returned
+/// unchanged. The "Information sources" and "Persisting knowledge" sections are present
+/// for both branches.
+///
 /// Verified flags (claude CLI 2.1.152, 2026-06-06):
 ///   --system-prompt <prompt>   replaces the session system prompt
 ///   --tools <list>             restricts available built-in tools
 ///
 /// NOTE: This prompt deliberately avoids embedding the full AiPayload JSON —
 /// the agent reads it from disk. Do NOT add payload serialisation here.
-pub fn build_cli_system_prompt(context_path: &Path) -> String {
+pub fn build_cli_system_prompt(context_path: &Path, context_engine: Option<EngineKind>) -> String {
     let path_display = context_path.display();
-    format!(
-        "# Role and restrictions\n\
+    let role_section = if matches!(context_engine, Some(EngineKind::Cloudwatch)) {
+        format!(
+            "# Role and restrictions\n\
+You are a CloudWatch Logs Insights query generation assistant embedded in Argus, a \
+database inspection tool.\n\
+\n\
+**Your only job is to generate CloudWatch Logs Insights queries.** Respond with a single \
+fenced ```cwlogs code block containing the Logs Insights query that answers the user's \
+request. Do not include any prose, explanation, or commentary outside that block.\n\
+\n\
+Use CloudWatch Logs Insights pipe syntax. Valid commands include: `fields`, `filter`, \
+`stats`, `sort`, `limit`, `parse`. Use `@`-fields such as `@timestamp`, `@message`, \
+`@logStream`, `@log` where appropriate.\n\
+\n\
+**You MUST NOT execute the query yourself.** You are strictly forbidden from running \
+queries or interacting with AWS via any mechanism, including but not limited to:\n\
+- Shell or Bash commands\n\
+- MCP tools\n\
+- AWS CLIs: `aws logs`, `aws cloudwatch`, or any equivalent\n\
+\n\
+Argus will execute the Logs Insights query you emit. Your role ends at generation.\n\
+\n\
+---\n\
+\n\
+# Information sources\n\
+\n\
+## Primary source — context folder\n\
+Your current working directory is the context folder for this connection: `{path_display}`\n\
+\n\
+Read these files **first** before answering any question:\n\
+- `manifest.json`  — connection metadata and source configuration\n\
+- `overview.md`    — human-written description of the log groups and their purpose\n\
+- `glossary.md`    — domain-specific terminology and abbreviations\n\
+- `cloudwatch/groups/` — per-log-group documentation\n\
+- `queries/`       — prefab queries and examples for this connection\n\
+\n\
+## Secondary source — project / cross-connection docs\n\
+The parent directory (`../`) may contain cross-connection skills, shared glossaries, \
+and project-level documentation that applies to multiple connections. Consult it when \
+the context folder alone is insufficient.\n\
+\n\
+---\n\
+\n\
+# Persisting knowledge\n\
+\n\
+When a documentation tool is available and the user corrects or teaches you something \
+about the log groups — for example, which group to query, what a field means, or which \
+tags apply to a group — you SHOULD persist that knowledge by calling the `document_object` \
+tool so it is available in future sessions. Use:\n\
+- `target=\"body\"` for general prose notes or corrections about a log group.\n\
+- `target=\"column_note\"` (with `column=<name>`) for the meaning, contents, or \
+behaviour of a specific log field.\n\
+- `target=\"tags\"` for object-level classification tags (e.g. `pii`, `high-volume`).\n\
+\n\
+You MUST NOT use `document_object` to modify the `system:` frontmatter block — that \
+region is owned by schema sync. Write only to `body`, `column_note`, or `tags`."
+        )
+    } else {
+        format!(
+            "# Role and restrictions\n\
 You are a SQL generation assistant embedded in Argus, a database inspection tool.\n\
 \n\
 **Your only job is to generate SQL.** Respond with a single fenced ```sql code block \
@@ -559,7 +651,9 @@ behaviour of a specific column.\n\
 \n\
 You MUST NOT use `document_object` to modify the `system:` frontmatter block — that \
 region is owned by schema sync. Write only to `body`, `column_note`, or `tags`."
-    )
+        )
+    };
+    role_section
 }
 
 /// Helper used by API providers: extract the first fenced code block from the model's reply.
@@ -598,7 +692,7 @@ mod tests {
 
     #[test]
     fn api_prompt_contains_sql_only_clause() {
-        let prompt = build_api_system_prompt(&empty_payload(), &[]).unwrap();
+        let prompt = build_api_system_prompt(&empty_payload(), &[], None).unwrap();
         assert!(
             prompt.contains("```sql"),
             "expected fenced sql block instruction, got:\n{prompt}"
@@ -611,8 +705,67 @@ mod tests {
     }
 
     #[test]
+    fn api_prompt_sql_engine_contains_sql_only_clause() {
+        // Explicit SQL engine should produce the same SQL prompt.
+        let prompt =
+            build_api_system_prompt(&empty_payload(), &[], Some(EngineKind::Postgres)).unwrap();
+        assert!(
+            prompt.contains("```sql"),
+            "expected fenced sql block instruction for Postgres engine"
+        );
+        assert!(
+            prompt.contains("only job is to generate SQL"),
+            "expected SQL-only clause for Postgres engine"
+        );
+        assert!(
+            !prompt.contains("```cwlogs"),
+            "SQL engine must not mention cwlogs block"
+        );
+    }
+
+    #[test]
+    fn api_prompt_cloudwatch_contains_cwlogs_mandate() {
+        let prompt =
+            build_api_system_prompt(&empty_payload(), &[], Some(EngineKind::Cloudwatch)).unwrap();
+        assert!(
+            prompt.contains("```cwlogs"),
+            "CloudWatch prompt must contain fenced cwlogs block instruction"
+        );
+        assert!(
+            prompt.contains("CloudWatch Logs Insights"),
+            "CloudWatch prompt must mention CloudWatch Logs Insights"
+        );
+        assert!(
+            !prompt.contains("generate SQL") && !prompt.contains("generate SQL"),
+            "CloudWatch prompt must not instruct to generate SQL"
+        );
+        assert!(
+            !prompt.contains("```sql"),
+            "CloudWatch prompt must not contain fenced sql block instruction"
+        );
+        assert!(
+            prompt.contains("aws logs"),
+            "CloudWatch prompt must forbid aws logs CLI"
+        );
+    }
+
+    #[test]
+    fn api_prompt_cloudwatch_no_execution_clause() {
+        let prompt =
+            build_api_system_prompt(&empty_payload(), &[], Some(EngineKind::Cloudwatch)).unwrap();
+        assert!(
+            prompt.contains("MUST NOT execute the query"),
+            "CloudWatch prompt must have no-execution clause"
+        );
+        assert!(
+            prompt.contains("aws logs"),
+            "CloudWatch prompt must forbid aws logs"
+        );
+    }
+
+    #[test]
     fn api_prompt_contains_no_execution_clause() {
-        let prompt = build_api_system_prompt(&empty_payload(), &[]).unwrap();
+        let prompt = build_api_system_prompt(&empty_payload(), &[], None).unwrap();
         assert!(
             prompt.contains("MUST NOT execute SQL"),
             "expected no-execution clause"
@@ -625,7 +778,7 @@ mod tests {
 
     #[test]
     fn api_prompt_contains_no_filesystem_language() {
-        let prompt = build_api_system_prompt(&empty_payload(), &[]).unwrap();
+        let prompt = build_api_system_prompt(&empty_payload(), &[], None).unwrap();
         // API providers have no disk access; the prompt must not instruct them to read files.
         let lower = prompt.to_lowercase();
         assert!(
@@ -645,7 +798,7 @@ mod tests {
 
     #[test]
     fn api_prompt_role_section_precedes_context_section() {
-        let prompt = build_api_system_prompt(&empty_payload(), &[]).unwrap();
+        let prompt = build_api_system_prompt(&empty_payload(), &[], None).unwrap();
         let role_pos = prompt
             .find("# Role and restrictions")
             .expect("role section header not found");
@@ -663,7 +816,7 @@ mod tests {
     #[test]
     fn cli_prompt_contains_sql_only_clause() {
         let path = std::path::Path::new("/tmp/my-context");
-        let prompt = build_cli_system_prompt(path);
+        let prompt = build_cli_system_prompt(path, None);
         assert!(
             prompt.contains("```sql"),
             "expected fenced sql block instruction"
@@ -677,7 +830,7 @@ mod tests {
     #[test]
     fn cli_prompt_contains_no_execution_clause() {
         let path = std::path::Path::new("/tmp/my-context");
-        let prompt = build_cli_system_prompt(path);
+        let prompt = build_cli_system_prompt(path, None);
         assert!(
             prompt.contains("MUST NOT execute SQL"),
             "expected no-execution clause"
@@ -691,7 +844,7 @@ mod tests {
     #[test]
     fn cli_prompt_references_context_folder() {
         let path = std::path::Path::new("/tmp/my-context");
-        let prompt = build_cli_system_prompt(path);
+        let prompt = build_cli_system_prompt(path, None);
         assert!(
             prompt.contains("/tmp/my-context"),
             "expected context path in prompt"
@@ -709,7 +862,7 @@ mod tests {
     #[test]
     fn cli_prompt_references_parent_directory() {
         let path = std::path::Path::new("/tmp/my-context");
-        let prompt = build_cli_system_prompt(path);
+        let prompt = build_cli_system_prompt(path, None);
         assert!(
             prompt.contains("../"),
             "expected parent directory reference (../)"
@@ -723,7 +876,7 @@ mod tests {
     #[test]
     fn cli_prompt_contains_document_object_guidance() {
         let path = std::path::Path::new("/tmp/my-context");
-        let prompt = build_cli_system_prompt(path);
+        let prompt = build_cli_system_prompt(path, None);
         // Guidance to use document_object tool when user teaches the agent.
         assert!(
             prompt.contains("document_object"),
@@ -757,7 +910,7 @@ mod tests {
     fn cli_prompt_sql_guardrails_still_present_after_doc_guidance() {
         // Regression: adding documentation guidance must not weaken SQL-only clauses.
         let path = std::path::Path::new("/tmp/my-context");
-        let prompt = build_cli_system_prompt(path);
+        let prompt = build_cli_system_prompt(path, None);
         assert!(
             prompt.contains("only job is to generate SQL"),
             "SQL-only clause must remain after documentation guidance addition"
@@ -769,6 +922,59 @@ mod tests {
         assert!(
             prompt.contains("psql") && prompt.contains("mysql") && prompt.contains("sqlcmd"),
             "database CLI prohibition list must remain"
+        );
+    }
+
+    #[test]
+    fn cli_prompt_cloudwatch_contains_cwlogs_mandate() {
+        let path = std::path::Path::new("/tmp/my-context");
+        let prompt = build_cli_system_prompt(path, Some(EngineKind::Cloudwatch));
+        assert!(
+            prompt.contains("```cwlogs"),
+            "CloudWatch CLI prompt must contain fenced cwlogs block instruction"
+        );
+        assert!(
+            prompt.contains("CloudWatch Logs Insights"),
+            "CloudWatch CLI prompt must mention CloudWatch Logs Insights"
+        );
+        assert!(
+            !prompt.contains("```sql"),
+            "CloudWatch CLI prompt must not contain fenced sql block instruction"
+        );
+        assert!(
+            !prompt.contains("only job is to generate SQL"),
+            "CloudWatch CLI prompt must not instruct to generate SQL"
+        );
+        assert!(
+            prompt.contains("aws logs"),
+            "CloudWatch CLI prompt must forbid aws logs CLI"
+        );
+    }
+
+    #[test]
+    fn cli_prompt_cloudwatch_retains_information_sources() {
+        // The CloudWatch branch must still include context folder and parent directory sections.
+        let path = std::path::Path::new("/tmp/my-context");
+        let prompt = build_cli_system_prompt(path, Some(EngineKind::Cloudwatch));
+        assert!(
+            prompt.contains("/tmp/my-context"),
+            "CloudWatch CLI prompt must reference the context path"
+        );
+        assert!(
+            prompt.contains("../"),
+            "CloudWatch CLI prompt must reference parent directory"
+        );
+        assert!(
+            prompt.contains("secondary source") || prompt.contains("cross-connection"),
+            "CloudWatch CLI prompt must describe parent directory as secondary source"
+        );
+        assert!(
+            prompt.contains("document_object"),
+            "CloudWatch CLI prompt must mention document_object tool"
+        );
+        assert!(
+            prompt.contains("MUST NOT") || prompt.contains("must not"),
+            "CloudWatch CLI prompt must contain MUST NOT prohibition"
         );
     }
 
@@ -963,8 +1169,8 @@ Here are the models:
 
     #[test]
     fn api_prompt_no_attachments_is_byte_identical() {
-        // The two-arg call with an empty slice must equal the prior two-section output.
-        let with_empty = build_api_system_prompt(&empty_payload(), &[]).unwrap();
+        // The call with an empty slice and None engine must produce the two-section output.
+        let with_empty = build_api_system_prompt(&empty_payload(), &[], None).unwrap();
         // Reconstruct expected: role + context only, no trailing attachments section.
         assert!(!with_empty.contains("# Attached result"));
         assert!(with_empty.contains("# Role and restrictions"));
@@ -976,7 +1182,7 @@ Here are the models:
     #[test]
     fn api_prompt_appends_attachments_as_trailing_section() {
         let atts = vec![sample_attachment("a1")];
-        let prompt = build_api_system_prompt(&empty_payload(), &atts).unwrap();
+        let prompt = build_api_system_prompt(&empty_payload(), &atts, None).unwrap();
         let ctx_pos = prompt.find("# Database context").unwrap();
         let att_pos = prompt.find("# Attached results").unwrap();
         assert!(att_pos > ctx_pos, "attachments section must be last");
@@ -989,7 +1195,7 @@ Here are the models:
         let mut att = sample_attachment("a1");
         att.truncated = true;
         att.row_count = 9999;
-        let prompt = build_api_system_prompt(&empty_payload(), &[att]).unwrap();
+        let prompt = build_api_system_prompt(&empty_payload(), &[att], None).unwrap();
         assert!(prompt.contains("# Attached result (9999 rows)"));
         assert!(prompt.contains("truncated"));
     }

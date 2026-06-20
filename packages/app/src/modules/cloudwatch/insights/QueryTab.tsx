@@ -12,13 +12,17 @@
  * Registers itself with TabRegistry on import.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { TabRegistry } from "@/platform/shell/tabs/TabRegistry";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { InsightsToolbar } from "./Toolbar";
 import { QueryEditor, type QueryEditorHandle } from "./QueryEditor";
 import { InsightsResultPanel } from "./ResultPanel";
 import { useInsightsQueryRun } from "./useQueryRun";
+import { useAiReadiness } from "@/modules/ai/useAiReadiness";
+import { useConnections } from "@/platform/connection-registry/useConnections";
+import { ChatPanel } from "@/modules/ai/components/ChatPanel";
+import { useCloudwatchForm } from "../FormController";
 import type { TimeRange } from "../types";
 import styles from "@/modules/mysql/sql/QueryTab.module.css";
 
@@ -74,7 +78,94 @@ function InsightsTabInner({ payload }: InnerProps) {
   const [selectedGroups, setSelectedGroups] = useState<string[]>(initialGroups);
   const [timeRange, setTimeRange] = useState<TimeRange>(DEFAULT_TIME_RANGE);
 
+  // -------------------------------------------------------------------------
+  // AI chat panel state
+  // -------------------------------------------------------------------------
+
+  // Readiness: provider alone is sufficient for CloudWatch (context-optional).
+  const readiness = useAiReadiness(connectionId, { contextOptional: true });
+
+  // Resolve the active connection + its context_path.
+  const { items: allConnections } = useConnections();
+  const currentConnection = allConnections.find((c) => c.id === connectionId) ?? null;
+  const contextPath = currentConnection?.context_path ?? null;
+
+  // Open the connection form so the user can link/locate a context folder.
+  const { openEdit } = useCloudwatchForm();
+  const handleLinkContext = useCallback(() => {
+    if (currentConnection) openEdit(currentConnection);
+  }, [openEdit, currentConnection]);
+
+  // Panel open/close state — persisted to localStorage.
+  const [panelOpen, setPanelOpen] = useState<boolean>(() => {
+    const stored = localStorage.getItem("argus.ai.panelOpen");
+    return stored === "1";
+  });
+
+  // Persist panelOpen.
+  useEffect(() => {
+    localStorage.setItem("argus.ai.panelOpen", panelOpen ? "1" : "0");
+  }, [panelOpen]);
+
+  // Listen for the ai.focusChatPanel palette command.
+  useEffect(() => {
+    function onFocusPanel() {
+      setPanelOpen(true);
+    }
+    window.addEventListener("argus:ai:openPanel", onFocusPanel as EventListener);
+    return () => window.removeEventListener("argus:ai:openPanel", onFocusPanel as EventListener);
+  }, []);
+
+  // Panel width — persisted to localStorage, clamped to [280, 800].
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    const stored = localStorage.getItem("argus.ai.panelWidth");
+    const n = stored ? parseInt(stored, 10) : 360;
+    return Number.isFinite(n) ? Math.min(800, Math.max(280, n)) : 360;
+  });
+
+  // Splitter drag logic.
+  const latestWidthRef = useRef(panelWidth);
+  latestWidthRef.current = panelWidth;
+  const splitterDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const handleSplitterMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      splitterDragRef.current = { startX: e.clientX, startWidth: latestWidthRef.current };
+      e.preventDefault();
+      function onMove(ev: MouseEvent) {
+        const d = splitterDragRef.current;
+        if (!d) return;
+        const dx = d.startX - ev.clientX;
+        const next = Math.min(800, Math.max(280, d.startWidth + dx));
+        setPanelWidth(next);
+      }
+      function onUp() {
+        splitterDragRef.current = null;
+        localStorage.setItem("argus.ai.panelWidth", String(latestWidthRef.current));
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      }
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [],
+  );
+
+  // Attachable result: available when the run returned at least one row.
+  // InsightsRunState has status "idle"|"running" (no "done"); result is set
+  // after a successful run while status returns to "idle".
+  const chatAttachableResult =
+    runner.state.result?.kind === "rows" && runner.state.result.rows.length > 0
+      ? {
+          columns: runner.state.result.columns.map((c) => c.name),
+          rows: runner.state.result.rows,
+          truncated: runner.state.result.truncated,
+        }
+      : null;
+
+  // -------------------------------------------------------------------------
   // Resizable result panel
+  // -------------------------------------------------------------------------
   const [resultHeight, setResultHeight] = useState(280);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
 
@@ -127,11 +218,14 @@ function InsightsTabInner({ payload }: InnerProps) {
         onRun={handleRun}
         running={runner.state.status === "running"}
         onCancel={handleCancel}
+        panelOpen={panelOpen}
+        onTogglePanel={() => setPanelOpen((prev) => !prev)}
+        readiness={readiness}
       />
 
       {/* Editor area */}
       <div className={styles.editorArea} style={{ flex: 1, minHeight: 0 }}>
-        <div className={styles.editorRow} style={{ height: "100%" }}>
+        <div className={styles.editorRow}>
           <div className={styles.editorWrap} style={{ height: "100%" }}>
             <QueryEditor
               ref={editorRef}
@@ -140,6 +234,28 @@ function InsightsTabInner({ payload }: InnerProps) {
               onRun={handleRun}
             />
           </div>
+          {panelOpen ? (
+            <>
+              <div
+                className={styles.splitter}
+                role="separator"
+                aria-orientation="vertical"
+                onMouseDown={handleSplitterMouseDown}
+              />
+              <div className={styles.chatHost} style={{ width: panelWidth }}>
+                <ChatPanel
+                  open={true}
+                  onClose={() => setPanelOpen(false)}
+                  connectionId={connectionId}
+                  contextPath={contextPath}
+                  readiness={readiness}
+                  onLinkContext={handleLinkContext}
+                  editorRef={editorRef}
+                  result={chatAttachableResult}
+                />
+              </div>
+            </>
+          ) : null}
         </div>
       </div>
 

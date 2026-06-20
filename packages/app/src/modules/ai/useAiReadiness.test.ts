@@ -5,6 +5,7 @@ import {
   isProviderConfigured,
   useAiReadiness,
   type ContextState,
+  type ReadinessLevel,
 } from "./useAiReadiness";
 import type { AiSettingsView } from "./types";
 
@@ -112,6 +113,86 @@ describe("deriveReadinessLevel", () => {
     expect(deriveReadinessLevel(true, "none")).toBe("needs-context");
     expect(deriveReadinessLevel(true, "missing")).toBe("needs-context");
     expect(deriveReadinessLevel(true, "unknown")).toBe("needs-context");
+  });
+
+  describe("contextOptional=true (CloudWatch profile)", () => {
+    it("not-configured when provider is missing, regardless of context or contextOptional", () => {
+      for (const ctx of contexts) {
+        expect(deriveReadinessLevel(false, ctx, true)).toBe("not-configured");
+      }
+    });
+
+    it("ready when provider configured, regardless of context state", () => {
+      const expected: ReadinessLevel = "ready";
+      for (const ctx of contexts) {
+        expect(deriveReadinessLevel(true, ctx, true)).toBe(expected);
+      }
+    });
+
+    it("never returns needs-context", () => {
+      for (const ctx of contexts) {
+        const level = deriveReadinessLevel(true, ctx, true);
+        expect(level).not.toBe("needs-context");
+      }
+    });
+  });
+});
+
+describe("useAiReadiness — contextOptional option", () => {
+  beforeEach(() => {
+    mockListObjects.mockReset();
+    mockItems = [];
+  });
+
+  it("returns ready when provider configured and no context folder (contextOptional=true)", async () => {
+    // No folder linked on the connection.
+    mockItems = [{ id: "CW", context_path: null }];
+
+    const { result } = renderHook(() =>
+      useAiReadiness("CW", { contextOptional: true }),
+    );
+
+    await waitFor(() => expect(result.current.contextState).toBe("none"));
+    expect(result.current.level).toBe("ready");
+    expect(result.current.contextOptional).toBe(true);
+  });
+
+  it("returns ready when provider configured and context folder present (contextOptional=true)", async () => {
+    mockListObjects.mockResolvedValue(undefined);
+    mockItems = [{ id: "CW", context_path: "/some/folder" }];
+
+    const { result } = renderHook(() =>
+      useAiReadiness("CW", { contextOptional: true }),
+    );
+
+    await waitFor(() => expect(result.current.contextState).toBe("available"));
+    expect(result.current.level).toBe("ready");
+  });
+
+  it("never returns needs-context for contextOptional connection", async () => {
+    // Folder listed as missing on disk.
+    mockListObjects.mockRejectedValue(new Error("missing manifest"));
+    mockItems = [{ id: "CW", context_path: "/missing" }];
+
+    const { result } = renderHook(() =>
+      useAiReadiness("CW", { contextOptional: true }),
+    );
+
+    await waitFor(() =>
+      expect(result.current.contextState).toBe("missing"),
+    );
+    expect(result.current.level).not.toBe("needs-context");
+    expect(result.current.level).toBe("ready");
+  });
+
+  it("contextOptional defaults to false — preserves existing context-required behaviour", async () => {
+    mockItems = [{ id: "PG", context_path: null }];
+
+    const { result } = renderHook(() => useAiReadiness("PG"));
+
+    await waitFor(() => expect(result.current.contextState).toBe("none"));
+    expect(result.current.level).toBe("needs-context");
+    expect(result.current.contextOptional).toBeUndefined();
   });
 });
 

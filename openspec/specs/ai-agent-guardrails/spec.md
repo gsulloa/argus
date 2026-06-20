@@ -5,13 +5,20 @@ Defines the system-prompt contract and tool-access restrictions that pin the AI 
 ## Requirements
 ### Requirement: Agent emits SQL, never executes it
 
-Every AI provider SHALL instruct the agent to respond with SQL only, inside a fenced ` ```sql ` code block, for Argus to execute. The agent MUST be told it is forbidden from executing SQL itself via any shell, Bash, MCP, or database tool (`psql`, `mysql`, `mariadb`, `sqlcmd`, `aws dynamodb`, `aws logs`, or equivalents). The agent MAY be granted exactly one Argus-owned, write-only MCP tool for documenting object docs (`document_object`); this tool SHALL NOT be able to execute SQL, run a database CLI, reach a database, or write outside the connection's context root.
+Every AI provider SHALL instruct the agent to respond with a query only — never to execute it — inside a single fenced code block, for Argus to execute. The query language SHALL match the connection's engine: for SQL engines (Postgres, MySQL, MSSQL, Athena) and when the engine is unknown, the agent SHALL be instructed to emit SQL inside a fenced ` ```sql ` block; for CloudWatch connections the agent SHALL be instructed to emit a CloudWatch Logs Insights query (pipe syntax — e.g. `fields`, `filter`, `stats`, `sort`, `limit`, `parse`, and `@`-fields) inside a fenced ` ```cwlogs ` block. The agent MUST be told it is forbidden from executing the query itself via any shell, Bash, MCP, or database/log tool (`psql`, `mysql`, `mariadb`, `sqlcmd`, `aws dynamodb`, `aws logs`, or equivalents). The agent MAY be granted exactly one Argus-owned, write-only MCP tool for documenting object docs (`document_object`); this tool SHALL NOT be able to execute queries, run a database CLI, reach a database, or write outside the connection's context root.
 
-#### Scenario: SQL-only clause present on every provider's system prompt
+#### Scenario: SQL-only clause present on SQL-engine system prompts
 
-- **WHEN** the system prompt is built for any provider (claude-cli, codex-cli, anthropic-api, openai-api)
+- **WHEN** the system prompt is built for a SQL-engine connection (Postgres, MySQL, MSSQL, Athena) or an unknown engine, for any provider (claude-cli, codex-cli, anthropic-api, openai-api)
 - **THEN** it contains an instruction to emit SQL inside a fenced ` ```sql ` block
-- **AND** it contains an explicit instruction NOT to execute SQL or run database CLIs
+- **AND** it contains an explicit instruction NOT to execute the query or run database CLIs
+
+#### Scenario: Logs Insights clause present on CloudWatch system prompts
+
+- **WHEN** the system prompt is built for a CloudWatch connection, for any provider (claude-cli, codex-cli, anthropic-api, openai-api)
+- **THEN** it instructs the agent to emit a CloudWatch Logs Insights query inside a fenced ` ```cwlogs ` block
+- **AND** it does NOT instruct the agent to emit SQL
+- **AND** it contains an explicit instruction NOT to execute the query or run `aws logs`
 
 #### Scenario: claude is tool-restricted to read-only built-ins plus the documentation tool
 

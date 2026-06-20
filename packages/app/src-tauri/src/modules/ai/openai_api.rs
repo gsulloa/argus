@@ -139,7 +139,7 @@ impl AiProvider for OpenAiApi {
             .map_err(|e| AppError::Keychain(format!("read openai key: {e}")))?
             .ok_or_else(|| AppError::Validation("OpenAI API key not configured".into()))?;
 
-        let system_prompt = build_api_system_prompt(&req.context_payload, &[])?;
+        let system_prompt = build_api_system_prompt(&req.context_payload, &[], None)?;
         let body = json!({
             "model": model,
             "max_tokens": 4096,
@@ -236,7 +236,8 @@ impl AiProvider for OpenAiApi {
         )?;
 
         // 3b. Build system prompt with the surviving attachments as the trailing section.
-        let system_prompt = build_api_system_prompt(&req.context_payload, &attachments)?;
+        let system_prompt =
+            build_api_system_prompt(&req.context_payload, &attachments, req.context_engine)?;
 
         // 4. Per-turn trimming (history), in addition to attachment eviction.
         let mut turns = req.turns.clone();

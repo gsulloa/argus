@@ -5,7 +5,9 @@
  * tokenizing: pipe `|`, command keywords (fields/filter/stats/sort/limit/
  * parse/display), and comments. No autocomplete from a schema.
  *
- * Exposes: getQuery() / focus() via ref.
+ * Exposes: getQuery() / getSql() / getCursor() / setCursor() / replaceBody() / focus() via ref.
+ * The handle structurally satisfies ChatEditorHandle so the AI chat panel can
+ * be mounted from any engine without per-engine wiring.
  */
 
 import { useEffect, useImperativeHandle, useRef, forwardRef } from "react";
@@ -95,7 +97,16 @@ const cwlogsSyntaxTheme = EditorView.theme({
 // ---------------------------------------------------------------------------
 
 export interface QueryEditorHandle {
+  /** Returns the full editor document. Kept for existing callers in QueryTab.tsx. */
   getQuery(): string;
+  /** Alias of getQuery(); satisfies ChatEditorHandle.getSql. */
+  getSql(): string;
+  /** Returns the current cursor offset (head of the primary selection). */
+  getCursor(): number;
+  /** Moves the cursor to the given offset. No-ops when the view is not mounted. */
+  setCursor(offset: number): void;
+  /** Replaces the entire document with `text`. No-ops when the view is not mounted. */
+  replaceBody(text: string): void;
   focus(): void;
 }
 
@@ -128,6 +139,20 @@ export const QueryEditor = forwardRef<QueryEditorHandle, Props>(function QueryEd
   useImperativeHandle(ref, () => ({
     getQuery() {
       return viewRef.current?.state.doc.toString() ?? "";
+    },
+    getSql() {
+      return viewRef.current?.state.doc.toString() ?? "";
+    },
+    getCursor() {
+      return viewRef.current?.state.selection.main.head ?? 0;
+    },
+    setCursor(offset: number) {
+      viewRef.current?.dispatch({ selection: { anchor: offset } });
+    },
+    replaceBody(text: string) {
+      const v = viewRef.current;
+      if (!v) return;
+      v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text } });
     },
     focus() {
       viewRef.current?.focus();

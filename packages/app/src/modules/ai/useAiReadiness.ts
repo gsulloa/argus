@@ -14,6 +14,10 @@ export interface AiReadiness {
   providerConfigured: boolean;
   contextState: ContextState;
   level: ReadinessLevel;
+  /** When true, this connection does not require a context folder to reach
+   * `ready`. The readiness level is derived from the provider prerequisite
+   * alone and will NEVER be `needs-context`. */
+  contextOptional?: boolean;
 }
 
 /**
@@ -37,22 +41,44 @@ export function isProviderConfigured(
 /**
  * Map the two prerequisites to a single readiness level. `unknown` context
  * (availability not yet resolved) is treated as not-ready.
+ *
+ * When `contextOptional` is true (e.g. CloudWatch), the context-folder
+ * prerequisite is ignored: a configured provider alone yields `ready`, and
+ * `needs-context` is never returned.
  */
 export function deriveReadinessLevel(
   providerConfigured: boolean,
   contextState: ContextState,
+  contextOptional = false,
 ): ReadinessLevel {
   if (!providerConfigured) return "not-configured";
+  if (contextOptional) return "ready";
   if (contextState === "available") return "ready";
   return "needs-context";
+}
+
+export interface UseAiReadinessOptions {
+  /** When true, the context-folder prerequisite is ignored. The connection
+   * reaches `ready` on a configured provider alone and NEVER resolves to
+   * `needs-context`. Use for engines where a context folder is optional
+   * enrichment rather than a hard requirement (e.g. CloudWatch). */
+  contextOptional?: boolean;
 }
 
 /**
  * Derive the AI readiness state for a connection from two prerequisites — a
  * configured AI provider and an available context folder. Recomputes
  * reactively when AI settings or the context folder change.
+ *
+ * Pass `{ contextOptional: true }` for engines (e.g. CloudWatch) where the
+ * context folder is optional: the hook will return `ready` as soon as a
+ * provider is configured, regardless of folder state.
  */
-export function useAiReadiness(connectionId: string | null): AiReadiness {
+export function useAiReadiness(
+  connectionId: string | null,
+  options?: UseAiReadinessOptions,
+): AiReadiness {
+  const contextOptional = options?.contextOptional ?? false;
   const { settings } = useAiSettings();
   const { items } = useConnections();
 
@@ -97,7 +123,7 @@ export function useAiReadiness(connectionId: string | null): AiReadiness {
 
   useContextChangeListener(contextPath, "all", check);
 
-  const level = deriveReadinessLevel(providerConfigured, contextState);
+  const level = deriveReadinessLevel(providerConfigured, contextState, contextOptional);
 
-  return { providerConfigured, contextState, level };
+  return { providerConfigured, contextState, level, ...(contextOptional && { contextOptional: true }) };
 }
