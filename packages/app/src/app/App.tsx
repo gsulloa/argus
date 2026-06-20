@@ -23,6 +23,7 @@ import {
   useTablePalette,
 } from "@/platform/command-palette";
 import { AiSettingsHost } from "@/modules/ai/AiSettingsHost";
+import { FeedbackHost } from "@/platform/feedback";
 import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
 import { usePostgresCommands } from "@/modules/postgres";
 import { useDynamoCommands } from "@/modules/dynamo";
@@ -72,6 +73,7 @@ export function ShellMain() {
       <DynamoTablesPaletteCommands />
       <QueryHistoryCommands />
       <AiSettingsHost />
+      <FeedbackHost />
       <SavedQueriesBootstrap />
       <TabStrip />
       <TabContent />

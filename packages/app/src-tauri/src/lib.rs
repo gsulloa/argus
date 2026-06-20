@@ -77,6 +77,7 @@ use crate::modules::postgres::{
     postgres_run_sql, postgres_run_sql_many, postgres_table_primary_key, postgres_table_structure,
     postgres_test_connection, PgPoolRegistry,
 };
+use crate::modules::feedback::submit_feedback;
 use crate::modules::query_history::{
     self,
     commands::{
@@ -425,6 +426,8 @@ pub fn run() {
             context_delete_model,
             context_get_project_source,
             context_set_project_source,
+            // Feedback command
+            submit_feedback,
             // AI provider commands
             ai_list_providers,
             ai_validate_provider,

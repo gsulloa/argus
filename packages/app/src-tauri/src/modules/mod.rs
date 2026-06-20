@@ -4,6 +4,7 @@ pub mod athena;
 pub mod cloudwatch;
 pub mod context;
 pub mod dynamo;
+pub mod feedback;
 pub mod mssql;
 pub mod mysql;
 pub mod postgres;

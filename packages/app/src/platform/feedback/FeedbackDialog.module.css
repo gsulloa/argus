@@ -1,0 +1,389 @@
+/* FeedbackDialog.module.css
+   Mirrors the SettingsPanel visual language: same dialog shell, same
+   button/input/select primitives, same section label rhythm.           */
+
+/* ---------------------------------------------------------------------------
+   Overlay + Dialog shell
+   --------------------------------------------------------------------------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 60;
+}
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl, 12px);
+  box-shadow: var(--shadow-lg);
+  padding: 18px 22px;
+  width: 520px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  z-index: 61;
+  overflow: hidden;
+}
+
+.title {
+  margin: 0 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Body (scrollable)
+   --------------------------------------------------------------------------- */
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-right: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   Field rows
+   --------------------------------------------------------------------------- */
+
+.fieldRow {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+}
+
+.fieldLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fieldRequired {
+  font-size: 10px;
+  color: var(--text-subtle);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Textarea for the message */
+.textarea {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 5px);
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 100px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  line-height: 1.5;
+}
+
+.textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(168, 85, 247, 0.18));
+}
+
+.textarea.fieldError {
+  border-color: var(--danger, #f87171);
+}
+
+/* Category select */
+.select {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 5px);
+  padding: 5px 8px;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.select:focus {
+  border-color: var(--accent);
+}
+
+/* Email input */
+.input {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 5px);
+  padding: 5px 10px;
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(168, 85, 247, 0.18));
+}
+
+.input.fieldError {
+  border-color: var(--danger, #f87171);
+}
+
+/* Inline field error message */
+.fieldErrorMsg {
+  font-size: 11px;
+  color: var(--danger, #f87171);
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Attachments
+   --------------------------------------------------------------------------- */
+
+.privacyNotice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 7px 10px;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.20);
+  border-radius: var(--radius-md, 5px);
+  font-size: 11.5px;
+  color: var(--warning, #fbbf24);
+  line-height: 1.4;
+}
+
+.privacyIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.attachmentList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.attachmentItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--elevated, #15151b);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 5px);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.attachmentName {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.attachmentSize {
+  font-size: 11px;
+  color: var(--text-subtle);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.attachmentRemove {
+  background: transparent;
+  border: 0;
+  color: var(--text-subtle);
+  cursor: pointer;
+  padding: 1px 2px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-sm, 3px);
+  flex-shrink: 0;
+}
+
+.attachmentRemove:hover {
+  color: var(--danger, #f87171);
+  background: rgba(248, 113, 113, 0.10);
+}
+
+.attachmentCap {
+  font-size: 11px;
+  color: var(--text-subtle);
+  margin: 2px 0 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Error banner (submission error)
+   --------------------------------------------------------------------------- */
+
+.errorBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 10px;
+  background: rgba(248, 113, 113, 0.10);
+  border: 1px solid rgba(248, 113, 113, 0.30);
+  border-radius: var(--radius-md, 5px);
+  font-size: 12px;
+  color: var(--danger, #f87171);
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.errorBannerIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* Success banner */
+.successBanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 16px;
+  text-align: center;
+  justify-content: center;
+  flex-direction: column;
+  font-size: 12.5px;
+  color: var(--success, #4ade80);
+}
+
+.successIcon {
+  color: var(--success, #4ade80);
+}
+
+.successTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.successSub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Spinner (submit pending)
+   --------------------------------------------------------------------------- */
+
+.spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: var(--radius-full, 999px);
+  animation: spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------------------------------------------------------------------------
+   Footer
+   --------------------------------------------------------------------------- */
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Buttons
+   --------------------------------------------------------------------------- */
+
+.btn {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 5px 12px;
+  border-radius: var(--radius-md, 5px);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btnPrimary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+/* ---------------------------------------------------------------------------
+   Shell affordance button (subtle, status-bar style)
+   --------------------------------------------------------------------------- */
+
+.affordanceBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 3px;
+  color: var(--text-subtle);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.affordanceBtn:hover {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}

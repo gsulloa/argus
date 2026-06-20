@@ -4,6 +4,7 @@ import * as cdk from "aws-cdk-lib";
 import { PROJECT_NAME } from "@/constants";
 import { AnalyticsStack } from "@/lib/AnalyticsStack/index";
 import { DnsStack } from "@/lib/DnsStack/index";
+import { FeedbackStack } from "@/lib/FeedbackStack/index";
 import { LandingStack } from "@/lib/LandingStack/index";
 import { ReleasesStack } from "@/lib/ReleasesStack/index";
 
@@ -32,5 +33,10 @@ const landingStack = new LandingStack(app, `${PROJECT_NAME}LandingStack`, {
 });
 landingStack.addDependency(dnsStack);
 landingStack.addDependency(analyticsStack);
+
+const feedbackStack = new FeedbackStack(app, `${PROJECT_NAME}FeedbackStack`, {
+  ...baseProps,
+});
+feedbackStack.addDependency(dnsStack);
 
 app.synth();

@@ -6,6 +6,7 @@ import {
   NodejsFunctionProps,
 } from "aws-cdk-lib/aws-lambda-nodejs";
 import { IBucket } from "aws-cdk-lib/aws-s3";
+import { ITable } from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
 
 import type { LambdaInvokeProps } from "@/constructs/LambdaInvoke";
@@ -68,8 +69,33 @@ export class NodejsFunctionBuilder {
     return this;
   }
 
-  // TODO: re-add grantDynamoDb once a DatabaseStack exists
-  // grantDynamoDb(action: "read" | "write"): this { ... }
+  grantDynamoDb(params: {
+    table: ITable;
+    permissions: "read" | "write" | "readWrite";
+    tableNameEnv?: string;
+  }): this {
+    this.props = {
+      ...this.props,
+      environment: {
+        ...this.props.environment,
+        [params.tableNameEnv ?? "TABLE_NAME"]: params.table.tableName,
+      },
+    };
+    this.postBuildSteps.push((lambda) => {
+      switch (params.permissions) {
+        case "read":
+          params.table.grantReadData(lambda);
+          break;
+        case "write":
+          params.table.grantWriteData(lambda);
+          break;
+        case "readWrite":
+          params.table.grantReadWriteData(lambda);
+          break;
+      }
+    });
+    return this;
+  }
 
   grantSes(): this {
     this.postBuildSteps.push((lambda) => {
