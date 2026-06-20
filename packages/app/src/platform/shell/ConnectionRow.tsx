@@ -1,4 +1,4 @@
-import { AlertTriangle, GripVertical, Loader2, Power, RotateCw } from "lucide-react";
+import { AlertTriangle, GripVertical, Loader2, Power } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useState } from "react";
@@ -32,7 +32,7 @@ import {
   type ActiveDynamoConnection,
 } from "@/modules/dynamo";
 import { openDynamoPartiQLTab } from "@/modules/dynamo/sql";
-import { DynamoConnectionSubtree, useDynamoTableCache } from "@/modules/dynamo/tables";
+import { DynamoConnectionSubtree, DynamoRefreshButton } from "@/modules/dynamo/tables";
 import {
   MYSQL_KIND,
   MysqlIcon,
@@ -975,25 +975,3 @@ export function ConnectionRow({
   );
 }
 
-// ---------------------------------------------------------------------------
-// DynamoRefreshButton — rendered in the toolbar slot of an active Dynamo row.
-// Uses useDynamoTableCache which requires DynamoTablesCacheProvider in the tree.
-// ---------------------------------------------------------------------------
-
-function DynamoRefreshButton({ connectionId }: { connectionId: string }) {
-  const { refresh } = useDynamoTableCache(connectionId);
-  return (
-    <button
-      type="button"
-      aria-label="Refresh tables"
-      title="Refresh tables"
-      onClick={(e) => {
-        e.stopPropagation();
-        refresh();
-      }}
-      className={styles.toolbarBtn}
-    >
-      <RotateCw size={13} />
-    </button>
-  );
-}
