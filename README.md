@@ -228,6 +228,20 @@ The IAM identity used to connect (either a named profile or static access keys) 
       "Resource": "*"
     },
     {
+      "Sid": "AthenaNamedQueries",
+      "Effect": "Allow",
+      "Action": [
+        "athena:ListWorkGroups",
+        "athena:ListNamedQueries",
+        "athena:BatchGetNamedQuery",
+        "athena:GetNamedQuery",
+        "athena:CreateNamedQuery",
+        "athena:UpdateNamedQuery",
+        "athena:DeleteNamedQuery"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "GlueSchemaRead",
       "Effect": "Allow",
       "Action": [
@@ -257,6 +271,8 @@ The IAM identity used to connect (either a named profile or static access keys) 
 ```
 
 Replace `your-query-results-bucket` with the bucket backing the workgroup's S3 output location, and `your-data-bucket` with every bucket that holds the underlying table data. If an `access denied` error appears on test connection, the most common cause is a missing `athena:GetWorkGroup` or `s3:ListBucket` permission.
+
+The `AthenaNamedQueries` statement powers the **Named Queries** sidebar branch: the read verbs (`ListWorkGroups`, `ListNamedQueries`, `BatchGetNamedQuery`, `GetNamedQuery`) list and open saved queries, while the write verbs (`CreateNamedQuery`, `UpdateNamedQuery`, `DeleteNamedQuery`) back the save / update / delete actions. The write verbs are only exercised by those actions — read-only connections never invoke them, and a missing write permission surfaces as an inline AWS error at the point of action rather than being detected up front.
 
 ## AI providers
 

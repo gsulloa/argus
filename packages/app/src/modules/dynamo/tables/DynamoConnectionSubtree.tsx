@@ -33,6 +33,7 @@ import type { DescribeSlot } from "./CacheProvider";
 import { TableSearchInput } from "./TableSearchInput";
 import { TableLeafLabel, TableLeafBadge } from "./TableLeaf";
 import { openTableTab } from "./openTableTab";
+import { openDynamoPartiQLTab } from "@/modules/dynamo/sql";
 import styles from "./DynamoConnectionSubtree.module.css";
 import sidebarStyles from "@/platform/shell/Sidebar.module.css";
 
@@ -267,6 +268,12 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
     if (name) openTable(name);
   }, [openTable]);
 
+  const handleContextOpenInPartiQL = useCallback(() => {
+    const name = contextMenuTableRef.current;
+    if (!name) return;
+    openDynamoPartiQLTab(tabs, connectionId, connectionName, `SELECT * FROM "${name}"`);
+  }, [tabs, connectionId, connectionName]);
+
   const handleContextCopyName = useCallback(() => {
     const name = contextMenuTableRef.current;
     if (name) {
@@ -373,6 +380,12 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
                 onSelect={handleContextOpen}
               >
                 Open
+              </ContextMenu.Item>
+              <ContextMenu.Item
+                className={sidebarStyles.contextItem}
+                onSelect={handleContextOpenInPartiQL}
+              >
+                Open in PartiQL editor
               </ContextMenu.Item>
               <ContextMenu.Item
                 className={sidebarStyles.contextItem}

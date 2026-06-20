@@ -234,11 +234,7 @@ impl<'a> IntrospectForContext for MssqlIntrospector<'a> {
         // Filter: exclude system schemas and db_* prefix schemas
         let user_schemas: Vec<_> = all_schemas
             .into_iter()
-            .filter(|s| {
-                !s.is_system
-                    && !s.name.starts_with("db_")
-                    && s.name != "guest"
-            })
+            .filter(|s| !s.is_system && !s.name.starts_with("db_") && s.name != "guest")
             .collect();
 
         let mut shapes: Vec<ObjectShape> = Vec::new();
@@ -246,18 +242,17 @@ impl<'a> IntrospectForContext for MssqlIntrospector<'a> {
         for schema_info in user_schemas {
             let schema_name = &schema_info.name;
 
-            let relations_result =
-                match mssql_list_relations_for_pool(&pool, schema_name).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "argus::context",
-                            schema = %schema_name,
-                            "context sync (mssql): failed to list relations: {e}"
-                        );
-                        continue;
-                    }
-                };
+            let relations_result = match mssql_list_relations_for_pool(&pool, schema_name).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "argus::context",
+                        schema = %schema_name,
+                        "context sync (mssql): failed to list relations: {e}"
+                    );
+                    continue;
+                }
+            };
 
             let mut relation_pairs: Vec<(String, String)> = Vec::new();
             for t in &relations_result.tables {
@@ -439,12 +434,11 @@ impl<'a> IntrospectForContext for AthenaIntrospector<'a> {
                     };
 
                     for table in tbl_resp.table_list() {
-                        let kind =
-                            if table.table_type() == Some("VIRTUAL_VIEW") {
-                                "view".to_string()
-                            } else {
-                                "table".to_string()
-                            };
+                        let kind = if table.table_type() == Some("VIRTUAL_VIEW") {
+                            "view".to_string()
+                        } else {
+                            "table".to_string()
+                        };
                         let table_name = table.name().to_string();
 
                         // Fetch columns.
@@ -464,7 +458,10 @@ impl<'a> IntrospectForContext for AthenaIntrospector<'a> {
 
                         let columns: Vec<ObjectShapeColumn> = col_entries
                             .into_iter()
-                            .map(|c| ObjectShapeColumn { name: c.name, ty: c.ty })
+                            .map(|c| ObjectShapeColumn {
+                                name: c.name,
+                                ty: c.ty,
+                            })
                             .collect();
 
                         shapes.push(ObjectShape {

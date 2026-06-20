@@ -15,6 +15,20 @@ use crate::modules::ai::commands::{
     ai_generate_sql, ai_get_settings, ai_inspect_models, ai_list_providers, ai_set_api_key,
     ai_set_settings, ai_validate_provider,
 };
+use crate::modules::athena::commands::{
+    athena_connect, athena_disconnect, athena_disconnect_all, athena_list_active,
+    athena_test_connection,
+};
+use crate::modules::athena::named_queries::{
+    athena_create_named_query, athena_delete_named_query, athena_get_named_query,
+    athena_list_named_queries, athena_update_named_query,
+};
+use crate::modules::athena::pool::AthenaClientRegistry;
+use crate::modules::athena::s3::{athena_list_s3_buckets, athena_list_s3_prefixes};
+use crate::modules::athena::schema_commands::{
+    athena_list_columns, athena_list_databases, athena_list_relations,
+};
+use crate::modules::athena::sql::{athena_cancel_query, athena_run_sql, athena_run_sql_many};
 use crate::modules::context::commands::{
     context_ai_payload, context_create_folder, context_delete_model, context_get_object,
     context_get_project_source, context_get_query, context_link_folder, context_list_known_folders,
@@ -22,11 +36,6 @@ use crate::modules::context::commands::{
     context_save_model, context_set_project_source, context_sync_schema, context_unlink,
 };
 use crate::modules::context::registry::{ContextRegistry, TauriEmitter};
-use crate::modules::athena::commands::{
-    athena_connect, athena_disconnect, athena_disconnect_all, athena_list_active,
-    athena_test_connection,
-};
-use crate::modules::athena::pool::AthenaClientRegistry;
 use crate::modules::cloudwatch::client::CloudwatchClientRegistry;
 use crate::modules::cloudwatch::commands::{
     cloudwatch_connect, cloudwatch_disconnect, cloudwatch_disconnect_all, cloudwatch_list_active,
@@ -36,12 +45,6 @@ use crate::modules::cloudwatch::groups::{
     cloudwatch_get_log_events, cloudwatch_list_log_groups, cloudwatch_list_log_streams,
 };
 use crate::modules::cloudwatch::insights::{cloudwatch_cancel_insights, cloudwatch_run_insights};
-use crate::modules::athena::s3::{athena_list_s3_buckets, athena_list_s3_prefixes};
-use crate::modules::athena::named_queries::{athena_get_named_query, athena_list_named_queries};
-use crate::modules::athena::schema_commands::{
-    athena_list_columns, athena_list_databases, athena_list_relations,
-};
-use crate::modules::athena::sql::{athena_cancel_query, athena_run_sql, athena_run_sql_many};
 use crate::modules::dynamo::client::DynamoClientRegistry;
 use crate::modules::dynamo::commands::{
     dynamo_connect, dynamo_disconnect, dynamo_list_active, dynamo_list_aws_profiles,
@@ -49,6 +52,7 @@ use crate::modules::dynamo::commands::{
 };
 use crate::modules::dynamo::edit::{dynamo_delete_item, dynamo_put_item, dynamo_update_item};
 use crate::modules::dynamo::items::{dynamo_count_items, dynamo_query, dynamo_scan};
+use crate::modules::dynamo::partiql::{dynamo_run_partiql, dynamo_run_partiql_many};
 use crate::modules::dynamo::tables::commands::{dynamo_describe_table, dynamo_list_tables};
 use crate::modules::mssql::{
     mssql_apply_table_edits, mssql_connect, mssql_count_table, mssql_disconnect,
@@ -94,7 +98,10 @@ use crate::platform::{
         connections_create, connections_delete, connections_get_secret, connections_list,
         connections_move, connections_refresh_secret, connections_update,
     },
-    open_connections::{connections_open_list, disconnect_all_connections, ensure_manager_window, ensure_workspace_window, workspace_open_connection, OpenConnectionsRegistry},
+    open_connections::{
+        connections_open_list, disconnect_all_connections, ensure_manager_window,
+        ensure_workspace_window, workspace_open_connection, OpenConnectionsRegistry,
+    },
     settings::{self, settings_get, settings_set},
     storage,
     updater::commands::{
@@ -359,6 +366,9 @@ pub fn run() {
             athena_list_columns,
             athena_list_named_queries,
             athena_get_named_query,
+            athena_create_named_query,
+            athena_update_named_query,
+            athena_delete_named_query,
             athena_run_sql,
             athena_run_sql_many,
             athena_cancel_query,
@@ -379,6 +389,8 @@ pub fn run() {
             dynamo_put_item,
             dynamo_update_item,
             dynamo_delete_item,
+            dynamo_run_partiql,
+            dynamo_run_partiql_many,
             // CloudWatch Logs commands
             cloudwatch_test_connection,
             cloudwatch_connect,

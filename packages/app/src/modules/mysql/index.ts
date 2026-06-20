@@ -23,6 +23,7 @@ export { mysqlSchemaCache } from "./schema/globalSchemaCache";
 export {
   emitMysqlSchemaEvent,
   subscribeMysqlSchemaEvent,
+  refreshConnection,
 } from "./schema/events";
 export type { MysqlSchemaEvent } from "./schema/events";
 export {

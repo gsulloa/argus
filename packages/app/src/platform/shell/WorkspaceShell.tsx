@@ -39,6 +39,7 @@ import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
 import { ShellMain } from "@/app/App";
 import { usePalette, useCommandHotkeys, useTablePalette } from "@/platform/command-palette";
 import { useShortcuts } from "@/platform/shell/useShortcuts";
+import { refreshFocusedConnection } from "@/platform/shell/refreshFocusedConnection";
 import { useLayout } from "@/platform/shell/Layout";
 import { useTabs, SETTINGS_PLACEHOLDER_KIND, SETTINGS_PLACEHOLDER_TAB_ID } from "@/platform/shell/tabs";
 import { SidebarScrollContext } from "@/platform/shell/sidebarScroll";
@@ -46,8 +47,8 @@ import { useOpenConnections } from "@/platform/connection-registry/useOpenConnec
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useConnectionGroups } from "@/platform/connection-registry/useConnectionGroups";
 import { ConnectionRail, EngineIcon, deriveEnv, engineLabel } from "./ConnectionRail";
-import { CLOUDWATCH_KIND, CloudwatchInsightsPrimaryAction } from "@/modules/cloudwatch";
 import { ConnectionSubtree } from "./ConnectionSubtree";
+import { ConnectionHeaderActions } from "./ConnectionHeaderActions";
 import { useFocusedConnection } from "./FocusedConnectionContext";
 import styles from "./WorkspaceShell.module.css";
 
@@ -336,11 +337,9 @@ function ConnectionIdentityHeader({ connectionId }: { connectionId: string }) {
           />
         </span>
       </span>
-      {connection.kind === CLOUDWATCH_KIND && (
-        <span className={styles.identityActions}>
-          <CloudwatchInsightsPrimaryAction connectionId={connection.id} />
-        </span>
-      )}
+      <span className={styles.identityActions}>
+        <ConnectionHeaderActions connectionId={connectionId} />
+      </span>
     </div>
   );
 }
@@ -355,12 +354,25 @@ function WorkspaceShortcuts() {
   const tablePalette = useTablePalette();
   const { close, activeTabId, cycle, open } = useTabs();
   const { focusedConnectionId } = useFocusedConnection();
+  const { items: connections } = useConnections();
   const { toggleInspector } = useLayout();
 
   // Register command-palette hotkeys (⌘K synonyms via command registry).
   useCommandHotkeys();
 
   useShortcuts([
+    // ⌘R / Ctrl+R → force-reload the focused connection's schema/table tree.
+    // useShortcuts calls preventDefault, suppressing the native webview reload.
+    // No-op (but still suppressed) when nothing is focused. whenInInput is
+    // omitted (false) so it never fires while typing in the SQL editor.
+    {
+      key: "r",
+      handler: () => {
+        if (!focusedConnectionId) return;
+        const conn = connections.find((c) => c.id === focusedConnectionId);
+        if (conn) refreshFocusedConnection(focusedConnectionId, conn.kind);
+      },
+    },
     // ⌘K → command palette
     { key: "k", whenInInput: true, handler: () => palette.show() },
     // ⌘⇧P → command palette synonym (no collision: shift=true, alt=false)

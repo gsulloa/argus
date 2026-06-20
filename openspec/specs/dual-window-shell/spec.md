@@ -116,3 +116,65 @@ The two windows SHALL follow fixed lifecycle rules. Closing the Workspace MUST d
 - **THEN** the application terminates cleanly on Windows and Linux
 - **AND** on macOS the process MAY remain alive per platform convention and recreate the Manager on dock activation
 
+### Requirement: Forced schema-reload accelerator
+
+The Workspace window SHALL register a global `Cmd+R` (macOS) / `Ctrl+R` (other platforms) keyboard accelerator that forces a reload of the **focused** connection's schema/table tree. The handler MUST resolve the focused connection's engine and trigger that engine's existing refresh path — dropping the connection's schema/table cache entry and re-fetching — identical in effect to activating that connection's tree refresh button. The handler MUST call `preventDefault` so the native webview reload does not fire. When no connection is focused, the accelerator MUST be a no-op (it MUST still suppress the native reload). The accelerator MUST NOT fire while the user is typing in an input or textarea.
+
+#### Scenario: Cmd+R reloads the focused connection's tree
+
+- **WHEN** a connection is focused in the rail and the user presses `Cmd+R` / `Ctrl+R`
+- **THEN** that connection's schema/table cache is dropped and its tree re-fetches
+- **AND** the native webview reload does not occur
+
+#### Scenario: Cmd+R with no focused connection is a safe no-op
+
+- **WHEN** no connection is focused and the user presses `Cmd+R` / `Ctrl+R`
+- **THEN** no refresh is triggered
+- **AND** the native webview reload is still suppressed
+
+#### Scenario: Accelerator routes to the focused engine
+
+- **WHEN** the focused connection is a Postgres connection and the user presses `Cmd+R`
+- **THEN** only the Postgres refresh path runs for that connection
+- **AND** switching focus to a DynamoDB connection and pressing `Cmd+R` runs the DynamoDB refresh path instead
+
+### Requirement: Workspace identity header exposes per-engine contextual actions
+
+The Workspace sidebar identity header SHALL render the focused connection's per-engine contextual actions inline in a dedicated, right-aligned actions slot, dispatched by the connection's engine kind. The actions presented MUST match the engine's capabilities and reuse the same action components as the rest of the app (single source of truth — no engine-specific action is reimplemented for the header):
+
+- **PostgreSQL** — New SQL query, Refresh schemas, and a visible-schemas picker.
+- **MySQL** — New SQL query, Refresh databases, and a visible-schemas picker.
+- **MSSQL** — New SQL query, Refresh, and a visible-schemas picker.
+- **Athena** — New SQL query and Refresh.
+- **DynamoDB** — Refresh tables.
+
+Engine kinds with no defined header actions (e.g. `cloudwatch`) SHALL render no actions slot content and MUST NOT error. The header MUST update reactively when the focused connection changes, showing the newly-focused connection's actions. Triggering a header action MUST have the same effect as triggering the corresponding action elsewhere in the app (e.g. "New SQL query" opens a new query tab bound to the focused connection).
+
+#### Scenario: Postgres connection shows query, refresh, and schema picker
+
+- **WHEN** a PostgreSQL connection is focused in the Workspace
+- **THEN** the identity header shows a New SQL query action, a Refresh action, and a visible-schemas picker
+- **AND** clicking New SQL query opens a new query tab bound to that connection
+
+#### Scenario: DynamoDB connection shows only refresh
+
+- **WHEN** a DynamoDB connection is focused in the Workspace
+- **THEN** the identity header shows a Refresh tables action
+- **AND** it shows no SQL-query or visible-schemas actions
+
+#### Scenario: Athena connection shows query and refresh, no schema picker
+
+- **WHEN** an Athena connection is focused in the Workspace
+- **THEN** the identity header shows a New SQL query action and a Refresh action
+- **AND** it shows no visible-schemas picker
+
+#### Scenario: Engine without header actions renders cleanly
+
+- **WHEN** a connection whose engine kind has no defined header actions (e.g. `cloudwatch`) is focused in the Workspace
+- **THEN** the identity header renders the connection identity with no action controls and without error
+
+#### Scenario: Actions follow focus changes
+
+- **WHEN** the focused connection changes from one engine to another (e.g. Postgres to DynamoDB)
+- **THEN** the identity header replaces the previous engine's actions with the newly-focused connection's actions
+

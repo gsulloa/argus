@@ -13,7 +13,6 @@ use tauri::{AppHandle, State};
 use tokio::time::{error::Elapsed, timeout, Duration};
 use uuid::Uuid;
 
-
 use crate::error::{AppError, AppResult};
 use crate::modules::activity_log::{
     emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
@@ -162,8 +161,7 @@ pub async fn list_schemas_for_pool(
         .map(|row| {
             let name: &str = row.get(0).unwrap_or_default();
             let name = name.to_string();
-            let is_system = SYSTEM_SCHEMAS.contains(&name.as_str())
-                || name.starts_with("db_");
+            let is_system = SYSTEM_SCHEMAS.contains(&name.as_str()) || name.starts_with("db_");
             SchemaInfo { name, is_system }
         })
         .collect();

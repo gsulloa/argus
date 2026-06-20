@@ -359,6 +359,15 @@ function MssqlTableViewer({
     tableData.refresh();
   }, [buffer, tableData]);
 
+  // Guarded refresh — asks the user to confirm before discarding pending edits.
+  const requestRefresh = useCallback(() => {
+    if (buffer.hasDirty) {
+      setDiscardOpen(true);
+    } else {
+      tableData.refresh();
+    }
+  }, [buffer.hasDirty, tableData]);
+
   // Add row (§19.3)
   const handleAddRow = useCallback(() => {
     if (isReadOnly || isView) return;
@@ -398,10 +407,10 @@ function MssqlTableViewer({
       if (active && (e.metaKey || e.ctrlKey) && e.key === "r" && !e.shiftKey && !e.altKey) {
         if ((e.target as HTMLElement | null)?.closest(".cm-editor")) return;
         e.preventDefault();
-        tableData.refresh();
+        requestRefresh();
       }
     },
-    [active, selection, isReadOnly, unifiedRows, tableData, pkColumns, buffer],
+    [active, selection, isReadOnly, unifiedRows, tableData, pkColumns, buffer, requestRefresh],
   );
 
   // ⌘S → apply the dirty buffer regardless of focus position (issue #88).
@@ -429,7 +438,7 @@ function MssqlTableViewer({
         active={activeSubtab}
         onChange={setActiveSubtab}
         visibleTabs={visibleTabs}
-        onReload={tableData.refresh}
+        onReload={requestRefresh}
         reloadDisabled={tableData.isLoading}
         reloading={tableData.isLoading}
       />
@@ -882,7 +891,7 @@ function DiscardDialog({
           Discard {count} pending edit{count !== 1 ? "s" : ""}?
         </div>
         <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-          All unsaved changes will be lost.
+          Your pending edits have not been committed to the database.
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button

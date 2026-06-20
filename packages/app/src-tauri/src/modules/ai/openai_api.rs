@@ -40,10 +40,7 @@ impl OpenAiApi {
     }
 
     fn completions_url(&self) -> String {
-        let base = self
-            .base_url
-            .as_deref()
-            .unwrap_or("https://api.openai.com");
+        let base = self.base_url.as_deref().unwrap_or("https://api.openai.com");
         format!("{base}/v1/chat/completions")
     }
 }
@@ -174,9 +171,7 @@ impl AiProvider for OpenAiApi {
         if !status.is_success() {
             return Err(AppError::Internal(format!(
                 "openai returned {status}: {}",
-                json.get("error")
-                    .map(|e| e.to_string())
-                    .unwrap_or_default()
+                json.get("error").map(|e| e.to_string()).unwrap_or_default()
             )));
         }
 
@@ -233,8 +228,12 @@ impl AiProvider for OpenAiApi {
         // 3a. Oldest-first attachment eviction BEFORE composing the system prompt.
         let mut attachments = req.attached_results.clone();
         let turn_chars: usize = req.turns.iter().map(|t| t.content.len()).sum();
-        let evicted =
-            evict_attachments_oldest_first(&mut attachments, &req.context_payload, turn_chars, threshold)?;
+        let evicted = evict_attachments_oldest_first(
+            &mut attachments,
+            &req.context_payload,
+            turn_chars,
+            threshold,
+        )?;
 
         // 3b. Build system prompt with the surviving attachments as the trailing section.
         let system_prompt = build_api_system_prompt(&req.context_payload, &attachments)?;
@@ -289,9 +288,7 @@ impl AiProvider for OpenAiApi {
         if !status.is_success() {
             return Err(AppError::Internal(format!(
                 "openai returned {status}: {}",
-                json.get("error")
-                    .map(|e| e.to_string())
-                    .unwrap_or_default()
+                json.get("error").map(|e| e.to_string()).unwrap_or_default()
             )));
         }
 
@@ -351,7 +348,11 @@ fn trim_turns_to_fit(
         turns.remove(0);
         trimmed += 1;
     }
-    if trimmed > 0 { Some(trimmed) } else { None }
+    if trimmed > 0 {
+        Some(trimmed)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -577,20 +578,42 @@ mod tests {
 
         keys::set(ACCOUNT_OPENAI, "multi-turn-key-oai").unwrap();
         let turns = vec![
-            ChatTurn { role: ChatRole::User, content: "hello".into(), tool_uses: vec![] },
-            ChatTurn { role: ChatRole::Assistant, content: "hi".into(), tool_uses: vec![] },
-            ChatTurn { role: ChatRole::User, content: "list tables".into(), tool_uses: vec![] },
+            ChatTurn {
+                role: ChatRole::User,
+                content: "hello".into(),
+                tool_uses: vec![],
+            },
+            ChatTurn {
+                role: ChatRole::Assistant,
+                content: "hi".into(),
+                tool_uses: vec![],
+            },
+            ChatTurn {
+                role: ChatRole::User,
+                content: "list tables".into(),
+                tool_uses: vec![],
+            },
         ];
         let (provider, req) = make_chat_req(turns, &server.uri());
         let deltas = collect_chat(provider.chat(req).await.unwrap()).await;
 
-        let texts: Vec<_> = deltas.iter().filter(|d| matches!(d, ChatDelta::Text(_))).collect();
-        let dones: Vec<_> = deltas.iter().filter(|d| matches!(d, ChatDelta::Done { .. })).collect();
+        let texts: Vec<_> = deltas
+            .iter()
+            .filter(|d| matches!(d, ChatDelta::Text(_)))
+            .collect();
+        let dones: Vec<_> = deltas
+            .iter()
+            .filter(|d| matches!(d, ChatDelta::Done { .. }))
+            .collect();
         assert!(!texts.is_empty(), "expected Text delta");
         assert_eq!(dones.len(), 1, "expected one Done");
         // No tool events.
-        assert!(!deltas.iter().any(|d| matches!(d, ChatDelta::ToolCallStarted { .. })));
-        assert!(!deltas.iter().any(|d| matches!(d, ChatDelta::ToolCallFinished { .. })));
+        assert!(!deltas
+            .iter()
+            .any(|d| matches!(d, ChatDelta::ToolCallStarted { .. })));
+        assert!(!deltas
+            .iter()
+            .any(|d| matches!(d, ChatDelta::ToolCallFinished { .. })));
     }
 
     #[tokio::test]
@@ -605,7 +628,11 @@ mod tests {
             .await;
 
         keys::set(ACCOUNT_OPENAI, "success-key-oai").unwrap();
-        let turns = vec![ChatTurn { role: ChatRole::User, content: "select 42".into(), tool_uses: vec![] }];
+        let turns = vec![ChatTurn {
+            role: ChatRole::User,
+            content: "select 42".into(),
+            tool_uses: vec![],
+        }];
         let (provider, req) = make_chat_req(turns, &server.uri());
         let deltas = collect_chat(provider.chat(req).await.unwrap()).await;
 
@@ -618,7 +645,11 @@ mod tests {
         keys::set(ACCOUNT_OPENAI, "key").unwrap();
         let provider = OpenAiApi::with_base_url(None, "http://127.0.0.1:1".into());
         let req = ChatRequest {
-            turns: vec![ChatTurn { role: ChatRole::User, content: "x".into(), tool_uses: vec![] }],
+            turns: vec![ChatTurn {
+                role: ChatRole::User,
+                content: "x".into(),
+                tool_uses: vec![],
+            }],
             context_path: None,
             context_payload: empty_payload(),
             model: Some("claude-opus-4-7".into()),
@@ -648,19 +679,28 @@ mod tests {
         let long_content = "x".repeat(4000);
         let mut turns: Vec<ChatTurn> = (0..199)
             .map(|i| ChatTurn {
-                role: if i % 2 == 0 { ChatRole::User } else { ChatRole::Assistant },
+                role: if i % 2 == 0 {
+                    ChatRole::User
+                } else {
+                    ChatRole::Assistant
+                },
                 content: long_content.clone(),
                 tool_uses: vec![],
             })
             .collect();
-        turns.push(ChatTurn { role: ChatRole::User, content: long_content, tool_uses: vec![] });
+        turns.push(ChatTurn {
+            role: ChatRole::User,
+            content: long_content,
+            tool_uses: vec![],
+        });
 
         let (provider, req) = make_chat_req(turns, &server.uri());
         let deltas = collect_chat(provider.chat(req).await.unwrap()).await;
 
         assert!(
             matches!(&deltas[0], ChatDelta::Status(s) if s.contains("trimmed")),
-            "expected trimming Status as first delta, got: {:?}", deltas[0]
+            "expected trimming Status as first delta, got: {:?}",
+            deltas[0]
         );
         assert!(matches!(deltas.last(), Some(ChatDelta::Done { .. })));
     }
@@ -677,10 +717,18 @@ mod tests {
             .await;
 
         keys::set(ACCOUNT_OPENAI, "no-tool-key").unwrap();
-        let turns = vec![ChatTurn { role: ChatRole::User, content: "x".into(), tool_uses: vec![] }];
+        let turns = vec![ChatTurn {
+            role: ChatRole::User,
+            content: "x".into(),
+            tool_uses: vec![],
+        }];
         let (provider, req) = make_chat_req(turns, &server.uri());
         let deltas = collect_chat(provider.chat(req).await.unwrap()).await;
-        assert!(!deltas.iter().any(|d| matches!(d, ChatDelta::ToolCallStarted { .. })));
-        assert!(!deltas.iter().any(|d| matches!(d, ChatDelta::ToolCallFinished { .. })));
+        assert!(!deltas
+            .iter()
+            .any(|d| matches!(d, ChatDelta::ToolCallStarted { .. })));
+        assert!(!deltas
+            .iter()
+            .any(|d| matches!(d, ChatDelta::ToolCallFinished { .. })));
     }
 }

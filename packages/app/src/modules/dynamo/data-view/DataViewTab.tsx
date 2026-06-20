@@ -225,8 +225,8 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingCell]);
 
-  // ── Discard dialog state — guards for close / switch / row-change ──────────
-  type DiscardReason = "tab-close" | "tab-switch" | "row-change";
+  // ── Discard dialog state — guards for close / switch / row-change / refresh ─
+  type DiscardReason = "tab-close" | "tab-switch" | "row-change" | "refresh";
   const [discardDialog, setDiscardDialog] = useState<{
     reason: DiscardReason;
     context: string;
@@ -754,6 +754,39 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
     anchorRowIndexRef.current = null;
   }, [reset, pageSize, clearCount]);
 
+  // ── resetDrafts — exit all edit modes and clear dirty flags ──────────────
+  // Called on confirmed discard before a refresh so hasUnsavedDraft becomes
+  // false and the inline/inspector editors are no longer open.
+  const resetDrafts = useCallback(() => {
+    setEditingCell(null);         // cancels the inline cell editor
+    setInspectorIsEditing(false); // exits the inspector JSON editor
+    setInspectorDirty(false);
+    setInlineCellDirty(false);
+    setInsertModalDirty(false);
+  }, [setInspectorDirty, setInlineCellDirty, setInsertModalDirty]);
+
+  // ── guardedRefresh — prompts "Discard changes?" when a draft exists ────────
+  // Wraps an arbitrary refresh action (handleRun or handleReset). When no draft
+  // exists it calls doRefresh immediately with no dialog.
+  const guardedRefresh = useCallback(
+    (doRefresh: () => void) => {
+      if (!hasUnsavedDraft) {
+        doRefresh();
+        return;
+      }
+      setDiscardDialog({
+        reason: "refresh",
+        context: "refresh the table",
+        onConfirm: () => {
+          resetDrafts();
+          setDiscardDialog(null);
+          doRefresh();
+        },
+      });
+    },
+    [hasUnsavedDraft, resetDrafts],
+  );
+
   const handleLoadMore = useCallback(() => {
     void loadMore("user");
   }, [loadMore]);
@@ -820,7 +853,7 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
             whenInInput: true,
             handler: () => {
               if (focusIsInCodeMirror()) return;
-              handleRun();
+              guardedRefresh(handleRun);
             },
           },
           {
@@ -830,7 +863,7 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
             whenInInput: true,
             handler: () => {
               if (focusIsInCodeMirror()) return;
-              handleReset();
+              guardedRefresh(handleReset);
             },
           },
           // ⌘N — open Insert modal (no-op on read-only or CodeMirror focus)
@@ -959,8 +992,8 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
         onBuilderChange={handleBuilderChange}
         status={status}
         lastEvaluatedKey={lastEvaluatedKey}
-        onRun={handleRun}
-        onReset={handleReset}
+        onRun={() => guardedRefresh(handleRun)}
+        onReset={() => guardedRefresh(handleReset)}
         onLoadMore={handleLoadMore}
         countLoading={countLoading}
         countResult={countResult}
@@ -1045,8 +1078,8 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
                 describe={describe}
                 onBuilderChange={handleBuilderChange}
                 onValidityChange={handleValidityChange}
-                onRun={handleRun}
-                onReset={handleReset}
+                onRun={() => guardedRefresh(handleRun)}
+                onReset={() => guardedRefresh(handleReset)}
                 onApplyOnlyFilter={handleApplyOnlyFilter}
                 disabled={needsCredentials}
                 models={models}
@@ -1267,6 +1300,7 @@ function DataViewContent({ tab, payload, active }: DataViewContentProps) {
             } else if (discardDialog.reason === "row-change") {
               pendingRowSelectRef.current = null;
             }
+            // "refresh" has no suspended promise — just close the dialog.
             setDiscardDialog(null);
           }}
         />

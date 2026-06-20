@@ -50,7 +50,10 @@ impl ChatSessionRegistry {
         connection_id: Option<Uuid>,
         context_path: Option<PathBuf>,
     ) -> AppResult<()> {
-        let mut guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         if guard.sessions.contains_key(id) {
             promote_lru(&mut guard.lru, id);
             return Ok(());
@@ -82,7 +85,10 @@ impl ChatSessionRegistry {
     }
 
     pub fn append_user(&self, id: &str, content: String) -> AppResult<()> {
-        let mut guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         let sess = guard
             .sessions
             .get_mut(id)
@@ -96,8 +102,16 @@ impl ChatSessionRegistry {
         Ok(())
     }
 
-    pub fn append_assistant(&self, id: &str, content: String, tool_uses: Vec<ToolUseRecord>) -> AppResult<()> {
-        let mut guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+    pub fn append_assistant(
+        &self,
+        id: &str,
+        content: String,
+        tool_uses: Vec<ToolUseRecord>,
+    ) -> AppResult<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         let sess = guard
             .sessions
             .get_mut(id)
@@ -112,7 +126,10 @@ impl ChatSessionRegistry {
     }
 
     pub fn set_in_flight(&self, id: &str, handle: Option<JoinHandle<()>>) -> AppResult<()> {
-        let mut guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         let sess = guard
             .sessions
             .get_mut(id)
@@ -123,7 +140,10 @@ impl ChatSessionRegistry {
     }
 
     pub fn abort(&self, id: &str) -> AppResult<()> {
-        let mut guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         if let Some(sess) = guard.sessions.get_mut(id) {
             if let Some(handle) = sess.in_flight.take() {
                 handle.abort();
@@ -133,7 +153,10 @@ impl ChatSessionRegistry {
     }
 
     pub fn close(&self, id: &str) -> AppResult<()> {
-        let mut guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         if let Some(mut sess) = guard.sessions.remove(id) {
             if let Some(handle) = sess.in_flight.take() {
                 handle.abort();
@@ -144,7 +167,10 @@ impl ChatSessionRegistry {
     }
 
     pub fn snapshot_turns(&self, id: &str) -> AppResult<Vec<ChatTurn>> {
-        let guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         Ok(guard
             .sessions
             .get(id)
@@ -153,8 +179,16 @@ impl ChatSessionRegistry {
     }
 
     /// Read+update provider scratch state. Returns prior value if any.
-    pub fn set_provider_state(&self, id: &str, key: &str, value: String) -> AppResult<Option<String>> {
-        let mut guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+    pub fn set_provider_state(
+        &self,
+        id: &str,
+        key: &str,
+        value: String,
+    ) -> AppResult<Option<String>> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         let sess = guard
             .sessions
             .get_mut(id)
@@ -163,7 +197,10 @@ impl ChatSessionRegistry {
     }
 
     pub fn get_provider_state(&self, id: &str, key: &str) -> AppResult<Option<String>> {
-        let guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         Ok(guard
             .sessions
             .get(id)
@@ -171,12 +208,18 @@ impl ChatSessionRegistry {
     }
 
     pub fn context_path(&self, id: &str) -> AppResult<Option<PathBuf>> {
-        let guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         Ok(guard.sessions.get(id).and_then(|s| s.context_path.clone()))
     }
 
     pub fn provider_id(&self, id: &str) -> AppResult<Option<ProviderId>> {
-        let guard = self.inner.lock().map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
         Ok(guard.sessions.get(id).map(|s| s.provider_id))
     }
 
@@ -209,7 +252,9 @@ fn promote_lru(lru: &mut VecDeque<String>, id: &str) {
 mod tests {
     use super::*;
 
-    fn anon_provider() -> ProviderId { ProviderId::ClaudeCli }
+    fn anon_provider() -> ProviderId {
+        ProviderId::ClaudeCli
+    }
 
     #[test]
     fn open_and_append_turns() {
@@ -244,7 +289,8 @@ mod tests {
     fn lru_eviction() {
         let reg = ChatSessionRegistry::new();
         for i in 0..MAX_SESSIONS {
-            reg.open_or_get(&format!("s{i}"), anon_provider(), None, None).unwrap();
+            reg.open_or_get(&format!("s{i}"), anon_provider(), None, None)
+                .unwrap();
         }
         assert_eq!(reg.len(), MAX_SESSIONS);
         // Touch s5 so it's NOT the LRU.
@@ -254,7 +300,7 @@ mod tests {
         assert_eq!(reg.len(), MAX_SESSIONS);
         // s0 should be gone; new and s5 should remain.
         assert_eq!(reg.turn_count("s0"), 0); // turn_count returns 0 for missing
-        // Better check: try to append to s0 — should fail with NotFound.
+                                             // Better check: try to append to s0 — should fail with NotFound.
         let r = reg.append_user("s0", "x".into());
         assert!(matches!(r, Err(AppError::NotFound(_))));
     }

@@ -175,15 +175,34 @@ pub struct SkippedTable {
     pub kept: String,
 }
 
+/// One updated object entry in `SyncReport.updated`, carrying the file path and
+/// a human-readable list of what changed in the `system:` block (added/removed
+/// columns, type changes, PK changes, column-order changes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdatedObject {
+    /// Canonical path of the file that was rewritten.
+    pub path: PathBuf,
+    /// Human-readable strings describing each change (empty when unchanged or
+    /// when no prior doc was available for comparison, e.g. a D3 migration).
+    pub changes: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncReport {
     pub created: Vec<PathBuf>,
-    pub updated: Vec<PathBuf>,
+    /// Updated object files; each entry carries the path and a description of
+    /// what changed in the `system:` block. Replaces the old `Vec<PathBuf>`.
+    pub updated: Vec<UpdatedObject>,
     pub marked_deleted: Vec<PathBuf>,
     pub orphaned_notes: Vec<OrphanedNote>,
     /// Live tables skipped due to a logical-name collision (Dynamo only).
     #[serde(default)]
     pub skipped: Vec<SkippedTable>,
+    /// Count of existing object files whose `system:` block matched the live
+    /// schema exactly — these files were NOT rewritten. Absent in legacy reports
+    /// (deserialises as 0 via `#[serde(default)]`).
+    #[serde(default)]
+    pub unchanged: usize,
 }
 
 // ---- AI payload ----

@@ -21,8 +21,7 @@ pub struct S3Prefix {
 }
 
 fn parse_params(params: serde_json::Value) -> AppResult<AthenaParams> {
-    serde_json::from_value(params)
-        .map_err(|e| AppError::Validation(format!("invalid params: {e}")))
+    serde_json::from_value(params).map_err(|e| AppError::Validation(format!("invalid params: {e}")))
 }
 
 /// List all S3 buckets visible to the form's credentials.
@@ -79,7 +78,11 @@ pub async fn athena_list_s3_prefixes(
     let prefixes: Vec<S3Prefix> = resp
         .common_prefixes()
         .iter()
-        .filter_map(|p| p.prefix().map(|s| S3Prefix { prefix: s.to_string() }))
+        .filter_map(|p| {
+            p.prefix().map(|s| S3Prefix {
+                prefix: s.to_string(),
+            })
+        })
         .collect();
     Ok(prefixes)
 }

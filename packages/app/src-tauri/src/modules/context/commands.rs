@@ -81,9 +81,10 @@ pub(crate) fn write_project_source_path(root: &Path, path: Option<&str>) -> AppR
     let mut manifest = parse_manifest(root).map_err(|e| AppError::Storage(format!("{e}")))?;
     match path {
         Some(p) => {
-            manifest
-                .extras
-                .insert(PROJECT_SOURCE_PATH_KEY.to_string(), serde_yaml::Value::String(p.to_string()));
+            manifest.extras.insert(
+                PROJECT_SOURCE_PATH_KEY.to_string(),
+                serde_yaml::Value::String(p.to_string()),
+            );
         }
         None => {
             manifest.extras.remove(PROJECT_SOURCE_PATH_KEY);
@@ -113,10 +114,7 @@ pub(crate) fn resolve_project_source_path_conn(
         .find(|c| c.id == conn_id)
         .ok_or_else(|| AppError::NotFound(format!("connection {conn_id} not found")))?;
 
-    if let Some(p) = record
-        .project_source_path
-        .filter(|s| !s.trim().is_empty())
-    {
+    if let Some(p) = record.project_source_path.filter(|s| !s.trim().is_empty()) {
         return Ok(Some(p));
     }
 
@@ -234,7 +232,10 @@ fn identity(doc: &ObjectDoc) -> String {
 /// persisted `params` JSON. Returns `None` for non-Dynamo connections, a
 /// missing connection, or an absent rule. Reuses the existing params column
 /// (the `connection-registry` treats params as opaque JSON).
-pub(crate) fn load_table_match(db: &State<'_, DbState>, conn_id: Uuid) -> AppResult<Option<TableMatch>> {
+pub(crate) fn load_table_match(
+    db: &State<'_, DbState>,
+    conn_id: Uuid,
+) -> AppResult<Option<TableMatch>> {
     let lock = db.0.lock().expect("db poisoned");
     let conns = connections::list(&lock)?;
     let conn = match conns.into_iter().find(|c| c.id == conn_id) {
@@ -372,8 +373,7 @@ pub(crate) fn list_known_folders_inner(
     // Canonicalize each path and group connection ids by canonical root.
     // Vec<String> preserves insertion order for deterministic output.
     let mut order: Vec<String> = Vec::new();
-    let mut groups: std::collections::HashMap<String, Vec<Uuid>> =
-        std::collections::HashMap::new();
+    let mut groups: std::collections::HashMap<String, Vec<Uuid>> = std::collections::HashMap::new();
 
     for (conn_id, raw_path) in conn_paths {
         let canonical = match std::fs::canonicalize(&raw_path) {
@@ -415,9 +415,7 @@ pub(crate) fn list_known_folders_inner(
 /// Roots that no longer exist on disk, or whose `context.yaml` cannot be
 /// parsed, are silently omitted. Group membership is not considered.
 #[tauri::command]
-pub fn context_list_known_folders(
-    db: State<'_, DbState>,
-) -> AppResult<Vec<KnownFolderEntry>> {
+pub fn context_list_known_folders(db: State<'_, DbState>) -> AppResult<Vec<KnownFolderEntry>> {
     // Drop the DB lock before doing any filesystem IO.
     let lock = db.0.lock().expect("db poisoned");
     list_known_folders_inner(&lock)
@@ -864,9 +862,7 @@ pub fn context_save_model(
     let conn_id = parse_conn_id(&connection_id)?;
     let (_kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
     let root = context_path.ok_or_else(|| {
-        AppError::Validation(format!(
-            "connection {conn_id} has no linked context folder"
-        ))
+        AppError::Validation(format!("connection {conn_id} has no linked context folder"))
     })?;
 
     // Fold the live table name to its logical name (identity when no rule).
@@ -918,8 +914,7 @@ pub fn context_save_model(
     let created;
     if file_exists {
         // Edit: splice new system YAML, optionally replace body.
-        let bytes =
-            rewrite_file_with_system_yaml(&target, &sys_yaml, draft.body.as_deref())?;
+        let bytes = rewrite_file_with_system_yaml(&target, &sys_yaml, draft.body.as_deref())?;
         atomic_write(&target, &bytes)?;
         created = false;
     } else {
@@ -1000,9 +995,7 @@ pub fn context_delete_model(
     let conn_id = parse_conn_id(&connection_id)?;
     let (_kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
     let root = context_path.ok_or_else(|| {
-        AppError::Validation(format!(
-            "connection {conn_id} has no linked context folder"
-        ))
+        AppError::Validation(format!("connection {conn_id} has no linked context folder"))
     })?;
 
     // Fold the live table name to its logical name (identity when no rule).
@@ -1072,7 +1065,10 @@ mod tests {
 
     #[test]
     fn slug_underscore_and_dash_preserved() {
-        assert_eq!(slug_for_model_name("order_item-v2").unwrap(), "order_item-v2");
+        assert_eq!(
+            slug_for_model_name("order_item-v2").unwrap(),
+            "order_item-v2"
+        );
     }
 
     // ---- project_source_path helpers ----
@@ -1204,7 +1200,10 @@ mod tests {
 
         // DB column is now populated.
         let after = connections::list(&db).unwrap();
-        assert_eq!(after[0].project_source_path.as_deref(), Some("/Users/me/app"));
+        assert_eq!(
+            after[0].project_source_path.as_deref(),
+            Some("/Users/me/app")
+        );
 
         // context.yaml lost the key but kept schema_version/name/other extras.
         let manifest = parse_manifest(dir.path()).unwrap();
@@ -1275,7 +1274,11 @@ mod tests {
     #[test]
     fn cdk_named_table_matches_logical_models() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("context.yaml"), "schema_version: 1\nname: T\n").unwrap();
+        fs::write(
+            dir.path().join("context.yaml"),
+            "schema_version: 1\nname: T\n",
+        )
+        .unwrap();
         write_model(dir.path(), "EventsTable", "Event");
         write_model(dir.path(), "EventsTable", "Attendee");
 
@@ -1294,7 +1297,11 @@ mod tests {
     #[test]
     fn same_folder_reused_across_environments() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("context.yaml"), "schema_version: 1\nname: T\n").unwrap();
+        fs::write(
+            dir.path().join("context.yaml"),
+            "schema_version: 1\nname: T\n",
+        )
+        .unwrap();
         write_model(dir.path(), "EventsTable", "Event");
 
         let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
@@ -1323,7 +1330,11 @@ mod tests {
     #[test]
     fn model_written_under_logical_folder_is_found_via_live_name() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("context.yaml"), "schema_version: 1\nname: T\n").unwrap();
+        fs::write(
+            dir.path().join("context.yaml"),
+            "schema_version: 1\nname: T\n",
+        )
+        .unwrap();
 
         // Rule strips a lowercase-hex CDK suffix.
         let rule = TableMatch {
@@ -1350,7 +1361,11 @@ mod tests {
     #[test]
     fn unconfigured_connection_matches_exactly() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("context.yaml"), "schema_version: 1\nname: T\n").unwrap();
+        fs::write(
+            dir.path().join("context.yaml"),
+            "schema_version: 1\nname: T\n",
+        )
+        .unwrap();
         write_model(dir.path(), "AppTable", "Order");
 
         let ctx = load_folder(dir.path(), EngineKind::Dynamo).unwrap();
@@ -1360,10 +1375,7 @@ mod tests {
         assert_eq!(exact.len(), 1);
 
         // A suffixed live name without a rule does NOT match.
-        let suffixed = collect_models(
-            &ctx.objects,
-            &normalize("MyApp-prod-AppTable-XYZ", None),
-        );
+        let suffixed = collect_models(&ctx.objects, &normalize("MyApp-prod-AppTable-XYZ", None));
         assert!(suffixed.is_empty());
     }
 
@@ -1377,7 +1389,8 @@ mod tests {
         // Directory must not exist yet.
         assert!(!target.exists());
 
-        let result = context_create_folder(target.to_string_lossy().into_owned(), "My Project".into());
+        let result =
+            context_create_folder(target.to_string_lossy().into_owned(), "My Project".into());
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
 
         assert!(target.join("context.yaml").exists(), "context.yaml missing");
@@ -1403,10 +1416,17 @@ mod tests {
         fs::write(target.join(".gitignore"), "**/_generated.*\n").unwrap();
         // Simulate an object doc to ensure nothing is touched.
         fs::create_dir_all(target.join("postgres/public")).unwrap();
-        fs::write(target.join("postgres/public/users.md"), "---\nsystem:\n  kind: table\n  name: users\nhuman: {}\n---\n# users\n").unwrap();
+        fs::write(
+            target.join("postgres/public/users.md"),
+            "---\nsystem:\n  kind: table\n  name: users\nhuman: {}\n---\n# users\n",
+        )
+        .unwrap();
 
         // Call create_folder a second time (as if a second connection links the same root).
-        let result = context_create_folder(target.to_string_lossy().into_owned(), "Different Name".into());
+        let result = context_create_folder(
+            target.to_string_lossy().into_owned(),
+            "Different Name".into(),
+        );
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
 
         // context.yaml must be byte-for-byte identical to what we wrote.
@@ -1443,7 +1463,7 @@ mod tests {
 
     // ---- context_list_known_folders (task 2.6) ----
 
-    use crate::platform::connections::{ConnectionInput, update as conn_update, ConnectionUpdate};
+    use crate::platform::connections::{update as conn_update, ConnectionInput, ConnectionUpdate};
     use crate::platform::storage::open_in_memory;
 
     fn fresh_db() -> rusqlite::Connection {
@@ -1495,7 +1515,8 @@ mod tests {
 
         let db = fresh_db();
         let id_a = make_connection_with_path(&db, "pg-conn", "postgres", Some(canonical.clone()));
-        let id_b = make_connection_with_path(&db, "dynamo-conn", "dynamodb", Some(canonical.clone()));
+        let id_b =
+            make_connection_with_path(&db, "dynamo-conn", "dynamodb", Some(canonical.clone()));
 
         let result = list_known_folders_inner(&db).unwrap();
         assert_eq!(result.len(), 1, "expected one entry");
@@ -1521,7 +1542,11 @@ mod tests {
         );
 
         let result = list_known_folders_inner(&db).unwrap();
-        assert!(result.is_empty(), "expected empty, got {:?} entries", result.len());
+        assert!(
+            result.is_empty(),
+            "expected empty, got {:?} entries",
+            result.len()
+        );
     }
 
     // 2.6 — no linked folders returns empty.

@@ -120,11 +120,7 @@ export function ConnectionSubtree({ connectionId }: Props) {
             contextPath={context_path}
             engine="dynamo"
             onActivate={(q) => {
-              void openContextQuery(tabs, connectionId, name, "dynamo", q, {
-                onCopied: (copiedName) => {
-                  console.log(`[argus] context query copied to clipboard: ${copiedName}`);
-                },
-              });
+              void openContextQuery(tabs, connectionId, name, "dynamo", q);
             }}
           />
         </div>

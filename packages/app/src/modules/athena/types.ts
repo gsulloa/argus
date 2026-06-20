@@ -120,6 +120,40 @@ export interface AthenaNamedQueryDetail extends AthenaNamedQuerySummary {
   query_string: string;
 }
 
+/** Identity returned by athena_create_named_query. */
+export interface AthenaCreatedNamedQuery {
+  named_query_id: string;
+  work_group: string;
+  database: string;
+}
+
+// Request types for write operations.
+
+export interface AthenaCreateNamedQueryArgs {
+  /** Connection id */
+  id: string;
+  name: string;
+  queryString: string;
+  database: string;
+  workGroup: string;
+  description?: string;
+}
+
+export interface AthenaUpdateNamedQueryArgs {
+  /** Connection id */
+  id: string;
+  namedQueryId: string;
+  name: string;
+  queryString: string;
+  description?: string;
+}
+
+export interface AthenaDeleteNamedQueryArgs {
+  /** Connection id */
+  id: string;
+  namedQueryId: string;
+}
+
 // ---------------------------------------------------------------------------
 // AWS credentials (shared with DynamoDB keychain shape)
 // ---------------------------------------------------------------------------

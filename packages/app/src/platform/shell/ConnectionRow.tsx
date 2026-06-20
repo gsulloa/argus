@@ -1,4 +1,4 @@
-import { AlertTriangle, GripVertical, Loader2, Power, RotateCw } from "lucide-react";
+import { AlertTriangle, GripVertical, Loader2, Power } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useState } from "react";
@@ -31,7 +31,8 @@ import {
   type DynamoParams,
   type ActiveDynamoConnection,
 } from "@/modules/dynamo";
-import { DynamoConnectionSubtree, useDynamoTableCache } from "@/modules/dynamo/tables";
+import { openDynamoPartiQLTab } from "@/modules/dynamo/sql";
+import { DynamoConnectionSubtree, DynamoRefreshButton } from "@/modules/dynamo/tables";
 import {
   MYSQL_KIND,
   MysqlIcon,
@@ -720,6 +721,15 @@ export function ConnectionRow({
               <>
                 <ContextMenu.Item
                   className={styles.contextItem}
+                  onSelect={() =>
+                    openDynamoPartiQLTab(tabs, connection.id, connection.name)
+                  }
+                >
+                  New PartiQL query
+                </ContextMenu.Item>
+                <ContextMenu.Separator className={styles.contextSeparator} />
+                <ContextMenu.Item
+                  className={styles.contextItem}
                   onSelect={() => setConfirmDisconnect(true)}
                 >
                   Disconnect
@@ -1010,12 +1020,7 @@ export function ConnectionRow({
             contextPath={connection.context_path}
             engine="dynamo"
             onActivate={(q) => {
-              void openContextQuery(tabs, connection.id, connection.name, "dynamo", q, {
-                onCopied: (name) => {
-                  // TODO: wire up a toast notification system when available
-                  console.log(`[argus] context query copied to clipboard: ${name}`);
-                },
-              });
+              void openContextQuery(tabs, connection.id, connection.name, "dynamo", q);
             }}
           />
         </div>
@@ -1074,25 +1079,3 @@ export function ConnectionRow({
   );
 }
 
-// ---------------------------------------------------------------------------
-// DynamoRefreshButton — rendered in the toolbar slot of an active Dynamo row.
-// Uses useDynamoTableCache which requires DynamoTablesCacheProvider in the tree.
-// ---------------------------------------------------------------------------
-
-function DynamoRefreshButton({ connectionId }: { connectionId: string }) {
-  const { refresh } = useDynamoTableCache(connectionId);
-  return (
-    <button
-      type="button"
-      aria-label="Refresh tables"
-      title="Refresh tables"
-      onClick={(e) => {
-        e.stopPropagation();
-        refresh();
-      }}
-      className={styles.toolbarBtn}
-    >
-      <RotateCw size={13} />
-    </button>
-  );
-}

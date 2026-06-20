@@ -77,11 +77,17 @@ export interface OrphanedNote {
   key: string;
 }
 
+export interface UpdatedObject {
+  path: string;
+  changes: string[];
+}
+
 export interface SyncReport {
   created: string[];
-  updated: string[];
+  updated: UpdatedObject[];
   marked_deleted: string[];
   orphaned_notes: OrphanedNote[];
+  unchanged: number;
 }
 
 export interface AiObjectEntry {
