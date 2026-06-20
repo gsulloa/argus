@@ -8,7 +8,7 @@ A Tauri 2 desktop app for inspecting and editing data across multiple sources.
 - **MySQL / MariaDB** — MySQL ≥ 5.7, MariaDB ≥ 10.5. Supports schema browsing, virtualized data grid with inline editing, SQL editor with multi-statement runs, table structure viewer.
 - **Microsoft SQL Server** — SQL Server 2017+, Azure SQL Database, Azure SQL Managed Instance. Supports schema browsing, virtualized data grid with inline editing, SQL editor with `GO` batch support, table structure viewer. SQL Authentication only in v1.
 - **DynamoDB** — Table browsing and item scanning.
-- **Amazon CloudWatch Logs** — Log group / stream browsing and querying.
+- **Amazon CloudWatch Logs** — Connection (region, AWS auth via profile/access-keys) + log-group/stream browser + raw event tail viewer + Logs Insights editor (`.cwlogs`, async `StartQuery` → poll → fetch lifecycle, dynamic columns, records/bytes-scanned cost, CSV/JSONL/XLSX export); context-folder schema sync via `CloudwatchIntrospector` (groups → `cloudwatch/groups/<name>.md`, `/`→`__` filename folding). No inline-editing data grid — logs are immutable. AWS credentials in OS keychain like DynamoDB.
 - **Amazon Athena** — Serverless SQL over S3 via the async query lifecycle (`StartQueryExecution` → poll → paginated fetch). Glue-backed schema browser (databases → tables/views → columns); SQL editor with multi-statement runs, bytes-scanned (cost) display, and CSV/JSONL/XLSX export. No inline-editing data grid — table click opens a `SELECT … LIMIT 100` preview. Context-folder schema sync via Glue introspection (`AthenaIntrospector`); context-folder-grounded AI SQL generation. Default `AwsDataCatalog` catalog only in v1; AWS credentials in OS keychain like DynamoDB.
 
 ## Context folders (cross-engine)
@@ -16,15 +16,15 @@ A Tauri 2 desktop app for inspecting and editing data across multiple sources.
 Each connection can optionally link to a **context folder** on disk holding
 structured documentation (object docs with `system:` / `human:` frontmatter)
 and prefab queries. The guiding model is **"the context folder is the project"**:
-multiple connections of any engine (Postgres, MySQL, MSSQL, DynamoDB, Athena)
+multiple connections of any engine (Postgres, MySQL, MSSQL, DynamoDB, Athena, CloudWatch)
 share one root; each engine's docs live under its own subtree within that root
 (`<root>/<engine>/<schema>/`). A folder is **independent of connection groups** —
 a connection retains its `context_path` regardless of which group it belongs to.
 One filesystem watcher per canonical path; the link/setup flow offers existing
 known folders first (reuse-first). Full layout, format, and behaviour: see
 `README.md` "Context folders" and `docs/context-folder-example/`. Schema-sync
-ships for Postgres, MySQL, MSSQL, DynamoDB, and Athena (`introspect_adapters.rs`);
-CloudWatch is on the roadmap. DynamoDB connections may carry an optional
+ships for Postgres, MySQL, MSSQL, DynamoDB, Athena, and CloudWatch (`introspect_adapters.rs`);
+CloudWatch groups sync to `cloudwatch/groups/<name>.md` with `/`→`__` filename folding. DynamoDB connections may carry an optional
 per-connection **table-name normalization rule** (`DynamoParams.table_match`,
 applied via `context/normalize.rs`) that folds CDK-style physical names
 (`MyApp-prod-EventsTable-3M4N…`) to a logical name (`EventsTable`) before every

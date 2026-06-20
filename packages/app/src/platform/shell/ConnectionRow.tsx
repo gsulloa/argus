@@ -64,6 +64,16 @@ import {
   AthenaSchemaToolbar,
 } from "@/modules/athena";
 import { openAthenaQueryTab } from "@/modules/athena/openAthenaQueryTab";
+import {
+  CLOUDWATCH_KIND,
+  CloudwatchIcon,
+  cloudwatchApi,
+  useActiveCloudwatchConnections,
+  useCloudwatchForm,
+  LogGroupsTree,
+  openInsightsTab,
+  CloudwatchInsightsPrimaryAction,
+} from "@/modules/cloudwatch";
 import { ContextQueriesBranch } from "@/modules/context/components/ContextQueriesBranch";
 import { openContextQuery } from "@/modules/context/openContextQuery";
 import { useTabs } from "@/platform/shell/tabs";
@@ -109,6 +119,7 @@ export function ConnectionRow({
   const myActive = useActiveMysqlConnections();
   const msActive = useActiveMssqlConnections();
   const athenaActive = useActiveAthenaConnections();
+  const cwActive = useActiveCloudwatchConnections();
   // Cross-engine open registry — used in manager mode for the open/closed dot.
   const openRegistry = useOpenConnections();
   const { items: allConnections, remove, move } = useConnections();
@@ -118,6 +129,7 @@ export function ConnectionRow({
   const myForm = useMysqlForm();
   const msForm = useMssqlForm();
   const athenaForm = useAthenaForm();
+  const cwForm = useCloudwatchForm();
   const handleDynamoError = useDynamoErrorHandler();
   const tabs = useTabs();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -129,6 +141,7 @@ export function ConnectionRow({
   const isMySQL = connection.kind === MYSQL_KIND;
   const isMssql = connection.kind === MSSQL_KIND;
   const isAthena = connection.kind === ATHENA_KIND;
+  const isCloudwatch = connection.kind === CLOUDWATCH_KIND;
 
   const active = isPostgres
     ? pgActive.isActive(connection.id)
@@ -140,7 +153,9 @@ export function ConnectionRow({
           ? msActive.isActive(connection.id)
           : isAthena
             ? athenaActive.isActive(connection.id)
-            : false;
+            : isCloudwatch
+              ? cwActive.isActive(connection.id)
+              : false;
 
   const activeDynamoView = isDynamo ? dyActive.getActive(connection.id) : undefined;
 
@@ -208,6 +223,8 @@ export function ConnectionRow({
           await mssqlApi.connect(connection.id);
         } else if (isAthena) {
           await athenaApi.connect(connection.id);
+        } else if (isCloudwatch) {
+          await cloudwatchApi.connect(connection.id);
         }
       }
       // Open and focus in the Workspace (idempotent for already-open connections).
@@ -235,6 +252,8 @@ export function ConnectionRow({
         await mssqlApi.disconnect(connection.id);
       } else if (isAthena) {
         await athenaApi.disconnect(connection.id);
+      } else if (isCloudwatch) {
+        await cloudwatchApi.disconnect(connection.id);
       }
     } catch (e) {
       console.error("[argus] manager close connection:", e);
@@ -289,6 +308,15 @@ export function ConnectionRow({
       } finally {
         setIsConnecting(false);
       }
+    } else if (isCloudwatch) {
+      setIsConnecting(true);
+      try {
+        await cloudwatchApi.connect(connection.id);
+      } catch (e) {
+        console.error("[argus] cloudwatch connect:", e);
+      } finally {
+        setIsConnecting(false);
+      }
     }
     // unknown kind: no-op
   }
@@ -333,6 +361,14 @@ export function ConnectionRow({
     }
   }
 
+  async function handleCloudwatchDisconnect() {
+    try {
+      await cloudwatchApi.disconnect(connection.id);
+    } catch (e) {
+      console.error("[argus] cloudwatch disconnect:", e);
+    }
+  }
+
   async function handleDelete() {
     try {
       if (active) {
@@ -346,6 +382,8 @@ export function ConnectionRow({
           await mssqlApi.disconnect(connection.id);
         } else if (isAthena) {
           await athenaApi.disconnect(connection.id);
+        } else if (isCloudwatch) {
+          await cloudwatchApi.disconnect(connection.id);
         }
       }
       await remove(connection.id);
@@ -397,7 +435,7 @@ export function ConnectionRow({
           : "Connect";
 
   // Determine whether the row has any clickable primary action
-  const isClickable = isPostgres || isDynamo || isMySQL || isMssql || isAthena;
+  const isClickable = isPostgres || isDynamo || isMySQL || isMssql || isAthena || isCloudwatch;
 
   return (
     <>
@@ -445,6 +483,8 @@ export function ConnectionRow({
                   <MssqlIcon size={mode === "manager" ? 16 : 14} />
                 ) : isAthena ? (
                   <AthenaIcon size={mode === "manager" ? 16 : 14} />
+                ) : isCloudwatch ? (
+                  <CloudwatchIcon size={mode === "manager" ? 16 : 14} />
                 ) : (
                   <span className={styles.itemKind}>{connection.kind}</span>
                 )}
@@ -618,6 +658,25 @@ export function ConnectionRow({
                 </span>
               </>
             )}
+            {mode === "workspace" && isCloudwatch && active && (
+              <>
+                <span className={styles.rowPrimary}>
+                  <CloudwatchInsightsPrimaryAction connectionId={connection.id} />
+                </span>
+                <button
+                  type="button"
+                  className={styles.disconnectBtn}
+                  aria-label="Disconnect"
+                  title="Disconnect"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDisconnect(true);
+                  }}
+                >
+                  <Power size={12} strokeWidth={2.5} />
+                </button>
+              </>
+            )}
           </div>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
@@ -747,6 +806,28 @@ export function ConnectionRow({
                 <ContextMenu.Separator className={styles.contextSeparator} />
               </>
             )}
+            {mode === "workspace" && isCloudwatch && active && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() =>
+                    openInsightsTab(tabs, {
+                      connectionId: connection.id,
+                      connectionName: connection.name,
+                    })
+                  }
+                >
+                  New Insights Query
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => setConfirmDisconnect(true)}
+                >
+                  Disconnect
+                </ContextMenu.Item>
+                <ContextMenu.Separator className={styles.contextSeparator} />
+              </>
+            )}
             {isPostgres && (
               <>
                 <ContextMenu.Item
@@ -827,7 +908,23 @@ export function ConnectionRow({
                 </ContextMenu.Item>
               </>
             )}
-            {!isPostgres && !isDynamo && !isMySQL && !isMssql && !isAthena && (
+            {isCloudwatch && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => cwForm.openEdit(connection)}
+                >
+                  Edit
+                </ContextMenu.Item>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => cwForm.openDuplicate(connection)}
+                >
+                  Duplicate
+                </ContextMenu.Item>
+              </>
+            )}
+            {!isPostgres && !isDynamo && !isMySQL && !isMssql && !isAthena && !isCloudwatch && (
               <ContextMenu.Item className={styles.contextItem} disabled>
                 {connection.kind}
               </ContextMenu.Item>
@@ -933,6 +1030,11 @@ export function ConnectionRow({
           <AthenaSchemaTree connectionId={connection.id} />
         </div>
       )}
+      {mode === "workspace" && isCloudwatch && active && (
+        <div className={styles.subtree}>
+          <LogGroupsTree connectionId={connection.id} />
+        </div>
+      )}
 
       <DisconnectConfirmDialog
         open={confirmDisconnect}
@@ -949,7 +1051,9 @@ export function ConnectionRow({
                 ? handleMssqlDisconnect
                 : isAthena
                   ? handleAthenaDisconnect
-                  : handleDynamoDisconnect
+                  : isCloudwatch
+                    ? handleCloudwatchDisconnect
+                    : handleDynamoDisconnect
         }
       />
 

@@ -8,7 +8,7 @@ A desktop tool for inspecting and editing data across multiple sources. Built on
 - **MySQL / MariaDB** — MySQL ≥ 5.7, MariaDB ≥ 10.5. Supports schema browsing, virtualized data grid with inline editing, SQL editor with multi-statement runs, table structure viewer.
 - **Microsoft SQL Server** — SQL Server 2017+, Azure SQL Database, Azure SQL Managed Instance. Supports schema browsing, virtualized data grid with inline editing, SQL editor with `GO` batch support, table structure viewer. SQL Authentication only in v1.
 - **DynamoDB** — Table browsing and item scanning.
-- **Amazon CloudWatch Logs** — Log group / stream browsing and querying.
+- **Amazon CloudWatch Logs** — Connection management (region, AWS auth via profile or access keys); log-group → log-stream browser (paginated groups, lazy streams newest-first); raw event tail viewer (`GetLogEvents` with older/newer paging); Logs Insights editor (`.cwlogs` queries, toolbar log-group multi-select + time-range picker, async `StartQuery` → poll → fetch lifecycle, dynamic columns, records/bytes-scanned cost display, and CSV/JSONL/XLSX export); context-folder schema sync of log groups via `CloudwatchIntrospector`. No inline-editing data grid — logs are immutable. AWS credentials stored in the OS keychain like DynamoDB.
 - **Amazon Athena** — Serverless SQL over S3. Connection management (region, workgroup, S3 output location, AWS auth via profile or access keys); Glue-backed schema browser (databases → tables/views → columns); SQL editor running queries through the async Athena lifecycle (`StartQueryExecution` → poll → paginated fetch) with cancellation, multi-statement runs, bytes-scanned (cost) display, and CSV/JSONL/XLSX export; context-folder schema sync via Glue introspection; and context-folder-grounded AI SQL generation. No inline-editing data grid — clicking a table opens a `SELECT … LIMIT 100` preview. Default `AwsDataCatalog` catalog only in v1. AWS credentials stored in the OS keychain like DynamoDB.
 
 ## Context folders
@@ -56,8 +56,8 @@ Object docs split frontmatter into two blocks: a `system:` block regenerated
 by **Sync schema** (live introspection) and a `human:` block plus Markdown
 body that the tool never touches. Sharing a folder across connections costs
 one filesystem watcher (path-keyed registry); edits in your editor refresh
-the UI within ~250 ms. Postgres, MySQL, MSSQL, and DynamoDB ship with full sync support;
-CloudWatch is on the roadmap (same folder format).
+the UI within ~250 ms. Postgres, MySQL, MSSQL, DynamoDB, Athena, and CloudWatch ship with full sync support.
+CloudWatch log groups sync to `cloudwatch/groups/<name>.md`, with `/` in group names folded to `__` in the filename (e.g. `/aws/lambda/fn` → `__aws__lambda__fn.md`).
 
 ### DynamoDB model docs (Single-Table Design)
 
@@ -160,6 +160,50 @@ Folders synced before configuring a rule keep their old suffix-named files
 logical-name re-sync.
 
 A minimal example folder lives in `docs/context-folder-example/`.
+
+## Amazon CloudWatch Logs setup
+
+### IAM permissions
+
+The IAM identity used to connect (either a named profile or static access keys) must have the following minimum permissions. Logs Insights queries are billed by bytes scanned; the time range and selected log groups set in the toolbar before each run directly bound that cost.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudWatchLogsBrowseAndTail",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams",
+        "logs:GetLogEvents"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchLogsInsights",
+      "Effect": "Allow",
+      "Action": [
+        "logs:StartQuery",
+        "logs:GetQueryResults",
+        "logs:StopQuery"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "StsIdentityCheck",
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+If an `access denied` error appears on test connection, the most common cause is a missing `logs:DescribeLogGroups` or `sts:GetCallerIdentity` permission.
 
 ## Amazon Athena setup
 

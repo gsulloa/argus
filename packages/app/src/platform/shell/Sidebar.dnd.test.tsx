@@ -194,6 +194,21 @@ vi.mock("@/modules/athena/openAthenaQueryTab", () => ({
   openAthenaQueryTab: vi.fn(),
 }));
 
+vi.mock("@/modules/cloudwatch", () => ({
+  CLOUDWATCH_KIND: "cloudwatch",
+  CloudwatchIcon: () => null,
+  cloudwatchApi: { connect: vi.fn(), disconnect: vi.fn(), disconnectAll: vi.fn() },
+  useActiveCloudwatchConnections: () => ({ items: [], isActive: () => false }),
+  useCloudwatchForm: () => ({
+    openCreate: vi.fn(),
+    openEdit: vi.fn(),
+    openDuplicate: vi.fn(),
+  }),
+  LogGroupsTree: () => null,
+  openInsightsTab: vi.fn(),
+  CloudwatchInsightsPrimaryAction: () => null,
+}));
+
 vi.mock("@/modules/context/openContextQuery", () => ({
   openContextQuery: vi.fn(),
 }));

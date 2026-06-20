@@ -4,7 +4,7 @@
  * Workspace identity header, dispatched by connection kind.
  *
  * Reuses each engine's existing action components unchanged. Engine kinds
- * without defined header actions (e.g. cloudwatch) render nothing.
+ * without defined header actions render nothing.
  *
  * Parallel to ConnectionSubtree (which dispatches the schema tree).
  */
@@ -15,6 +15,7 @@ import { MSSQL_KIND, MssqlSchemaPrimaryActions, MssqlSchemaToolbar } from "@/mod
 import { ATHENA_KIND, AthenaSchemaPrimaryActions, AthenaSchemaToolbar } from "@/modules/athena";
 import { DYNAMO_KIND } from "@/modules/dynamo";
 import { DynamoRefreshButton } from "@/modules/dynamo/tables";
+import { CLOUDWATCH_KIND, CloudwatchInsightsPrimaryAction } from "@/modules/cloudwatch";
 
 interface Props {
   connectionId: string;
@@ -56,6 +57,8 @@ export function ConnectionHeaderActions({ connectionId }: Props) {
       );
     case DYNAMO_KIND:
       return <DynamoRefreshButton connectionId={connectionId} />;
+    case CLOUDWATCH_KIND:
+      return <CloudwatchInsightsPrimaryAction connectionId={connectionId} />;
     default:
       return null;
   }

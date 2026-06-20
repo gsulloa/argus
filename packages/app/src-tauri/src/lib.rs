@@ -29,6 +29,15 @@ use crate::modules::athena::schema_commands::{
     athena_list_columns, athena_list_databases, athena_list_relations,
 };
 use crate::modules::athena::sql::{athena_cancel_query, athena_run_sql, athena_run_sql_many};
+use crate::modules::cloudwatch::client::CloudwatchClientRegistry;
+use crate::modules::cloudwatch::commands::{
+    cloudwatch_connect, cloudwatch_disconnect, cloudwatch_disconnect_all, cloudwatch_list_active,
+    cloudwatch_test_connection,
+};
+use crate::modules::cloudwatch::groups::{
+    cloudwatch_get_log_events, cloudwatch_list_log_groups, cloudwatch_list_log_streams,
+};
+use crate::modules::cloudwatch::insights::{cloudwatch_cancel_insights, cloudwatch_run_insights};
 use crate::modules::context::commands::{
     context_ai_payload, context_create_folder, context_delete_model, context_get_object,
     context_get_project_source, context_get_query, context_link_folder, context_list_known_folders,
@@ -197,6 +206,7 @@ pub fn run() {
             app.manage(MssqlPoolRegistry::new());
             app.manage(DynamoClientRegistry::new());
             app.manage(AthenaClientRegistry::new());
+            app.manage(CloudwatchClientRegistry::new());
             app.manage(OpenConnectionsRegistry::new());
             app.manage(platform::updater::UpdaterState::default());
 
@@ -381,6 +391,17 @@ pub fn run() {
             dynamo_delete_item,
             dynamo_run_partiql,
             dynamo_run_partiql_many,
+            // CloudWatch Logs commands
+            cloudwatch_test_connection,
+            cloudwatch_connect,
+            cloudwatch_disconnect,
+            cloudwatch_disconnect_all,
+            cloudwatch_list_active,
+            cloudwatch_list_log_groups,
+            cloudwatch_list_log_streams,
+            cloudwatch_get_log_events,
+            cloudwatch_run_insights,
+            cloudwatch_cancel_insights,
             // Updater commands
             updater_check_and_download,
             updater_install_and_restart,

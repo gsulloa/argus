@@ -1,6 +1,7 @@
 pub mod activity_log;
 pub mod ai;
 pub mod athena;
+pub mod cloudwatch;
 pub mod context;
 pub mod dynamo;
 pub mod mssql;

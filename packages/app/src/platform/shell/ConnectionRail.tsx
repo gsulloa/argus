@@ -40,6 +40,11 @@ import {
   AthenaIcon,
   athenaApi,
 } from "@/modules/athena";
+import {
+  CLOUDWATCH_KIND,
+  CloudwatchIcon,
+  cloudwatchApi,
+} from "@/modules/cloudwatch";
 import { useOpenConnections } from "@/platform/connection-registry/useOpenConnections";
 import { useFocusedConnection } from "./FocusedConnectionContext";
 import styles from "./ConnectionRail.module.css";
@@ -72,6 +77,7 @@ export function engineLabel(kind: string): string {
   if (kind === MYSQL_KIND) return "MySQL";
   if (kind === MSSQL_KIND) return "SQL Server";
   if (kind === ATHENA_KIND) return "Athena";
+  if (kind === CLOUDWATCH_KIND) return "CloudWatch Logs";
   return kind;
 }
 
@@ -81,6 +87,7 @@ export function EngineIcon({ kind }: { kind: string }) {
   if (kind === MYSQL_KIND) return <MysqlIcon size={16} />;
   if (kind === MSSQL_KIND) return <MssqlIcon size={16} />;
   if (kind === ATHENA_KIND) return <AthenaIcon size={16} />;
+  if (kind === CLOUDWATCH_KIND) return <CloudwatchIcon size={16} />;
   // Fallback: first two chars of kind as text
   return <span style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.04em" }}>{kind.slice(0, 2)}</span>;
 }
@@ -101,6 +108,8 @@ async function disconnectConnection(id: string, kind: string): Promise<void> {
       await mssqlApi.disconnect(id);
     } else if (kind === ATHENA_KIND) {
       await athenaApi.disconnect(id);
+    } else if (kind === CLOUDWATCH_KIND) {
+      await cloudwatchApi.disconnect(id);
     }
   } catch (e) {
     console.error("[argus] ConnectionRail disconnect:", e);
