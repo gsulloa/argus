@@ -4,9 +4,11 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { invoke } from "@tauri-apps/api/core";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useConnectionGroups } from "@/platform/connection-registry/useConnectionGroups";
 import { computeMidpointSortOrder } from "@/platform/connection-registry/sortOrder";
+import { useOpenConnections } from "@/platform/connection-registry/useOpenConnections";
 import type { Connection } from "@/platform/connection-registry/types";
 import {
   openQueryTab,
@@ -88,15 +90,26 @@ function dynamoSubtitle(
 export function ConnectionRow({
   connection,
   draggable = false,
+  mode = "workspace",
 }: {
   connection: Connection;
   draggable?: boolean;
+  /**
+   * "workspace" (default) — full row with active-gated toolbar and inline
+   *   subtree. Existing behavior unchanged.
+   * "manager" — header-only row (kind icon, name, badges, open/closed dot
+   *   driven by the cross-engine open registry). Primary action = open in
+   *   Workspace. No subtree. Context menu gains "Close connection".
+   */
+  mode?: "manager" | "workspace";
 }) {
   const pgActive = useActiveConnections();
   const dyActive = useActiveDynamoConnections();
   const myActive = useActiveMysqlConnections();
   const msActive = useActiveMssqlConnections();
   const athenaActive = useActiveAthenaConnections();
+  // Cross-engine open registry — used in manager mode for the open/closed dot.
+  const openRegistry = useOpenConnections();
   const { items: allConnections, remove, move } = useConnections();
   const { items: groups } = useConnectionGroups();
   const pgForm = usePostgresForm();
@@ -159,6 +172,73 @@ export function ConnectionRow({
         : [],
     [confirmDisconnect, isPostgres, isMySQL, isMssql, connection.id],
   );
+
+  /**
+   * Manager-mode primary click: connect if not already open, then open in the
+   * Workspace via workspace_open_connection (Phase 6 coordination).
+   *
+   * The per-engine connect must happen here in the Manager because connection
+   * params and secrets live in the Manager's context.  workspace_open_connection
+   * is intentionally engine-agnostic — it only ensures the Workspace window
+   * exists, focuses it, and emits workspace:focus-connection so the rail
+   * selects the right item.  For an already-open connection the connect step
+   * is skipped and workspace_open_connection is called directly (idempotent
+   * focus).
+   */
+  async function handleManagerRowClick() {
+    if (isConnecting) return;
+    setIsConnecting(true);
+    try {
+      // Connect only if not already open.
+      if (!openRegistry.isOpen(connection.id)) {
+        if (isPostgres) {
+          await postgresApi.connect(connection.id);
+        } else if (isDynamo) {
+          try {
+            await dynamoApi.connect(connection.id);
+          } catch (e) {
+            const err = e as Parameters<typeof handleDynamoError>[1];
+            await handleDynamoError(connection.id, err);
+            return;
+          }
+        } else if (isMySQL) {
+          await mysqlApi.connect(connection.id);
+        } else if (isMssql) {
+          await mssqlApi.connect(connection.id);
+        } else if (isAthena) {
+          await athenaApi.connect(connection.id);
+        }
+      }
+      // Open and focus in the Workspace (idempotent for already-open connections).
+      await invoke("workspace_open_connection", { id: connection.id });
+    } catch (e) {
+      console.error("[argus] manager open in workspace:", e);
+    } finally {
+      setIsConnecting(false);
+    }
+  }
+
+  /**
+   * Manager-mode "Close connection" context menu action.
+   * Disconnects via the per-engine disconnect path.
+   */
+  async function handleManagerCloseConnection() {
+    try {
+      if (isPostgres) {
+        await postgresApi.disconnect(connection.id);
+      } else if (isDynamo) {
+        await dynamoApi.disconnect(connection.id);
+      } else if (isMySQL) {
+        await mysqlApi.disconnect(connection.id);
+      } else if (isMssql) {
+        await mssqlApi.disconnect(connection.id);
+      } else if (isAthena) {
+        await athenaApi.disconnect(connection.id);
+      }
+    } catch (e) {
+      console.error("[argus] manager close connection:", e);
+    }
+  }
 
   async function handleRowClick() {
     if (active || isConnecting) return;
@@ -288,17 +368,32 @@ export function ConnectionRow({
     }
   }
 
+  // In manager mode, "active/open" is sourced from the cross-engine open registry.
+  // In workspace mode, it uses the per-engine active hooks (existing behavior).
+  const isOpenInRegistry = openRegistry.isOpen(connection.id);
+
   const dotState: "active" | "inactive" | "connecting" = isConnecting
     ? "connecting"
-    : active
-      ? "active"
-      : "inactive";
+    : mode === "manager"
+      ? isOpenInRegistry
+        ? "active"
+        : "inactive"
+      : active
+        ? "active"
+        : "inactive";
 
-  const rowTitle = active
-    ? connection.name
-    : isConnecting
-      ? "Connecting…"
-      : "Connect";
+  const rowTitle =
+    mode === "manager"
+      ? isOpenInRegistry
+        ? `Open in Workspace (connected)`
+        : isConnecting
+          ? "Connecting…"
+          : "Open in Workspace"
+      : active
+        ? connection.name
+        : isConnecting
+          ? "Connecting…"
+          : "Connect";
 
   // Determine whether the row has any clickable primary action
   const isClickable = isPostgres || isDynamo || isMySQL || isMssql || isAthena;
@@ -311,6 +406,7 @@ export function ConnectionRow({
             ref={draggable ? sortable.setNodeRef : undefined}
             style={style}
             className={styles.row}
+            data-mode={mode}
           >
             {draggable && (
               <button
@@ -326,35 +422,56 @@ export function ConnectionRow({
             <button
               type="button"
               className={styles.item}
-              onClick={isClickable ? handleRowClick : undefined}
+              data-mode={mode}
+              onClick={
+                isClickable
+                  ? mode === "manager"
+                    ? handleManagerRowClick
+                    : handleRowClick
+                  : undefined
+              }
               title={isClickable ? rowTitle : connection.name}
               aria-busy={isConnecting || undefined}
             >
               <span className={styles.icon}>
                 {isPostgres ? (
-                  <PostgresIcon size={14} />
+                  <PostgresIcon size={mode === "manager" ? 16 : 14} />
                 ) : isDynamo ? (
-                  <DynamoIcon size={14} />
+                  <DynamoIcon size={mode === "manager" ? 16 : 14} />
                 ) : isMySQL ? (
-                  <MysqlIcon size={14} />
+                  <MysqlIcon size={mode === "manager" ? 16 : 14} />
                 ) : isMssql ? (
-                  <MssqlIcon size={14} />
+                  <MssqlIcon size={mode === "manager" ? 16 : 14} />
                 ) : isAthena ? (
-                  <AthenaIcon size={14} />
+                  <AthenaIcon size={mode === "manager" ? 16 : 14} />
                 ) : (
                   <span className={styles.itemKind}>{connection.kind}</span>
                 )}
               </span>
-              <span className={styles.itemName}>{connection.name}</span>
-              {isDynamo && active && activeDynamoView && (
-                <span className={styles.itemSubtitle}>
-                  {dynamoSubtitle(connection, activeDynamoView)}
+              {/* Manager mode: two-line layout (name + host subtitle) */}
+              {mode === "manager" ? (
+                <span className={styles.managerItemBody}>
+                  <span className={styles.itemName}>{connection.name}</span>
+                  <span className={styles.managerHostLine}>
+                    {(connection.params as Record<string, unknown>).host as string
+                      || (connection.params as Record<string, unknown>).region as string
+                      || connection.kind}
+                  </span>
                 </span>
-              )}
-              {isDynamo && !active && (
-                <span className={styles.itemSubtitle}>
-                  {dynamoSubtitle(connection, undefined)}
-                </span>
+              ) : (
+                <>
+                  <span className={styles.itemName}>{connection.name}</span>
+                  {isDynamo && active && activeDynamoView && (
+                    <span className={styles.itemSubtitle}>
+                      {dynamoSubtitle(connection, activeDynamoView)}
+                    </span>
+                  )}
+                  {isDynamo && !active && (
+                    <span className={styles.itemSubtitle}>
+                      {dynamoSubtitle(connection, undefined)}
+                    </span>
+                  )}
+                </>
               )}
               {readOnly && <span className={styles.roBadge}>RO</span>}
               {needsCredentials && (
@@ -380,7 +497,8 @@ export function ConnectionRow({
                 />
               )}
             </button>
-            {isPostgres && active && (
+            {/* Active-gated toolbar — workspace mode only. Not rendered in manager. */}
+            {mode === "workspace" && isPostgres && active && (
               <>
                 <span className={styles.rowPrimary}>
                   <SchemaPrimaryActions connectionId={connection.id} />
@@ -402,7 +520,7 @@ export function ConnectionRow({
                 </span>
               </>
             )}
-            {isDynamo && active && (
+            {mode === "workspace" && isDynamo && active && (
               <>
                 <button
                   type="button"
@@ -421,7 +539,7 @@ export function ConnectionRow({
                 </span>
               </>
             )}
-            {isMySQL && active && (
+            {mode === "workspace" && isMySQL && active && (
               <>
                 <span className={styles.rowPrimary}>
                   <button
@@ -455,7 +573,7 @@ export function ConnectionRow({
                 </button>
               </>
             )}
-            {isMssql && active && (
+            {mode === "workspace" && isMssql && active && (
               <>
                 <span className={styles.rowPrimary}>
                   <MssqlSchemaPrimaryActions connectionId={connection.id} />
@@ -477,7 +595,7 @@ export function ConnectionRow({
                 </span>
               </>
             )}
-            {isAthena && active && (
+            {mode === "workspace" && isAthena && active && (
               <>
                 <span className={styles.rowPrimary}>
                   <AthenaSchemaPrimaryActions connectionId={connection.id} />
@@ -503,7 +621,20 @@ export function ConnectionRow({
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
           <ContextMenu.Content className={styles.contextMenu}>
-            {isPostgres && active && (
+            {/* Manager mode: "Close connection" when the connection is open. */}
+            {mode === "manager" && isOpenInRegistry && (
+              <>
+                <ContextMenu.Item
+                  className={styles.contextItem}
+                  onSelect={() => void handleManagerCloseConnection()}
+                >
+                  Close connection
+                </ContextMenu.Item>
+                <ContextMenu.Separator className={styles.contextSeparator} />
+              </>
+            )}
+            {/* Workspace mode: per-engine active-gated "New SQL Query" + "Disconnect". */}
+            {mode === "workspace" && isPostgres && active && (
               <>
                 <ContextMenu.Item
                   className={styles.contextItem}
@@ -526,7 +657,7 @@ export function ConnectionRow({
                 <ContextMenu.Separator className={styles.contextSeparator} />
               </>
             )}
-            {isDynamo && active && (
+            {mode === "workspace" && isDynamo && active && (
               <>
                 <ContextMenu.Item
                   className={styles.contextItem}
@@ -537,7 +668,7 @@ export function ConnectionRow({
                 <ContextMenu.Separator className={styles.contextSeparator} />
               </>
             )}
-            {isMySQL && active && (
+            {mode === "workspace" && isMySQL && active && (
               <>
                 <ContextMenu.Item
                   className={styles.contextItem}
@@ -560,7 +691,7 @@ export function ConnectionRow({
                 <ContextMenu.Separator className={styles.contextSeparator} />
               </>
             )}
-            {isMssql && active && (
+            {mode === "workspace" && isMssql && active && (
               <>
                 <ContextMenu.Item
                   className={styles.contextItem}
@@ -583,7 +714,7 @@ export function ConnectionRow({
                 <ContextMenu.Separator className={styles.contextSeparator} />
               </>
             )}
-            {isAthena && active && (
+            {mode === "workspace" && isAthena && active && (
               <>
                 <ContextMenu.Item
                   className={styles.contextItem}
@@ -730,7 +861,8 @@ export function ConnectionRow({
         </ContextMenu.Portal>
       </ContextMenu.Root>
 
-      {isPostgres && active && (
+      {/* Inline subtree — workspace mode only. Not rendered in manager mode. */}
+      {mode === "workspace" && isPostgres && active && (
         <div className={styles.subtree}>
           <SchemaTree connectionId={connection.id} />
           <ContextQueriesBranch
@@ -744,7 +876,7 @@ export function ConnectionRow({
           />
         </div>
       )}
-      {isMySQL && active && (
+      {mode === "workspace" && isMySQL && active && (
         <div className={styles.subtree}>
           <MysqlSchemaTree connectionId={connection.id} />
           <ContextQueriesBranch
@@ -758,7 +890,7 @@ export function ConnectionRow({
           />
         </div>
       )}
-      {isMssql && active && (
+      {mode === "workspace" && isMssql && active && (
         <div className={styles.subtree}>
           <MssqlSchemaTree connectionId={connection.id} />
           <ContextQueriesBranch
@@ -772,7 +904,7 @@ export function ConnectionRow({
           />
         </div>
       )}
-      {isDynamo && active && (
+      {mode === "workspace" && isDynamo && active && (
         <div className={styles.subtree}>
           <DynamoConnectionSubtree connectionId={connection.id} connectionName={connection.name} />
           <ContextQueriesBranch
@@ -791,7 +923,7 @@ export function ConnectionRow({
           />
         </div>
       )}
-      {isAthena && active && (
+      {mode === "workspace" && isAthena && active && (
         <div className={styles.subtree}>
           <AthenaSchemaTree connectionId={connection.id} />
         </div>

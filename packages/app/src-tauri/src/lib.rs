@@ -85,6 +85,7 @@ use crate::platform::{
         connections_create, connections_delete, connections_get_secret, connections_list,
         connections_move, connections_refresh_secret, connections_update,
     },
+    open_connections::{connections_open_list, disconnect_all_connections, ensure_manager_window, ensure_workspace_window, workspace_open_connection, OpenConnectionsRegistry},
     settings::{self, settings_get, settings_set},
     storage,
     updater::commands::{
@@ -189,6 +190,7 @@ pub fn run() {
             app.manage(MssqlPoolRegistry::new());
             app.manage(DynamoClientRegistry::new());
             app.manage(AthenaClientRegistry::new());
+            app.manage(OpenConnectionsRegistry::new());
             app.manage(platform::updater::UpdaterState::default());
 
             // Context registry — shared singleton keyed by canonical folder path.
@@ -247,6 +249,11 @@ pub fn run() {
             connections_move,
             connections_get_secret,
             connections_refresh_secret,
+            connections_open_list,
+            disconnect_all_connections,
+            ensure_workspace_window,
+            ensure_manager_window,
+            workspace_open_connection,
             connection_groups_list,
             connection_groups_create,
             connection_groups_update,
@@ -404,38 +411,89 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error building tauri application")
         .run(|app_handle, event| {
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                let state = app_handle.state::<platform::updater::UpdaterState>();
-                // If a user-triggered install just called app.restart(), let Tauri's
-                // relaunch sequence proceed — do NOT prevent_exit and do NOT block.
-                if state.relaunching.load(std::sync::atomic::Ordering::Acquire) {
-                    tracing::info!(target: "updater", "relaunch_allowed_by_exit_handler");
-                    let _ = api;
-                    return;
-                }
-                let installing = state.installing.load(std::sync::atomic::Ordering::Acquire);
-                let has_pending =
-                    tauri::async_runtime::block_on(async { state.pending.lock().await.is_some() });
-
-                if has_pending && !installing {
-                    api.prevent_exit();
-                    let app_clone = app_handle.clone();
-                    tauri::async_runtime::block_on(async {
-                        platform::updater::commands::apply_pending_on_exit(&app_clone).await;
-                    });
-                    app_handle.exit(0);
-                } else if installing {
-                    api.prevent_exit();
-                    // Wait up to 10 s for the in-flight install to settle.
-                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                    while state.installing.load(std::sync::atomic::Ordering::Acquire)
-                        && std::time::Instant::now() < deadline
-                    {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
+            match event {
+                // ---------------------------------------------------------------
+                // Phase 6: Window lifecycle rules
+                //
+                // Manager closes:
+                //   - Workspace exists  → allow Manager to close; Workspace keeps running.
+                //   - No Workspace      → on Windows/Linux quit; on macOS let the process
+                //     stay alive (the dock icon will call Reopen to recreate the Manager).
+                //
+                // Workspace closes:
+                //   - Allow the close; the frontend has already invoked ensure_manager_window
+                //     (via the onCloseRequested handler in WorkspaceShell) before we get here.
+                //     Connections remain open because pools live in the shared Rust backend.
+                // ---------------------------------------------------------------
+                tauri::RunEvent::WindowEvent {
+                    label,
+                    event: tauri::WindowEvent::CloseRequested { .. },
+                    ..
+                } if label == "manager" => {
+                    // Manager close-requested: check whether a Workspace exists.
+                    let workspace_exists = app_handle.get_webview_window("workspace").is_some();
+                    if !workspace_exists {
+                        // No Workspace — quit on Windows/Linux; on macOS keep alive.
+                        #[cfg(not(target_os = "macos"))]
+                        app_handle.exit(0);
+                        // macOS: do nothing — process stays alive; Reopen recreates Manager.
                     }
-                    app_handle.exit(0);
+                    // Workspace exists: let the Manager close normally (no special action).
                 }
-                // else: no pending update → fall through, default exit proceeds
+
+                // ---------------------------------------------------------------
+                // Phase 6 (macOS): Dock icon activated with no visible windows.
+                // Recreate the Manager so the user can get back in.
+                // ---------------------------------------------------------------
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen {
+                    has_visible_windows: false,
+                    ..
+                } => {
+                    let app = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = platform::open_connections::ensure_manager_window(app).await;
+                    });
+                }
+
+                // ---------------------------------------------------------------
+                // Existing: updater exit-requested guard (unchanged).
+                // ---------------------------------------------------------------
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    let state = app_handle.state::<platform::updater::UpdaterState>();
+                    // If a user-triggered install just called app.restart(), let Tauri's
+                    // relaunch sequence proceed — do NOT prevent_exit and do NOT block.
+                    if state.relaunching.load(std::sync::atomic::Ordering::Acquire) {
+                        tracing::info!(target: "updater", "relaunch_allowed_by_exit_handler");
+                        let _ = api;
+                        return;
+                    }
+                    let installing = state.installing.load(std::sync::atomic::Ordering::Acquire);
+                    let has_pending =
+                        tauri::async_runtime::block_on(async { state.pending.lock().await.is_some() });
+
+                    if has_pending && !installing {
+                        api.prevent_exit();
+                        let app_clone = app_handle.clone();
+                        tauri::async_runtime::block_on(async {
+                            platform::updater::commands::apply_pending_on_exit(&app_clone).await;
+                        });
+                        app_handle.exit(0);
+                    } else if installing {
+                        api.prevent_exit();
+                        // Wait up to 10 s for the in-flight install to settle.
+                        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                        while state.installing.load(std::sync::atomic::Ordering::Acquire)
+                            && std::time::Instant::now() < deadline
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                        app_handle.exit(0);
+                    }
+                    // else: no pending update → fall through, default exit proceeds
+                }
+
+                _ => {}
             }
         });
 }

@@ -13,7 +13,6 @@ import { mssqlApi, useActiveMssqlConnections } from "@/modules/mssql";
 import { useKindPicker } from "./useKindPicker";
 import { openHistoryTab } from "@/modules/query-history";
 import { useTabs } from "@/platform/shell/tabs";
-import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
 import { listAllDirtySummaries } from "@/platform/shell/tabs/useDirtySummary";
 import logoUrl from "@/assets/logo.svg";
 import { APP_DISPLAY_NAME } from "@/platform/app-identity";
@@ -45,7 +44,7 @@ import { DisconnectConfirmDialog } from "./DisconnectConfirmDialog";
 import { SavedQueriesPanel } from "@/modules/saved-queries/SavedQueriesPanel";
 import { noAutoCorrectProps } from "../../modules/shared/text-input-hygiene";
 
-export { UNGROUPED_DROPPABLE_ID };
+export { UNGROUPED_DROPPABLE_ID, ConnectionsSection };
 
 export function Sidebar() {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -71,10 +70,29 @@ interface RenameDialog {
   initialName: string;
 }
 
-function ConnectionsSection() {
+function ConnectionsSection({
+  mode = "workspace",
+  filterQuery = "",
+}: {
+  mode?: "manager" | "workspace";
+  filterQuery?: string;
+}) {
   const connections = useConnections();
   const groups = useConnectionGroups();
   const picker = useKindPicker();
+
+  // Filter connections by name/host when a filterQuery is provided (manager search).
+  const filteredItems = useMemo(() => {
+    if (!filterQuery.trim()) return connections.items;
+    const q = filterQuery.trim().toLowerCase();
+    return connections.items.filter((c) => {
+      if (c.name.toLowerCase().includes(q)) return true;
+      const p = c.params as Record<string, unknown>;
+      const host = typeof p.host === "string" ? p.host : typeof p.region === "string" ? p.region : "";
+      if (host.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  }, [connections.items, filterQuery]);
   const [creatingGroupName, setCreatingGroupName] = useState<string | null>(null);
   const [renameDialog, setRenameDialog] = useState<RenameDialog | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ConnectionGroup | null>(null);
@@ -83,7 +101,7 @@ function ConnectionsSection() {
   const grouped = useMemo(() => {
     const byGroup = new Map<string, Connection[]>();
     const ungrouped: Connection[] = [];
-    for (const c of connections.items) {
+    for (const c of filteredItems) {
       if (c.group_id) {
         const arr = byGroup.get(c.group_id) ?? [];
         arr.push(c);
@@ -93,7 +111,7 @@ function ConnectionsSection() {
       }
     }
     return { byGroup, ungrouped };
-  }, [connections.items]);
+  }, [filteredItems]);
 
   const groupIds = useMemo(() => groups.items.map((g) => g.id), [groups.items]);
   const { isExpanded, toggle } = useExpandedGroups(groupIds);
@@ -243,10 +261,12 @@ function ConnectionsSection() {
   const allTabCount = useMemo(() => {
     let count = 0;
     for (const a of activeItems) {
-      count += listConnectionTabs(tabs.tabs, a.id).length;
+      // Use _allSets to count across all connection sets, not just the focused one.
+      const connSet = tabs._allSets.get(a.id);
+      count += connSet ? connSet.tabs.length : 0;
     }
     return count;
-  }, [activeItems, tabs.tabs]);
+  }, [activeItems, tabs._allSets]);
 
   const allDirtyLabels = useMemo(() => {
     if (!confirmAll) return [];
@@ -273,9 +293,10 @@ function ConnectionsSection() {
   const loading = connections.loading || groups.loading;
   const error = connections.error ?? groups.error;
   const isEmpty = !loading && !error && connections.items.length === 0 && groups.items.length === 0;
+  const isFilterEmpty = !loading && !error && connections.items.length > 0 && filteredItems.length === 0;
 
   return (
-    <section className={styles.section}>
+    <section className={styles.section} data-manager={mode === "manager" ? "true" : undefined}>
       <header className={styles.sectionHeader}>
         <span>Connections</span>
         <span className={styles.sectionActions}>
@@ -320,6 +341,9 @@ function ConnectionsSection() {
         <div className={styles.empty}>
           No connections yet. Click <strong>+</strong> to add one.
         </div>
+      )}
+      {isFilterEmpty && (
+        <div className={styles.empty}>No connections match your filter.</div>
       )}
 
       {!loading && !error && (connections.items.length > 0 || groups.items.length > 0) && (
@@ -368,7 +392,7 @@ function ConnectionsSection() {
                     {expanded && (
                       <div className={styles.groupBody}>
                         {members.map((c) => (
-                          <ConnectionRow key={c.id} connection={c} draggable />
+                          <ConnectionRow key={c.id} connection={c} draggable mode={mode} />
                         ))}
                       </div>
                     )}
@@ -389,7 +413,7 @@ function ConnectionsSection() {
               />
               <div className={styles.groupBody}>
                 {grouped.ungrouped.map((c) => (
-                  <ConnectionRow key={c.id} connection={c} draggable />
+                  <ConnectionRow key={c.id} connection={c} draggable mode={mode} />
                 ))}
               </div>
             </SortableContext>

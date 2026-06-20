@@ -1,31 +1,47 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { TabRegistry } from "./TabRegistry";
 import { useTabs } from "./TabsContext";
+import { FocusedConnectionCtxRef } from "@/platform/shell/FocusedConnectionContext";
 import styles from "./TabContent.module.css";
 
 export function TabContent() {
-  const { tabs, activeTabId } = useTabs();
+  const { activeTabId, _allSets } = useTabs();
+  const focusedCtx = useContext(FocusedConnectionCtxRef);
+  const focusedConnectionId = focusedCtx?.focusedConnectionId ?? null;
+
   // Force re-render when registry changes so newly-registered kinds become visible.
   const [, setVersion] = useState(0);
   useEffect(() => TabRegistry.subscribe(() => setVersion((v) => v + 1)), []);
 
-  // Track which tab IDs have ever been activated (lazy first-mount; freed on close).
-  const [everActivated, setEverActivated] = useState<Set<string>>(() => new Set());
+  // Track which tab IDs have ever been activated across ALL connection sets
+  // (lazy first-mount; freed on close). This preserves the "inactive tab
+  // content remains mounted" guarantee and extends it per-connection (task 5.4).
+  const [everActivated, setEverActivated] = useState<Set<string>>(
+    () => new Set(),
+  );
 
-  // Add activeTabId to the ever-activated set on each activation.
+  // Add activeTabId of each connection set to ever-activated on activation.
   useEffect(() => {
-    if (!activeTabId) return;
+    const toAdd: string[] = [];
+    for (const [, set] of _allSets) {
+      if (set.activeTabId) toAdd.push(set.activeTabId);
+    }
+    if (toAdd.length === 0) return;
     setEverActivated((prev) => {
-      if (prev.has(activeTabId)) return prev;
+      const missing = toAdd.filter((id) => !prev.has(id));
+      if (missing.length === 0) return prev;
       const next = new Set(prev);
-      next.add(activeTabId);
+      for (const id of missing) next.add(id);
       return next;
     });
-  }, [activeTabId]);
+  }, [_allSets]);
 
-  // Prune closed tabs from the ever-activated set.
+  // Prune closed tabs from ever-activated set (across all connection sets).
   useEffect(() => {
-    const openIds = new Set(tabs.map((t) => t.id));
+    const openIds = new Set<string>();
+    for (const [, set] of _allSets) {
+      for (const t of set.tabs) openIds.add(t.id);
+    }
     setEverActivated((prev) => {
       let changed = false;
       const next = new Set(prev);
@@ -37,9 +53,17 @@ export function TabContent() {
       }
       return changed ? next : prev;
     });
-  }, [tabs]);
+  }, [_allSets]);
 
-  if (tabs.length === 0) {
+  // Determine if any connection has tabs at all.
+  const focusedSet = focusedConnectionId
+    ? (_allSets.get(focusedConnectionId) ?? { tabs: [], activeTabId: null })
+    : { tabs: [], activeTabId: null };
+
+  const focusedHasTabs = focusedSet.tabs.length > 0;
+
+  // When focused connection has no open tabs, show empty placeholder.
+  if (!focusedHasTabs) {
     return (
       <div className={styles.root}>
         <div className={styles.empty}>
@@ -52,13 +76,24 @@ export function TabContent() {
     );
   }
 
-  // Render one slot per ever-activated tab that is still open.
-  const slots = tabs.filter((t) => everActivated.has(t.id));
+  // Collect all ever-activated tabs across all connection sets (for mounting).
+  const allTabs = new Map<string, { tab: import("./types").Tab; connectionId: string }>();
+  for (const [connId, set] of _allSets) {
+    for (const tab of set.tabs) {
+      if (everActivated.has(tab.id)) {
+        allTabs.set(tab.id, { tab, connectionId: connId });
+      }
+    }
+  }
 
   return (
     <div className={styles.root}>
-      {slots.map((tab) => {
-        const isActive = tab.id === activeTabId;
+      {[...allTabs.values()].map(({ tab, connectionId }) => {
+        // A tab is active (visible) iff:
+        // 1. It belongs to the currently-focused connection, AND
+        // 2. It is that connection's active tab.
+        const isActive =
+          connectionId === focusedConnectionId && tab.id === activeTabId;
         const Renderer = TabRegistry.get(tab.kind);
         return (
           <div

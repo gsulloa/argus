@@ -28,6 +28,7 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useTabs } from "@/platform/shell/tabs";
+import type { Tab } from "@/platform/shell/tabs/types";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { DYNAMO_KIND } from "@/modules/dynamo/types";
 import { dynamoApi } from "@/modules/dynamo/api";
@@ -40,12 +41,31 @@ function isTauriRuntime() {
   );
 }
 
-/** Close all dynamo-data-view tabs for the given connection id. */
+/** Close all dynamo-data-view tabs for the given connection id.
+ *
+ * Uses _allSets (cross-connection) when available so that tabs are closed
+ * even when the disconnected connection is not currently focused.
+ * Falls back to tabs.tabs for environments that mock useTabs without _allSets.
+ */
 function closeDataViewTabsForConnection(
   tabs: ReturnType<typeof useTabs>,
   connectionId: string,
 ): void {
-  const toClose = tabs.tabs.filter((t) => {
+  // Prefer the connection's own set from _allSets for an efficient O(1) lookup.
+  // Fall back to scanning tabs.tabs (the focused connection's tabs) when
+  // _allSets is unavailable (e.g. legacy test mocks).
+  const candidates: Tab[] = tabs._allSets
+    ? (tabs._allSets.get(connectionId)?.tabs ?? [])
+    : tabs.tabs.filter((t) => {
+        const payload = t.payload as { connectionId?: unknown } | null | undefined;
+        return (
+          typeof payload === "object" &&
+          payload !== null &&
+          payload.connectionId === connectionId
+        );
+      });
+
+  const toClose = candidates.filter((t) => {
     if (t.kind !== DYNAMO_DATA_VIEW_KIND) return false;
     const payload = t.payload as { connectionId?: unknown } | null | undefined;
     return (

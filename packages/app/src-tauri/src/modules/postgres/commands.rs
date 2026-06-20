@@ -18,6 +18,7 @@ use crate::modules::postgres::pool::{
 };
 use crate::modules::postgres::tls::client_config_for;
 use crate::modules::postgres::url::parse_postgres_url as do_parse_url;
+use crate::platform::open_connections::OpenConnectionsRegistry;
 use crate::platform::DbState;
 
 /// Hard cap on a single test or eager-handshake operation.
@@ -136,6 +137,7 @@ pub async fn postgres_connect(
     app: AppHandle,
     db: State<'_, DbState>,
     pools: State<'_, PgPoolRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
     id: String,
 ) -> AppResult<ConnectResult> {
     let started = Instant::now();
@@ -182,6 +184,7 @@ pub async fn postgres_connect(
                     })),
             );
             let _ = app.emit("postgres:active-changed", ());
+            open_registry.mark_open(&app, &db, parsed).await;
         }
         Err(e) => {
             emit_activity(
@@ -199,6 +202,7 @@ pub async fn postgres_connect(
 pub async fn postgres_disconnect(
     app: AppHandle,
     pools: State<'_, PgPoolRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
     id: String,
 ) -> AppResult<()> {
     let started = Instant::now();
@@ -221,6 +225,7 @@ pub async fn postgres_disconnect(
     let removed = pools.disconnect(&parsed).await;
     if removed {
         let _ = app.emit("postgres:active-changed", ());
+        open_registry.mark_closed(&app, parsed).await;
     }
     emit_activity(
         &app,
@@ -239,12 +244,14 @@ pub async fn postgres_disconnect(
 pub async fn postgres_disconnect_all(
     app: AppHandle,
     pools: State<'_, PgPoolRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
 ) -> AppResult<u32> {
     let started = Instant::now();
     let dropped = pools.disconnect_all().await;
     let dropped_u32 = u32::try_from(dropped).unwrap_or(u32::MAX);
     if dropped > 0 {
         let _ = app.emit("postgres:active-changed", ());
+        open_registry.mark_kind_closed(&app, "postgres").await;
         emit_activity(
             &app,
             ActivityLogEntryBuilder::new(

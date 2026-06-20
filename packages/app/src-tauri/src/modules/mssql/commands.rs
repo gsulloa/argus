@@ -20,6 +20,7 @@ use crate::modules::mssql::pool::{load_connection_input, ActivePoolSummary, Mssq
 use crate::modules::mssql::tls::build_tiberius_config;
 use crate::modules::mssql::url::parse_any as do_parse_url;
 use crate::modules::mssql::url::ParseUrlResult;
+use crate::platform::open_connections::OpenConnectionsRegistry;
 use crate::platform::DbState;
 
 /// Hard cap on a single test or eager-handshake operation.
@@ -142,6 +143,7 @@ pub async fn mssql_connect(
     app: AppHandle,
     db: State<'_, DbState>,
     registry: State<'_, MssqlPoolRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
     id: String,
 ) -> AppResult<ActivePoolSummary> {
     let started = Instant::now();
@@ -187,6 +189,7 @@ pub async fn mssql_connect(
                     })),
             );
             let _ = app.emit("mssql:active-changed", ());
+            open_registry.mark_open(&app, &db, uuid).await;
         }
         Err(e) => {
             emit_activity(
@@ -208,6 +211,7 @@ pub async fn mssql_connect(
 pub async fn mssql_disconnect(
     app: AppHandle,
     registry: State<'_, MssqlPoolRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
     id: String,
 ) -> AppResult<bool> {
     let started = Instant::now();
@@ -230,6 +234,7 @@ pub async fn mssql_disconnect(
     let removed = registry.disconnect(uuid).await?;
     // Always emit, even for idempotent no-op.
     let _ = app.emit("mssql:active-changed", ());
+    open_registry.mark_closed(&app, uuid).await;
     emit_activity(
         &app,
         ActivityLogEntryBuilder::new(
@@ -251,12 +256,14 @@ pub async fn mssql_disconnect(
 pub async fn mssql_disconnect_all(
     app: AppHandle,
     registry: State<'_, MssqlPoolRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
 ) -> AppResult<u32> {
     let started = Instant::now();
     let dropped = registry.disconnect_all().await?;
     let dropped_u32 = u32::try_from(dropped).unwrap_or(u32::MAX);
     if dropped > 0 {
         let _ = app.emit("mssql:active-changed", ());
+        open_registry.mark_kind_closed(&app, "mssql").await;
         emit_activity(
             &app,
             ActivityLogEntryBuilder::new(

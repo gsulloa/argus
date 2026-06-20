@@ -13,6 +13,7 @@ use crate::modules::dynamo::client::{
     build_dynamo_client, ActiveDynamoClient, ActiveDynamoClientView, DynamoClientRegistry,
 };
 use crate::modules::dynamo::params::{DynamoAuth, DynamoParams};
+use crate::platform::open_connections::OpenConnectionsRegistry;
 use crate::platform::{secrets, DbState};
 
 // ---------------------------------------------------------------------------
@@ -247,6 +248,7 @@ pub async fn dynamo_connect(
     app: tauri::AppHandle,
     db: State<'_, DbState>,
     registry: State<'_, DynamoClientRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
     connection_id: String,
 ) -> AppResult<serde_json::Value> {
     let id = Uuid::parse_str(&connection_id)
@@ -288,6 +290,7 @@ pub async fn dynamo_connect(
             };
             registry.insert(id, active).await;
             let _ = app.emit(ACTIVE_CHANGED_EVENT, ());
+            open_registry.mark_open(&app, &db, id).await;
             let metric = Metric::AwsIdentity {
                 value: format!("{}:{}", built.account_id, built.identity_arn),
             };
@@ -338,6 +341,7 @@ pub async fn dynamo_connect(
 pub async fn dynamo_disconnect(
     app: tauri::AppHandle,
     registry: State<'_, DynamoClientRegistry>,
+    open_registry: State<'_, OpenConnectionsRegistry>,
     connection_id: String,
 ) -> AppResult<()> {
     let id = Uuid::parse_str(&connection_id)
@@ -347,6 +351,7 @@ pub async fn dynamo_disconnect(
     let duration_ms = started.elapsed().as_millis() as u64;
     if removed {
         let _ = app.emit(ACTIVE_CHANGED_EVENT, ());
+        open_registry.mark_closed(&app, id).await;
     }
     // Always emit one activity entry.
     emit_activity(

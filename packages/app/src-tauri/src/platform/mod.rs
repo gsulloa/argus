@@ -1,5 +1,6 @@
 pub mod connection_groups;
 pub mod connections;
+pub mod open_connections;
 pub mod secrets;
 pub mod settings;
 pub mod storage;

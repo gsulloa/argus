@@ -1,0 +1,97 @@
+/* WorkspaceShell — sidebar composition: ConnectionRail + tree column */
+
+/* Horizontal flex container that fills the Layout `sidebar` slot */
+.sidebarComposite {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Tree column: flex:1, scrollable, provides the SidebarScrollContext surface */
+.treeColumn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Empty state shown when no connection is focused */
+.emptyState {
+  padding: 16px 12px;
+  color: var(--text-subtle);
+  font-size: 12px;
+  text-align: center;
+  user-select: none;
+}
+
+/* ── Connection identity header (Decision 11) ───────────────────────────── */
+/* Persistent header above the level-2 schema tree showing the focused       */
+/* connection's name, engine icon, and environment indicator.                */
+
+.identityHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  min-width: 0;
+  user-select: none;
+}
+
+.identityIcon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.identityBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 1px;
+}
+
+.identityName {
+  font-size: var(--text-sm, 12px);
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.identityMeta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.identityEngine {
+  font-size: var(--text-xs, 11px);
+  color: var(--text-subtle);
+  white-space: nowrap;
+}
+
+/* Small env dot — mirrors the rail's envDot but inline */
+.identityEnvDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.identityEnvDot[data-env="prod"] {
+  background: var(--warning, #fbbf24);
+}
+
+.identityEnvDot[data-env="neutral"] {
+  background: var(--text-subtle, #6b6e7b);
+}

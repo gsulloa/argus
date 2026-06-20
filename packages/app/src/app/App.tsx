@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { ThemeProvider, useTheme } from "@/platform/shell/ThemeProvider";
+import { useTheme } from "@/platform/shell/ThemeProvider";
 import { Layout } from "@/platform/shell/Layout";
 import { Sidebar } from "@/platform/shell/Sidebar";
 import { Inspector } from "@/platform/shell/Inspector";
@@ -7,87 +7,40 @@ import { StatusBar } from "@/platform/shell/StatusBar";
 import {
   TabContent,
   TabStrip,
-  TabsProvider,
   useTabs,
-  WELCOME_KIND,
   SETTINGS_PLACEHOLDER_KIND,
   SETTINGS_PLACEHOLDER_TAB_ID,
 } from "@/platform/shell/tabs";
+import { useFocusedConnection } from "@/platform/shell/FocusedConnectionContext";
 import { useShortcuts } from "@/platform/shell/useShortcuts";
 import { useLayout } from "@/platform/shell/Layout";
 import {
   CommandRegistry,
   Palette,
-  PaletteProvider,
   TablePalette,
   useCommandHotkeys,
   usePalette,
   useTablePalette,
 } from "@/platform/command-palette";
-import { ConnectionsProvider } from "@/platform/connection-registry/useConnections";
-import { ConnectionGroupsProvider } from "@/platform/connection-registry/useConnectionGroups";
-import { ContextEventBusProvider } from "@/modules/context/eventBus";
-import { AiSettingsProvider } from "@/modules/ai/store";
 import { AiSettingsHost } from "@/modules/ai/AiSettingsHost";
-import { ActivityLogProvider } from "@/platform/activity-log/store";
 import { ActivityLogPanel } from "@/platform/activity-log/ActivityLogPanel";
-import { UpdaterProvider } from "@/platform/updater";
-import { ToastProvider } from "@/platform/toast";
-import { PostgresFormProvider, usePostgresCommands } from "@/modules/postgres";
-import {
-  DynamoFormProvider,
-  CredentialsRefreshedListener,
-  useDynamoCommands,
-} from "@/modules/dynamo";
-import { MysqlFormProvider, useMysqlCommands } from "@/modules/mysql";
+import { usePostgresCommands } from "@/modules/postgres";
+import { useDynamoCommands } from "@/modules/dynamo";
+import { useMysqlCommands } from "@/modules/mysql";
 import { useMysqlTabLifecycle } from "@/modules/mysql/useMysqlTabLifecycle";
-import { MssqlFormProvider, useMssqlCommands } from "@/modules/mssql";
+import { useMssqlCommands } from "@/modules/mssql";
 import { useMssqlTabLifecycle } from "@/modules/mssql/useMssqlTabLifecycle";
-import { AthenaFormProvider } from "@/modules/athena";
 import { useDataViewLifecycle } from "@/modules/dynamo/data-view/useDataViewLifecycle";
-import { DynamoTablesCacheProvider, useDynamoTablesPaletteCommands } from "@/modules/dynamo/tables";
-import { KindPickerProvider } from "@/platform/shell/useKindPicker";
+import { useDynamoTablesPaletteCommands } from "@/modules/dynamo/tables";
 import { useQueryHistoryCommands } from "@/modules/query-history";
 import { savedQueriesStore } from "@/modules/saved-queries/store";
+import { AppProviders } from "./AppProviders";
 
 export function App() {
   return (
-    <ThemeProvider>
-      <ToastProvider>
-        <UpdaterProvider>
-          <PaletteProvider>
-            <TabsProvider>
-              <ConnectionGroupsProvider>
-                <ConnectionsProvider>
-                  <AiSettingsProvider>
-                  <ContextEventBusProvider>
-                  <ActivityLogProvider>
-                    <PostgresFormProvider>
-                      <MysqlFormProvider>
-                        <MssqlFormProvider>
-                          <DynamoFormProvider>
-                            <AthenaFormProvider>
-                              <DynamoTablesCacheProvider>
-                                <KindPickerProvider>
-                                  <Shell />
-                                  <CredentialsRefreshedListener />
-                                </KindPickerProvider>
-                              </DynamoTablesCacheProvider>
-                            </AthenaFormProvider>
-                          </DynamoFormProvider>
-                        </MssqlFormProvider>
-                      </MysqlFormProvider>
-                    </PostgresFormProvider>
-                  </ActivityLogProvider>
-                  </ContextEventBusProvider>
-                  </AiSettingsProvider>
-                </ConnectionsProvider>
-              </ConnectionGroupsProvider>
-            </TabsProvider>
-          </PaletteProvider>
-        </UpdaterProvider>
-      </ToastProvider>
-    </ThemeProvider>
+    <AppProviders>
+      <Shell />
+    </AppProviders>
   );
 }
 
@@ -104,7 +57,7 @@ function Shell() {
   );
 }
 
-function ShellMain() {
+export function ShellMain() {
   return (
     <>
       <ShortcutBindings />
@@ -120,7 +73,6 @@ function ShellMain() {
       <QueryHistoryCommands />
       <AiSettingsHost />
       <SavedQueriesBootstrap />
-      <BootstrapTabs />
       <TabStrip />
       <TabContent />
       <Palette />
@@ -185,6 +137,7 @@ function ShortcutBindings() {
   const palette = usePalette();
   const tablePalette = useTablePalette();
   const { close, activeTabId, cycle, open } = useTabs();
+  const { focusedConnectionId } = useFocusedConnection();
   const { toggleInspector } = useLayout();
 
   useCommandHotkeys();
@@ -204,36 +157,22 @@ function ShortcutBindings() {
     {
       key: ",",
       whenInInput: true,
-      handler: () =>
+      // Settings tab opens in the focused connection's set.
+      // If no connection is focused, ⌘, is a no-op in the Workspace (task 5.6).
+      handler: () => {
+        if (!focusedConnectionId) return;
         open({
           id: SETTINGS_PLACEHOLDER_TAB_ID,
           kind: SETTINGS_PLACEHOLDER_KIND,
           title: "Settings",
           payload: null,
-        }),
+        });
+      },
     },
     { key: "Tab", mod: false, handler: () => cycle(1) },
     { key: "Tab", mod: false, shift: true, handler: () => cycle(-1) },
   ]);
 
-  return null;
-}
-
-function BootstrapTabs() {
-  const { tabs, open } = useTabs();
-  useEffect(() => {
-    if (tabs.length === 0) {
-      open({
-        id: "welcome",
-        kind: WELCOME_KIND,
-        title: "Welcome",
-        closable: true,
-        payload: null,
-      });
-    }
-    // intentionally only on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   return null;
 }
 
