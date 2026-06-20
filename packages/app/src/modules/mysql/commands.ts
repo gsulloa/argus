@@ -8,8 +8,7 @@ import { mysqlApi } from "./api";
 import { useMysqlForm } from "./FormController";
 import { useActiveMysqlConnections } from "./useActiveConnections";
 import { openMysqlQueryTab } from "./openMysqlQueryTab";
-import { mysqlSchemaCache } from "./schema/globalSchemaCache";
-import { emitMysqlSchemaEvent } from "./schema/events";
+import { emitMysqlSchemaEvent, refreshConnection } from "./schema/events";
 
 interface SelectionApi {
   selectedConnectionId: string | null;
@@ -130,8 +129,7 @@ export function useMysqlCommands(selection: SelectionApi = NOOP_SELECTION) {
             console.warn("[argus] mysql schema refresh: no active connection");
             return;
           }
-          mysqlSchemaCache.invalidate(c.id);
-          emitMysqlSchemaEvent({ type: "invalidate", connectionId: c.id });
+          refreshConnection(c.id);
         },
       }),
     );

@@ -23,8 +23,10 @@ import React, {
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { dynamoApi } from "@/modules/dynamo/api";
+import { isStale } from "@/platform/cache/ttl";
 import type { AppError } from "@/platform/errors/AppError";
 import { dynamoTablesApi } from "./api";
+import { DYNAMO_TABLES_REFRESH_EVENT } from "./refresh";
 import type { TableDescription } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -40,7 +42,14 @@ const MAX_INFLIGHT_DESCRIBES = 8;
 export type TablesSlot =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ready"; names: string[]; next_token?: string; truncated: boolean }
+  | {
+      status: "ready";
+      names: string[];
+      next_token?: string;
+      truncated: boolean;
+      /** Epoch-ms when the table list was last fetched; drives the cache TTL. */
+      fetchedAt?: number;
+    }
   | { status: "error"; error: AppError };
 
 export type DescribeSlot =
@@ -128,6 +137,7 @@ function cacheReducer(state: CacheState, action: Action): CacheState {
           names: action.names,
           next_token: action.next_token,
           truncated: action.truncated,
+          fetchedAt: Date.now(),
         },
       });
       return next;
@@ -157,6 +167,7 @@ function cacheReducer(state: CacheState, action: Action): CacheState {
           names: [...prevNames, ...action.names],
           next_token: action.next_token,
           truncated: action.truncated,
+          fetchedAt: Date.now(),
         },
       });
       return next;
@@ -334,6 +345,11 @@ function isTauriRuntime(): boolean {
 export function DynamoTablesCacheProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(cacheReducer, new Map<string, ConnectionCache>());
 
+  // Always-current state ref — used by callbacks/handlers registered once that
+  // must read the latest cache (e.g. subscribe's TTL check, event handlers).
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   // Ref-count of subscribers per connectionId. Incremented on first
   // useDynamoTableCache(id) subscription, decremented on unmount.
   const subCounts = useRef<Map<string, number>>(new Map());
@@ -343,8 +359,14 @@ export function DynamoTablesCacheProvider({ children }: { children: React.ReactN
   // -------------------------------------------------------------------------
 
   const doListTables = useCallback(
-    async (connectionId: string, origin: "auto" | "user") => {
-      dispatch({ type: "listTablesStart", connectionId });
+    async (
+      connectionId: string,
+      origin: "auto" | "user",
+      opts?: { background?: boolean },
+    ) => {
+      const background = opts?.background ?? false;
+      // A background (stale) refresh keeps the cached names rendered — no flash.
+      if (!background) dispatch({ type: "listTablesStart", connectionId });
       try {
         const result = await dynamoTablesApi.listTables({ connectionId, origin });
         dispatch({
@@ -355,6 +377,10 @@ export function DynamoTablesCacheProvider({ children }: { children: React.ReactN
           truncated: result.truncated,
         });
       } catch (e) {
+        if (background) {
+          console.warn("[dynamo:tables] background refresh failed; keeping cache:", e);
+          return;
+        }
         const { toAppError } = await import("@/platform/errors/AppError");
         dispatch({ type: "listTablesErr", connectionId, error: toAppError(e) });
       }
@@ -415,10 +441,18 @@ export function DynamoTablesCacheProvider({ children }: { children: React.ReactN
       counts.set(connectionId, prev + 1);
 
       if (prev === 0) {
-        // First subscriber for this connectionId — ensure entry exists and fire
-        // listTables if cache is idle (or absent).
-        dispatch({ type: "listTablesStart", connectionId });
-        void doListTables(connectionId, "auto");
+        // First subscriber for this connectionId. Serve the cache across focus
+        // switches: a "ready" entry within the TTL is reused without a refetch;
+        // a stale "ready" entry is refreshed in the background (cached names
+        // stay visible); otherwise fire a foreground listTables.
+        const slot = stateRef.current.get(connectionId)?.tables;
+        if (slot?.status === "ready") {
+          if (isStale(slot.fetchedAt)) {
+            void doListTables(connectionId, "auto", { background: true });
+          }
+        } else {
+          void doListTables(connectionId, "auto");
+        }
       }
 
       return () => {
@@ -465,14 +499,6 @@ export function DynamoTablesCacheProvider({ children }: { children: React.ReactN
   // Intentionally no dependency array — runs after every render to drain the
   // queue whenever state changes. The inner dispatch actions are idempotent
   // and only fire when queue is non-empty and there's capacity.
-
-  // -------------------------------------------------------------------------
-  // Stable ref to always-current state — used by event handlers that are
-  // registered once ([] deps) but must see the latest cache entries.
-  // -------------------------------------------------------------------------
-
-  const stateRef = useRef(state);
-  stateRef.current = state;
 
   // -------------------------------------------------------------------------
   // Tauri event: dynamo:active-changed
@@ -553,6 +579,21 @@ export function DynamoTablesCacheProvider({ children }: { children: React.ReactN
       if (unlisten) unlisten();
     };
   }, [doListTables]);
+
+  // -------------------------------------------------------------------------
+  // Window event: dynamo:tables-refresh — forced reload of one connection
+  // (toolbar refresh / global Cmd+R). Drops the cache entry and re-lists.
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    function onRefresh(e: Event) {
+      const connectionId = (e as CustomEvent<string>).detail;
+      if (typeof connectionId !== "string") return;
+      refresh(connectionId);
+    }
+    window.addEventListener(DYNAMO_TABLES_REFRESH_EVENT, onRefresh);
+    return () => window.removeEventListener(DYNAMO_TABLES_REFRESH_EVENT, onRefresh);
+  }, [refresh]);
 
   // -------------------------------------------------------------------------
   // Context value
