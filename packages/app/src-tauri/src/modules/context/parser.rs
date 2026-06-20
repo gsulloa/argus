@@ -86,24 +86,20 @@ pub fn parse_manifest(root: &Path) -> Result<ContextManifest, ParserError> {
 
 // ---- 3.2: parse_object_doc ----
 
-/// Parse a Markdown object-documentation file.
+/// Parse a Markdown object-documentation file from an in-memory string.
 ///
-/// The file must start with a YAML frontmatter block delimited by `---` lines.
-/// The frontmatter must contain a `system:` key; `human:` is optional and
-/// defaults to `ObjectHuman::default()` if absent.
+/// `source_path` is used only for error messages and to populate
+/// `ObjectDoc::source_path`; the file is not read from disk.
 ///
-/// The raw Markdown body (everything after the closing `---`) is preserved
-/// byte-for-byte in `ObjectDoc::body`.
-pub fn parse_object_doc(path: &Path) -> Result<ObjectDoc, ParserError> {
-    let raw = std::fs::read_to_string(path).map_err(|e| ParserError::Io {
-        path: path.to_path_buf(),
-        msg: e.to_string(),
-    })?;
-
+/// The string must use **LF line endings** (`\n`). CRLF input will cause
+/// `MissingFrontmatter` because the parser requires `"---\n"` at byte 0.
+/// Callers that need to handle CRLF files must normalise with
+/// `raw.replace("\r\n", "\n")` before calling this function.
+pub fn parse_object_doc_str(raw: &str, source_path: &Path) -> Result<ObjectDoc, ParserError> {
     // Frontmatter must start at byte 0: "---\n"
     if !raw.starts_with("---\n") {
         return Err(ParserError::MissingFrontmatter {
-            path: path.to_path_buf(),
+            path: source_path.to_path_buf(),
         });
     }
 
@@ -122,7 +118,7 @@ pub fn parse_object_doc(path: &Path) -> Result<ObjectDoc, ParserError> {
 
     let (fm_end_in_after, body_start_in_after) =
         close_pos.ok_or_else(|| ParserError::MissingFrontmatter {
-            path: path.to_path_buf(),
+            path: source_path.to_path_buf(),
         })?;
 
     let frontmatter = &after_open[..fm_end_in_after];
@@ -131,26 +127,27 @@ pub fn parse_object_doc(path: &Path) -> Result<ObjectDoc, ParserError> {
     // Parse frontmatter as a YAML map to extract `system` and `human`
     let fm_map: HashMap<String, serde_yaml::Value> =
         serde_yaml::from_str(frontmatter).map_err(|e| ParserError::FrontmatterParse {
-            path: path.to_path_buf(),
+            path: source_path.to_path_buf(),
             msg: e.to_string(),
         })?;
 
     let system_val = fm_map
         .get("system")
         .ok_or_else(|| ParserError::MissingSystemBlock {
-            path: path.to_path_buf(),
+            path: source_path.to_path_buf(),
         })?;
 
-    let system =
-        serde_yaml::from_value(system_val.clone()).map_err(|e| ParserError::FrontmatterParse {
-            path: path.to_path_buf(),
+    let system = serde_yaml::from_value(system_val.clone()).map_err(|e| {
+        ParserError::FrontmatterParse {
+            path: source_path.to_path_buf(),
             msg: format!("system block: {e}"),
-        })?;
+        }
+    })?;
 
     let human = match fm_map.get("human") {
         Some(v) => {
             serde_yaml::from_value(v.clone()).map_err(|e| ParserError::FrontmatterParse {
-                path: path.to_path_buf(),
+                path: source_path.to_path_buf(),
                 msg: format!("human block: {e}"),
             })?
         }
@@ -161,8 +158,23 @@ pub fn parse_object_doc(path: &Path) -> Result<ObjectDoc, ParserError> {
         system,
         human,
         body,
-        source_path: path.to_path_buf(),
+        source_path: source_path.to_path_buf(),
     })
+}
+
+/// Parse a Markdown object-documentation file from disk.
+///
+/// Reads the file at `path` and delegates to [`parse_object_doc_str`]. The
+/// file must use LF line endings; a CRLF file will return
+/// `ParserError::MissingFrontmatter`. Callers that need to handle CRLF
+/// gracefully should catch the error, read the raw bytes, normalise, and retry
+/// via `parse_object_doc_str`.
+pub fn parse_object_doc(path: &Path) -> Result<ObjectDoc, ParserError> {
+    let raw = std::fs::read_to_string(path).map_err(|e| ParserError::Io {
+        path: path.to_path_buf(),
+        msg: e.to_string(),
+    })?;
+    parse_object_doc_str(&raw, path)
 }
 
 // ---- 3.3: parse_queries_dir ----
@@ -604,6 +616,37 @@ mod tests {
     /// A minimal valid object doc with both system and human blocks.
     fn minimal_object_doc() -> &'static str {
         "---\nsystem:\n  kind: table\n  name: users\nhuman:\n  tags:\n    - pii\n---\n# users\n\nThe user table.\n"
+    }
+
+    // ---- parse_object_doc_str tests (task 1.2) ----
+
+    /// A valid in-memory doc (LF endings) parses correctly via `parse_object_doc_str`.
+    #[test]
+    fn parse_object_doc_str_valid_parses() {
+        let raw = "---\nsystem:\n  kind: table\n  name: accounts\nhuman:\n  tags:\n    - billing\n---\n# accounts\n";
+        let path = Path::new("/fake/path/accounts.md");
+        let doc = parse_object_doc_str(raw, path).expect("should parse");
+        assert_eq!(doc.system.kind, "table");
+        assert_eq!(doc.system.name, "accounts");
+        assert_eq!(
+            doc.human.tags,
+            Some(vec!["billing".to_string()]),
+        );
+        assert_eq!(doc.source_path, path);
+    }
+
+    /// CRLF input fails with `MissingFrontmatter`, proving that the caller must
+    /// normalise line endings before calling `parse_object_doc_str`.
+    #[test]
+    fn parse_object_doc_str_crlf_fails() {
+        let lf_raw = "---\nsystem:\n  kind: table\n  name: accounts\nhuman: {}\n---\n# accounts\n";
+        let crlf_raw = lf_raw.replace('\n', "\r\n");
+        let path = Path::new("/fake/path/accounts.md");
+        let err = parse_object_doc_str(&crlf_raw, path).unwrap_err();
+        assert!(
+            matches!(err, ParserError::MissingFrontmatter { .. }),
+            "expected MissingFrontmatter for CRLF input, got: {err}"
+        );
     }
 
     // ---- manifest tests ----

@@ -139,6 +139,52 @@
   padding: 8px 0;
 }
 
+/* Updated object item — path + change sub-list */
+.updatedItem {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11.5px;
+}
+
+.changeList {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.changeItem {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.changeDash {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10px;
+  color: var(--text-subtle);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.changeText {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* Unchanged count line */
+.unchangedLine {
+  font-size: 11.5px;
+  color: var(--text-subtle);
+  margin: 0;
+  padding: 2px 0;
+}
+
 /* Footer */
 .footer {
   display: flex;
