@@ -95,14 +95,13 @@ export function CloudwatchConnectionForm({
   onSaved,
   onConnected,
 }: CloudwatchConnectionFormProps) {
-  const { create, update, refresh: refreshConnections } = useConnections();
+  const { items, create, update, refresh: refreshConnections } = useConnections();
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
   const isEdit = mode.kind === "edit";
-  const [contextTick, setContextTick] = useState(0);
   const sessionTokenRef = useRef<HTMLInputElement>(null);
 
   // Reset and initialize form when dialog opens
@@ -429,13 +428,9 @@ export function CloudwatchConnectionForm({
             {mode.kind === "edit" ? (
               <div className={`${styles.field} ${styles.fieldFull}`}>
                 <ContextFolderRow
-                  key={contextTick}
                   connectionId={mode.connection.id}
-                  contextPath={mode.connection.context_path ?? null}
-                  onChanged={() => {
-                    setContextTick((t) => t + 1);
-                    void refreshConnections();
-                  }}
+                  contextPath={(items.find((c) => c.id === mode.connection.id) ?? mode.connection).context_path ?? null}
+                  onChanged={() => { void refreshConnections(); }}
                 />
               </div>
             ) : (

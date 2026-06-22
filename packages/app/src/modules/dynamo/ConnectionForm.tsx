@@ -143,7 +143,7 @@ export function DynamoConnectionForm({
   onSaved,
   onConnected,
 }: DynamoConnectionFormProps) {
-  const { create, update, refresh: refreshConnections } = useConnections();
+  const { items, create, update, refresh: refreshConnections } = useConnections();
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
@@ -154,7 +154,6 @@ export function DynamoConnectionForm({
 
   const isCredentialsOnly = mode.kind === "credentials-only";
   const isEdit = mode.kind === "edit";
-  const [contextTick, setContextTick] = useState(0);
 
   // Reset and initialize form when dialog opens
   useEffect(() => {
@@ -686,13 +685,9 @@ export function DynamoConnectionForm({
               mode.kind === "edit" ? (
                 <div className={`${styles.field} ${styles.fieldFull}`}>
                   <ContextFolderRow
-                    key={contextTick}
                     connectionId={mode.connection.id}
-                    contextPath={mode.connection.context_path ?? null}
-                    onChanged={() => {
-                      setContextTick((t) => t + 1);
-                      void refreshConnections();
-                    }}
+                    contextPath={(items.find((c) => c.id === mode.connection.id) ?? mode.connection).context_path ?? null}
+                    onChanged={() => { void refreshConnections(); }}
                   />
                 </div>
               ) : (
