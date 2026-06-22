@@ -338,7 +338,10 @@ pub fn ensure_connection_form_window(
 ) -> AppResult<()> {
     // Store the intent.
     {
-        let mut guard = state.connection_form.lock().expect("connection_form poisoned");
+        let mut guard = state
+            .connection_form
+            .lock()
+            .expect("connection_form poisoned");
         *guard = Some(intent.clone());
     }
 
@@ -350,14 +353,18 @@ pub fn ensure_connection_form_window(
         return Ok(());
     }
 
-    WebviewWindowBuilder::new(&app, "connection-form", WebviewUrl::App("index.html".into()))
-        .title("Argus")
-        .inner_size(540.0, 660.0)
-        .min_inner_size(480.0, 560.0)
-        .resizable(true)
-        .center()
-        .build()
-        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
+    WebviewWindowBuilder::new(
+        &app,
+        "connection-form",
+        WebviewUrl::App("index.html".into()),
+    )
+    .title("Argus")
+    .inner_size(540.0, 660.0)
+    .min_inner_size(480.0, 560.0)
+    .resizable(true)
+    .center()
+    .build()
+    .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
     Ok(())
 }
@@ -367,7 +374,10 @@ pub fn ensure_connection_form_window(
 pub fn connection_form_intent(
     state: State<'_, WindowIntentState>,
 ) -> AppResult<Option<ConnectionFormIntent>> {
-    let guard = state.connection_form.lock().expect("connection_form poisoned");
+    let guard = state
+        .connection_form
+        .lock()
+        .expect("connection_form poisoned");
     Ok(guard.clone())
 }
 
@@ -385,7 +395,10 @@ pub fn ensure_feedback_window(
 ) -> AppResult<()> {
     // Store the engine.
     {
-        let mut guard = state.feedback_engine.lock().expect("feedback_engine poisoned");
+        let mut guard = state
+            .feedback_engine
+            .lock()
+            .expect("feedback_engine poisoned");
         *guard = engine.clone();
     }
 
@@ -412,8 +425,13 @@ pub fn ensure_feedback_window(
 /// Return the latest stored feedback intent (called by the window on mount).
 #[tauri::command]
 pub fn feedback_intent(state: State<'_, WindowIntentState>) -> AppResult<FeedbackIntent> {
-    let guard = state.feedback_engine.lock().expect("feedback_engine poisoned");
-    Ok(FeedbackIntent { engine: guard.clone() })
+    let guard = state
+        .feedback_engine
+        .lock()
+        .expect("feedback_engine poisoned");
+    Ok(FeedbackIntent {
+        engine: guard.clone(),
+    })
 }
 
 // ---------------------------------------------------------------------------
