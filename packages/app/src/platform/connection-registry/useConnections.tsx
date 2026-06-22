@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { connectionsApi } from "./api";
 import type {
   Connection,
@@ -60,6 +61,18 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  // Cross-window refresh: when the connection-form window saves a connection
+  // it emits `connections:registry-changed`. All windows listen and refresh.
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const unlistenPromise = listen("connections:registry-changed", () => {
+      void refresh();
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
   }, [refresh]);
 
   const create = useCallback(

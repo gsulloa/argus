@@ -292,6 +292,131 @@ pub async fn workspace_open_connection(app: AppHandle, id: String) -> AppResult<
 }
 
 // ---------------------------------------------------------------------------
+// Window intent state + commands for connection-form and feedback windows
+// ---------------------------------------------------------------------------
+
+/// Intent payload for the connection-form window.  Serialised as camelCase
+/// for the frontend contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionFormIntent {
+    pub mode: String,                  // "create" | "edit" | "duplicate"
+    pub kind: String,                  // engine kind, e.g. "postgres"
+    pub connection_id: Option<String>, // present for edit/duplicate; serializes as connectionId
+    /// Optional engine-specific sub-mode (e.g. DynamoDB "credentials-only"
+    /// re-auth). Serializes as `subMode`. Absent for ordinary create/edit.
+    #[serde(default)]
+    pub sub_mode: Option<String>,
+}
+
+/// Intent payload returned by `feedback_intent`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackIntent {
+    pub engine: Option<String>,
+}
+
+/// Managed state holding the latest intent for each modal window.
+/// Uses `std::sync::Mutex` — no async needed, these are tiny payloads.
+#[derive(Default)]
+pub struct WindowIntentState {
+    pub connection_form: std::sync::Mutex<Option<ConnectionFormIntent>>,
+    pub feedback_engine: std::sync::Mutex<Option<String>>,
+}
+
+/// Ensure the `connection-form` window exists and is showing the correct intent.
+///
+/// * If the window already exists: show + focus it, then emit
+///   `connection-form:intent-changed` so the live window re-prefills.
+/// * If the window does not exist: store the intent and create the window.
+///   The window reads the intent on mount via `connection_form_intent`.
+#[tauri::command]
+pub fn ensure_connection_form_window(
+    app: AppHandle,
+    state: State<'_, WindowIntentState>,
+    intent: ConnectionFormIntent,
+) -> AppResult<()> {
+    // Store the intent.
+    {
+        let mut guard = state.connection_form.lock().expect("connection_form poisoned");
+        *guard = Some(intent.clone());
+    }
+
+    if let Some(win) = app.get_webview_window("connection-form") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        // Notify the already-open window so it re-prefills.
+        let _ = app.emit("connection-form:intent-changed", intent);
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(&app, "connection-form", WebviewUrl::App("index.html".into()))
+        .title("Argus")
+        .inner_size(540.0, 660.0)
+        .min_inner_size(480.0, 560.0)
+        .resizable(true)
+        .center()
+        .build()
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Return the latest stored `ConnectionFormIntent` (called by the window on mount).
+#[tauri::command]
+pub fn connection_form_intent(
+    state: State<'_, WindowIntentState>,
+) -> AppResult<Option<ConnectionFormIntent>> {
+    let guard = state.connection_form.lock().expect("connection_form poisoned");
+    Ok(guard.clone())
+}
+
+/// Ensure the `feedback` window exists and is showing the correct intent.
+///
+/// * If the window already exists: show + focus it, then emit
+///   `feedback:intent-changed` so the live window re-prefills.
+/// * If the window does not exist: store the engine and create the window.
+///   The window reads the intent on mount via `feedback_intent`.
+#[tauri::command]
+pub fn ensure_feedback_window(
+    app: AppHandle,
+    state: State<'_, WindowIntentState>,
+    engine: Option<String>,
+) -> AppResult<()> {
+    // Store the engine.
+    {
+        let mut guard = state.feedback_engine.lock().expect("feedback_engine poisoned");
+        *guard = engine.clone();
+    }
+
+    if let Some(win) = app.get_webview_window("feedback") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        // Notify the already-open window so it re-prefills.
+        let _ = app.emit("feedback:intent-changed", FeedbackIntent { engine });
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(&app, "feedback", WebviewUrl::App("index.html".into()))
+        .title("Argus")
+        .inner_size(500.0, 600.0)
+        .min_inner_size(420.0, 480.0)
+        .resizable(true)
+        .center()
+        .build()
+        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Return the latest stored feedback intent (called by the window on mount).
+#[tauri::command]
+pub fn feedback_intent(state: State<'_, WindowIntentState>) -> AppResult<FeedbackIntent> {
+    let guard = state.feedback_engine.lock().expect("feedback_engine poisoned");
+    Ok(FeedbackIntent { engine: guard.clone() })
+}
+
+// ---------------------------------------------------------------------------
 // Phase 6: disconnect_all_connections — Task 6.8
 // ---------------------------------------------------------------------------
 
