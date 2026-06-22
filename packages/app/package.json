@@ -1,7 +1,7 @@
 {
   "name": "argus",
   "private": false,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "A Tauri 2 desktop app for inspecting and editing data across PostgreSQL, MySQL/MariaDB, Microsoft SQL Server, DynamoDB, Amazon CloudWatch Logs, and Amazon Athena.",
   "license": "MIT",
   "author": "Gabriel Ulloa <gabriel.ulloa.e@gmail.com>",
