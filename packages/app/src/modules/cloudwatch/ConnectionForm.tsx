@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import { toAppError } from "@/platform/errors/AppError";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow";
 import type { ConnectionUpdate } from "@/platform/connection-registry/types";
 import type { Connection } from "@/platform/connection-registry/types";
+import { FormWindowSurface } from "@/platform/shell/FormWindowSurface";
 import { cloudwatchApi } from "./api";
 import { AWS_REGIONS } from "@/modules/dynamo/regions";
 import {
@@ -15,7 +15,6 @@ import {
   type TestConnectionResult,
 } from "./types";
 import { noAutoCorrectProps } from "../shared/text-input-hygiene";
-import overlayStyles from "@/platform/shell/Dialog.module.css";
 import styles from "@/modules/dynamo/ConnectionForm.module.css";
 
 export type FormMode =
@@ -95,14 +94,13 @@ export function CloudwatchConnectionForm({
   onSaved,
   onConnected,
 }: CloudwatchConnectionFormProps) {
-  const { create, update, refresh: refreshConnections } = useConnections();
+  const { items, create, update, refresh: refreshConnections } = useConnections();
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
   const isEdit = mode.kind === "edit";
-  const [contextTick, setContextTick] = useState(0);
   const sessionTokenRef = useRef<HTMLInputElement>(null);
 
   // Reset and initialize form when dialog opens
@@ -272,16 +270,10 @@ export function CloudwatchConnectionForm({
   const selectedProfile = profiles.find((p) => p.name === form.profile);
   const selectedProfileIsSso = selectedProfile?.sso ?? false;
 
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={overlayStyles.overlay} />
-        <Dialog.Content className={styles.dialog}>
-          <Dialog.Title className={styles.title}>{getTitle(mode)}</Dialog.Title>
-          <Dialog.Description className={styles.subtitle}>
-            Configure an Amazon CloudWatch Logs connection. CloudWatch Logs is read-only. Test before saving.
-          </Dialog.Description>
+  if (!open) return null;
 
+  return (
+    <FormWindowSurface title={getTitle(mode)} description="Configure an Amazon CloudWatch Logs connection. CloudWatch Logs is read-only. Test before saving.">
           {/* Auth mode radio */}
           <div className={styles.authRadioGroup}>
             <label className={styles.authRadioLabel}>
@@ -429,13 +421,9 @@ export function CloudwatchConnectionForm({
             {mode.kind === "edit" ? (
               <div className={`${styles.field} ${styles.fieldFull}`}>
                 <ContextFolderRow
-                  key={contextTick}
                   connectionId={mode.connection.id}
-                  contextPath={mode.connection.context_path ?? null}
-                  onChanged={() => {
-                    setContextTick((t) => t + 1);
-                    void refreshConnections();
-                  }}
+                  contextPath={(items.find((c) => c.id === mode.connection.id) ?? mode.connection).context_path ?? null}
+                  onChanged={() => { void refreshConnections(); }}
                 />
               </div>
             ) : (
@@ -514,8 +502,6 @@ export function CloudwatchConnectionForm({
               </button>
             </div>
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    </FormWindowSurface>
   );
 }

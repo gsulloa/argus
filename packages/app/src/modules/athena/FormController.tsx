@@ -3,11 +3,11 @@ import {
   useCallback,
   useContext,
   useMemo,
-  useState,
   type ReactNode,
 } from "react";
 import type { Connection } from "@/platform/connection-registry/types";
-import { AthenaConnectionForm, type FormMode } from "./ConnectionForm";
+import { openConnectionFormWindow } from "@/platform/shell/connectionFormWindow";
+import { ATHENA_KIND } from "./types";
 
 interface AthenaFormControllerValue {
   openCreate: () => void;
@@ -16,50 +16,32 @@ interface AthenaFormControllerValue {
   close: () => void;
 }
 
-interface ControllerState {
-  open: boolean;
-  mode: FormMode;
-}
-
-interface AthenaFormProviderProps {
-  children: ReactNode;
-  onSaved?: (saved: Connection) => void;
-  onConnected?: (id: string) => void;
-}
-
 const AthenaFormContext = createContext<AthenaFormControllerValue | null>(null);
 
 export function AthenaFormProvider({
   children,
-  onSaved,
-  onConnected,
-}: AthenaFormProviderProps) {
-  const [state, setState] = useState<ControllerState>({
-    open: false,
-    mode: { kind: "create" },
-  });
-
+}: {
+  children: ReactNode;
+}) {
   const openCreate = useCallback(
-    () => setState({ open: true, mode: { kind: "create" } }),
+    () => void openConnectionFormWindow({ mode: "create", kind: ATHENA_KIND }),
     [],
   );
 
   const openEdit = useCallback(
     (c: Connection) =>
-      setState({ open: true, mode: { kind: "edit", connection: c } }),
+      void openConnectionFormWindow({ mode: "edit", kind: ATHENA_KIND, connectionId: c.id }),
     [],
   );
 
   const openDuplicate = useCallback(
     (c: Connection) =>
-      setState({ open: true, mode: { kind: "duplicate", connection: c } }),
+      void openConnectionFormWindow({ mode: "duplicate", kind: ATHENA_KIND, connectionId: c.id }),
     [],
   );
 
-  const close = useCallback(
-    () => setState((s) => ({ ...s, open: false })),
-    [],
-  );
+  // close is a no-op — the window manages its own close lifecycle
+  const close = useCallback(() => {}, []);
 
   const value = useMemo(
     () => ({ openCreate, openEdit, openDuplicate, close }),
@@ -69,13 +51,6 @@ export function AthenaFormProvider({
   return (
     <AthenaFormContext.Provider value={value}>
       {children}
-      <AthenaConnectionForm
-        open={state.open}
-        mode={state.mode}
-        onOpenChange={(open) => setState((s) => ({ ...s, open }))}
-        onSaved={onSaved}
-        onConnected={onConnected}
-      />
     </AthenaFormContext.Provider>
   );
 }

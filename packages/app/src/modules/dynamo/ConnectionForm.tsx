@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import { toAppError } from "@/platform/errors/AppError";
 import { connectionsApi } from "@/platform/connection-registry/api";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow";
 import type { ConnectionUpdate } from "@/platform/connection-registry/types";
 import type { Connection } from "@/platform/connection-registry/types";
+import { FormWindowSurface } from "@/platform/shell/FormWindowSurface";
 import { dynamoApi } from "./api";
 import { classifyDynamoError, extractSsoCommand } from "./errors";
 import { AWS_REGIONS } from "./regions";
@@ -22,7 +22,6 @@ import {
   type TableMatch,
 } from "./tableMatch";
 import { noAutoCorrectProps } from "../shared/text-input-hygiene";
-import overlayStyles from "@/platform/shell/Dialog.module.css";
 import styles from "./ConnectionForm.module.css";
 
 export type FormMode =
@@ -143,7 +142,7 @@ export function DynamoConnectionForm({
   onSaved,
   onConnected,
 }: DynamoConnectionFormProps) {
-  const { create, update, refresh: refreshConnections } = useConnections();
+  const { items, create, update, refresh: refreshConnections } = useConnections();
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
@@ -154,7 +153,6 @@ export function DynamoConnectionForm({
 
   const isCredentialsOnly = mode.kind === "credentials-only";
   const isEdit = mode.kind === "edit";
-  const [contextTick, setContextTick] = useState(0);
 
   // Reset and initialize form when dialog opens
   useEffect(() => {
@@ -399,18 +397,17 @@ export function DynamoConnectionForm({
   const selectedProfile = profiles.find((p) => p.name === form.profile);
   const selectedProfileIsSso = selectedProfile?.sso ?? false;
 
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={overlayStyles.overlay} />
-        <Dialog.Content className={styles.dialog}>
-          <Dialog.Title className={styles.title}>{getTitle(mode)}</Dialog.Title>
-          <Dialog.Description className={styles.subtitle}>
-            {isCredentialsOnly
-              ? "Your session token expired. Re-enter your credentials to resume."
-              : "Configure a DynamoDB connection. Test before saving."}
-          </Dialog.Description>
+  if (!open) return null;
 
+  return (
+    <FormWindowSurface
+      title={getTitle(mode)}
+      description={
+        isCredentialsOnly
+          ? "Your session token expired. Re-enter your credentials to resume."
+          : "Configure a DynamoDB connection. Test before saving."
+      }
+    >
           {isCredentialsOnly && (
             <div className={styles.credentialsOnlyBanner}>
               Session token expired — only credential fields are editable.
@@ -686,13 +683,9 @@ export function DynamoConnectionForm({
               mode.kind === "edit" ? (
                 <div className={`${styles.field} ${styles.fieldFull}`}>
                   <ContextFolderRow
-                    key={contextTick}
                     connectionId={mode.connection.id}
-                    contextPath={mode.connection.context_path ?? null}
-                    onChanged={() => {
-                      setContextTick((t) => t + 1);
-                      void refreshConnections();
-                    }}
+                    contextPath={(items.find((c) => c.id === mode.connection.id) ?? mode.connection).context_path ?? null}
+                    onChanged={() => { void refreshConnections(); }}
                   />
                 </div>
               ) : (
@@ -789,8 +782,6 @@ export function DynamoConnectionForm({
               )}
             </div>
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    </FormWindowSurface>
   );
 }

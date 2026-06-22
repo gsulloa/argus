@@ -3,72 +3,61 @@ import {
   useCallback,
   useContext,
   useMemo,
-  useState,
   type ReactNode,
 } from "react";
 import type { Connection } from "@/platform/connection-registry/types";
-import { DynamoConnectionForm, type FormMode } from "./ConnectionForm";
+import { openConnectionFormWindow } from "@/platform/shell/connectionFormWindow";
+import { DYNAMO_KIND } from "./types";
 
 interface DynamoFormControllerValue {
   openCreate: () => void;
   openEdit: (c: Connection) => void;
   openDuplicate: (c: Connection) => void;
+  /** Opens the form in credentials-only mode (re-enter expired creds). */
   openCredentialsOnly: (c: Connection) => void;
   close: () => void;
-}
-
-interface ControllerState {
-  open: boolean;
-  mode: FormMode;
-}
-
-interface DynamoFormProviderProps {
-  children: ReactNode;
-  /** Notified once a connection is saved (created or updated). */
-  onSaved?: (saved: Connection) => void;
-  /** Notified after a successful Save & Connect — passes the newly active id. */
-  onConnected?: (id: string) => void;
 }
 
 const DynamoFormContext = createContext<DynamoFormControllerValue | null>(null);
 
 export function DynamoFormProvider({
   children,
-  onSaved,
-  onConnected,
-}: DynamoFormProviderProps) {
-  const [state, setState] = useState<ControllerState>({
-    open: false,
-    mode: { kind: "create" },
-  });
-
+}: {
+  children: ReactNode;
+}) {
   const openCreate = useCallback(
-    () => setState({ open: true, mode: { kind: "create" } }),
+    () => void openConnectionFormWindow({ mode: "create", kind: DYNAMO_KIND }),
     [],
   );
 
   const openEdit = useCallback(
     (c: Connection) =>
-      setState({ open: true, mode: { kind: "edit", connection: c } }),
+      void openConnectionFormWindow({ mode: "edit", kind: DYNAMO_KIND, connectionId: c.id }),
     [],
   );
 
   const openDuplicate = useCallback(
     (c: Connection) =>
-      setState({ open: true, mode: { kind: "duplicate", connection: c } }),
+      void openConnectionFormWindow({ mode: "duplicate", kind: DYNAMO_KIND, connectionId: c.id }),
     [],
   );
 
+  // credentials-only is a dynamo-specific re-auth sub-mode. We carry it on the
+  // intent's `subMode` field; ConnectionFormWindow maps it to the
+  // `credentials-only` DynamoConnectionForm FormMode variant.
   const openCredentialsOnly = useCallback(
     (c: Connection) =>
-      setState({ open: true, mode: { kind: "credentials-only", connection: c } }),
+      void openConnectionFormWindow({
+        mode: "edit",
+        kind: DYNAMO_KIND,
+        connectionId: c.id,
+        subMode: "credentials-only",
+      }),
     [],
   );
 
-  const close = useCallback(
-    () => setState((s) => ({ ...s, open: false })),
-    [],
-  );
+  // close is a no-op — the window manages its own close lifecycle
+  const close = useCallback(() => {}, []);
 
   const value = useMemo(
     () => ({ openCreate, openEdit, openDuplicate, openCredentialsOnly, close }),
@@ -78,13 +67,6 @@ export function DynamoFormProvider({
   return (
     <DynamoFormContext.Provider value={value}>
       {children}
-      <DynamoConnectionForm
-        open={state.open}
-        mode={state.mode}
-        onOpenChange={(open) => setState((s) => ({ ...s, open }))}
-        onSaved={onSaved}
-        onConnected={onConnected}
-      />
     </DynamoFormContext.Provider>
   );
 }
