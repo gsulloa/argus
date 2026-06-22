@@ -3,14 +3,14 @@
  *
  * Responsibilities:
  *  1. Registers "Send feedback" in the CommandRegistry so the command palette
- *     can open the form (same pattern as AiSettingsHost).
- *  2. Hosts the FeedbackDialog so the Radix focus-trap works correctly.
- *  3. Resolves the active engine type (connection.kind) for the submission
+ *     can open the feedback window (same pattern as AiSettingsHost).
+ *  2. Resolves the active engine type (connection.kind) for the submission
  *     metadata — the engine type string only, never the connection string or
  *     host (e.g. "postgres", "dynamo", "cloudwatch").
- *  4. Listens for the "argus:feedback:open" custom event so the shell
- *     affordance (FeedbackAffordance in StatusBar) can open the form without
- *     prop-drilling.
+ *  3. Calls `ensure_feedback_window` to open the dedicated feedback window.
+ *     No dialog is rendered here any more.
+ *  4. (Nice-to-have) Listens for `argus:feedback:submitted` to show a
+ *     success toast in the shell.
  *
  * Engine resolution:
  *   Both AppProviders windows (Manager + Workspace) mount
@@ -19,31 +19,30 @@
  *   engine will be null — that is acceptable per the spec.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { CommandRegistry } from "@/platform/command-palette/CommandRegistry";
 import { useFocusedConnection } from "@/platform/shell/FocusedConnectionContext";
 import { useConnections } from "@/platform/connection-registry/useConnections";
-import { FeedbackDialog } from "./FeedbackDialog";
+import { useToast } from "@/platform/toast";
 
 // ---------------------------------------------------------------------------
 // FeedbackHost (exported)
 // ---------------------------------------------------------------------------
 
 export function FeedbackHost() {
-  const [open, setOpen] = useState(false);
-
-  // Resolve the active engine type — safe in both Manager and Workspace windows
-  // because both mount FocusedConnectionProvider and ConnectionsProvider via
-  // AppProviders. In the Manager window, focusedConnectionId is null → engine
-  // is null (acceptable per the privacy spec).
   const { focusedConnectionId } = useFocusedConnection();
   const { items: connections } = useConnections();
+  const toast = useToast();
 
   const engine: string | null = focusedConnectionId
     ? (connections.find((c) => c.id === focusedConnectionId)?.kind ?? null)
     : null;
 
-  const show = useCallback(() => setOpen(true), []);
+  const show = useCallback(() => {
+    void invoke("ensure_feedback_window", { engine });
+  }, [engine]);
 
   // Register the command palette entry.
   useEffect(() => {
@@ -57,15 +56,20 @@ export function FeedbackHost() {
     return unregister;
   }, [show]);
 
-  // Listen for the custom event emitted by FeedbackAffordance in StatusBar.
-  // This avoids prop-drilling while keeping one canonical open-state here.
+  // Listen for successful feedback submission from the feedback window
+  // and show a toast in the shell (nice-to-have).
   useEffect(() => {
-    const handler = () => show();
-    window.addEventListener("argus:feedback:open", handler);
-    return () => window.removeEventListener("argus:feedback:open", handler);
-  }, [show]);
+    const unlistenPromise = listen("argus:feedback:submitted", () => {
+      toast.show("Feedback sent — thank you!", "success");
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [toast]);
 
-  return <FeedbackDialog open={open} onOpenChange={setOpen} engine={engine} />;
+  // FeedbackHost no longer renders any dialog — the feedback window is a
+  // dedicated Tauri window opened via ensure_feedback_window.
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -73,16 +77,26 @@ export function FeedbackHost() {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns a `show` callback that opens the FeedbackDialog by dispatching
- * the "argus:feedback:open" custom event. FeedbackHost (mounted in ShellMain)
- * handles the event and flips its open state.
+ * Returns a `show` callback that opens the feedback window via
+ * `ensure_feedback_window`. The engine is resolved from the focused
+ * connection in the current window (null is acceptable when no connection
+ * is focused).
  *
- * This is the same event-dispatch pattern used by the AI chat panel
- * ("argus:ai:openPanel" in AiSettingsHost).
+ * NOTE: This hook must be called inside AppProviders (which it always is,
+ * since FeedbackAffordance lives inside the shell which is wrapped in
+ * AppProviders).
  */
 export function useFeedback(): { show: () => void } {
+  const { focusedConnectionId } = useFocusedConnection();
+  const { items: connections } = useConnections();
+
+  const engine: string | null = focusedConnectionId
+    ? (connections.find((c) => c.id === focusedConnectionId)?.kind ?? null)
+    : null;
+
   const show = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("argus:feedback:open"));
-  }, []);
+    void invoke("ensure_feedback_window", { engine });
+  }, [engine]);
+
   return { show };
 }

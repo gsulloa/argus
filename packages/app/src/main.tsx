@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ManagerApp } from "@/app/ManagerApp";
 import { WorkspaceApp } from "@/app/WorkspaceApp";
+import { ConnectionFormApp } from "@/app/ConnectionFormApp";
+import { FeedbackApp } from "@/app/FeedbackApp";
 import { APP_DISPLAY_NAME } from "@/platform/app-identity";
 import "@/styles/global.css";
 
@@ -15,10 +17,27 @@ if (!rootEl) throw new Error("#root not found");
 
 // Route to a role-specific root component based on the Tauri window label.
 // The `manager` window is created at startup (declared in tauri.conf.json);
-// the `workspace` window is created on demand via `ensure_workspace_window`.
-// Both windows load the same bundle; the label is the authoritative routing key.
+// the `workspace` window is created on demand via `ensure_workspace_window`;
+// the `connection-form` window is created on demand via `ensure_connection_form_window`;
+// the `feedback` window is created on demand via `ensure_feedback_window`.
+// All windows load the same bundle; the label is the authoritative routing key.
 const windowLabel = getCurrentWindow().label;
-const RootComponent = windowLabel === "workspace" ? WorkspaceApp : ManagerApp;
+
+let RootComponent: React.ComponentType;
+switch (windowLabel) {
+  case "workspace":
+    RootComponent = WorkspaceApp;
+    break;
+  case "connection-form":
+    RootComponent = ConnectionFormApp;
+    break;
+  case "feedback":
+    RootComponent = FeedbackApp;
+    break;
+  default:
+    RootComponent = ManagerApp;
+    break;
+}
 
 ReactDOM.createRoot(rootEl).render(
   <React.StrictMode>

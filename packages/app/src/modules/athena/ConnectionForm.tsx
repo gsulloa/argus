@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import { toAppError } from "@/platform/errors/AppError";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow";
 import type { ConnectionUpdate } from "@/platform/connection-registry/types";
 import type { Connection } from "@/platform/connection-registry/types";
+import { FormWindowSurface } from "@/platform/shell/FormWindowSurface";
 import { athenaApi } from "./api";
 import { AWS_REGIONS } from "@/modules/dynamo/regions";
 import {
@@ -15,7 +15,6 @@ import {
   type TestConnectionResult,
 } from "./types";
 import { noAutoCorrectProps } from "../shared/text-input-hygiene";
-import overlayStyles from "@/platform/shell/Dialog.module.css";
 import styles from "@/modules/dynamo/ConnectionForm.module.css";
 
 export type FormMode =
@@ -332,16 +331,10 @@ export function AthenaConnectionForm({
   const selectedProfile = profiles.find((p) => p.name === form.profile);
   const selectedProfileIsSso = selectedProfile?.sso ?? false;
 
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={overlayStyles.overlay} />
-        <Dialog.Content className={styles.dialog}>
-          <Dialog.Title className={styles.title}>{getTitle(mode)}</Dialog.Title>
-          <Dialog.Description className={styles.subtitle}>
-            Configure an Amazon Athena connection. Test before saving.
-          </Dialog.Description>
+  if (!open) return null;
 
+  return (
+    <FormWindowSurface title={getTitle(mode)} description="Configure an Amazon Athena connection. Test before saving.">
           {/* Auth mode radio */}
           <div className={styles.authRadioGroup}>
             <label className={styles.authRadioLabel}>
@@ -643,8 +636,6 @@ export function AthenaConnectionForm({
               </button>
             </div>
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    </FormWindowSurface>
   );
 }

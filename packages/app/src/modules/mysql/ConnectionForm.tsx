@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import { AppError, toAppError } from "@/platform/errors/AppError";
 import { connectionsApi } from "@/platform/connection-registry/api";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import type { Connection } from "@/platform/connection-registry/types";
 import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow";
+import { FormWindowSurface } from "@/platform/shell/FormWindowSurface";
 import { mysqlApi } from "./api";
 import {
   MYSQL_KIND,
@@ -14,7 +14,6 @@ import {
   type TestResult,
 } from "./types";
 import { noAutoCorrectProps } from "../shared/text-input-hygiene";
-import overlayStyles from "@/platform/shell/Dialog.module.css";
 import styles from "./ConnectionForm.module.css";
 
 type Mode = "create" | "edit" | "duplicate";
@@ -278,16 +277,10 @@ export function MysqlConnectionForm({
         ? "Duplicate MySQL connection"
         : "New MySQL connection";
 
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={overlayStyles.overlay} />
-        <Dialog.Content className={styles.dialog}>
-          <Dialog.Title className={styles.title}>{title}</Dialog.Title>
-          <Dialog.Description className={styles.subtitle}>
-            Fill the form or paste a connection URL. Test before saving.
-          </Dialog.Description>
+  if (!open) return null;
 
+  return (
+    <FormWindowSurface title={title} description="Fill the form or paste a connection URL. Test before saving.">
           <div className={styles.tabs} role="tablist">
             <button
               type="button"
@@ -525,9 +518,7 @@ export function MysqlConnectionForm({
               </button>
             </div>
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    </FormWindowSurface>
   );
 }
 

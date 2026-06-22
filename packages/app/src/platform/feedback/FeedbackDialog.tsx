@@ -1,12 +1,8 @@
 /**
  * FeedbackDialog — in-app feedback form.
  *
- * Entry points:
- *   1. Command palette: "Send feedback" registered by FeedbackHost (App.tsx).
- *   2. Shell affordance: FeedbackAffordance button in StatusBar.
- *
- * Both entry points open this component via the FeedbackHost mounted in
- * ShellMain (same pattern as AiSettingsHost / SettingsPanel).
+ * Rendered in a dedicated native Tauri window (the `feedback` window).
+ * Uses FormWindowSurface as its outer shell instead of Radix Dialog.
  *
  * Tauri command contract:
  *   invoke("submit_feedback", {
@@ -21,11 +17,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { AlertTriangle, CheckCircle, Paperclip, X } from "lucide-react";
 import { useToast } from "@/platform/toast";
+import { FormWindowSurface } from "@/platform/shell/FormWindowSurface";
 import { noAutoCorrectProps } from "@/modules/shared/text-input-hygiene";
 import styles from "./FeedbackDialog.module.css";
 
@@ -53,6 +49,11 @@ interface FeedbackDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Active connection engine type (e.g. "postgres", "dynamo"), or null. */
   engine: string | null;
+  /**
+   * Called when feedback is successfully submitted, before onOpenChange(false).
+   * Use this to emit cross-window events or trigger toasts.
+   */
+  onSubmitted?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +79,7 @@ function formatBytes(bytes: number): string {
 // FeedbackDialog
 // ---------------------------------------------------------------------------
 
-export function FeedbackDialog({ open, onOpenChange, engine }: FeedbackDialogProps) {
+export function FeedbackDialog({ open, onOpenChange, engine, onSubmitted }: FeedbackDialogProps) {
   // Form fields
   const [message, setMessage] = useState("");
   const [category, setCategory] = useState<Category | "">("");
@@ -99,7 +100,7 @@ export function FeedbackDialog({ open, onOpenChange, engine }: FeedbackDialogPro
   // Focus message field when dialog opens
   useEffect(() => {
     if (open && !succeeded) {
-      // Small timeout to let Radix animate in before stealing focus
+      // Small timeout to let the window finish rendering before stealing focus
       const t = window.setTimeout(() => {
         messageRef.current?.focus();
       }, 80);
@@ -140,8 +141,6 @@ export function FeedbackDialog({ open, onOpenChange, engine }: FeedbackDialogPro
       return;
     }
 
-    // @tauri-apps/plugin-dialog returns string | string[] | null depending on
-    // `multiple`. We request multiple but cap in JS.
     const picked = await dialogOpen({
       multiple: true,
       filters: [
@@ -158,12 +157,6 @@ export function FeedbackDialog({ open, onOpenChange, engine }: FeedbackDialogPro
     const paths = Array.isArray(picked) ? picked : [picked];
     if (paths.length === 0) return;
 
-    // Check each file using the Tauri fs plugin for size, or fall back to
-    // reading via fetch (data URI). In Tauri 2 we can use @tauri-apps/plugin-fs.
-    // However we may not have file metadata easily without fs plugin. Instead,
-    // we'll validate size by fetching the file as a Blob via convertFileSrc +
-    // fetch, which works in Tauri webviews. If that fails we accept the file
-    // optimistically (Rust-side will also validate).
     const errors: string[] = [];
     const accepted: AttachmentFile[] = [];
 
@@ -173,8 +166,6 @@ export function FeedbackDialog({ open, onOpenChange, engine }: FeedbackDialogPro
         break;
       }
       const name = p.split(/[\\/]/).pop() ?? p;
-      // Try to get file size via a HEAD request to the asset URL.
-      // In Tauri, convertFileSrc maps a FS path to a safe asset:// URL.
       let sizeBytes = 0;
       try {
         const { convertFileSrc } = await import("@tauri-apps/api/core");
@@ -184,7 +175,6 @@ export function FeedbackDialog({ open, onOpenChange, engine }: FeedbackDialogPro
         sizeBytes = blob.size;
       } catch {
         // If we can't determine size, accept and let Rust validate.
-        // sizeBytes remains 0.
       }
 
       if (sizeBytes > MAX_FILE_BYTES) {
@@ -224,18 +214,17 @@ export function FeedbackDialog({ open, onOpenChange, engine }: FeedbackDialogPro
         message: messageTrimmed,
         category: category !== "" ? category : undefined,
         email: emailTrimmed.length > 0 ? emailTrimmed : undefined,
-        // TODO: engine is obtained from FeedbackHost which reads the focused
-        // connection via useFocusedConnection + useConnections. If the dialog
-        // is opened when no connection is focused, engine is null — acceptable.
         engine: engine ?? null,
         attachmentPaths: attachments.map((a) => a.path),
       });
 
       setSucceeded(true);
+      // Notify parent of success (e.g. emit cross-window event)
+      onSubmitted?.();
       // Auto-close after a moment
       window.setTimeout(() => {
         onOpenChange(false);
-        // Reset form after close animation
+        // Reset form after close
         window.setTimeout(() => {
           setMessage("");
           setCategory("");
@@ -267,6 +256,7 @@ export function FeedbackDialog({ open, onOpenChange, engine }: FeedbackDialogPro
     engine,
     attachments,
     onOpenChange,
+    onSubmitted,
     toast,
   ]);
 
@@ -428,11 +418,14 @@ export function FeedbackDialog({ open, onOpenChange, engine }: FeedbackDialogPro
 
       {/* Footer */}
       <div className={styles.footer}>
-        <Dialog.Close asChild>
-          <button type="button" className={styles.btn} disabled={submitting}>
-            Cancel
-          </button>
-        </Dialog.Close>
+        <button
+          type="button"
+          className={styles.btn}
+          disabled={submitting}
+          onClick={() => onOpenChange(false)}
+        >
+          Cancel
+        </button>
         <button
           type="button"
           className={`${styles.btn} ${styles.btnPrimary}`}
@@ -448,18 +441,14 @@ export function FeedbackDialog({ open, onOpenChange, engine }: FeedbackDialogPro
   );
 
   // ---------------------------------------------------------------------------
-  // Dialog root
+  // Window surface root
   // ---------------------------------------------------------------------------
 
+  if (!open) return null;
+
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={styles.overlay} />
-        <Dialog.Content className={styles.dialog}>
-          <Dialog.Title className={styles.title}>Send feedback</Dialog.Title>
-          {succeeded ? renderSuccess() : renderForm()}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <FormWindowSurface title="Send feedback">
+      {succeeded ? renderSuccess() : renderForm()}
+    </FormWindowSurface>
   );
 }

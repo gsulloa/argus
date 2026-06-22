@@ -100,8 +100,10 @@ use crate::platform::{
         connections_move, connections_refresh_secret, connections_update,
     },
     open_connections::{
-        connections_open_list, disconnect_all_connections, ensure_manager_window,
-        ensure_workspace_window, workspace_open_connection, OpenConnectionsRegistry,
+        connection_form_intent, connections_open_list, disconnect_all_connections,
+        ensure_connection_form_window, ensure_feedback_window, ensure_manager_window,
+        ensure_workspace_window, feedback_intent, workspace_open_connection,
+        OpenConnectionsRegistry, WindowIntentState,
     },
     settings::{self, settings_get, settings_set},
     storage,
@@ -209,6 +211,7 @@ pub fn run() {
             app.manage(AthenaClientRegistry::new());
             app.manage(CloudwatchClientRegistry::new());
             app.manage(OpenConnectionsRegistry::new());
+            app.manage(WindowIntentState::default());
             app.manage(platform::updater::UpdaterState::default());
 
             // Context registry — shared singleton keyed by canonical folder path.
@@ -272,6 +275,10 @@ pub fn run() {
             ensure_workspace_window,
             ensure_manager_window,
             workspace_open_connection,
+            ensure_connection_form_window,
+            connection_form_intent,
+            ensure_feedback_window,
+            feedback_intent,
             connection_groups_list,
             connection_groups_create,
             connection_groups_update,
