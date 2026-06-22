@@ -120,7 +120,7 @@ export function MysqlConnectionForm({
   onSaved,
   onConnected,
 }: ConnectionFormProps) {
-  const { create, update, refresh: refreshConnections } = useConnections();
+  const { items, create, update, refresh: refreshConnections } = useConnections();
   const [view, setView] = useState<"form" | "url">("form");
   const [form, setForm] = useState<FormState>(() =>
     initial ? fromConnection(initial, mode) : emptyForm(),
@@ -131,7 +131,6 @@ export function MysqlConnectionForm({
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [contextTick, setContextTick] = useState(0);
 
   // Reset state when the dialog (re)opens.
   useEffect(() => {
@@ -453,13 +452,9 @@ export function MysqlConnectionForm({
               {mode === "edit" && initial ? (
                 <div className={`${styles.field} ${styles.fieldFull}`}>
                   <ContextFolderRow
-                    key={contextTick}
                     connectionId={initial.id}
-                    contextPath={initial.context_path ?? null}
-                    onChanged={() => {
-                      setContextTick((t) => t + 1);
-                      void refreshConnections();
-                    }}
+                    contextPath={(items.find((c) => c.id === initial.id) ?? initial).context_path ?? null}
+                    onChanged={() => { void refreshConnections(); }}
                   />
                 </div>
               ) : (
