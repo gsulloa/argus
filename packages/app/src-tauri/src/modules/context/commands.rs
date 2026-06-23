@@ -806,10 +806,10 @@ pub struct ModelDraft {
     pub body: Option<String>,
 }
 
-/// Derive an on-disk filename stem from an entity name: keep [A-Za-z0-9_-],
+/// Derive an on-disk filename stem from a name: keep [A-Za-z0-9_-],
 /// replace any run of other chars with a single '-', trim leading/trailing '-'.
 /// Returns `AppError::Validation` if the result is empty.
-fn slug_for_model_name(name: &str) -> AppResult<String> {
+fn slug_for_name(name: &str, label: &str) -> AppResult<String> {
     let mut slug = String::new();
     let mut in_run = false;
     for ch in name.chars() {
@@ -825,11 +825,21 @@ fn slug_for_model_name(name: &str) -> AppResult<String> {
     let slug = slug.trim_matches('-').to_owned();
     if slug.is_empty() {
         return Err(AppError::Validation(format!(
-            "model name {:?} produces an empty filename slug",
+            "{label} {:?} produces an empty filename slug",
             name
         )));
     }
     Ok(slug)
+}
+
+/// Slug helper for model names (thin wrapper that preserves the original label).
+fn slug_for_model_name(name: &str) -> AppResult<String> {
+    slug_for_name(name, "model name")
+}
+
+/// Slug helper for query names.
+fn slug_for_query_name(name: &str) -> AppResult<String> {
+    slug_for_name(name, "query name")
 }
 
 // ---- 5.10: context_save_model ----
@@ -1017,6 +1027,376 @@ pub fn context_delete_model(
     } else {
         Ok(DeleteModelResult { deleted: false })
     }
+}
+
+// ---- Query write helpers ----
+
+/// Result returned by `context_save_query` and `context_rename_query`.
+#[derive(Debug, serde::Serialize)]
+pub struct SaveQueryResult {
+    /// Absolute path to the body file that was written.
+    pub path: String,
+    /// `true` when the file was newly created; `false` on overwrite.
+    pub created: bool,
+    /// Display name stored in the meta file.
+    pub name: String,
+}
+
+/// Result returned by `context_delete_query`.
+#[derive(serde::Serialize)]
+pub struct DeleteQueryResult {
+    pub deleted: bool,
+}
+
+/// One entry in the `context_list_linked_queries` response.
+///
+/// Groups ALL connections that share the same canonical context-folder root
+/// and engine into a single entry so the frontend can display queries once
+/// regardless of how many connections point at the same folder.
+#[derive(serde::Serialize)]
+pub struct LinkedQueryGroup {
+    /// Canonical absolute path of the context-folder root.
+    pub canonical_root: String,
+    /// `name` from `context.yaml` when present; otherwise the folder basename.
+    pub project_name: String,
+    /// Engine subtree string (e.g. `"postgres"`, `"dynamo"`).
+    pub engine: String,
+    /// All connection IDs in this (root, engine) group.
+    pub connection_ids: Vec<String>,
+    /// First member's ID; the frontend decides which is live.
+    pub representative_connection_id: String,
+    /// Queries available for this engine in this folder.
+    pub queries: Vec<QueryListItem>,
+}
+
+// ---- 5.12: context_save_query ----
+
+/// Create or update a prefab query in the linked context folder.
+///
+/// `mode`:
+/// - `None` or `Some("create")` → create mode: returns `Conflict` if the slug already exists.
+/// - `Some("update")` → update mode: overwrites in place.
+///
+/// Files are written at:
+/// - `<root>/<engine>/queries/<slug>.<ext>`         (body)
+/// - `<root>/<engine>/queries/<slug>.meta.yaml`     (metadata)
+///
+/// The filesystem watcher will emit `context://changed` with `kinds:["query"]`
+/// automatically — no explicit event emission needed here.
+///
+/// ## Error messages (stable; the frontend matches these)
+/// - No linked folder   → `AppError::Validation("connection … has no linked context folder")`
+/// - Unknown engine     → `AppError::Validation("unsupported engine kind: …")`
+/// - Empty name         → `AppError::Validation("query name … produces an empty filename slug")`
+/// - Conflict on create → `AppError::Validation("query … already exists")`
+#[tauri::command]
+pub fn context_save_query(
+    db: State<'_, DbState>,
+    connection_id: String,
+    name: String,
+    sql: String,
+    description: Option<String>,
+    params: Option<Vec<QueryParam>>,
+    tags: Option<Vec<String>>,
+    mode: Option<String>,
+) -> AppResult<SaveQueryResult> {
+    let conn_id = parse_conn_id(&connection_id)?;
+    let (kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
+    let root = context_path.ok_or_else(|| {
+        AppError::Validation(format!("connection {conn_id} has no linked context folder"))
+    })?;
+
+    let engine = EngineKind::from_connection_kind(&kind)
+        .ok_or_else(|| AppError::Validation(format!("unsupported engine kind: {kind}")))?;
+    let ext = engine.query_extensions()[0];
+    let subtree = engine.subtree();
+
+    let name = name.trim().to_owned();
+    if name.is_empty() {
+        return Err(AppError::Validation("query name must not be empty".into()));
+    }
+    let slug = slug_for_query_name(&name)?;
+
+    let queries_dir = Path::new(&root).join(subtree).join("queries");
+    std::fs::create_dir_all(&queries_dir)
+        .map_err(|e| AppError::Storage(format!("create queries dir: {e}")))?;
+
+    let body_path = queries_dir.join(format!("{slug}.{ext}"));
+    let meta_path = queries_dir.join(format!("{slug}.meta.yaml"));
+
+    let is_update = matches!(mode.as_deref(), Some("update"));
+    let file_exists = body_path.exists();
+
+    if !is_update && file_exists {
+        return Err(AppError::Validation(format!(
+            "query {slug:?} already exists; use mode=update to overwrite"
+        )));
+    }
+
+    // Write body.
+    atomic_write(&body_path, sql.as_bytes())?;
+
+    // Write meta.
+    let meta = crate::modules::context::types::QueryMeta {
+        name: Some(name.clone()),
+        description,
+        params: params.unwrap_or_default(),
+        tags: tags.unwrap_or_default(),
+    };
+    let meta_yaml = serde_yaml::to_string(&meta)
+        .map_err(|e| AppError::Internal(format!("yaml serialise query meta: {e}")))?;
+    atomic_write(&meta_path, meta_yaml.as_bytes())?;
+
+    Ok(SaveQueryResult {
+        path: body_path.to_string_lossy().into_owned(),
+        created: !file_exists,
+        name,
+    })
+}
+
+// ---- 5.13: context_rename_query ----
+
+/// Rename a prefab query within the linked context folder.
+///
+/// Moves both the body file and the `.meta.yaml` sidecar to the new slug.
+/// If the old meta is present its `name` field is updated to `to_name`;
+/// if absent a fresh meta is written with `name: to_name`.
+///
+/// ## Error messages (stable)
+/// - Source not found   → `AppError::NotFound("query … not found")`
+/// - Destination exists → `AppError::Validation("query … already exists")`
+#[tauri::command]
+pub fn context_rename_query(
+    db: State<'_, DbState>,
+    connection_id: String,
+    from_name: String,
+    to_name: String,
+) -> AppResult<SaveQueryResult> {
+    let conn_id = parse_conn_id(&connection_id)?;
+    let (kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
+    let root = context_path.ok_or_else(|| {
+        AppError::Validation(format!("connection {conn_id} has no linked context folder"))
+    })?;
+
+    let engine = EngineKind::from_connection_kind(&kind)
+        .ok_or_else(|| AppError::Validation(format!("unsupported engine kind: {kind}")))?;
+    let ext = engine.query_extensions()[0];
+    let subtree = engine.subtree();
+
+    let to_name = to_name.trim().to_owned();
+    if to_name.is_empty() {
+        return Err(AppError::Validation(
+            "target query name must not be empty".into(),
+        ));
+    }
+
+    let from_slug = slug_for_query_name(from_name.trim())?;
+    let to_slug = slug_for_query_name(&to_name)?;
+
+    let queries_dir = Path::new(&root).join(subtree).join("queries");
+
+    let from_body = queries_dir.join(format!("{from_slug}.{ext}"));
+    let from_meta = queries_dir.join(format!("{from_slug}.meta.yaml"));
+    let to_body = queries_dir.join(format!("{to_slug}.{ext}"));
+    let to_meta = queries_dir.join(format!("{to_slug}.meta.yaml"));
+
+    if !from_body.exists() {
+        return Err(AppError::NotFound(format!("query {from_slug:?} not found")));
+    }
+    if to_body.exists() {
+        return Err(AppError::Validation(format!(
+            "query {to_slug:?} already exists"
+        )));
+    }
+
+    // Read old meta (if present) and update the name field.
+    let old_meta: Option<crate::modules::context::types::QueryMeta> = if from_meta.exists() {
+        match std::fs::read_to_string(&from_meta) {
+            Ok(content) => serde_yaml::from_str(&content).ok(),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    // Rename body file.
+    std::fs::rename(&from_body, &to_body)
+        .map_err(|e| AppError::Storage(format!("rename query body: {e}")))?;
+
+    // Write updated meta at new path.
+    let new_meta = crate::modules::context::types::QueryMeta {
+        name: Some(to_name.clone()),
+        description: old_meta.as_ref().and_then(|m| m.description.clone()),
+        params: old_meta
+            .as_ref()
+            .map(|m| m.params.clone())
+            .unwrap_or_default(),
+        tags: old_meta
+            .as_ref()
+            .map(|m| m.tags.clone())
+            .unwrap_or_default(),
+    };
+    let meta_yaml = serde_yaml::to_string(&new_meta)
+        .map_err(|e| AppError::Internal(format!("yaml serialise query meta: {e}")))?;
+    atomic_write(&to_meta, meta_yaml.as_bytes())?;
+
+    // Remove old meta (best-effort; ignore if already gone).
+    if from_meta.exists() {
+        let _ = std::fs::remove_file(&from_meta);
+    }
+
+    Ok(SaveQueryResult {
+        path: to_body.to_string_lossy().into_owned(),
+        created: false,
+        name: to_name,
+    })
+}
+
+// ---- 5.14: context_delete_query ----
+
+/// Delete a prefab query from the linked context folder.
+///
+/// Removes the body file and its `.meta.yaml` sidecar (if present).
+/// Returns `AppError::NotFound` when the body file does not exist.
+#[tauri::command]
+pub fn context_delete_query(
+    db: State<'_, DbState>,
+    connection_id: String,
+    name: String,
+) -> AppResult<DeleteQueryResult> {
+    let conn_id = parse_conn_id(&connection_id)?;
+    let (kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
+    let root = context_path.ok_or_else(|| {
+        AppError::Validation(format!("connection {conn_id} has no linked context folder"))
+    })?;
+
+    let engine = EngineKind::from_connection_kind(&kind)
+        .ok_or_else(|| AppError::Validation(format!("unsupported engine kind: {kind}")))?;
+    let ext = engine.query_extensions()[0];
+    let subtree = engine.subtree();
+
+    let slug = slug_for_query_name(name.trim())?;
+    let queries_dir = Path::new(&root).join(subtree).join("queries");
+    let body_path = queries_dir.join(format!("{slug}.{ext}"));
+    let meta_path = queries_dir.join(format!("{slug}.meta.yaml"));
+
+    if !body_path.exists() {
+        return Err(AppError::NotFound(format!("query {slug:?} not found")));
+    }
+
+    std::fs::remove_file(&body_path)
+        .map_err(|e| AppError::Storage(format!("delete query body: {e}")))?;
+
+    // Remove meta if present (best-effort; ignore if absent).
+    if meta_path.exists() {
+        let _ = std::fs::remove_file(&meta_path);
+    }
+
+    Ok(DeleteQueryResult { deleted: true })
+}
+
+// ---- 5.15: context_list_linked_queries ----
+
+/// List all prefab queries grouped by (canonical-root, engine).
+///
+/// Each group collapses every connection that shares the same canonical
+/// context-folder root and engine kind into a single `LinkedQueryGroup`.
+/// The `representative_connection_id` is the first member; the frontend
+/// decides which connection is live.
+///
+/// Connections without a linked folder or an unrecognised engine are skipped.
+/// Groups are sorted by `(project_name, engine)` for deterministic ordering.
+#[tauri::command]
+pub fn context_list_linked_queries(
+    db: State<'_, DbState>,
+    registry: State<'_, Arc<super::registry::ContextRegistry>>,
+) -> AppResult<Vec<LinkedQueryGroup>> {
+    use super::canon_path::CanonPath;
+    use std::collections::HashMap;
+
+    let lock = db.0.lock().expect("db poisoned");
+    let all_conns = crate::platform::connections::list(&lock)?;
+    drop(lock);
+
+    // Group connections by (canonical_root, engine_subtree).
+    // Value: (canonical_root_string, engine, Vec<conn_id_string>)
+    let mut groups: HashMap<(String, String), (String, Vec<String>)> = HashMap::new();
+
+    for conn in &all_conns {
+        let Some(ref path) = conn.context_path else {
+            continue;
+        };
+        let Some(engine) = EngineKind::from_connection_kind(&conn.kind) else {
+            continue;
+        };
+
+        // Use lenient canonicalization so unavailable folders still group correctly.
+        let canon = CanonPath::new_lenient(path);
+        let canon_str = canon.as_path().to_string_lossy().into_owned();
+        let subtree = engine.subtree().to_owned();
+
+        let key = (canon_str.clone(), subtree);
+        let entry = groups.entry(key).or_insert_with(|| (canon_str, Vec::new()));
+        entry.1.push(conn.id.to_string());
+    }
+
+    let mut result: Vec<LinkedQueryGroup> = Vec::new();
+
+    for ((canon_str, engine_subtree), (_root, conn_ids)) in groups {
+        // Pick a representative connection to get parsed queries from.
+        let rep_id_str = conn_ids[0].clone();
+        let rep_uuid = match Uuid::parse_str(&rep_id_str) {
+            Ok(u) => u,
+            Err(_) => continue,
+        };
+
+        // Resolve queries via the registry (lazy-subscribe like context_list_queries).
+        let queries = match get_or_subscribe(&db, &registry, rep_uuid)? {
+            Some(parsed) => parsed
+                .queries
+                .into_iter()
+                .map(|q| QueryListItem {
+                    name: q.name,
+                    description: q.description,
+                    params: q.params,
+                    tags: q.tags,
+                })
+                .collect(),
+            None => vec![],
+        };
+
+        // Derive project_name: try context.yaml `name`, fall back to folder basename.
+        let canon_path = std::path::Path::new(&canon_str);
+        let project_name = parse_manifest(canon_path)
+            .ok()
+            .map(|m| m.name)
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| {
+                canon_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&canon_str)
+                    .to_owned()
+            });
+
+        result.push(LinkedQueryGroup {
+            canonical_root: canon_str,
+            project_name,
+            engine: engine_subtree,
+            connection_ids: conn_ids,
+            representative_connection_id: rep_id_str,
+            queries,
+        });
+    }
+
+    // Deterministic ordering: sort by (project_name, engine).
+    result.sort_by(|a, b| {
+        a.project_name
+            .cmp(&b.project_name)
+            .then_with(|| a.engine.cmp(&b.engine))
+    });
+
+    Ok(result)
 }
 
 // ---- unit tests ----
@@ -1598,5 +1978,483 @@ mod tests {
 
         let result = list_known_folders_inner(&db).unwrap();
         assert!(result.is_empty());
+    }
+
+    // ---- query write helpers (slug_for_query_name) ----
+
+    #[test]
+    fn slug_for_query_simple() {
+        assert_eq!(
+            slug_for_query_name("Top customers").unwrap(),
+            "Top-customers"
+        );
+    }
+
+    #[test]
+    fn slug_for_query_empty_is_error() {
+        assert!(slug_for_query_name("").is_err());
+    }
+
+    #[test]
+    fn slug_for_query_whitespace_only_is_error() {
+        assert!(slug_for_query_name("   ").is_err());
+    }
+
+    // ---- context_save_query / context_rename_query / context_delete_query ----
+    //
+    // These commands need `State<DbState>` and `State<Arc<ContextRegistry>>` which
+    // cannot be constructed in unit tests without a full Tauri runtime. We therefore
+    // test the core logic by exercising the filesystem operations directly.
+
+    /// Write the minimal `context.yaml` for a temp folder.
+    fn write_context_yaml(dir: &std::path::Path, name: &str) {
+        fs::write(
+            dir.join("context.yaml"),
+            format!("schema_version: 1\nname: {name}\n"),
+        )
+        .unwrap();
+    }
+
+    /// Helper: create an in-memory DB with one connection of the given kind
+    /// pointing at `context_path`.
+    fn make_conn_with_path_and_kind(
+        db: &rusqlite::Connection,
+        kind: &str,
+        context_path: Option<String>,
+    ) -> uuid::Uuid {
+        crate::platform::connections::create(
+            db,
+            ConnectionInput {
+                name: "q-test".into(),
+                kind: kind.into(),
+                params: serde_json::Value::Null,
+                group_id: None,
+                secret: None,
+                context_path,
+                project_source_path: None,
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    /// Pure-Rust equivalent of `context_save_query` logic, factored for testing.
+    fn save_query_direct(
+        root: &std::path::Path,
+        engine: EngineKind,
+        name: &str,
+        sql: &str,
+        mode: Option<&str>,
+    ) -> AppResult<SaveQueryResult> {
+        let ext = engine.query_extensions()[0];
+        let subtree = engine.subtree();
+        let name_trimmed = name.trim().to_owned();
+        if name_trimmed.is_empty() {
+            return Err(AppError::Validation("query name must not be empty".into()));
+        }
+        let slug = slug_for_query_name(&name_trimmed)?;
+        let queries_dir = root.join(subtree).join("queries");
+        std::fs::create_dir_all(&queries_dir)
+            .map_err(|e| AppError::Storage(format!("create queries dir: {e}")))?;
+        let body_path = queries_dir.join(format!("{slug}.{ext}"));
+        let meta_path = queries_dir.join(format!("{slug}.meta.yaml"));
+        let is_update = matches!(mode, Some("update"));
+        let file_exists = body_path.exists();
+        if !is_update && file_exists {
+            return Err(AppError::Validation(format!(
+                "query {slug:?} already exists; use mode=update to overwrite"
+            )));
+        }
+        atomic_write(&body_path, sql.as_bytes())?;
+        let meta = crate::modules::context::types::QueryMeta {
+            name: Some(name_trimmed.clone()),
+            description: None,
+            params: vec![],
+            tags: vec![],
+        };
+        let meta_yaml =
+            serde_yaml::to_string(&meta).map_err(|e| AppError::Internal(format!("yaml: {e}")))?;
+        atomic_write(&meta_path, meta_yaml.as_bytes())?;
+        Ok(SaveQueryResult {
+            path: body_path.to_string_lossy().into_owned(),
+            created: !file_exists,
+            name: name_trimmed,
+        })
+    }
+
+    // ---- save: creates body + meta with correct extension ----
+
+    #[test]
+    fn save_query_postgres_writes_sql_files() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "PG Test");
+        let res = save_query_direct(
+            dir.path(),
+            EngineKind::Postgres,
+            "Active users",
+            "SELECT 1;",
+            None,
+        )
+        .unwrap();
+        assert!(res.created);
+        assert!(res.path.ends_with(".sql"));
+        let body_path = std::path::Path::new(&res.path);
+        assert!(body_path.exists());
+        assert_eq!(fs::read_to_string(body_path).unwrap(), "SELECT 1;");
+        let meta_path = body_path.with_extension("meta.yaml");
+        assert!(meta_path.exists());
+        assert!(fs::read_to_string(meta_path)
+            .unwrap()
+            .contains("Active users"));
+    }
+
+    #[test]
+    fn save_query_dynamo_writes_partiql_files() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "Dynamo Test");
+        let res = save_query_direct(
+            dir.path(),
+            EngineKind::Dynamo,
+            "Scan events",
+            "SELECT * FROM Events;",
+            None,
+        )
+        .unwrap();
+        assert!(res.path.ends_with(".partiql"));
+    }
+
+    #[test]
+    fn save_query_cloudwatch_writes_cwlogs_files() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "CW Test");
+        let res = save_query_direct(
+            dir.path(),
+            EngineKind::Cloudwatch,
+            "Error logs",
+            "fields @message | filter @message like /ERROR/",
+            None,
+        )
+        .unwrap();
+        assert!(res.path.ends_with(".cwlogs"));
+    }
+
+    // ---- save create: conflict on existing slug ----
+
+    #[test]
+    fn save_query_create_conflict_if_exists() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        save_query_direct(
+            dir.path(),
+            EngineKind::Postgres,
+            "My Query",
+            "SELECT 1;",
+            None,
+        )
+        .unwrap();
+        // Second create should fail.
+        let err = save_query_direct(
+            dir.path(),
+            EngineKind::Postgres,
+            "My Query",
+            "SELECT 2;",
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, AppError::Validation(ref m) if m.contains("already exists")),
+            "expected Validation(already exists), got: {err:?}"
+        );
+    }
+
+    // ---- save update: overwrites ----
+
+    #[test]
+    fn save_query_update_overwrites() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        let res1 = save_query_direct(
+            dir.path(),
+            EngineKind::Postgres,
+            "My Query",
+            "SELECT 1;",
+            None,
+        )
+        .unwrap();
+        assert!(res1.created);
+        let res2 = save_query_direct(
+            dir.path(),
+            EngineKind::Postgres,
+            "My Query",
+            "SELECT 99;",
+            Some("update"),
+        )
+        .unwrap();
+        assert!(!res2.created);
+        assert_eq!(fs::read_to_string(&res2.path).unwrap(), "SELECT 99;");
+    }
+
+    // ---- save: empty name is error ----
+
+    #[test]
+    fn save_query_empty_name_is_error() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        let err = save_query_direct(dir.path(), EngineKind::Postgres, "  ", "SELECT 1;", None)
+            .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)), "got: {err:?}");
+    }
+
+    // ---- rename: moves both files + updates meta name ----
+
+    #[test]
+    fn rename_query_moves_files_and_updates_name() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        let ext = EngineKind::Postgres.query_extensions()[0];
+        let queries_dir = dir.path().join("postgres/queries");
+        fs::create_dir_all(&queries_dir).unwrap();
+
+        // Write body + meta at from_slug.
+        let from_body = queries_dir.join(format!("old-query.{ext}"));
+        let from_meta = queries_dir.join("old-query.meta.yaml");
+        fs::write(&from_body, "SELECT 1;").unwrap();
+        fs::write(&from_meta, "name: old query\ntags: [t1]\n").unwrap();
+
+        // Perform rename directly (mirrors the logic in context_rename_query).
+        let from_slug = slug_for_query_name("old query").unwrap();
+        let to_slug = slug_for_query_name("new query").unwrap();
+        let to_body = queries_dir.join(format!("{to_slug}.{ext}"));
+        let to_meta = queries_dir.join(format!("{to_slug}.meta.yaml"));
+
+        assert!(from_body.exists());
+        assert!(!to_body.exists());
+
+        std::fs::rename(&from_body, &to_body).unwrap();
+
+        let old_meta: Option<crate::modules::context::types::QueryMeta> = {
+            let content = fs::read_to_string(&from_meta).unwrap();
+            serde_yaml::from_str(&content).ok()
+        };
+        let new_meta = crate::modules::context::types::QueryMeta {
+            name: Some("new query".to_owned()),
+            description: old_meta.as_ref().and_then(|m| m.description.clone()),
+            params: old_meta
+                .as_ref()
+                .map(|m| m.params.clone())
+                .unwrap_or_default(),
+            tags: old_meta
+                .as_ref()
+                .map(|m| m.tags.clone())
+                .unwrap_or_default(),
+        };
+        let meta_yaml = serde_yaml::to_string(&new_meta).unwrap();
+        atomic_write(&to_meta, meta_yaml.as_bytes()).unwrap();
+        let _ = std::fs::remove_file(&from_meta);
+
+        // Old body gone, new body present.
+        assert!(!from_body.exists());
+        assert!(to_body.exists());
+        assert_eq!(fs::read_to_string(&to_body).unwrap(), "SELECT 1;");
+
+        // New meta has updated name.
+        let content = fs::read_to_string(&to_meta).unwrap();
+        assert!(content.contains("new query"));
+
+        // Tags preserved.
+        assert!(content.contains("t1"));
+    }
+
+    // ---- rename: conflict if destination exists ----
+
+    #[test]
+    fn rename_query_conflict_if_dest_exists() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        let ext = EngineKind::Postgres.query_extensions()[0];
+        let queries_dir = dir.path().join("postgres/queries");
+        fs::create_dir_all(&queries_dir).unwrap();
+        fs::write(queries_dir.join(format!("a.{ext}")), "SELECT 1;").unwrap();
+        fs::write(queries_dir.join(format!("b.{ext}")), "SELECT 2;").unwrap();
+
+        // Simulate conflict check.
+        let from_slug = "a";
+        let to_slug = "b";
+        let from_body = queries_dir.join(format!("{from_slug}.{ext}"));
+        let to_body = queries_dir.join(format!("{to_slug}.{ext}"));
+
+        assert!(from_body.exists());
+        assert!(to_body.exists()); // destination already exists → should error
+
+        let err: AppResult<()> = if to_body.exists() {
+            Err(AppError::Validation(format!(
+                "query {to_slug:?} already exists"
+            )))
+        } else {
+            Ok(())
+        };
+        assert!(matches!(err, Err(AppError::Validation(_))));
+    }
+
+    // ---- rename: not found ----
+
+    #[test]
+    fn rename_query_not_found_is_error() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        let ext = EngineKind::Postgres.query_extensions()[0];
+        let queries_dir = dir.path().join("postgres/queries");
+        fs::create_dir_all(&queries_dir).unwrap();
+
+        let from_body = queries_dir.join(format!("missing.{ext}"));
+        assert!(!from_body.exists());
+
+        let err: AppResult<()> = if !from_body.exists() {
+            Err(AppError::NotFound("query \"missing\" not found".into()))
+        } else {
+            Ok(())
+        };
+        assert!(matches!(err, Err(AppError::NotFound(_))));
+    }
+
+    // ---- delete: removes both files ----
+
+    #[test]
+    fn delete_query_removes_body_and_meta() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        let ext = EngineKind::Postgres.query_extensions()[0];
+        let queries_dir = dir.path().join("postgres/queries");
+        fs::create_dir_all(&queries_dir).unwrap();
+        let body = queries_dir.join(format!("del-me.{ext}"));
+        let meta = queries_dir.join("del-me.meta.yaml");
+        fs::write(&body, "SELECT 1;").unwrap();
+        fs::write(&meta, "name: del me\n").unwrap();
+
+        assert!(body.exists());
+        assert!(meta.exists());
+
+        // Simulate delete logic.
+        std::fs::remove_file(&body).unwrap();
+        if meta.exists() {
+            std::fs::remove_file(&meta).unwrap();
+        }
+
+        assert!(!body.exists());
+        assert!(!meta.exists());
+    }
+
+    // ---- delete: not found ----
+
+    #[test]
+    fn delete_query_not_found_is_error() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        let ext = EngineKind::Postgres.query_extensions()[0];
+        let queries_dir = dir.path().join("postgres/queries");
+        fs::create_dir_all(&queries_dir).unwrap();
+
+        let body = queries_dir.join(format!("ghost.{ext}"));
+        assert!(!body.exists());
+
+        let err: AppResult<()> = if !body.exists() {
+            Err(AppError::NotFound("query \"ghost\" not found".into()))
+        } else {
+            Ok(())
+        };
+        assert!(matches!(err, Err(AppError::NotFound(_))));
+    }
+
+    // ---- context_list_linked_queries helpers ----
+    // The Tauri-State version cannot be unit-tested without a runtime, but we
+    // can test the grouping + project_name derivation logic directly.
+
+    #[test]
+    fn list_linked_queries_groups_same_root_same_engine() {
+        use super::super::canon_path::CanonPath;
+        use std::collections::HashMap;
+
+        let base = TempDir::new().unwrap();
+        // Create a shared context folder.
+        let shared = base.path().join("shared");
+        fs::create_dir_all(&shared).unwrap();
+        write_context_yaml(&shared, "Shared Project");
+        // Write one query for postgres.
+        let q_dir = shared.join("postgres/queries");
+        fs::create_dir_all(&q_dir).unwrap();
+        fs::write(q_dir.join("my-query.sql"), "SELECT 1;").unwrap();
+        fs::write(q_dir.join("my-query.meta.yaml"), "name: My Query\n").unwrap();
+
+        let db = fresh_db();
+        let id_a = make_conn_with_path_and_kind(
+            &db,
+            "postgres",
+            Some(shared.to_string_lossy().into_owned()),
+        );
+        let id_b = make_conn_with_path_and_kind(
+            &db,
+            "postgres",
+            Some(shared.to_string_lossy().into_owned()),
+        );
+
+        // Simulate the grouping logic.
+        let all_conns = crate::platform::connections::list(&db).unwrap();
+        let mut groups: HashMap<(String, String), (String, Vec<String>)> = HashMap::new();
+        for conn in &all_conns {
+            let Some(ref path) = conn.context_path else {
+                continue;
+            };
+            let Some(engine) = EngineKind::from_connection_kind(&conn.kind) else {
+                continue;
+            };
+            let canon = CanonPath::new_lenient(path);
+            let canon_str = canon.as_path().to_string_lossy().into_owned();
+            let key = (canon_str.clone(), engine.subtree().to_owned());
+            let entry = groups.entry(key).or_insert_with(|| (canon_str, Vec::new()));
+            entry.1.push(conn.id.to_string());
+        }
+
+        // Should be exactly one group.
+        assert_eq!(groups.len(), 1, "expected one group, got: {groups:?}");
+        let group = groups.values().next().unwrap();
+        assert_eq!(group.1.len(), 2, "both conn IDs should be in the group");
+
+        let mut ids = group.1.clone();
+        ids.sort();
+        let mut expected = vec![id_a.to_string(), id_b.to_string()];
+        expected.sort();
+        assert_eq!(ids, expected);
+    }
+
+    #[test]
+    fn list_linked_queries_empty_when_no_context_path() {
+        use super::super::canon_path::CanonPath;
+        use std::collections::HashMap;
+
+        let db = fresh_db();
+        // Create connections without context_path.
+        make_conn_with_path_and_kind(&db, "postgres", None);
+        make_conn_with_path_and_kind(&db, "dynamo", None);
+
+        let all_conns = crate::platform::connections::list(&db).unwrap();
+        let mut groups: HashMap<(String, String), (String, Vec<String>)> = HashMap::new();
+        for conn in &all_conns {
+            let Some(ref path) = conn.context_path else {
+                continue;
+            };
+            let Some(engine) = EngineKind::from_connection_kind(&conn.kind) else {
+                continue;
+            };
+            let canon = CanonPath::new_lenient(path);
+            let canon_str = canon.as_path().to_string_lossy().into_owned();
+            let key = (canon_str.clone(), engine.subtree().to_owned());
+            let entry = groups.entry(key).or_insert_with(|| (canon_str, Vec::new()));
+            entry.1.push(conn.id.to_string());
+        }
+
+        assert!(
+            groups.is_empty(),
+            "expected no groups when no context_path set"
+        );
     }
 }

@@ -50,6 +50,7 @@ import { ConnectionRail, EngineIcon, deriveEnv, engineLabel } from "./Connection
 import { ConnectionSubtree } from "./ConnectionSubtree";
 import { ConnectionHeaderActions } from "./ConnectionHeaderActions";
 import { useFocusedConnection } from "./FocusedConnectionContext";
+import { SavedQueriesPanel } from "@/modules/saved-queries/SavedQueriesPanel";
 import styles from "./WorkspaceShell.module.css";
 
 // ---------------------------------------------------------------------------
@@ -285,6 +286,7 @@ function WorkspaceSidebar() {
           ) : (
             <p className={styles.emptyState}>Open a connection</p>
           )}
+          <SavedQueriesPanel />
         </div>
       </SidebarScrollContext.Provider>
     </div>

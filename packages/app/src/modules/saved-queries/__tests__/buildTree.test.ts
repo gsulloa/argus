@@ -218,6 +218,28 @@ describe("buildTree", () => {
   // raw field is preserved
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // Regression: non-empty input must produce a non-empty tree (issue #181)
+  // SavedQueriesPanel was not rendered in WorkspaceShell, so the panel never
+  // appeared.  This test guards against the store/buildTree side: a non-empty
+  // saved_queries_list must yield a non-empty tree so that, once the panel IS
+  // mounted, it renders rows rather than the empty-state message.
+  // -------------------------------------------------------------------------
+
+  it("produces a non-empty tree for a non-empty folder+query set (regression #181)", () => {
+    const folder = makeFolder({ id: "reg-f", name: "My Queries", sort_order: 0 });
+    const query = makeQuery({ id: "reg-q", name: "SELECT * FROM users", folder_id: "reg-f" });
+
+    const tree = buildTree([folder], [query]);
+
+    expect(tree.length).toBeGreaterThan(0);
+    const folderNode = tree[0];
+    expect(folderNode?.kind).toBe("folder");
+    if (folderNode?.kind !== "folder") throw new Error("expected folder");
+    expect(folderNode.children.length).toBeGreaterThan(0);
+    expect(folderNode.children[0]?.kind).toBe("query");
+  });
+
   it("preserves the raw backend record on each node", () => {
     const folder = makeFolder({ id: "f", name: "My Folder" });
     const query = makeQuery({ id: "q", name: "My Query", folder_id: "f" });

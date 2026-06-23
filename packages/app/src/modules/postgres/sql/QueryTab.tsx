@@ -22,6 +22,7 @@ import { ConnectionSelector } from "./ConnectionSelector";
 import { useCloseConfirm } from "@/platform/shell/tabs/useCloseConfirm";
 import { savedQueriesStore } from "@/modules/saved-queries/store";
 import { SaveAsModal } from "@/modules/saved-queries/SaveAsModal";
+import { contextApi } from "@/modules/context/api";
 import { useAiReadiness } from "@/modules/ai/useAiReadiness";
 import { usePostgresForm } from "../FormController";
 import { useConnections } from "@/platform/connection-registry/useConnections";
@@ -414,6 +415,10 @@ function QueryTab({ tabId, payload }: InnerProps) {
   const [defaultSaveFolder, setDefaultSaveFolder] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Track the context-query name when a tab was saved to a context folder
+  // (for tabs NOT opened from an existing local saved query).
+  const [contextSavedName, setContextSavedName] = useState<string | null>(null);
+
   // Load the lastUsedFolder setting when opening SaveAs.
   const openSaveAsModal = useCallback(() => {
     // Load last-used folder.
@@ -431,11 +436,8 @@ function QueryTab({ tabId, payload }: InnerProps) {
     // 7.4: No-op if not dirty.
     if (!isDirty(tabState, currentSql)) return;
 
-    if (!tabState.savedQueryId) {
-      // First save — open modal.
-      openSaveAsModal();
-    } else {
-      // Subsequent save — direct overwrite.
+    if (tabState.savedQueryId) {
+      // Tab was opened from an EXISTING local saved query — keep saving via local store.
       if (isSaving) return;
       setIsSaving(true);
       const savedId = tabState.savedQueryId;
@@ -455,38 +457,53 @@ function QueryTab({ tabId, payload }: InnerProps) {
           toast.show(`Failed to save: ${(e as Error).message ?? String(e)}`, "error");
         })
         .finally(() => setIsSaving(false));
+    } else if (contextSavedName && tabState.currentConnectionId) {
+      // Subsequent save to context folder.
+      if (isSaving) return;
+      setIsSaving(true);
+      contextApi
+        .saveQuery(tabState.currentConnectionId, contextSavedName, currentSql, { mode: "update" })
+        .then(() => {
+          toast.show("Saved", "success");
+        })
+        .catch((e) => {
+          toast.show(`Failed to save: ${(e as Error).message ?? String(e)}`, "error");
+        })
+        .finally(() => setIsSaving(false));
+    } else {
+      // First save — open modal.
+      openSaveAsModal();
     }
-  }, [tabState, isSaving, tabActions, openSaveAsModal, setTabTitle, tabId, toast]);
+  }, [tabState, isSaving, contextSavedName, tabActions, openSaveAsModal, setTabTitle, tabId, toast]);
 
-  // SaveAs modal confirm handler.
+  // SaveAs modal confirm handler — routes to context folder (not local DB).
   const handleSaveAsConfirm = useCallback(
-    async ({ name, folderId }: { name: string; folderId: string | null }) => {
+    async ({ name }: { name: string; folderId: string | null }) => {
       const currentSql = editorRef.current?.getSql() ?? "";
+      const connId = tabState.currentConnectionId;
       setShowSaveAs(false);
+      if (!connId) {
+        toast.show("Select a connection before saving", "error");
+        return;
+      }
       try {
-        const q = await savedQueriesStore.createQuery(
-          folderId,
-          name,
-          currentSql,
-          tabState.currentConnectionId ?? undefined,
-        );
-        tabActions.setSaved({
-          savedQueryId: q.id,
-          savedSql: q.sql,
-          savedName: q.name,
-          savedFolderId: q.folder_id,
-        });
-        setTabTitle(tabId, q.name);
-        // Persist lastUsedFolder.
-        if (folderId) {
-          setSetting("savedQueries:lastUsedFolder", folderId).catch(() => {});
-        }
-        toast.show(`Saved as "${q.name}"`, "success");
+        await contextApi.saveQuery(connId, name, currentSql, { mode: "create" });
+        setContextSavedName(name);
+        setTabTitle(tabId, name);
+        toast.show(`Saved as "${name}"`, "success");
       } catch (e) {
-        toast.show(`Failed to save: ${(e as Error).message ?? String(e)}`, "error");
+        const msg = (e as Error).message ?? String(e);
+        if (msg.includes("already exists")) {
+          toast.show(`A query named "${name}" already exists. Choose a different name.`, "error");
+          setShowSaveAs(true);
+        } else if (msg.includes("has no linked context folder")) {
+          toast.show("Link a context folder for this connection to save queries", "info");
+        } else {
+          toast.show(`Failed to save: ${msg}`, "error");
+        }
       }
     },
-    [tabState.currentConnectionId, tabActions, setTabTitle, tabId, toast],
+    [tabState.currentConnectionId, setTabTitle, tabId, toast],
   );
 
   // ---------------------------------------------------------------------------
