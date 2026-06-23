@@ -243,6 +243,16 @@ vi.mock("@/assets/logo.svg", () => ({ default: "" }));
 
 // Import after all mocks.
 import { Sidebar } from "./Sidebar";
+import { ContextEventBusProvider } from "@/modules/context/eventBus";
+
+const renderSidebar = () =>
+  render(
+    React.createElement(
+      ContextEventBusProvider,
+      null,
+      React.createElement(Sidebar),
+    ),
+  );
 
 describe("Sidebar DnD — cross-section drops", () => {
   beforeEach(() => {
@@ -266,7 +276,7 @@ describe("Sidebar DnD — cross-section drops", () => {
 
   it("drag ungrouped connection onto empty group header calls move with group_id", async () => {
     // c1 is ungrouped; g1 is empty.
-    render(React.createElement(Sidebar));
+    renderSidebar();
     expect(capturedOnDragEnd.current).not.toBeNull();
 
     capturedOnDragEnd.current!({
@@ -297,7 +307,7 @@ describe("Sidebar DnD — cross-section drops", () => {
       },
     ];
 
-    render(React.createElement(Sidebar));
+    renderSidebar();
     expect(capturedOnDragEnd.current).not.toBeNull();
 
     capturedOnDragEnd.current!({

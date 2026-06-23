@@ -43,5 +43,13 @@ Inside `<engine>/queries/`, pair a body file with a sibling `.meta.yaml`:
 - `top-customers.meta.yaml` — display name, description, declared params
   with types and defaults, tags.
 
+The extension depends on the engine: `.sql` for Postgres, MySQL, MSSQL, and
+Athena; `.partiql` for DynamoDB; `.cwlogs` for CloudWatch.
+
 Activate a query from the **Context Queries** branch in the sidebar to open
 a tab pre-populated with the body and a parameter strip.
+
+These files can be created, renamed, and deleted from within Argus — use
+**Save query** in the SQL editor toolbar or the **+** button in the Saved
+Queries panel. You can still hand-write or edit the files directly in your
+editor; Argus picks up changes within ~250 ms.
