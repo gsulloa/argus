@@ -5,6 +5,7 @@ import { useConnections } from "@/platform/connection-registry/useConnections";
 import type { Connection } from "@/platform/connection-registry/types";
 import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow";
 import { FormWindowSurface } from "@/platform/shell/FormWindowSurface";
+import { ColorPicker } from "@/platform/connection-registry/ColorPicker";
 import { postgresApi } from "./api";
 import {
   POSTGRES_KIND,
@@ -40,6 +41,7 @@ interface FormState {
   sslmode: SslMode;
   application_name: string;
   read_only: boolean;
+  color: string | null;
 }
 
 function emptyForm(): FormState {
@@ -53,6 +55,7 @@ function emptyForm(): FormState {
     sslmode: "prefer",
     application_name: "",
     read_only: false,
+    color: null,
   };
 }
 
@@ -69,6 +72,7 @@ function fromConnection(c: Connection, mode: Mode): FormState {
     application_name:
       typeof p.application_name === "string" ? p.application_name : "",
     read_only: Boolean(p.read_only),
+    color: c.color ?? null,
   };
 }
 
@@ -244,8 +248,8 @@ export function ConnectionForm({
         // Edit: pass secret only if user typed a new password.
         const patch =
           form.password.length > 0
-            ? { name: trimmedName, params: params as unknown as Record<string, unknown>, secret: form.password }
-            : { name: trimmedName, params: params as unknown as Record<string, unknown> };
+            ? { name: trimmedName, params: params as unknown as Record<string, unknown>, secret: form.password, color: form.color }
+            : { name: trimmedName, params: params as unknown as Record<string, unknown>, color: form.color };
         saved = await update(initial.id, patch);
       } else {
         saved = await create({
@@ -253,6 +257,7 @@ export function ConnectionForm({
           kind: POSTGRES_KIND,
           params: params as unknown as Record<string, unknown>,
           secret: form.password.length > 0 ? form.password : undefined,
+          color: form.color,
         });
       }
       setSave({ kind: "idle" });
@@ -346,6 +351,14 @@ export function ConnectionForm({
                   onChange={(e) => setField("name", e.target.value)}
                 />
                 {errors.name && <div className={styles.error}>{errors.name}</div>}
+              </div>
+
+              <div className={`${styles.field} ${styles.fieldFull}`}>
+                <ColorPicker
+                  label="Color"
+                  value={form.color}
+                  onChange={(next) => setField("color", next)}
+                />
               </div>
 
               <div className={styles.field}>

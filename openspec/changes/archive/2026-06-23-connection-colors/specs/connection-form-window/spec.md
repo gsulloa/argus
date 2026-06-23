@@ -1,38 +1,4 @@
-# connection-form-window Specification
-
-## Purpose
-TBD - created by archiving change independent-modal-windows. Update Purpose after archive.
-## Requirements
-### Requirement: Connection form opens in a dedicated window
-
-The connection create/edit form SHALL be presented in a dedicated native window (label `connection-form`), not as an in-window dialog overlay. Triggering "new connection" (after the kind picker selects an engine) or "edit connection" SHALL open or focus this window. The window SHALL be sized for the form's content and be resizable, and MUST NOT render the form as an overlay inside the Manager or Workspace window.
-
-#### Scenario: New connection opens the form window
-
-- **WHEN** the user selects an engine in the connection kind picker
-- **THEN** a `connection-form` window opens (or is focused if already open) showing the create form for that engine
-- **AND** no connection-form dialog overlay is rendered inside the Manager or Workspace window
-
-#### Scenario: Edit connection opens the form window
-
-- **WHEN** the user triggers "edit" on an existing connection
-- **THEN** the `connection-form` window opens (or is focused if already open) showing the edit form prefilled with that connection's values
-
-### Requirement: Single-instance window with focus
-
-At most one `connection-form` window SHALL exist at a time. Triggering the form while the window already exists MUST reuse and focus the existing window rather than creating a second one. When re-triggered with a different intent (e.g. editing a different connection), the window SHOULD update to reflect the new intent before focusing; if it does not, it MUST at minimum focus the existing window without error.
-
-#### Scenario: Re-trigger focuses the existing window
-
-- **WHEN** a `connection-form` window is already open and the user triggers "new connection" again
-- **THEN** no second `connection-form` window is created
-- **AND** the existing window is shown and focused
-
-#### Scenario: Re-trigger with a new edit target
-
-- **WHEN** a `connection-form` window is open editing connection A and the user triggers "edit" on connection B
-- **THEN** the existing window is focused
-- **AND** the window reflects connection B's values, or otherwise focuses without error
+## MODIFIED Requirements
 
 ### Requirement: Form intent prefill
 
@@ -89,4 +55,3 @@ On successful submission the window SHALL persist the connection via the existin
 - **WHEN** submission fails (e.g. validation rejected by the backend or a keychain error)
 - **THEN** the window stays open and shows the error
 - **AND** the entered values are preserved for retry
-

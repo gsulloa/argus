@@ -17,6 +17,7 @@ pub struct Connection {
     pub sort_order: f64,
     pub context_path: Option<String>,
     pub project_source_path: Option<String>,
+    pub color: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -35,6 +36,8 @@ pub struct ConnectionInput {
     pub context_path: Option<String>,
     #[serde(default)]
     pub project_source_path: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -53,6 +56,10 @@ pub struct ConnectionUpdate {
     /// `Some(Some(p))` = replace, `Some(None)` = clear the path (set to NULL).
     #[serde(default, deserialize_with = "deserialize_project_source_path_field")]
     pub project_source_path: Option<Option<String>>,
+    /// Triple state: missing field = leave color untouched, `Some(Some(k))` = set palette key,
+    /// `Some(None)` = clear the color (set to NULL).
+    #[serde(default, deserialize_with = "deserialize_color_field")]
+    pub color: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,6 +92,14 @@ where
     Ok(v)
 }
 
+fn deserialize_color_field<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v: Option<Option<String>> = Option::<Option<String>>::deserialize(d)?;
+    Ok(v)
+}
+
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -97,6 +112,26 @@ fn validate_name(name: &str) -> AppResult<()> {
         return Err(AppError::Validation("name must not be empty".into()));
     }
     Ok(())
+}
+
+const VALID_COLORS: &[&str] = &[
+    "violet", "blue", "green", "amber", "red", "teal", "pink", "gray",
+];
+
+fn validate_color(color: Option<&str>) -> AppResult<()> {
+    match color {
+        None => Ok(()),
+        Some(key) => {
+            if VALID_COLORS.contains(&key) {
+                Ok(())
+            } else {
+                Err(AppError::Validation(format!(
+                    "color \"{key}\" is not a valid palette key; valid keys are: {}",
+                    VALID_COLORS.join(", ")
+                )))
+            }
+        }
+    }
 }
 
 fn group_exists(conn: &rusqlite::Connection, group_id: &Uuid) -> AppResult<bool> {
@@ -133,6 +168,7 @@ fn row_to_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<Connection> {
     let updated_at: i64 = row.get(7)?;
     let context_path: Option<String> = row.get(8)?;
     let project_source_path: Option<String> = row.get(9)?;
+    let color: Option<String> = row.get(10)?;
 
     Ok(Connection {
         id,
@@ -143,17 +179,18 @@ fn row_to_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<Connection> {
         sort_order,
         context_path,
         project_source_path,
+        color,
         created_at,
         updated_at,
     })
 }
 
 const SELECT_CONNECTION_COLS: &str =
-    "id, name, kind, params_json, group_id, sort_order, created_at, updated_at, context_path, project_source_path";
+    "id, name, kind, params_json, group_id, sort_order, created_at, updated_at, context_path, project_source_path, color";
 
 pub fn list(conn: &rusqlite::Connection) -> AppResult<Vec<Connection>> {
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.name, c.kind, c.params_json, c.group_id, c.sort_order, c.created_at, c.updated_at, c.context_path, c.project_source_path \
+        "SELECT c.id, c.name, c.kind, c.params_json, c.group_id, c.sort_order, c.created_at, c.updated_at, c.context_path, c.project_source_path, c.color \
          FROM connections c \
          LEFT JOIN connection_groups g ON g.id = c.group_id \
          ORDER BY (c.group_id IS NULL) ASC, COALESCE(g.sort_order, 0) ASC, c.sort_order ASC",
@@ -168,6 +205,7 @@ pub fn list(conn: &rusqlite::Connection) -> AppResult<Vec<Connection>> {
 
 pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<Connection> {
     validate_name(&input.name)?;
+    validate_color(input.color.as_deref())?;
     if let Some(g) = input.group_id.as_ref() {
         if !group_exists(conn, g)? {
             return Err(AppError::NotFound(format!(
@@ -198,8 +236,8 @@ pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<
     let sort_order = max + 1.0;
 
     conn.execute(
-        "INSERT INTO connections (id, name, kind, params_json, group_id, sort_order, context_path, project_source_path, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+        "INSERT INTO connections (id, name, kind, params_json, group_id, sort_order, context_path, project_source_path, color, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
         params![
             id.as_bytes().to_vec(),
             input.name.trim(),
@@ -209,6 +247,7 @@ pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<
             sort_order,
             input.context_path,
             input.project_source_path,
+            input.color,
             now,
         ],
     )?;
@@ -228,6 +267,7 @@ pub fn create(conn: &rusqlite::Connection, input: ConnectionInput) -> AppResult<
         sort_order,
         context_path: input.context_path.clone(),
         project_source_path: input.project_source_path.clone(),
+        color: input.color.clone(),
         created_at: now,
         updated_at: now,
     })
@@ -264,11 +304,18 @@ pub fn update(
         Some(v) => v,
         None => current.project_source_path.clone(),
     };
+    let new_color = match update.color {
+        Some(v) => {
+            validate_color(v.as_deref())?;
+            v
+        }
+        None => current.color.clone(),
+    };
     current.updated_at = now_unix();
 
     let params_json = serde_json::to_string(&current.params)?;
     conn.execute(
-        "UPDATE connections SET name = ?2, params_json = ?3, updated_at = ?4, context_path = ?5, project_source_path = ?6 WHERE id = ?1",
+        "UPDATE connections SET name = ?2, params_json = ?3, updated_at = ?4, context_path = ?5, project_source_path = ?6, color = ?7 WHERE id = ?1",
         params![
             current.id.as_bytes().to_vec(),
             current.name,
@@ -276,10 +323,12 @@ pub fn update(
             current.updated_at,
             new_context_path,
             new_project_source_path,
+            new_color,
         ],
     )?;
     current.context_path = new_context_path;
     current.project_source_path = new_project_source_path;
+    current.color = new_color;
 
     match update.secret {
         Some(Some(s)) => {
@@ -461,6 +510,7 @@ mod tests {
                 secret: Some("hunter2".into()),
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -487,6 +537,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap_err();
@@ -507,6 +558,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap_err();
@@ -534,6 +586,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -561,6 +614,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -602,6 +656,7 @@ mod tests {
                 secret: Some("s".into()),
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -640,6 +695,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -684,6 +740,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -724,6 +781,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -737,6 +795,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -750,6 +809,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -770,6 +830,7 @@ mod tests {
                 secret: Some("a".into()),
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -816,6 +877,7 @@ mod tests {
                 secret: Some("s".into()),
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -851,6 +913,7 @@ mod tests {
                 secret: Some("old".into()),
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -883,6 +946,7 @@ mod tests {
                 secret: None,
                 context_path: Some("/Users/me/billing/ctx".into()),
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -907,6 +971,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -938,6 +1003,7 @@ mod tests {
                 secret: None,
                 context_path: Some("/x".into()),
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -969,6 +1035,7 @@ mod tests {
                 secret: None,
                 context_path: Some("/x".into()),
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -1002,6 +1069,7 @@ mod tests {
                 secret: None,
                 context_path: Some("/tmp/argus-context-test-fake".into()),
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -1026,6 +1094,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: Some("/Users/me/app".into()),
+                color: None,
             },
         )
         .unwrap();
@@ -1050,6 +1119,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();
@@ -1081,6 +1151,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: Some("/repo".into()),
+                color: None,
             },
         )
         .unwrap();
@@ -1112,6 +1183,7 @@ mod tests {
                 secret: None,
                 context_path: None,
                 project_source_path: Some("/repo".into()),
+                color: None,
             },
         )
         .unwrap();
@@ -1126,5 +1198,196 @@ mod tests {
         )
         .unwrap();
         assert_eq!(updated.project_source_path.as_deref(), Some("/repo"));
+    }
+
+    // ---- color tests ----
+
+    #[test]
+    fn create_with_valid_color_persists_it() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "teal-conn".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: None,
+                color: Some("teal".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(made.color.as_deref(), Some("teal"));
+        let listed = list(&c).unwrap();
+        assert_eq!(listed[0].color.as_deref(), Some("teal"));
+    }
+
+    #[test]
+    fn create_with_invalid_color_is_rejected() {
+        let c = fresh();
+        let err = create(
+            &c,
+            ConnectionInput {
+                name: "bad-color".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: None,
+                color: Some("neon".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+        assert!(list(&c).unwrap().is_empty());
+    }
+
+    #[test]
+    fn create_without_color_defaults_to_null() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "no-color".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: None,
+                color: None,
+            },
+        )
+        .unwrap();
+        assert!(made.color.is_none());
+    }
+
+    #[test]
+    fn update_sets_color() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: None,
+                color: None,
+            },
+        )
+        .unwrap();
+        assert!(made.color.is_none());
+        let updated = update(
+            &c,
+            made.id,
+            ConnectionUpdate {
+                color: Some(Some("pink".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.color.as_deref(), Some("pink"));
+        let listed = list(&c).unwrap();
+        assert_eq!(listed[0].color.as_deref(), Some("pink"));
+    }
+
+    #[test]
+    fn update_clears_color() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: None,
+                color: Some("pink".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(made.color.as_deref(), Some("pink"));
+        let updated = update(
+            &c,
+            made.id,
+            ConnectionUpdate {
+                color: Some(None),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(updated.color.is_none());
+        let listed = list(&c).unwrap();
+        assert!(listed[0].color.is_none());
+    }
+
+    #[test]
+    fn update_omits_color_leaves_color_unchanged() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: None,
+                color: Some("amber".into()),
+            },
+        )
+        .unwrap();
+        let updated = update(
+            &c,
+            made.id,
+            ConnectionUpdate {
+                name: Some("renamed".into()),
+                // color field omitted — leave unchanged
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.color.as_deref(), Some("amber"));
+    }
+
+    #[test]
+    fn update_rejects_invalid_color() {
+        let c = fresh();
+        let made = create(
+            &c,
+            ConnectionInput {
+                name: "x".into(),
+                kind: "postgres".into(),
+                params: JsonValue::Null,
+                group_id: None,
+                secret: None,
+                context_path: None,
+                project_source_path: None,
+                color: Some("blue".into()),
+            },
+        )
+        .unwrap();
+        let err = update(
+            &c,
+            made.id,
+            ConnectionUpdate {
+                color: Some(Some("neon".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+        // Row should be unchanged
+        let listed = list(&c).unwrap();
+        assert_eq!(listed[0].color.as_deref(), Some("blue"));
     }
 }

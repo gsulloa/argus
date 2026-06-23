@@ -1528,6 +1528,7 @@ mod tests {
                 secret: None,
                 context_path,
                 project_source_path,
+                color: None,
             },
         )
         .unwrap()
@@ -1866,6 +1867,7 @@ mod tests {
                 secret: None,
                 context_path,
                 project_source_path: None,
+                color: None,
             },
         )
         .unwrap();

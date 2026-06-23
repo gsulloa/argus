@@ -6,6 +6,7 @@ import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow"
 import type { ConnectionUpdate } from "@/platform/connection-registry/types";
 import type { Connection } from "@/platform/connection-registry/types";
 import { FormWindowSurface } from "@/platform/shell/FormWindowSurface";
+import { ColorPicker } from "@/platform/connection-registry/ColorPicker";
 import { dynamoApi } from "./api";
 import { classifyDynamoError, extractSsoCommand } from "./errors";
 import { AWS_REGIONS } from "./regions";
@@ -55,6 +56,7 @@ interface FormState {
   matchPrefix: string;
   matchSuffix: string;
   matchRegex: string;
+  color: string | null;
 }
 
 function emptyForm(): FormState {
@@ -72,6 +74,7 @@ function emptyForm(): FormState {
     matchPrefix: "",
     matchSuffix: "",
     matchRegex: "",
+    color: null,
   };
 }
 
@@ -93,6 +96,7 @@ function fromConnection(c: Connection, modeKind: FormMode["kind"]): FormState {
     matchPrefix: tm?.prefix ?? "",
     matchSuffix: tm?.suffix_pattern ?? "",
     matchRegex: tm?.regex ?? "",
+    color: c.color ?? null,
   };
 }
 
@@ -361,11 +365,13 @@ export function DynamoConnectionForm({
           kind: DYNAMO_KIND,
           params: params as unknown as Record<string, unknown>,
           ...(secret ? { secret } : {}),
+          color: form.color,
         });
       } else if (mode.kind === "edit") {
         const patch: ConnectionUpdate = {
           name: form.name.trim(),
           params: params as unknown as Record<string, unknown>,
+          color: form.color,
         };
         // §9.5: Only set secret if user actually filled at least one credential field
         if (
@@ -456,6 +462,17 @@ export function DynamoConnectionForm({
                 {!form.name.trim() && (
                   <div className={styles.error}>Required</div>
                 )}
+              </div>
+            )}
+
+            {/* Color picker — hidden in credentials-only mode */}
+            {!isCredentialsOnly && (
+              <div className={`${styles.field} ${styles.fieldFull}`}>
+                <ColorPicker
+                  label="Color"
+                  value={form.color}
+                  onChange={(next) => setField("color", next)}
+                />
               </div>
             )}
 

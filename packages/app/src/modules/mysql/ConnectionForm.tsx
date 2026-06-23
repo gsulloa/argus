@@ -5,6 +5,7 @@ import { useConnections } from "@/platform/connection-registry/useConnections";
 import type { Connection } from "@/platform/connection-registry/types";
 import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow";
 import { FormWindowSurface } from "@/platform/shell/FormWindowSurface";
+import { ColorPicker } from "@/platform/connection-registry/ColorPicker";
 import { mysqlApi } from "./api";
 import {
   MYSQL_KIND,
@@ -39,6 +40,7 @@ interface FormState {
   password: string;
   ssl_mode: SslMode;
   read_only: boolean;
+  color: string | null;
 }
 
 function emptyForm(): FormState {
@@ -51,6 +53,7 @@ function emptyForm(): FormState {
     password: "",
     ssl_mode: "preferred",
     read_only: false,
+    color: null,
   };
 }
 
@@ -65,6 +68,7 @@ function fromConnection(c: Connection, mode: Mode): FormState {
     password: "",
     ssl_mode: (p.ssl_mode as SslMode | undefined) ?? "preferred",
     read_only: Boolean(p.read_only),
+    color: c.color ?? null,
   };
 }
 
@@ -233,8 +237,8 @@ export function MysqlConnectionForm({
         // Edit: pass secret only if user typed a new password.
         const patch =
           form.password.length > 0
-            ? { name: trimmedName, params: params as unknown as Record<string, unknown>, secret: form.password }
-            : { name: trimmedName, params: params as unknown as Record<string, unknown> };
+            ? { name: trimmedName, params: params as unknown as Record<string, unknown>, secret: form.password, color: form.color }
+            : { name: trimmedName, params: params as unknown as Record<string, unknown>, color: form.color };
         saved = await update(initial.id, patch);
       } else {
         saved = await create({
@@ -242,6 +246,7 @@ export function MysqlConnectionForm({
           kind: MYSQL_KIND,
           params: params as unknown as Record<string, unknown>,
           secret: form.password.length > 0 ? form.password : undefined,
+          color: form.color,
         });
       }
       setSave({ kind: "idle" });
@@ -335,6 +340,14 @@ export function MysqlConnectionForm({
                   onChange={(e) => setField("name", e.target.value)}
                 />
                 {errors.name && <div className={styles.error}>{errors.name}</div>}
+              </div>
+
+              <div className={`${styles.field} ${styles.fieldFull}`}>
+                <ColorPicker
+                  label="Color"
+                  value={form.color}
+                  onChange={(next) => setField("color", next)}
+                />
               </div>
 
               <div className={styles.field}>

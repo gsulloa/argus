@@ -11,6 +11,8 @@ export interface Connection {
   /** Local, per-connection path to the app source repo read by the AI model
    * inspector. Never stored in the shared context.yaml. */
   project_source_path: string | null;
+  /** User-chosen palette color key for this connection, or null if unset. */
+  color: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -23,6 +25,8 @@ export interface ConnectionInput {
   secret?: string | null;
   context_path?: string | null;
   project_source_path?: string | null;
+  /** Omit to leave unchanged. `null` clears. */
+  color?: string | null;
 }
 
 export interface ConnectionUpdate {
@@ -34,6 +38,8 @@ export interface ConnectionUpdate {
   context_path?: string | null;
   /** Omit to leave unchanged. `null` clears. */
   project_source_path?: string | null;
+  /** Omit to leave unchanged. `null` clears. */
+  color?: string | null;
 }
 
 export interface ConnectionMove {
