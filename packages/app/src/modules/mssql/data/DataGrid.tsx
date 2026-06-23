@@ -215,6 +215,22 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
       }
     }
 
+    // ⌘A / Ctrl+A — select all loaded rows. Only fires when a selection is
+    // already active (row range or active cell) and focus is not in a native
+    // editing context; otherwise the browser's select-all-text applies.
+    if ((e.metaKey || e.ctrlKey) && (e.key === "a" || e.key === "A")) {
+      const target = e.target as HTMLElement;
+      const tag = target.tagName.toUpperCase();
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) {
+        return;
+      }
+      if ((selection.anchor === null && activeCell === null) || rows.length === 0) return;
+      e.preventDefault();
+      setActiveCell(null);
+      onSelectionChange({ anchor: 0, active: rows.length - 1 });
+      return;
+    }
+
     if (e.key === "Escape") {
       if (activeCell !== null) {
         setActiveCell(null);
