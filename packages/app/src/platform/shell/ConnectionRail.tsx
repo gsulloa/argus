@@ -12,6 +12,8 @@
  *   Decision 4  — clicking an item calls setFocused(id).
  *   spec/connection-rail — all rail requirements.
  */
+import { useMemo } from "react";
+import type React from "react";
 import { Plus } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { invoke } from "@tauri-apps/api/core";
@@ -46,6 +48,11 @@ import {
   cloudwatchApi,
 } from "@/modules/cloudwatch";
 import { useOpenConnections } from "@/platform/connection-registry/useOpenConnections";
+import { useConnections } from "@/platform/connection-registry/useConnections";
+import {
+  isConnectionColor,
+  connectionColorVar,
+} from "@/platform/connection-registry/colors";
 import { useFocusedConnection } from "./FocusedConnectionContext";
 import styles from "./ConnectionRail.module.css";
 
@@ -122,7 +129,16 @@ async function disconnectConnection(id: string, kind: string): Promise<void> {
 
 export function ConnectionRail() {
   const { items } = useOpenConnections();
+  const { items: persistedConnections } = useConnections();
   const { focusedConnectionId, setFocused } = useFocusedConnection();
+
+  // Build an id→color map from the persisted connection list so we can resolve
+  // explicit color keys for each open rail item without exposing color on the
+  // lightweight OpenConnection type.
+  const colorMap = useMemo<Map<string, string | null>>(
+    () => new Map(persistedConnections.map((c) => [c.id, c.color])),
+    [persistedConnections],
+  );
 
   async function handleClose(id: string, kind: string) {
     await disconnectConnection(id, kind);
@@ -142,8 +158,17 @@ export function ConnectionRail() {
   return (
     <nav className={styles.rail} aria-label="Open connections">
       {items.map((conn) => {
-        const env = deriveEnv(conn.name);
         const isFocused = conn.id === focusedConnectionId;
+
+        // Decision 4: explicit color key wins; fall back to name heuristic.
+        const persistedColor = colorMap.get(conn.id);
+        const hasExplicitColor = isConnectionColor(persistedColor);
+        const dotStyle = hasExplicitColor
+          ? ({ "--dot-color": connectionColorVar(persistedColor) } as React.CSSProperties)
+          : undefined;
+        // Provisional heuristic fallback — kept as the fallback for uncolored connections.
+        const env = hasExplicitColor ? undefined : deriveEnv(conn.name);
+
         return (
           <ContextMenu.Root key={conn.id}>
             <ContextMenu.Trigger asChild>
@@ -158,7 +183,13 @@ export function ConnectionRail() {
               >
                 <EngineIcon kind={conn.kind} />
                 <span className={styles.itemLabel}>{conn.name}</span>
-                <span className={styles.envDot} data-env={env} aria-hidden="true" />
+                <span
+                  className={styles.envDot}
+                  data-color={hasExplicitColor ? persistedColor : undefined}
+                  data-env={env}
+                  style={dotStyle}
+                  aria-hidden="true"
+                />
               </button>
             </ContextMenu.Trigger>
             <ContextMenu.Portal>

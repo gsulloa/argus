@@ -24,12 +24,17 @@ The Workspace SHALL present a vertical **connection rail** as its level-1 naviga
 
 ### Requirement: Rail item appearance
 
-Each rail item SHALL display the connection's engine icon, an environment-color indicator, and the connection **name in small text beneath the icon** (truncated with an ellipsis when it does not fit; the full name remains available on hover). The visual treatment MUST follow `DESIGN.md` (engine icons, small `--text-xs`-scale label, no decorative gradients, restrained color). The currently focused item MUST be visually distinguished from the others.
+Each rail item SHALL display the connection's engine icon, a color indicator, and the connection **name in small text beneath the icon** (truncated with an ellipsis when it does not fit; the full name remains available on hover). The color indicator SHALL render the connection's explicit color when one is assigned; when the connection has no explicit color, the indicator SHALL fall back to the name-based environment heuristic (production names → warning color, otherwise neutral). The visual treatment MUST follow `DESIGN.md` (engine icons, small `--text-xs`-scale label, no decorative gradients, restrained color — the indicator is a small dot, never a full-item fill). The currently focused item MUST be visually distinguished from the others.
 
-#### Scenario: Engine icon, environment color, and small name label
+#### Scenario: Engine icon, explicit color, and small name label
 
-- **WHEN** the rail renders an open Postgres connection marked as a production environment
-- **THEN** the item shows the Postgres engine icon, the production environment color, and the connection name in a small label beneath the icon
+- **WHEN** the rail renders an open Postgres connection with the explicit color `red`
+- **THEN** the item shows the Postgres engine icon, a red indicator dot, and the connection name in a small label beneath the icon
+
+#### Scenario: Uncolored connection falls back to the environment heuristic
+
+- **WHEN** the rail renders an open connection that has no explicit color and whose name marks it as a production environment
+- **THEN** the item's indicator dot uses the production environment (warning) color
 
 #### Scenario: Long name is truncated
 

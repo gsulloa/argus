@@ -5,6 +5,7 @@ import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow"
 import type { ConnectionUpdate } from "@/platform/connection-registry/types";
 import type { Connection } from "@/platform/connection-registry/types";
 import { FormWindowSurface } from "@/platform/shell/FormWindowSurface";
+import { ColorPicker } from "@/platform/connection-registry/ColorPicker";
 import { athenaApi } from "./api";
 import { AWS_REGIONS } from "@/modules/dynamo/regions";
 import {
@@ -41,6 +42,7 @@ interface FormState {
   accessKeyId: string;
   secretAccessKey: string;
   sessionToken: string;
+  color: string | null;
 }
 
 function emptyForm(): FormState {
@@ -55,6 +57,7 @@ function emptyForm(): FormState {
     accessKeyId: "",
     secretAccessKey: "",
     sessionToken: "",
+    color: null,
   };
 }
 
@@ -71,6 +74,7 @@ function fromConnection(c: Connection, modeKind: FormMode["kind"]): FormState {
     accessKeyId: "",
     secretAccessKey: "",
     sessionToken: "",
+    color: c.color ?? null,
   };
 }
 
@@ -297,11 +301,13 @@ export function AthenaConnectionForm({
           kind: ATHENA_KIND,
           params: params as unknown as Record<string, unknown>,
           ...(secret ? { secret } : {}),
+          color: form.color,
         });
       } else if (mode.kind === "edit") {
         const patch: ConnectionUpdate = {
           name: form.name.trim(),
           params: params as unknown as Record<string, unknown>,
+          color: form.color,
         };
         if (
           form.auth === "access_keys" &&
@@ -374,6 +380,15 @@ export function AthenaConnectionForm({
               {!form.name.trim() && (
                 <div className={styles.error}>Required</div>
               )}
+            </div>
+
+            {/* Color */}
+            <div className={`${styles.field} ${styles.fieldFull}`}>
+              <ColorPicker
+                label="Color"
+                value={form.color}
+                onChange={(next) => setField("color", next)}
+              />
             </div>
 
             {/* Access keys credential fields */}

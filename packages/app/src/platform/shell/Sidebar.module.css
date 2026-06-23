@@ -355,6 +355,22 @@
   display: inline-flex;
 }
 
+/**
+ * Connection color swatch — small dot shown adjacent to the engine icon when a
+ * connection has an explicit color key assigned (Decision 5).
+ * Rendered inline beside .icon; does not affect the icon, activeDot, or RO badge.
+ * Size is deliberately small (8 px) — a label-level color cue, never a CTA.
+ */
+.colorSwatch {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-sm, 3px);
+  border: 1px solid var(--border);
+  background: var(--swatch-color);
+  flex-shrink: 0;
+  display: inline-block;
+}
+
 .itemSubtitle {
   font-size: 10.5px;
   color: var(--text-subtle);
