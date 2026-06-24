@@ -59,6 +59,40 @@ one filesystem watcher (path-keyed registry); edits in your editor refresh
 the UI within ~250 ms. Postgres, MySQL, MSSQL, DynamoDB, Athena, and CloudWatch ship with full sync support.
 CloudWatch log groups sync to `cloudwatch/groups/<name>.md`, with `/` in group names folded to `__` in the filename (e.g. `/aws/lambda/fn` → `__aws__lambda__fn.md`).
 
+### Query authoring
+
+Prefab queries can now be created, renamed, and deleted from within Argus —
+you no longer need to write the files by hand.
+
+**Where to create a query:** use **Save query** in the SQL editor toolbar, or
+the **+** button in the **Saved Queries** panel. Both write the new query into
+the connection's linked context folder at `<root>/<engine>/queries/`. If the
+connection has no linked folder, the action first guides you to link or create
+one.
+
+**File format.** Each query is stored as a pair of sibling files under
+`<root>/<engine>/queries/`:
+
+| File | Purpose |
+|------|---------|
+| `<slug>.<ext>` | Query body (`sql` for Postgres/MySQL/MSSQL/Athena; `partiql` for DynamoDB; `cwlogs` for CloudWatch) |
+| `<slug>.meta.yaml` | Metadata: `name`, `description`, `params`, `tags` |
+
+The slug is derived from the query name by keeping `[A-Za-z0-9_-]`, collapsing
+other character runs to `-`, and trimming leading/trailing `-`.
+
+**Shared across workspaces.** Because the files live on disk inside your
+project repo, any other Argus connection linked to the same context folder sees
+the query immediately — no sync step needed.
+
+**Rename and delete** are available from the **Saved Queries** panel context
+menu. Renaming a query renames both sibling files atomically. Deleting removes
+both files from disk.
+
+**Legacy local saved queries** (queries saved before context folders existed, or
+when no folder was linked) remain visible in the Saved Queries panel and fully
+editable. New saves always go to the context folder.
+
 ### DynamoDB model docs (Single-Table Design)
 
 For Single-Table Design tables, you can add **model docs** that describe the

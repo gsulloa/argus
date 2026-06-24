@@ -4,10 +4,12 @@ import type {
   AiPayload,
   ContextManifest,
   KnownFolder,
+  LinkedQueryGroup,
   ObjectDoc,
   ObjectListItem,
   QueryDoc,
   QueryListItem,
+  SaveQueryResult,
   SyncReport,
 } from "./types";
 
@@ -52,4 +54,34 @@ export const contextApi = {
 
   revealPath: (path: string) =>
     call<void>("context_reveal_path", { path }),
+
+  saveQuery: (
+    connectionId: string,
+    name: string,
+    sql: string,
+    opts?: {
+      description?: string;
+      params?: QueryListItem["params"];
+      tags?: string[];
+      mode?: "create" | "update";
+    },
+  ) =>
+    call<SaveQueryResult>("context_save_query", {
+      connectionId,
+      name,
+      sql,
+      description: opts?.description,
+      params: opts?.params,
+      tags: opts?.tags,
+      mode: opts?.mode,
+    }),
+
+  renameQuery: (connectionId: string, fromName: string, toName: string) =>
+    call<SaveQueryResult>("context_rename_query", { connectionId, fromName, toName }),
+
+  deleteQuery: (connectionId: string, name: string) =>
+    call<{ deleted: boolean }>("context_delete_query", { connectionId, name }),
+
+  listLinkedQueries: () =>
+    call<LinkedQueryGroup[]>("context_list_linked_queries"),
 };

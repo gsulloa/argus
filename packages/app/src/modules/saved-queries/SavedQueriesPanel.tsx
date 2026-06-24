@@ -13,7 +13,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { FileCode2, Folder, FolderOpen, Plus } from "lucide-react";
+import { ChevronRight, Code2, FileCode2, Folder, FolderOpen, Plus } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -23,11 +23,19 @@ import { useSidebarScrollRef } from "@/platform/shell/sidebarScroll";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useToast } from "@/platform/toast";
 import { getSetting, setSetting } from "@/platform/settings/api";
+import { useActiveConnections } from "@/modules/postgres/useActiveConnections";
+import { useActiveMysqlConnections } from "@/modules/mysql/useActiveConnections";
+import { useActiveMssqlConnections } from "@/modules/mssql/useActiveConnections";
+import { contextApi } from "@/modules/context/api";
+import { useLinkedContextQueries } from "@/modules/context/hooks";
+import { openContextQuery } from "@/modules/context/openContextQuery";
+import type { LinkedQueryGroup, QueryListItem } from "@/modules/context/types";
 import { useSavedQueries } from "./useSavedQueries";
 import { openSavedQuery, openSavedQueryInNew } from "./openSavedQuery";
 import { FolderPicker } from "./FolderPicker";
 import type { FolderNode, QueryNode, SavedQueryFolder, TreeNode as SqTreeNode } from "./types";
 import dialogStyles from "@/platform/shell/Dialog.module.css";
+import ctxStyles from "@/modules/context/components/ContextQueriesBranch.module.css";
 import styles from "./SavedQueriesPanel.module.css";
 import { noAutoCorrectProps } from "../shared/text-input-hygiene";
 
@@ -403,6 +411,258 @@ function RenameInput({ initialName, onCommit, onCancel }: RenameInputProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Name-prompt dialog (used for "New context query" creation)
+// ---------------------------------------------------------------------------
+
+interface NamePromptDialogProps {
+  open: boolean;
+  title: string;
+  placeholder?: string;
+  onConfirm: (name: string) => void;
+  onCancel: () => void;
+}
+
+function NamePromptDialog({ open, title, placeholder = "Query name", onConfirm, onCancel }: NamePromptDialogProps) {
+  const [value, setValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      setValue("");
+      setTimeout(() => inputRef.current?.focus(), 0);
+    }
+  }, [open]);
+
+  function commit() {
+    const trimmed = value.trim();
+    if (trimmed) onConfirm(trimmed);
+  }
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(o) => !o && onCancel()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className={dialogStyles.overlay} />
+        <Dialog.Content className={dialogStyles.content}>
+          <Dialog.Title className={dialogStyles.title}>{title}</Dialog.Title>
+          <input
+            {...noAutoCorrectProps}
+            ref={inputRef}
+            type="text"
+            className={styles.renameInput}
+            style={{ width: "100%", marginTop: 8, marginBottom: 8 }}
+            placeholder={placeholder}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") { e.preventDefault(); commit(); }
+              if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+            }}
+          />
+          <div className={dialogStyles.footer}>
+            <button type="button" onClick={onCancel}>Cancel</button>
+            <button
+              type="button"
+              className={dialogStyles.primary}
+              disabled={!value.trim()}
+              onClick={commit}
+            >
+              Create
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Context queries section (shows linked context-folder queries grouped by
+// project + engine, below the local saved-queries tree)
+// ---------------------------------------------------------------------------
+
+const ENGINE_LABEL: Record<string, string> = {
+  postgres: "PostgreSQL",
+  mysql: "MySQL",
+  mssql: "SQL Server",
+  dynamo: "DynamoDB",
+  cloudwatch: "CloudWatch",
+  athena: "Athena",
+};
+
+interface ContextQueryRowProps {
+  group: LinkedQueryGroup;
+  query: QueryListItem;
+  connectionName: string;
+  onOpen: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}
+
+function ContextQueryRow({ query, onOpen, onRename, onDelete }: ContextQueryRowProps) {
+  const isClickable = query !== undefined;
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>
+        <button
+          type="button"
+          className={ctxStyles.queryRow}
+          title={query.description ?? query.name}
+          onClick={isClickable ? onOpen : undefined}
+        >
+          <span className={ctxStyles.queryIcon}><Code2 size={12} strokeWidth={1.5} /></span>
+          <span className={ctxStyles.queryName}>{query.name}</span>
+        </button>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className={styles.contextMenu}>
+          <ContextMenu.Item className={styles.contextItem} onSelect={onOpen}>
+            Open
+          </ContextMenu.Item>
+          <ContextMenu.Separator className={styles.contextSeparator} />
+          <ContextMenu.Item className={styles.contextItem} onSelect={onRename}>
+            Rename
+          </ContextMenu.Item>
+          <ContextMenu.Separator className={styles.contextSeparator} />
+          <ContextMenu.Item
+            className={`${styles.contextItem} ${styles.contextItemDanger}`}
+            onSelect={onDelete}
+          >
+            Delete
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
+  );
+}
+
+interface ContextQueriesSectionProps {
+  groups: LinkedQueryGroup[];
+  /** Map of connectionId -> connectionName for display */
+  connectionNames: Map<string, string>;
+  activePostgresIds: Set<string>;
+  activeMysqlIds: Set<string>;
+  activeMssqlIds: Set<string>;
+  onRenameQuery: (group: LinkedQueryGroup, query: QueryListItem) => void;
+  onDeleteQuery: (group: LinkedQueryGroup, query: QueryListItem) => void;
+}
+
+function pickRepresentativeConnection(
+  group: LinkedQueryGroup,
+  activePostgresIds: Set<string>,
+  activeMysqlIds: Set<string>,
+  activeMssqlIds: Set<string>,
+): string {
+  // Prefer an active connection from the group
+  for (const id of group.connection_ids) {
+    if (activePostgresIds.has(id) || activeMysqlIds.has(id) || activeMssqlIds.has(id)) {
+      return id;
+    }
+  }
+  return group.representative_connection_id;
+}
+
+function ContextQueriesSection({
+  groups,
+  connectionNames,
+  activePostgresIds,
+  activeMysqlIds,
+  activeMssqlIds,
+  onRenameQuery,
+  onDeleteQuery,
+}: ContextQueriesSectionProps) {
+  const tabs = useTabs();
+  const [expanded, setExpanded] = useState(true);
+
+  if (groups.length === 0) return null;
+
+  // Group by project_name
+  const byProject = new Map<string, LinkedQueryGroup[]>();
+  for (const g of groups) {
+    const list = byProject.get(g.project_name) ?? [];
+    list.push(g);
+    byProject.set(g.project_name, list);
+  }
+
+  return (
+    <div className={ctxStyles.root} style={{ marginTop: 4, borderTop: "1px solid var(--border)", paddingTop: 4 }}>
+      <button
+        type="button"
+        className={ctxStyles.header}
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+      >
+        <span className={ctxStyles.caret} data-expanded={String(expanded)}>
+          <ChevronRight size={11} strokeWidth={2} />
+        </span>
+        <span className={ctxStyles.label}>Context Queries</span>
+      </button>
+
+      {expanded && (
+        <div className={ctxStyles.body}>
+          {Array.from(byProject.entries()).map(([projectName, projectGroups]) => (
+            <div key={projectName}>
+              {/* Project subheader */}
+              <div style={{
+                fontSize: 10,
+                fontWeight: 600,
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                color: "var(--text-subtle)",
+                padding: "4px 8px 2px 18px",
+              }}>
+                {projectName}
+              </div>
+              {projectGroups.map((group) => {
+                const repConnId = pickRepresentativeConnection(group, activePostgresIds, activeMysqlIds, activeMssqlIds);
+                const repConnName = connectionNames.get(repConnId) ?? repConnId;
+                const engineLabel = ENGINE_LABEL[group.engine] ?? group.engine;
+                const sorted = [...group.queries].sort((a, b) => a.name.localeCompare(b.name));
+                const isNoOp = group.engine === "cloudwatch";
+
+                return (
+                  <div key={`${group.canonical_root}:${group.engine}`}>
+                    {/* Engine subheader */}
+                    <div style={{
+                      fontSize: 10,
+                      color: "var(--text-subtle)",
+                      padding: "2px 8px 2px 26px",
+                      fontStyle: "italic",
+                    }}>
+                      {engineLabel}
+                    </div>
+                    {sorted.map((query) => (
+                      <ContextQueryRow
+                        key={query.name}
+                        group={group}
+                        query={query}
+                        connectionName={repConnName}
+                        onOpen={() => {
+                          if (isNoOp) return;
+                          void openContextQuery(
+                            tabs,
+                            repConnId,
+                            repConnName,
+                            group.engine as Parameters<typeof openContextQuery>[3],
+                            query,
+                          );
+                        }}
+                        onRename={() => onRenameQuery(group, query)}
+                        onDelete={() => onDeleteQuery(group, query)}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main panel
 // ---------------------------------------------------------------------------
 
@@ -426,6 +686,79 @@ export function SavedQueriesPanel() {
   const { items: connections } = useConnections();
   const toast = useToast();
   const sidebarScrollRef = useSidebarScrollRef();
+
+  // ---- Context queries state ----
+  const { data: linkedGroups, refresh: refreshLinked } = useLinkedContextQueries();
+  const { items: activePgItems } = useActiveConnections();
+  const { items: activeMysqlItems } = useActiveMysqlConnections();
+  const { items: activeMssqlItems } = useActiveMssqlConnections();
+
+  const activePostgresIds = useMemo(() => new Set(activePgItems.map((c) => c.id)), [activePgItems]);
+  const activeMysqlIds = useMemo(() => new Set(activeMysqlItems.map((c) => c.id)), [activeMysqlItems]);
+  const activeMssqlIds = useMemo(() => new Set(activeMssqlItems.map((c) => c.id)), [activeMssqlItems]);
+
+  const connectionNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of connections) m.set(c.id, c.name);
+    return m;
+  }, [connections]);
+
+  // ---- Context query rename/delete state ----
+  const [ctxRenameTarget, setCtxRenameTarget] = useState<{ group: LinkedQueryGroup; query: QueryListItem } | null>(null);
+  const [ctxDeleteTarget, setCtxDeleteTarget] = useState<{ group: LinkedQueryGroup; query: QueryListItem } | null>(null);
+  const [ctxRenameNewName, setCtxRenameNewName] = useState("");
+
+  // ---- New context query creation state ----
+  // When multiple targets exist, we first ask user to pick one.
+  const [showNewCtxQuery, setShowNewCtxQuery] = useState(false);
+  const [newCtxQueryTargetGroup, setNewCtxQueryTargetGroup] = useState<LinkedQueryGroup | null>(null);
+  const [showCtxTargetPicker, setShowCtxTargetPicker] = useState(false);
+
+  // Distinct targets for new query creation (by canonical_root+engine)
+  const ctxNewTargets = useMemo(() => {
+    const seen = new Set<string>();
+    const out: LinkedQueryGroup[] = [];
+    for (const g of linkedGroups) {
+      const key = `${g.canonical_root}:${g.engine}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(g);
+      }
+    }
+    return out;
+  }, [linkedGroups]);
+
+  async function handleContextQueryCreate(group: LinkedQueryGroup, name: string) {
+    const repConnId = pickRepresentativeConnection(group, activePostgresIds, activeMysqlIds, activeMssqlIds);
+    try {
+      await contextApi.saveQuery(repConnId, name, "");
+      refreshLinked();
+      toast.show(`Context query "${name}" created`, "success");
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      toast.show(`Failed to create query: ${msg}`, "error");
+    }
+  }
+
+  async function handleContextQueryRename(group: LinkedQueryGroup, query: QueryListItem, newName: string) {
+    const repConnId = pickRepresentativeConnection(group, activePostgresIds, activeMysqlIds, activeMssqlIds);
+    try {
+      await contextApi.renameQuery(repConnId, query.name, newName);
+      refreshLinked();
+    } catch (e) {
+      toast.show(`Rename failed: ${(e as Error).message}`, "error");
+    }
+  }
+
+  async function handleContextQueryDelete(group: LinkedQueryGroup, query: QueryListItem) {
+    const repConnId = pickRepresentativeConnection(group, activePostgresIds, activeMysqlIds, activeMssqlIds);
+    try {
+      await contextApi.deleteQuery(repConnId, query.name);
+      refreshLinked();
+    } catch (e) {
+      toast.show(`Delete failed: ${(e as Error).message}`, "error");
+    }
+  }
 
   // ---- Search state ----
   const [searchQuery, setSearchQuery] = useState("");
@@ -568,13 +901,18 @@ export function SavedQueriesPanel() {
 
   // ---- Actions ----
 
-  async function handleCreateQuery(parentFolderId: string | null | undefined) {
-    try {
-      const q = await actions.createQuery(parentFolderId, "Untitled", "");
-      // Open the new query in a tab
-      openSavedQuery(tabs, { items: connections }, q.id);
-    } catch (e) {
-      toast.show(`Failed to create query: ${(e as Error).message}`, "error");
+  function handleCreateQuery(_parentFolderId?: string | null) {
+    // Route ALL new queries to the context folder — never create local-DB rows.
+    if (ctxNewTargets.length === 0) {
+      toast.show("Link a context folder to a connection to save queries", "info");
+      return;
+    }
+    if (ctxNewTargets.length === 1) {
+      setNewCtxQueryTargetGroup(ctxNewTargets[0] ?? null);
+      setShowNewCtxQuery(true);
+    } else {
+      // Multiple targets — show picker first
+      setShowCtxTargetPicker(true);
     }
   }
 
@@ -991,6 +1329,22 @@ export function SavedQueriesPanel() {
         )}
       </div>
 
+      {/* Context queries section — shown below the local tree */}
+      <div className={styles.treeWrap} style={{ paddingTop: 0 }}>
+        <ContextQueriesSection
+          groups={linkedGroups}
+          connectionNames={connectionNames}
+          activePostgresIds={activePostgresIds}
+          activeMysqlIds={activeMysqlIds}
+          activeMssqlIds={activeMssqlIds}
+          onRenameQuery={(group, query) => {
+            setCtxRenameTarget({ group, query });
+            setCtxRenameNewName(query.name);
+          }}
+          onDeleteQuery={(group, query) => setCtxDeleteTarget({ group, query })}
+        />
+      </div>
+
       {/* Delete confirmation */}
       <ConfirmDialog
         open={deleteTarget !== null}
@@ -1015,6 +1369,131 @@ export function SavedQueriesPanel() {
         }}
         onCancel={() => setMoveTarget(null)}
       />
+
+      {/* Context query rename dialog */}
+      <Dialog.Root
+        open={ctxRenameTarget !== null}
+        onOpenChange={(o) => { if (!o) setCtxRenameTarget(null); }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className={dialogStyles.overlay} />
+          <Dialog.Content className={dialogStyles.content}>
+            <Dialog.Title className={dialogStyles.title}>Rename query</Dialog.Title>
+            <input
+              {...noAutoCorrectProps}
+              type="text"
+              className={styles.renameInput}
+              style={{ width: "100%", marginTop: 8, marginBottom: 8 }}
+              value={ctxRenameNewName}
+              onChange={(e) => setCtxRenameNewName(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  const trimmed = ctxRenameNewName.trim();
+                  if (trimmed && ctxRenameTarget) {
+                    void handleContextQueryRename(ctxRenameTarget.group, ctxRenameTarget.query, trimmed);
+                    setCtxRenameTarget(null);
+                  }
+                }
+                if (e.key === "Escape") { e.preventDefault(); setCtxRenameTarget(null); }
+              }}
+            />
+            <div className={dialogStyles.footer}>
+              <button type="button" onClick={() => setCtxRenameTarget(null)}>Cancel</button>
+              <button
+                type="button"
+                className={dialogStyles.primary}
+                disabled={!ctxRenameNewName.trim()}
+                onClick={() => {
+                  const trimmed = ctxRenameNewName.trim();
+                  if (trimmed && ctxRenameTarget) {
+                    void handleContextQueryRename(ctxRenameTarget.group, ctxRenameTarget.query, trimmed);
+                    setCtxRenameTarget(null);
+                  }
+                }}
+              >
+                Rename
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Context query delete confirmation */}
+      <ConfirmDialog
+        open={ctxDeleteTarget !== null}
+        title="Delete context query"
+        description={
+          ctxDeleteTarget ? (
+            <>Delete context query <strong>"{ctxDeleteTarget.query.name}"</strong>? This removes the file from the context folder and cannot be undone.</>
+          ) : null
+        }
+        confirmLabel="Delete"
+        dangerous
+        onConfirm={() => {
+          if (ctxDeleteTarget) {
+            void handleContextQueryDelete(ctxDeleteTarget.group, ctxDeleteTarget.query);
+          }
+          setCtxDeleteTarget(null);
+        }}
+        onCancel={() => setCtxDeleteTarget(null)}
+      />
+
+      {/* New context query — name prompt (single target or after picker) */}
+      <NamePromptDialog
+        open={showNewCtxQuery}
+        title="New context query"
+        placeholder="Query name"
+        onConfirm={(name) => {
+          setShowNewCtxQuery(false);
+          if (newCtxQueryTargetGroup) {
+            void handleContextQueryCreate(newCtxQueryTargetGroup, name);
+          }
+          setNewCtxQueryTargetGroup(null);
+        }}
+        onCancel={() => {
+          setShowNewCtxQuery(false);
+          setNewCtxQueryTargetGroup(null);
+        }}
+      />
+
+      {/* Context target picker (when multiple context folders exist) */}
+      <Dialog.Root
+        open={showCtxTargetPicker}
+        onOpenChange={(o) => { if (!o) setShowCtxTargetPicker(false); }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className={dialogStyles.overlay} />
+          <Dialog.Content className={dialogStyles.content}>
+            <Dialog.Title className={dialogStyles.title}>Choose context folder</Dialog.Title>
+            <Dialog.Description className={dialogStyles.description}>
+              Select which context folder to save the new query into.
+            </Dialog.Description>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, margin: "8px 0" }}>
+              {ctxNewTargets.map((g) => (
+                <button
+                  key={`${g.canonical_root}:${g.engine}`}
+                  type="button"
+                  className={styles.folderPickerItem}
+                  onClick={() => {
+                    setShowCtxTargetPicker(false);
+                    setNewCtxQueryTargetGroup(g);
+                    setShowNewCtxQuery(true);
+                  }}
+                >
+                  <Code2 size={12} />
+                  <span>{g.project_name} — {ENGINE_LABEL[g.engine] ?? g.engine}</span>
+                </button>
+              ))}
+            </div>
+            <div className={dialogStyles.footer}>
+              <button type="button" onClick={() => setShowCtxTargetPicker(false)}>Cancel</button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </section>
   );
 }

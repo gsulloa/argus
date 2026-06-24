@@ -5,6 +5,7 @@ import { useConnections } from "@/platform/connection-registry/useConnections";
 import type { Connection } from "@/platform/connection-registry/types";
 import { ContextFolderRow } from "@/modules/context/components/ContextFolderRow";
 import { FormWindowSurface } from "@/platform/shell/FormWindowSurface";
+import { ColorPicker } from "@/platform/connection-registry/ColorPicker";
 import { mssqlApi } from "./api";
 import {
   MSSQL_KIND,
@@ -43,6 +44,7 @@ interface FormState {
   trustServerCertificate: boolean;
   readOnly: boolean;
   applicationIntent: ApplicationIntent;
+  color: string | null;
 }
 
 function emptyForm(): FormState {
@@ -58,6 +60,7 @@ function emptyForm(): FormState {
     trustServerCertificate: false,
     readOnly: false,
     applicationIntent: "read-write",
+    color: null,
   };
 }
 
@@ -75,6 +78,7 @@ function fromConnection(c: Connection, mode: Mode): FormState {
     trustServerCertificate: Boolean(p.trustServerCertificate),
     readOnly: Boolean(p.readOnly),
     applicationIntent: (p.applicationIntent as ApplicationIntent | undefined) ?? "read-write",
+    color: c.color ?? null,
   };
 }
 
@@ -254,8 +258,8 @@ export function MssqlConnectionForm({
       if (mode === "edit" && initial) {
         const patch =
           form.password.length > 0
-            ? { name: trimmedName, params: params as unknown as Record<string, unknown>, secret: form.password }
-            : { name: trimmedName, params: params as unknown as Record<string, unknown> };
+            ? { name: trimmedName, params: params as unknown as Record<string, unknown>, secret: form.password, color: form.color }
+            : { name: trimmedName, params: params as unknown as Record<string, unknown>, color: form.color };
         saved = await update(initial.id, patch);
       } else {
         saved = await create({
@@ -263,6 +267,7 @@ export function MssqlConnectionForm({
           kind: MSSQL_KIND,
           params: params as unknown as Record<string, unknown>,
           secret: form.password.length > 0 ? form.password : undefined,
+          color: form.color,
         });
       }
       setSave({ kind: "idle" });
@@ -357,6 +362,14 @@ export function MssqlConnectionForm({
                   onChange={(e) => setField("name", e.target.value)}
                 />
                 {errors.name && <div className={styles.error}>{errors.name}</div>}
+              </div>
+
+              <div className={`${styles.field} ${styles.fieldFull}`}>
+                <ColorPicker
+                  label="Color"
+                  value={form.color}
+                  onChange={(next) => setField("color", next)}
+                />
               </div>
 
               {/* Host */}

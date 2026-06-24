@@ -15,6 +15,7 @@ function makeConn(id: string, groupId: string | null, sortOrder: number): Connec
     sort_order: sortOrder,
     context_path: null,
     project_source_path: null,
+    color: null,
     created_at: 0,
     updated_at: 0,
   };

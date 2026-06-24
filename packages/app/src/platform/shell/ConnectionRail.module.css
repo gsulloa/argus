@@ -93,12 +93,17 @@
   flex-shrink: 0;
 }
 
-/* prod heuristic → warning/danger color */
+/* Explicit palette color — set via inline --dot-color CSS var (Decision 4) */
+.envDot[data-color] {
+  background: var(--dot-color);
+}
+
+/* prod heuristic → warning/danger color (fallback when no explicit color) */
 .envDot[data-env="prod"] {
   background: var(--warning, #fbbf24);
 }
 
-/* neutral / local */
+/* neutral / local (fallback when no explicit color) */
 .envDot[data-env="neutral"] {
   background: var(--text-subtle, #6b6e7b);
 }

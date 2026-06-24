@@ -1,3 +1,4 @@
+import type React from "react";
 import { AlertTriangle, GripVertical, Loader2, Power } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -10,6 +11,10 @@ import { useConnectionGroups } from "@/platform/connection-registry/useConnectio
 import { computeMidpointSortOrder } from "@/platform/connection-registry/sortOrder";
 import { useOpenConnections } from "@/platform/connection-registry/useOpenConnections";
 import type { Connection } from "@/platform/connection-registry/types";
+import {
+  isConnectionColor,
+  connectionColorVar,
+} from "@/platform/connection-registry/colors";
 import {
   openQueryTab,
   POSTGRES_KIND,
@@ -489,6 +494,15 @@ export function ConnectionRow({
                   <span className={styles.itemKind}>{connection.kind}</span>
                 )}
               </span>
+              {/* Color swatch — rendered only when an explicit palette color is set.
+                  A small dot adjacent to the engine icon; never displaces any other element. */}
+              {isConnectionColor(connection.color) && (
+                <span
+                  className={styles.colorSwatch}
+                  style={{ "--swatch-color": connectionColorVar(connection.color) } as React.CSSProperties}
+                  aria-hidden="true"
+                />
+              )}
               {/* Manager mode: two-line layout (name + host subtitle) */}
               {mode === "manager" ? (
                 <span className={styles.managerItemBody}>

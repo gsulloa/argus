@@ -140,3 +140,29 @@ export interface KnownFolder {
   /** IDs of connections already pointing at this root. */
   connection_ids: string[];
 }
+
+// ---------------------------------------------------------------------------
+// context_save_query / context_rename_query result
+// ---------------------------------------------------------------------------
+
+/** Returned by context_save_query and context_rename_query. */
+export interface SaveQueryResult {
+  path: string;
+  created: boolean;
+  name: string;
+}
+
+// ---------------------------------------------------------------------------
+// context_list_linked_queries result
+// ---------------------------------------------------------------------------
+
+/** One group returned by `context_list_linked_queries`. snake_case to match IPC. */
+export interface LinkedQueryGroup {
+  canonical_root: string;
+  project_name: string;
+  /** Engine subtree string: "postgres"|"mysql"|"mssql"|"dynamo"|"cloudwatch"|"athena" */
+  engine: string;
+  connection_ids: string[];
+  representative_connection_id: string;
+  queries: QueryListItem[];
+}

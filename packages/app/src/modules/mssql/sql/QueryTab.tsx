@@ -19,8 +19,8 @@ import { useActiveMssqlConnections } from "../useActiveConnections";
 import { mssqlSchemaCache, isMssqlSystemSchema } from "../schema/globalSchemaCache";
 import { mssqlBulkColumnsCache } from "../columns/columnsCache";
 import { mssqlApi } from "../api";
-import { savedQueriesStore } from "@/modules/saved-queries/store";
 import { SaveAsModal } from "@/modules/saved-queries/SaveAsModal";
+import { contextApi } from "@/modules/context/api";
 import { useToast } from "@/platform/toast";
 import { ParamStrip } from "@/modules/context/components/ParamStrip";
 import { substituteMssqlParams } from "@/modules/context/components/substituteParams";
@@ -319,6 +319,9 @@ function MssqlQueryTab({ tabId, payload }: InnerProps) {
   // -------------------------------------------------------------------------
   const [showSaveAs, setShowSaveAs] = useState(false);
   const [defaultSaveFolder, setDefaultSaveFolder] = useState<string | null>(null);
+  const [isSavingCtx, setIsSavingCtx] = useState(false);
+  // Track context-query name for subsequent saves
+  const [contextSavedName, setContextSavedName] = useState<string | null>(null);
 
   const openSaveAsModal = useCallback(() => {
     getSetting("savedQueries:lastUsedFolder")
@@ -327,18 +330,39 @@ function MssqlQueryTab({ tabId, payload }: InnerProps) {
     setShowSaveAs(true);
   }, []);
 
+  // MSSQL has no savedQueryId tracking — all new saves go to context folder.
+  const handleSave = useCallback(() => {
+    if (contextSavedName) {
+      if (isSavingCtx) return;
+      setIsSavingCtx(true);
+      contextApi
+        .saveQuery(connectionId, contextSavedName, editorRef.current?.getSql() ?? "", { mode: "update" })
+        .then(() => toast.show("Saved", "success"))
+        .catch((e) => toast.show(`Failed to save: ${(e as Error).message ?? String(e)}`, "error"))
+        .finally(() => setIsSavingCtx(false));
+    } else {
+      openSaveAsModal();
+    }
+  }, [connectionId, contextSavedName, isSavingCtx, openSaveAsModal, toast]);
+
   const handleSaveAsConfirm = useCallback(
-    async ({ name, folderId }: { name: string; folderId: string | null }) => {
+    async ({ name }: { name: string; folderId: string | null }) => {
       const currentSql = editorRef.current?.getSql() ?? "";
       setShowSaveAs(false);
       try {
-        await savedQueriesStore.createQuery(folderId, name, currentSql, connectionId);
-        if (folderId) {
-          setSetting("savedQueries:lastUsedFolder", folderId).catch(() => {});
-        }
+        await contextApi.saveQuery(connectionId, name, currentSql, { mode: "create" });
+        setContextSavedName(name);
         toast.show(`Saved as "${name}"`, "success");
       } catch (e) {
-        toast.show(`Failed to save: ${(e as Error).message ?? String(e)}`, "error");
+        const msg = (e as Error).message ?? String(e);
+        if (msg.includes("already exists")) {
+          toast.show(`A query named "${name}" already exists. Choose a different name.`, "error");
+          setShowSaveAs(true);
+        } else if (msg.includes("has no linked context folder")) {
+          toast.show("Link a context folder for this connection to save queries", "info");
+        } else {
+          toast.show(`Failed to save: ${msg}`, "error");
+        }
       }
     },
     [connectionId, toast],
@@ -546,9 +570,10 @@ function MssqlQueryTab({ tabId, payload }: InnerProps) {
           <button
             type="button"
             className={styles.toolbarButton}
-            onClick={openSaveAsModal}
+            onClick={handleSave}
             title="Save query"
             aria-label="Save query"
+            disabled={isSavingCtx}
           >
             <Save size={11} />
             Save

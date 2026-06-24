@@ -50,6 +50,9 @@ import { ConnectionRail, EngineIcon, deriveEnv, engineLabel } from "./Connection
 import { ConnectionSubtree } from "./ConnectionSubtree";
 import { ConnectionHeaderActions } from "./ConnectionHeaderActions";
 import { useFocusedConnection } from "./FocusedConnectionContext";
+import { SavedQueriesPanel } from "@/modules/saved-queries/SavedQueriesPanel";
+import { useActiveDynamoConnections } from "@/modules/dynamo/useActiveConnections";
+import type { DynamoParams } from "@/modules/dynamo/types";
 import styles from "./WorkspaceShell.module.css";
 
 // ---------------------------------------------------------------------------
@@ -285,6 +288,7 @@ function WorkspaceSidebar() {
           ) : (
             <p className={styles.emptyState}>Open a connection</p>
           )}
+          <SavedQueriesPanel />
         </div>
       </SidebarScrollContext.Provider>
     </div>
@@ -303,12 +307,23 @@ function WorkspaceSidebar() {
 function ConnectionIdentityHeader({ connectionId }: { connectionId: string }) {
   const { items } = useConnections();
   const { items: groups } = useConnectionGroups();
+  const { getActive } = useActiveDynamoConnections();
   const connection = items.find((c) => c.id === connectionId);
 
   if (!connection) return null;
 
   const env = deriveEnv(connection.name);
   const label = engineLabel(connection.kind);
+
+  // For DynamoDB connections, surface the active AWS region as quiet metadata
+  // (issue #184). Prefer the runtime region of the active connection; fall
+  // back to the configured params region; otherwise show nothing.
+  const dynamoRegion =
+    connection.kind === "dynamodb"
+      ? (getActive(connection.id)?.region
+          ?? (connection.params as unknown as DynamoParams).region
+          ?? null)
+      : null;
 
   // Resolve the group name when the connection has a group_id.
   const groupName = connection.group_id
@@ -329,6 +344,11 @@ function ConnectionIdentityHeader({ connectionId }: { connectionId: string }) {
         <span className={styles.identityName} title={displayName}>{displayName}</span>
         <span className={styles.identityMeta}>
           <span className={styles.identityEngine}>{label}</span>
+          {dynamoRegion && (
+            <span className={styles.identityRegion} title={`AWS region: ${dynamoRegion}`}>
+              {dynamoRegion}
+            </span>
+          )}
           <span
             className={styles.identityEnvDot}
             data-env={env}

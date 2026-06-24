@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { contextApi } from "./api";
 import {
   type ContextChangeKind,
+  type LinkedQueryGroup,
   type ObjectDoc,
   type ObjectListItem,
   type QueryDoc,
   type QueryListItem,
 } from "./types";
-import { useContextChangeListener } from "./eventBus";
+import { useContextChangeListener, useContextEventBus } from "./eventBus";
 
 interface AsyncState<T> {
   data: T;
@@ -102,5 +103,47 @@ export function useContextQuery(
     !!contextPath && !!name,
   );
   useContextChangeListener(contextPath, KINDS_QUERIES, refresh);
+  return { ...state, refresh };
+}
+
+/**
+ * Subscribe to ALL context://changed events regardless of path,
+ * filtered optionally by kind. Fires the callback whenever any context folder
+ * emits a change matching the given kinds.
+ */
+export function useAnyContextChangeListener(
+  kinds: ContextChangeKind[] | "all",
+  listener: () => void,
+): void {
+  const bus = useContextEventBus();
+  const ref = useRef(listener);
+  useEffect(() => {
+    ref.current = listener;
+  }, [listener]);
+
+  const kindsKey = kinds === "all" ? "all" : kinds.slice().sort().join(",");
+
+  useEffect(() => {
+    return bus.subscribeAll((event) => {
+      if (kinds !== "all") {
+        const intersects = event.kinds.some((k) => (kinds as ContextChangeKind[]).includes(k));
+        if (!intersects) return;
+      }
+      ref.current();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bus, kindsKey]);
+}
+
+const KINDS_LINKED_QUERIES: ContextChangeKind[] = ["query", "manifest"];
+
+/**
+ * Fetches all linked context queries across all connections and refreshes
+ * whenever any context folder emits a query or manifest change.
+ */
+export function useLinkedContextQueries(): AsyncState<LinkedQueryGroup[]> & { refresh: () => void } {
+  const fetcher = useCallback(() => contextApi.listLinkedQueries(), []);
+  const { state, refresh } = useAsync<LinkedQueryGroup[]>([], fetcher, true);
+  useAnyContextChangeListener(KINDS_LINKED_QUERIES, refresh);
   return { ...state, refresh };
 }
