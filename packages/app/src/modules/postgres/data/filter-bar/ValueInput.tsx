@@ -23,10 +23,53 @@ function namedColumn(column: ColumnRef, columns: DataColumn[]): DataColumn | nul
   return columns.find((c) => c.name === column.name) ?? null;
 }
 
-function inputTypeForCategory(cat: string): "text" | "number" | "date" | "datetime-local" {
-  if (cat === "numeric") return "number";
+function inputTypeForCategory(cat: string): "text" | "date" | "datetime-local" {
   if (cat === "date") return "date";
   return "text";
+}
+
+/**
+ * Returns the appropriate `inputMode` for numeric columns so mobile/assistive
+ * tech shows a numeric keypad while still using `type="text"` (which never
+ * blanks on non-numeric characters).
+ *
+ * Returns `undefined` for non-numeric categories so the attribute is omitted.
+ */
+function inputModeForCategory(
+  cat: string,
+  dataType: string | undefined,
+): React.HTMLAttributes<HTMLInputElement>["inputMode"] | undefined {
+  if (cat !== "numeric") return undefined;
+  const t = (dataType ?? "").toLowerCase();
+  // Fractional types get "decimal"; everything else (int family) gets "numeric".
+  if (
+    t === "real" ||
+    t === "float4" ||
+    t === "float8" ||
+    t === "double precision" ||
+    t.startsWith("numeric") ||
+    t.startsWith("decimal")
+  ) {
+    return "decimal";
+  }
+  return "numeric";
+}
+
+/**
+ * Splits a raw string into individual value fragments.
+ *
+ * For all categories: split on commas and newlines.
+ * For numeric category only: also split on runs of whitespace (so pasting a
+ * space-separated list of IDs yields one chip per ID). Whitespace-splitting is
+ * intentionally NOT applied to text columns because multi-word text values
+ * (e.g. "New York") should not be split.
+ */
+export function splitValues(raw: string, category: string): string[] {
+  const delimiter = category === "numeric" ? /[,\n\s]+/ : /[,\n]+/;
+  return raw
+    .split(delimiter)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 function parseScalar(raw: string, cat: string): FilterScalar {
@@ -57,11 +100,13 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
         ? value
         : { min: "" as FilterScalar, max: "" as FilterScalar };
     const inputType = inputTypeForCategory(cat);
+    const inputMode = inputModeForCategory(cat, named?.data_type);
     return (
       <span className={styles.between}>
         <input
           {...noAutoCorrectProps}
           type={inputType}
+          inputMode={inputMode}
           className={`${styles.valueInput} ${styles.betweenInput}`}
           value={String(obj.min ?? "")}
           aria-label="Minimum"
@@ -73,6 +118,7 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
         <input
           {...noAutoCorrectProps}
           type={inputType}
+          inputMode={inputMode}
           className={`${styles.valueInput} ${styles.betweenInput}`}
           value={String(obj.max ?? "")}
           aria-label="Maximum"
@@ -114,10 +160,12 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
   }
 
   const inputType = inputTypeForCategory(cat);
+  const inputMode = inputModeForCategory(cat, named?.data_type);
   return (
     <input
       {...noAutoCorrectProps}
       type={inputType}
+      inputMode={inputMode}
       className={styles.valueInput}
       value={asScalarStringForDisplay(value)}
       aria-label="Value"
@@ -140,11 +188,16 @@ interface ChipInputProps {
 function ChipInput({ values, category, onChange }: ChipInputProps) {
   const [draft, setDraft] = useState("");
 
-  function commit() {
-    const trimmed = draft.trim();
-    if (!trimmed) return;
-    onChange([...values, parseScalar(trimmed, category)]);
+  function commitRaw(raw: string) {
+    const fragments = splitValues(raw, category);
+    if (fragments.length === 0) return;
+    const newChips = fragments.map((f) => parseScalar(f, category));
+    onChange([...values, ...newChips]);
     setDraft("");
+  }
+
+  function commit() {
+    commitRaw(draft);
   }
 
   return (
@@ -177,6 +230,18 @@ function ChipInput({ values, category, onChange }: ChipInputProps) {
             e.preventDefault();
             onChange(values.slice(0, -1));
           }
+        }}
+        onPaste={(e) => {
+          const pasted = e.clipboardData.getData("text");
+          const combined = draft + pasted;
+          // Only split-and-commit when the combined text contains a delimiter;
+          // otherwise fall through to the default paste so the user can keep typing.
+          const hasDelimiter = /[,\n]/.test(combined) || (category === "numeric" && /\s/.test(combined.trim()));
+          if (hasDelimiter) {
+            e.preventDefault();
+            commitRaw(combined);
+          }
+          // No delimiter → let default paste append to draft naturally.
         }}
         onBlur={commit}
         placeholder={values.length === 0 ? "type then Enter…" : ""}
