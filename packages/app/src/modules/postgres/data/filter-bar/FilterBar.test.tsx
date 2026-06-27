@@ -430,6 +430,94 @@ describe("FilterBar — forwardRef focus() handle", () => {
 });
 
 // ---------------------------------------------------------------------------
+// RAW filter row
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — RAW filter row", () => {
+  it("picking Raw SQL shows the expression input and hides the operator picker", async () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "any_column" }, op: "Contains", value: "" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+
+    // Open the column picker
+    const columnTrigger = screen.getByRole("button", { name: /Any column/i });
+    fireEvent.click(columnTrigger);
+
+    // Click "Raw SQL"
+    const rawSqlOption = screen.getByRole("button", { name: /Raw SQL/i });
+    fireEvent.click(rawSqlOption);
+
+    // onDraftChange should have been called with a RAW row
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows[0]!.column).toEqual({ kind: "raw" });
+    expect(next.rows[0]!.op).toBe("RAW");
+  });
+
+  it("RAW row renders expression input (aria-label 'Raw SQL expression') and hides operator picker", () => {
+    const draft: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft })} />);
+
+    // Expression input must be present
+    expect(screen.getByRole("textbox", { name: /Raw SQL expression/i })).toBeInTheDocument();
+    // Operator picker must NOT be present (no combobox/select with aria-label "Operator")
+    expect(screen.queryByRole("combobox", { name: /Operator/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Operator/i })).toBeNull();
+  });
+
+  it("switching back from Raw SQL to a named column restores the operator picker", async () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+
+    // Open column picker (button shows "Raw SQL")
+    const columnTrigger = screen.getByRole("button", { name: /Raw SQL/i });
+    fireEvent.click(columnTrigger);
+
+    // Pick a named column
+    const countryOption = screen.getByRole("button", { name: /^country/i });
+    fireEvent.click(countryOption);
+
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows[0]!.column).toEqual({ kind: "named", name: "country" });
+    // op should no longer be RAW (coerced to a valid op for the named column)
+    expect(next.rows[0]!.op).not.toBe("RAW");
+  });
+
+  it("RAW row can be removed via the − button without affecting sibling rows", () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [
+        { enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "active" },
+        { enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" },
+      ],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+
+    const removeBtns = screen.getAllByRole("button", { name: /Remove row/i });
+    // Remove the second row (index 1, the RAW row)
+    fireEvent.click(removeBtns[1]!);
+
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows).toHaveLength(1);
+    expect(next.rows[0]!.column).toEqual({ kind: "named", name: "status" });
+    expect(next.rows[0]!.value).toBe("active");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // No filters enabled transient status
 // ---------------------------------------------------------------------------
 

@@ -59,6 +59,7 @@ export function coerceValueForOperator(
   op: Operator,
 ): FilterValue | undefined {
   if (op === "IS NULL" || op === "IS NOT NULL") return undefined;
+  if (op === "RAW") return typeof prev === "string" ? prev : "";
   if (op === "BETWEEN") {
     if (prev && typeof prev === "object" && !Array.isArray(prev)) return prev;
     return { min: "", max: "" };

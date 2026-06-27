@@ -1,7 +1,7 @@
 import { Minus, Plus } from "lucide-react";
 import { ColumnPicker } from "./ColumnPicker";
 import { OperatorPicker } from "./OperatorPicker";
-import { ValueInput } from "./ValueInput";
+import { ValueInput, RawExpressionInput } from "./ValueInput";
 import { operatorsForColumn } from "./operatorRules";
 import { coerceValueForOperator } from "./treeMutations";
 import { RowApplyButton } from "../../../shared/filter-bar";
@@ -49,6 +49,7 @@ export function ConditionRow({
   onInsertBelow,
   onRemove,
 }: ConditionRowProps) {
+  const isRaw = row.column.kind === "raw";
   const meta = namedColumnMeta(row.column, columns);
   const ops = operatorsForColumn(row.column, meta.dataType, meta.isNullable);
 
@@ -101,23 +102,32 @@ export function ConditionRow({
         </span>
       </span>
 
-      {/* Operator picker */}
-      <span data-filter-control="op" style={{ display: "contents" }}>
-        <OperatorPicker value={row.op} options={ops} onChange={onOpChange} />
-      </span>
+      {/* Operator picker — hidden for raw rows */}
+      {!isRaw && (
+        <span data-filter-control="op" style={{ display: "contents" }}>
+          <OperatorPicker value={row.op} options={ops} onChange={onOpChange} />
+        </span>
+      )}
 
       {/* Value input wrapper — green tint when applied */}
       <span
         className={[styles.valueInputWrapper, isApplied ? styles.appliedTint : ""].filter(Boolean).join(" ")}
         data-filter-control="value"
       >
-        <ValueInput
-          column={row.column}
-          columns={columns}
-          op={row.op}
-          value={row.value}
-          onChange={(v) => onChange({ ...row, value: v })}
-        />
+        {isRaw ? (
+          <RawExpressionInput
+            value={typeof row.value === "string" ? row.value : ""}
+            onChange={(v) => onChange({ ...row, value: v })}
+          />
+        ) : (
+          <ValueInput
+            column={row.column}
+            columns={columns}
+            op={row.op}
+            value={row.value}
+            onChange={(v) => onChange({ ...row, value: v })}
+          />
+        )}
       </span>
 
       {/* Spacer pushes action buttons to the right */}

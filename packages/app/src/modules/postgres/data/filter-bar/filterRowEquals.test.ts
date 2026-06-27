@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { filterRowEquals } from "../types";
-import type { FilterRow } from "../types";
+import { filterRowEquals, isCompleteRow, modelToPayload } from "../types";
+import type { FilterRow, FilterModel } from "../types";
 
 function row(overrides: Partial<FilterRow> = {}): FilterRow {
   return {
@@ -95,5 +95,89 @@ describe("filterRowEquals", () => {
     const a = row({ op: "In", value: ["a", "b", "c"] });
     const b = row({ op: "In", value: ["a", "b"] });
     expect(filterRowEquals(a, b)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isCompleteRow — RAW rows
+// ---------------------------------------------------------------------------
+
+describe("isCompleteRow — RAW rows", () => {
+  it("returns false for RAW row with empty string value", () => {
+    const r: FilterRow = { enabled: true, column: { kind: "raw" }, op: "RAW", value: "" };
+    expect(isCompleteRow(r)).toBe(false);
+  });
+
+  it("returns false for RAW row with whitespace-only value", () => {
+    const r: FilterRow = { enabled: true, column: { kind: "raw" }, op: "RAW", value: "   " };
+    expect(isCompleteRow(r)).toBe(false);
+  });
+
+  it("returns false for RAW row with undefined value", () => {
+    const r: FilterRow = { enabled: true, column: { kind: "raw" }, op: "RAW", value: undefined };
+    expect(isCompleteRow(r)).toBe(false);
+  });
+
+  it("returns true for RAW row with a non-empty expression", () => {
+    const r: FilterRow = { enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" };
+    expect(isCompleteRow(r)).toBe(true);
+  });
+
+  it("returns true for RAW row with leading/trailing whitespace around a non-empty expression", () => {
+    const r: FilterRow = { enabled: true, column: { kind: "raw" }, op: "RAW", value: "  id > 0  " };
+    expect(isCompleteRow(r)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// modelToPayload — RAW rows
+// ---------------------------------------------------------------------------
+
+describe("modelToPayload — RAW rows", () => {
+  it("emits wire shape { kind: condition, column: { kind: raw }, op: RAW, value } for a complete RAW row", () => {
+    const model: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "raw" }, op: "RAW", value: "data->>'flag' = 'true'" }],
+      combinator: "AND",
+    };
+    const payload = modelToPayload(model);
+    expect(payload.filter_tree).toBeDefined();
+    expect(payload.filter_tree!.children).toHaveLength(1);
+    expect(payload.filter_tree!.children[0]).toEqual({
+      kind: "condition",
+      column: { kind: "raw" },
+      op: "RAW",
+      value: "data->>'flag' = 'true'",
+    });
+  });
+
+  it("drops incomplete RAW rows (empty expression)", () => {
+    const model: FilterModel = {
+      rows: [
+        { enabled: true, column: { kind: "raw" }, op: "RAW", value: "" },
+        { enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "active" },
+      ],
+      combinator: "AND",
+    };
+    const payload = modelToPayload(model);
+    expect(payload.filter_tree!.children).toHaveLength(1);
+    expect(payload.filter_tree!.children[0]!.op).toBe("=");
+  });
+
+  it("drops incomplete RAW rows (whitespace-only expression)", () => {
+    const model: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "raw" }, op: "RAW", value: "   " }],
+      combinator: "AND",
+    };
+    const payload = modelToPayload(model);
+    expect(payload.filter_tree).toBeUndefined();
+  });
+
+  it("drops disabled RAW rows", () => {
+    const model: FilterModel = {
+      rows: [{ enabled: false, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
+      combinator: "AND",
+    };
+    const payload = modelToPayload(model);
+    expect(payload.filter_tree).toBeUndefined();
   });
 });
