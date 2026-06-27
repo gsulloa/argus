@@ -4,8 +4,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppError } from "@/platform/errors/AppError";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
-import { copyCellValue } from "@/platform/grid/cellClipboard";
+import { copyCellValue, copyRowsTsv } from "@/platform/grid/cellClipboard";
 import { EditableCell, looksLikeBytea } from "./EditableCell";
+import { RowContextMenu } from "./RowContextMenu";
 import { pixelYToRowIndex } from "./dragRowIndex";
 import { headerFloorWidthFor } from "./headerMeasure";
 import { cycleSort, sortIndexFor } from "./sortHelpers";
@@ -18,6 +19,74 @@ const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
 const STATUS_ROW_HEIGHT = 28;
 const SCROLL_LOOKAHEAD_ROWS = (pageSize: number) => pageSize * 2;
+
+// ---------------------------------------------------------------------------
+// Module-level pure helpers (shared by keyboard shortcuts AND the context menu)
+// ---------------------------------------------------------------------------
+
+/** Entry type used by `buffer.bulkDeleteToggle`. */
+export type DeleteEntry = {
+  rowKey: string;
+  source: "insert" | "server";
+  pk?: Record<string, EditValue>;
+  currentlyDeleted: boolean;
+};
+
+/**
+ * Resolve the display value for a cell, preferring any pending edit in the
+ * buffer over the server value. This is the same lookup used in the ⌘C copy
+ * path so the menu and keyboard shortcut produce identical output.
+ */
+export function resolveCellDisplayValue(
+  rows: UnifiedRow[],
+  columns: DataColumn[],
+  buffer: Pick<UseEditBufferResult, "getRowEdits">,
+  rowIndex: number,
+  colIndex: number,
+): EditValue | CellValue | null {
+  const row = rows[rowIndex];
+  if (!row) return null;
+  const serverValue = row.cells[colIndex] ?? null;
+  const col = columns[colIndex];
+  if (!col || !row.rowKey) return serverValue;
+  const editsEntry = buffer.getRowEdits(row.rowKey);
+  return editsEntry && col.name in editsEntry.changes
+    ? (editsEntry.changes[col.name] as EditValue)
+    : serverValue;
+}
+
+/**
+ * Build the array of delete-toggle entries for a contiguous row range
+ * [rangeStart, rangeEnd] (inclusive). Mirrors the logic in the Backspace/Delete
+ * keyboard branch so both paths produce identical entries.
+ */
+export function buildDeleteEntries(
+  rows: UnifiedRow[],
+  columns: DataColumn[],
+  pkColumns: string[] | null,
+  buffer: Pick<UseEditBufferResult, "isRowDeleted">,
+  rangeStart: number,
+  rangeEnd: number,
+): DeleteEntry[] {
+  const entries: DeleteEntry[] = [];
+  for (let i = rangeStart; i <= rangeEnd; i++) {
+    const r = rows[i];
+    if (!r || !r.rowKey) continue;
+    if (r.source === "insert") {
+      entries.push({ rowKey: r.rowKey, source: "insert", currentlyDeleted: false });
+    } else {
+      if (!pkColumns) continue; // no-PK relation: can't delete server rows
+      const pk: Record<string, EditValue> = {};
+      for (const col of pkColumns) {
+        const idx = columns.findIndex((c) => c.name === col);
+        if (idx >= 0) pk[col] = (r.cells[idx] ?? null) as EditValue;
+      }
+      const currentlyDeleted = buffer.isRowDeleted(r.rowKey);
+      entries.push({ rowKey: r.rowKey, source: "server", pk, currentlyDeleted });
+    }
+  }
+  return entries;
+}
 
 export interface UnifiedRow {
   rowKey: string;
@@ -163,6 +232,20 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
   const [editing, setEditing] = useState<{ rowIndex: number; col: string } | null>(null);
 
   // -----------------------------------------------------------------------
+  // Context menu state — resolved on right-click, cleared on close.
+  // -----------------------------------------------------------------------
+  /**
+   * The effective target for the context menu: the row/col that was
+   * right-clicked, after applying the retargeting rule. Reset to null
+   * when the menu closes.
+   */
+  const [ctxTarget, setCtxTarget] = useState<{ rowIndex: number; colIndex: number } | null>(null);
+  // Keep a ref in sync so context menu callbacks always read fresh data even
+  // if the Radix portal captures a stale prop reference.
+  const ctxTargetRef = useRef<{ rowIndex: number; colIndex: number } | null>(null);
+  ctxTargetRef.current = ctxTarget;
+
+  // -----------------------------------------------------------------------
   // Drag-to-select state
   // -----------------------------------------------------------------------
   interface DragState {
@@ -203,17 +286,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
         if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT" && !target.isContentEditable) {
           const row = rows[activeCell.row];
           if (row) {
-            const serverValue = row.cells[activeCell.col] ?? null;
-            const col = columns[activeCell.col];
-            const displayValue =
-              col && row.rowKey
-                ? (() => {
-                    const editsEntry = buffer.getRowEdits(row.rowKey);
-                    return editsEntry && col.name in editsEntry.changes
-                      ? (editsEntry.changes[col.name] as EditValue)
-                      : serverValue;
-                  })()
-                : serverValue;
+            const displayValue = resolveCellDisplayValue(rows, columns, buffer, activeCell.row, activeCell.col);
             e.preventDefault();
             void copyCellValue(displayValue);
           }
@@ -242,28 +315,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
       if (selection.anchor === null) return;
       if (isReadOnly) return;
       e.preventDefault();
-      const entries: Array<{
-        rowKey: string;
-        source: "insert" | "server";
-        pk?: Record<string, EditValue>;
-        currentlyDeleted: boolean;
-      }> = [];
-      for (let i = rangeStart; i <= rangeEnd; i++) {
-        const r = rows[i];
-        if (!r || !r.rowKey) continue;
-        if (r.source === "insert") {
-          entries.push({ rowKey: r.rowKey, source: "insert", currentlyDeleted: false });
-        } else {
-          if (!pkColumns) continue; // no-PK relation: can't delete server rows
-          const pk: Record<string, EditValue> = {};
-          for (const col of pkColumns) {
-            const idx = columns.findIndex((c) => c.name === col);
-            if (idx >= 0) pk[col] = (r.cells[idx] ?? null) as EditValue;
-          }
-          const currentlyDeleted = buffer.isRowDeleted(r.rowKey);
-          entries.push({ rowKey: r.rowKey, source: "server", pk, currentlyDeleted });
-        }
-      }
+      const entries = buildDeleteEntries(rows, columns, pkColumns, buffer, rangeStart, rangeEnd);
       if (entries.length > 0) {
         buffer.bulkDeleteToggle(entries);
       }
@@ -460,9 +512,106 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
             ]
               .filter(Boolean)
               .join(" ");
-            return (
+
+            // ------------------------------------------------------------------
+            // Context menu: resolve state for this row when it is the target.
+            // ------------------------------------------------------------------
+            // The effective context target: either ctxTarget (if it was set for
+            // this row) or the fallback for when nothing has been set yet.
+            // We compute menu props here so they're always in scope for the JSX.
+            const isCtxRow = ctxTarget !== null && ctxTarget.rowIndex === vi.index;
+            const ctxColIndex = isCtxRow ? ctxTarget.colIndex : 0;
+
+            // Determine the effective target range for multi-row operations.
+            // If this row is selected (inside the range), the whole range is the target.
+            const ctxRangeStart = selected && isCtxRow ? rangeStart : vi.index;
+            const ctxRangeEnd   = selected && isCtxRow ? rangeEnd   : vi.index;
+            const isMulti = ctxRangeEnd > ctxRangeStart;
+
+            // canEditCell: same cellReadOnly computation for the context-targeted cell.
+            const ctxCol = columns[ctxColIndex];
+            const ctxServerValue = ctxCol ? (r.cells[ctxColIndex] ?? null) : null;
+            const ctxIsPkOfExisting = ctxCol ? (!isInsert && (pkColumns?.includes(ctxCol.name) ?? false)) : false;
+            const ctxCellReadOnly =
+              isReadOnly ||
+              isDeleted ||
+              ctxIsPkOfExisting ||
+              (ctxCol ? looksLikeBytea(ctxCol.data_type) : false) ||
+              isCellEnvelope(ctxServerValue) ||
+              (!isInsert && pkColumns === null) ||
+              !r.rowKey;
+            const canEditCell = !ctxCellReadOnly && !bulkEditActive;
+
+            // canDeleteRows: at least one targetted row is deletable.
+            const canDeleteRows =
+              !isReadOnly &&
+              (() => {
+                for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
+                  const tr = rows[i];
+                  if (!tr || !tr.rowKey) continue;
+                  if (tr.source === "insert") return true;
+                  if (pkColumns !== null) return true;
+                }
+                return false;
+              })();
+
+            // deleteIsRestore: every targeted row is already deleted.
+            const deleteIsRestore =
+              (() => {
+                for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
+                  const tr = rows[i];
+                  if (!tr || !tr.rowKey) continue;
+                  if (!buffer.isRowDeleted(tr.rowKey)) return false;
+                }
+                return true;
+              })();
+
+            // Disabled reason strings.
+            const editCellDisabledReason = isReadOnly
+              ? "Grid is read-only"
+              : bulkEditActive
+              ? "Bulk-edit mode is active"
+              : "This cell can’t be edited";
+            const deleteDisabledReason = isReadOnly
+              ? "Grid is read-only"
+              : "Requires a primary key";
+
+            // Context menu callbacks.
+            function handleCtxCopyCell() {
+              // Use the ref so the callback always reads the latest ctxTarget,
+              // even if Radix captured an older closure from the portal mount.
+              const target = ctxTargetRef.current;
+              if (!target) return;
+              const val = resolveCellDisplayValue(rows, columns, buffer, target.rowIndex, target.colIndex);
+              void copyCellValue(val);
+            }
+
+            function handleCtxCopyRows() {
+              const targetRows: unknown[][] = [];
+              for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
+                const tr = rows[i];
+                if (tr) targetRows.push(tr.cells);
+              }
+              void copyRowsTsv(targetRows, columns.map((c) => c.name));
+            }
+
+            function handleCtxEditCell() {
+              const target = ctxTargetRef.current;
+              if (!target) return;
+              if (bulkEditActive) return;
+              const col = columns[target.colIndex];
+              if (col) setEditing({ rowIndex: target.rowIndex, col: col.name });
+            }
+
+            function handleCtxToggleDelete() {
+              const entries = buildDeleteEntries(rows, columns, pkColumns, buffer, ctxRangeStart, ctxRangeEnd);
+              if (entries.length > 0) {
+                buffer.bulkDeleteToggle(entries);
+              }
+            }
+
+            const rowEl = (
               <div
-                key={vi.key}
                 className={rowClasses}
                 data-selected={selected ? "true" : "false"}
                 style={{
@@ -490,6 +639,22 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   };
                   dragClientYRef.current = e.clientY;
                   setDragActive(true);
+                }}
+                onContextMenu={(e) => {
+                  // Resolve the clicked column from [data-col].
+                  const cellEl = (e.target as HTMLElement).closest("[data-col]") as HTMLElement | null;
+                  const colIdx = cellEl ? parseInt(cellEl.dataset.col ?? "0", 10) : 0;
+
+                  // Retargeting rule:
+                  //   • Right-click INSIDE current selection → keep selection, multi-target.
+                  //   • Right-click OUTSIDE → set activeCell to the clicked cell, clear range.
+                  const insideSelection = vi.index >= rangeStart && vi.index <= rangeEnd && rangeStart >= 0;
+                  if (!insideSelection) {
+                    onActiveCellChange({ row: vi.index, col: colIdx });
+                    onSelectionChange({ anchor: null, active: null });
+                  }
+                  // Always record the clicked cell as context target.
+                  setCtxTarget({ rowIndex: vi.index, colIndex: colIdx });
                 }}
               >
                 {columns.map((col) => {
@@ -581,6 +746,25 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   );
                 })}
               </div>
+            );
+
+            return (
+              <RowContextMenu
+                key={vi.key}
+                target={{ rowIndex: vi.index, colIndex: ctxColIndex }}
+                isMulti={isMulti}
+                canEditCell={canEditCell}
+                editCellDisabledReason={editCellDisabledReason}
+                canDeleteRows={canDeleteRows}
+                deleteDisabledReason={deleteDisabledReason}
+                deleteIsRestore={deleteIsRestore}
+                onCopyCell={handleCtxCopyCell}
+                onCopyRows={handleCtxCopyRows}
+                onEditCell={handleCtxEditCell}
+                onToggleDelete={handleCtxToggleDelete}
+              >
+                {rowEl}
+              </RowContextMenu>
             );
           })}
         </div>
