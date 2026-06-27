@@ -4,6 +4,7 @@
 //! - `mysql_run_sql_many(id, statements, origin?)` — runs pre-split statements sequentially.
 //! - `split_statements(input)` — pure statement splitter (semicolon-aware, MySQL-dialect).
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -20,9 +21,11 @@ use crate::modules::activity_log::{
     emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
 };
 use crate::modules::mysql::binding::{bind_kind_for_type, decode_row_value, BindKind};
-use crate::modules::mysql::cancel::capture_thread_id;
+use crate::modules::mysql::cancel::{capture_thread_id, fire_mysql_cancel};
 use crate::modules::mysql::data::ColumnInfo;
-use crate::modules::mysql::pool::MysqlPoolRegistry;
+use crate::modules::mysql::params::MysqlParams;
+use crate::modules::mysql::pool::{load_connection_input, MysqlPoolRegistry};
+use crate::modules::query_cancel::{CancelAction, RunningQueryRegistry};
 use crate::modules::query_history::{self, HistoryOrigin, HistoryStatus, NewEntry};
 use crate::platform::DbState;
 
@@ -628,12 +631,25 @@ fn map_sqlx_error_with_sql(err: sqlx::Error, sql: &str) -> AppError {
     }
 }
 
+/// Owned cancel context passed into `run_single_sql` to enable server-side
+/// query cancellation via `KILL QUERY <thread_id>`.
+pub(super) struct MysqlCancel {
+    pub params: MysqlParams,
+    pub secret: Option<String>,
+}
+
 /// Core execution logic shared by `mysql_run_sql` and `mysql_run_sql_many`.
 /// Returns `RunSqlResult` or an `AppError`.
+///
+/// When `cancel_ctx` is `Some((registry, token, cancel))`, the function
+/// registers the in-flight query with the registry so it can be cancelled.
+/// After the query resolves, if the guard is marked cancelled the function
+/// returns `Err(AppError::cancelled())`.
 async fn run_single_sql(
     pool: &sqlx::MySqlPool,
     sql: &str,
     read_only: bool,
+    cancel_ctx: Option<(&RunningQueryRegistry, Uuid, &MysqlCancel)>,
 ) -> AppResult<RunSqlResult> {
     let started = Instant::now();
     let mutating = is_mutating_sql(sql);
@@ -643,15 +659,33 @@ async fn run_single_sql(
         return Err(AppError::Validation("connection is read-only".into()));
     }
 
+    // Hoist connection acquisition and thread_id capture so both branches share
+    // the same connection (the one whose thread_id we captured).
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|e| map_sqlx_error_with_sql(e, sql))?;
+    let thread_id = capture_thread_id(&mut conn).await?;
+
+    // Register with the cancel registry if a cancel context was supplied.
+    let guard = if let Some((registry, token, cancel)) = cancel_ctx {
+        let params = cancel.params.clone();
+        let secret = cancel.secret.clone();
+        let action: CancelAction = Arc::new(move || {
+            let params = params.clone();
+            let secret = secret.clone();
+            Box::pin(async move {
+                let _ = fire_mysql_cancel(&params, secret.as_deref(), thread_id).await;
+            })
+        });
+        Some(registry.register(token, action).await)
+    } else {
+        None
+    };
+
     if !mutating {
         // Row-returning query.
         let fetch_sql = sql.to_string();
-        let mut conn = pool
-            .acquire()
-            .await
-            .map_err(|e| map_sqlx_error_with_sql(e, sql))?;
-        let thread_id = capture_thread_id(&mut conn).await?;
-        let _ = thread_id; // thread_id captured for potential cancel integration
 
         let rows = tokio::time::timeout(RUN_SQL_TIMEOUT, async {
             sqlx::query(&fetch_sql)
@@ -666,6 +700,11 @@ async fn run_single_sql(
                 format!("query timed out ({}s)", RUN_SQL_TIMEOUT.as_secs()),
             )
         })??;
+
+        // If the run was cancelled, return the neutral cancelled error.
+        if guard.as_ref().map_or(false, |g| g.cancelled()) {
+            return Err(AppError::cancelled());
+        }
 
         let query_ms = started.elapsed().as_millis() as u64;
 
@@ -720,11 +759,6 @@ async fn run_single_sql(
     } else {
         // Mutating query — execute path.
         let exec_sql = sql.to_string();
-        let mut conn = pool
-            .acquire()
-            .await
-            .map_err(|e| map_sqlx_error_with_sql(e, sql))?;
-        let _thread_id = capture_thread_id(&mut conn).await?;
 
         let result = tokio::time::timeout(RUN_SQL_TIMEOUT, async {
             sqlx::query(&exec_sql)
@@ -739,6 +773,11 @@ async fn run_single_sql(
                 format!("query timed out ({}s)", RUN_SQL_TIMEOUT.as_secs()),
             )
         })??;
+
+        // If the run was cancelled, return the neutral cancelled error.
+        if guard.as_ref().map_or(false, |g| g.cancelled()) {
+            return Err(AppError::cancelled());
+        }
 
         let query_ms = started.elapsed().as_millis() as u64;
         let affected_rows = result.rows_affected();
@@ -855,9 +894,11 @@ fn record_mysql_history_err(
 pub async fn mysql_run_sql(
     app: AppHandle,
     registry: State<'_, MysqlPoolRegistry>,
+    cancel_registry: State<'_, RunningQueryRegistry>,
     id: Uuid,
     sql: String,
     origin: Option<Origin>,
+    run_token: Option<String>,
 ) -> AppResult<RunSqlResult> {
     let started_wall_ms = now_unix_ms();
     let started = Instant::now();
@@ -869,7 +910,31 @@ pub async fn mysql_run_sql(
     // Fetch connection name for history recording (cheap SQLite lookup).
     let connection_name = fetch_connection_name(&app, id);
 
-    let result = run_single_sql(&pool, &sql, read_only).await;
+    // Resolve cancel context: parse token, load params+secret. If anything
+    // fails, log and proceed without cancellation (preserve today's behavior).
+    let cancel_info: Option<(Uuid, MysqlCancel)> = match run_token
+        .as_deref()
+        .and_then(|t| Uuid::parse_str(t).ok())
+    {
+        None => None,
+        Some(token) => {
+            let db = app.state::<DbState>();
+            match load_connection_input(&db.0, id) {
+                Ok((params, secret)) => Some((token, MysqlCancel { params, secret })),
+                Err(e) => {
+                    tracing::warn!("mysql_run_sql: could not load cancel context: {e:?}");
+                    None
+                }
+            }
+        }
+    };
+
+    let result = match &cancel_info {
+        Some((token, cancel)) => {
+            run_single_sql(&pool, &sql, read_only, Some((&cancel_registry, *token, cancel))).await
+        }
+        None => run_single_sql(&pool, &sql, read_only, None).await,
+    };
     let duration_ms = started.elapsed().as_millis() as u64;
 
     let builder = ActivityLogEntryBuilder::new(ActivityKind::RunSql, activity_origin, duration_ms)
@@ -936,9 +1001,11 @@ pub async fn mysql_run_sql(
 pub async fn mysql_run_sql_many(
     app: AppHandle,
     registry: State<'_, MysqlPoolRegistry>,
+    cancel_registry: State<'_, RunningQueryRegistry>,
     id: Uuid,
     statements: Vec<String>,
     origin: Option<Origin>,
+    run_token: Option<String>,
 ) -> AppResult<MultiSqlResult> {
     let started_wall_ms = now_unix_ms();
     let started = Instant::now();
@@ -947,6 +1014,25 @@ pub async fn mysql_run_sql_many(
 
     let pool = registry.acquire(id)?;
     let read_only = registry.read_only_for(id).unwrap_or(false);
+
+    // Resolve cancel context once before the loop. If anything fails, proceed
+    // without cancellation (preserve today's behavior).
+    let cancel_info: Option<(Uuid, MysqlCancel)> = match run_token
+        .as_deref()
+        .and_then(|t| Uuid::parse_str(t).ok())
+    {
+        None => None,
+        Some(token) => {
+            let db = app.state::<DbState>();
+            match load_connection_input(&db.0, id) {
+                Ok((params, secret)) => Some((token, MysqlCancel { params, secret })),
+                Err(e) => {
+                    tracing::warn!("mysql_run_sql_many: could not load cancel context: {e:?}");
+                    None
+                }
+            }
+        }
+    };
 
     // Split if single-statement batch is passed (frontend can pass either).
     let stmts: Vec<String> = if statements.len() == 1 {
@@ -960,6 +1046,7 @@ pub async fn mysql_run_sql_many(
 
     let mut outcomes: Vec<StatementOutcome> = Vec::with_capacity(stmts.len());
     let mut errored = false;
+    let mut cancelled = false;
     let mut total_items: u64 = 0;
 
     for (idx, stmt) in stmts.iter().enumerate() {
@@ -987,7 +1074,7 @@ pub async fn mysql_run_sql_many(
             break;
         }
 
-        if errored {
+        if errored || cancelled {
             outcomes.push(StatementOutcome::Skipped {
                 index: idx,
                 sql: stmt.clone(),
@@ -995,12 +1082,23 @@ pub async fn mysql_run_sql_many(
             continue;
         }
 
-        // Per-statement timeout.
+        // Per-statement timeout. Note: run_single_sql now has its own internal
+        // RUN_SQL_TIMEOUT, so we only add the outer timeout for total budget.
         let remaining = MANY_TOTAL_TIMEOUT.saturating_sub(elapsed);
         let per_stmt_timeout = remaining.min(RUN_SQL_TIMEOUT);
 
-        let stmt_result =
-            tokio::time::timeout(per_stmt_timeout, run_single_sql(&pool, stmt, read_only)).await;
+        let stmt_result = tokio::time::timeout(
+            per_stmt_timeout,
+            run_single_sql(
+                &pool,
+                stmt,
+                read_only,
+                cancel_info
+                    .as_ref()
+                    .map(|(token, cancel)| (&*cancel_registry, *token, cancel)),
+            ),
+        )
+        .await;
 
         match stmt_result {
             Ok(Ok(result)) => {
@@ -1014,6 +1112,18 @@ pub async fn mysql_run_sql_many(
                     sql: stmt.clone(),
                     result,
                 });
+            }
+            Ok(Err(ref e)) if matches!(e, AppError::Cancelled(_)) => {
+                // Cancelled — stop the batch and return immediately.
+                cancelled = true;
+                // Mark the remaining statements as skipped.
+                for (i, s) in stmts.iter().enumerate().skip(idx + 1) {
+                    outcomes.push(StatementOutcome::Skipped {
+                        index: i,
+                        sql: s.clone(),
+                    });
+                }
+                break;
             }
             Ok(Err(e)) => {
                 outcomes.push(StatementOutcome::Err {
@@ -1036,6 +1146,11 @@ pub async fn mysql_run_sql_many(
                 errored = true;
             }
         }
+    }
+
+    // If the batch was cancelled, return immediately with the cancelled error.
+    if cancelled {
+        return Err(AppError::cancelled());
     }
 
     let duration_ms = started.elapsed().as_millis() as u64;

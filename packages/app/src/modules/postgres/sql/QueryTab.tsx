@@ -684,6 +684,18 @@ function QueryTab({ tabId, payload }: InnerProps) {
             <span>Format</span>
             <span className={styles.kbd}>{FORMAT_HINT}</span>
           </button>
+          <span className={styles.toolbarDivider} aria-hidden="true" />
+          {runner.state.status === "running" ? (
+            <button
+              type="button"
+              className={styles.toolbarButton}
+              onClick={() => runner.cancel()}
+              style={{ color: "var(--danger)" }}
+              title="Stop query (Mod+.)"
+            >
+              Stop
+            </button>
+          ) : null}
         </div>
         {payload.contextQuery && payload.contextQuery.params.length > 0 && (
           <ParamStrip
@@ -706,6 +718,7 @@ function QueryTab({ tabId, payload }: InnerProps) {
                 onRunAll={onRunAll}
                 onFormat={onFormat}
                 onSave={onSave}
+                onCancel={() => runner.cancel()}
               />
             ) : (
               <div className={styles.editorPlaceholder}>Loading editor…</div>

@@ -3,6 +3,11 @@
  *
  * Mirrors Athena's useQueryRun but uses dynamoRunPartiql / dynamoRunPartiqlMany.
  * Splits multi-statement bodies on ";" (same helper as MySQL/Athena).
+ *
+ * NOTE: unlike the SQL engines (Postgres/MySQL/MSSQL) and the async engines
+ * (Athena/CloudWatch), DynamoDB exposes no server-side abort API for
+ * ExecuteStatement/scan/query, so there is intentionally no Stop/cancel
+ * affordance here (issue #193). A PartiQL run cannot be cancelled mid-flight.
  */
 
 import { useCallback, useState } from "react";

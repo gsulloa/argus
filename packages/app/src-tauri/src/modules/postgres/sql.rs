@@ -9,6 +9,7 @@
 //! wire, but doing the check in this module lets us return a clean validation
 //! error before dispatch and lets multi-statement runs halt cleanly.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use deadpool_postgres::Object as PgObject;
@@ -27,6 +28,7 @@ use crate::modules::activity_log::{
 };
 use crate::modules::postgres::data::{fire_cancel, DataColumn};
 use crate::modules::postgres::pool::PgPoolRegistry;
+use crate::modules::query_cancel::{CancelAction, RunningQueryRegistry};
 use crate::modules::query_history::{self, HistoryOrigin, HistoryStatus, NewEntry};
 use crate::platform::DbState;
 
@@ -601,9 +603,11 @@ fn record_history_err(
 pub async fn postgres_run_sql(
     app: AppHandle,
     pools: State<'_, PgPoolRegistry>,
+    registry: State<'_, RunningQueryRegistry>,
     id: String,
     sql: String,
     origin: Option<Origin>,
+    run_token: Option<String>,
 ) -> AppResult<RunSqlResult> {
     let started_wall_ms = now_unix_ms();
     let started = Instant::now();
@@ -626,7 +630,24 @@ pub async fn postgres_run_sql(
         let sslmode = pools.sslmode_for(&parsed).await?;
         let client = pools.acquire(&parsed).await?;
         let cancel_token = client.cancel_token();
-        match timeout(RUN_SQL_TIMEOUT, run_one(&client, &sql, is_read_only)).await {
+
+        // Register with the cancel registry if a run_token was supplied.
+        let _guard = if let Some(ref tok_str) = run_token {
+            if let Ok(token) = Uuid::parse_str(tok_str) {
+                let ct = cancel_token.clone();
+                let action: CancelAction = Arc::new(move || {
+                    let ct = ct.clone();
+                    Box::pin(async move { fire_cancel(ct, sslmode).await })
+                });
+                Some(registry.register(token, action).await)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let result = match timeout(RUN_SQL_TIMEOUT, run_one(&client, &sql, is_read_only)).await {
             Ok(r) => r,
             Err(_) => {
                 fire_cancel(cancel_token, sslmode).await;
@@ -636,7 +657,14 @@ pub async fn postgres_run_sql(
                     format!("run-sql timed out ({}s)", RUN_SQL_TIMEOUT.as_secs()),
                 ))
             }
+        };
+
+        // If the run was cancelled, override any result/error with the neutral cancelled error.
+        if _guard.as_ref().map_or(false, |g| g.cancelled()) {
+            return Err(AppError::cancelled());
         }
+
+        result
     }
     .await;
 
@@ -679,9 +707,11 @@ pub async fn postgres_run_sql(
 pub async fn postgres_run_sql_many(
     app: AppHandle,
     pools: State<'_, PgPoolRegistry>,
+    registry: State<'_, RunningQueryRegistry>,
     id: String,
     statements: Vec<String>,
     origin: Option<Origin>,
+    run_token: Option<String>,
 ) -> AppResult<Vec<RunManyOutcome>> {
     let activity_origin = origin.unwrap_or(Origin::User);
     let parsed = parse_id(&id)?;
@@ -702,6 +732,22 @@ pub async fn postgres_run_sql_many(
     let client = pools.acquire(&parsed).await?;
     let cancel_token = client.cancel_token();
     let connection_name = fetch_connection_name(&app, parsed);
+
+    // Register with the cancel registry once for the whole batch.
+    let guard = if let Some(ref tok_str) = run_token {
+        if let Ok(token) = Uuid::parse_str(tok_str) {
+            let ct = cancel_token.clone();
+            let action: CancelAction = Arc::new(move || {
+                let ct = ct.clone();
+                Box::pin(async move { fire_cancel(ct, sslmode).await })
+            });
+            Some(registry.register(token, action).await)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let mut outcomes: Vec<RunManyOutcome> = Vec::with_capacity(statements.len());
     let mut halted = false;
@@ -724,6 +770,12 @@ pub async fn postgres_run_sql_many(
         let started = Instant::now();
         let result = timeout(RUN_SQL_TIMEOUT, run_one(&client, sql, is_read_only)).await;
         let total_ms = started.elapsed().as_millis() as u64;
+
+        // If the batch was cancelled during this statement, stop immediately.
+        if guard.as_ref().map_or(false, |g| g.cancelled()) {
+            drop(client);
+            return Err(AppError::cancelled());
+        }
 
         let builder = ActivityLogEntryBuilder::new(ActivityKind::RunSql, activity_origin, total_ms)
             .connection(parsed)
