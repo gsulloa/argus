@@ -4,7 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppError } from "@/platform/errors/AppError";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
-import { copyCellValue } from "@/platform/grid/cellClipboard";
+import { copyCellValue, formatRowsTSV } from "@/platform/grid/cellClipboard";
 import { EditableCell, looksLikeBytea } from "./EditableCell";
 import { pixelYToRowIndex } from "./dragRowIndex";
 import { headerFloorWidthFor } from "./headerMeasure";
@@ -185,6 +185,43 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     selection.anchor === null
       ? -1
       : Math.max(selection.anchor, selection.active ?? selection.anchor);
+
+  // -----------------------------------------------------------------------
+  // Row-range copy-to-clipboard on Ctrl/Cmd+C.
+  // Early-returns when a single cell is active so the keydown handler owns
+  // that path. Resolves cell values via the edit buffer so pending edits are
+  // reflected in the copied TSV.
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    function handleCopy(e: ClipboardEvent) {
+      // Single-cell takes precedence — handled by the keydown handler.
+      if (activeCell !== null) return;
+      const { anchor, active } = selection;
+      if (anchor === null || active === null) return;
+      const from = Math.min(anchor, active);
+      const to = Math.max(anchor, active);
+      const resolved: unknown[][] = [];
+      for (let i = from; i <= to; i++) {
+        const row = rows[i];
+        if (!row) continue;
+        const editsEntry = row.rowKey ? buffer.getRowEdits(row.rowKey) : undefined;
+        const resolvedCells = columns.map((col, colIdx) => {
+          const serverValue = row.cells[colIdx] ?? null;
+          if (editsEntry && col.name in editsEntry.changes) {
+            return editsEntry.changes[col.name] as EditValue;
+          }
+          return serverValue;
+        });
+        resolved.push(resolvedCells);
+      }
+      if (resolved.length > 0) {
+        e.clipboardData?.setData("text/plain", formatRowsTSV(resolved));
+        e.preventDefault();
+      }
+    }
+    window.addEventListener("copy", handleCopy);
+    return () => window.removeEventListener("copy", handleCopy);
+  }, [selection, rows, activeCell, columns, buffer]);
 
   // -----------------------------------------------------------------------
   // Keyboard handler: Backspace / Delete toggles bulk delete; Escape clears;

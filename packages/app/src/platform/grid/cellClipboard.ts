@@ -43,6 +43,17 @@ export function formatCellValue(value: unknown): string {
 }
 
 /**
+ * Serialize a 2-D array of cell values to a TSV string suitable for pasting
+ * into a spreadsheet. Each row's cells are joined by `\t`; rows are joined by
+ * `\n`. Cell values are formatted via `formatCellValue` so output is
+ * byte-for-byte identical to a sequence of single-cell copies. An empty input
+ * array returns `""`.
+ */
+export function formatRowsTSV(rows: unknown[][]): string {
+  return rows.map((cells) => cells.map(formatCellValue).join("\t")).join("\n");
+}
+
+/**
  * Write a cell value to the system clipboard. Formats via `formatCellValue`,
  * then writes with `navigator.clipboard.writeText`. Any error is swallowed
  * (logged as a warning) so callers never need to handle clipboard failures.
