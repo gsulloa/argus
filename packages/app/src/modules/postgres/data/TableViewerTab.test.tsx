@@ -450,3 +450,95 @@ describe("TableViewerTab — first-mount fetch gating (Tauri lane)", () => {
     expect(options.filter_tree).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// PK error-state banner tests (task 3.4)
+// ---------------------------------------------------------------------------
+
+let pkErrorCounter = 0;
+function uniquePkErrorViewer() {
+  pkErrorCounter++;
+  return renderViewer({
+    connectionId: `conn-pkerr-${pkErrorCounter}`,
+    schema: "public",
+    relation: `table-pkerr-${pkErrorCounter}`,
+  });
+}
+
+describe("TableViewerTab — PK lookup error state (Tauri lane)", () => {
+  beforeEach(() => {
+    queryTableMock.mockReset();
+    tablePrimaryKeyMock.mockReset();
+    getSettingMock.mockReset();
+    setSettingMock.mockReset();
+    getSettingMock.mockResolvedValue(null);
+    setSettingMock.mockResolvedValue(undefined);
+    queryTableMock.mockResolvedValue(makeResult(1));
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  });
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+
+  it("3.4a: rejected tablePrimaryKey shows the PK error banner and NOT the no-PK banner", async () => {
+    tablePrimaryKeyMock.mockRejectedValue(new Error("connection reset by peer"));
+
+    uniquePkErrorViewer();
+
+    await waitFor(() => {
+      // The retry banner must mention the error cause.
+      expect(screen.getByText(/connection reset by peer/i)).toBeInTheDocument();
+    });
+
+    // Must have a Retry button.
+    expect(screen.getByRole("button", { name: /Retry primary key lookup/i })).toBeInTheDocument();
+
+    // Must NOT show the "No primary key" banner.
+    expect(screen.queryByText(/No primary key/i)).toBeNull();
+  });
+
+  it("3.4b: clicking Retry re-invokes tablePrimaryKey and, on success, removes the error banner", async () => {
+    // First call fails.
+    tablePrimaryKeyMock.mockRejectedValueOnce(new Error("timeout"));
+    // Second call (after Retry) succeeds with a real PK.
+    tablePrimaryKeyMock.mockResolvedValue({ pk_columns: ["id"], enums: {} });
+
+    uniquePkErrorViewer();
+
+    // Wait for the error banner to appear.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Retry primary key lookup/i })).toBeInTheDocument();
+    });
+
+    // Click Retry.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Retry primary key lookup/i }));
+      await Promise.resolve();
+    });
+
+    // After successful retry, the error banner should be gone.
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /Retry primary key lookup/i })).toBeNull();
+    });
+
+    // The no-PK banner should also not be visible (PK is now known).
+    expect(screen.queryByText(/No primary key/i)).toBeNull();
+
+    // tablePrimaryKey was called twice total (initial + retry).
+    expect(tablePrimaryKeyMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("3.4c: genuine pk_columns: null success still shows the no-PK banner (not the error banner)", async () => {
+    tablePrimaryKeyMock.mockResolvedValue({ pk_columns: null, enums: {} });
+
+    uniquePkErrorViewer();
+
+    await waitFor(() => {
+      expect(screen.getByText(/No primary key/i)).toBeInTheDocument();
+    });
+
+    // Must NOT show the retry/error banner.
+    expect(screen.queryByRole("button", { name: /Retry primary key lookup/i })).toBeNull();
+  });
+});

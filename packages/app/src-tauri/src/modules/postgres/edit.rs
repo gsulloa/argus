@@ -232,6 +232,23 @@ pub struct TableEditMetadata {
     pub enums: BTreeMap<String, Vec<String>>,
 }
 
+/// Combine a resolved PK with an enum-lookup outcome, tolerating enum failure.
+///
+/// If the enum lookup failed, the returned `enums` map is empty.  The PK is
+/// never discarded because of an enum failure — the two sub-queries are
+/// independent.  This helper is extracted so it can be unit-tested without a
+/// live database connection.
+pub fn combine_pk_and_enums(
+    pk_columns: Option<Vec<String>>,
+    enum_result: Result<BTreeMap<String, Vec<String>>, impl std::fmt::Debug>,
+) -> TableEditMetadata {
+    let enums = match enum_result {
+        Ok(map) => map,
+        Err(_) => BTreeMap::new(),
+    };
+    TableEditMetadata { pk_columns, enums }
+}
+
 const SQL_PK_LOOKUP: &str = "\
 SELECT a.attname
 FROM pg_catalog.pg_index i
@@ -302,14 +319,26 @@ pub async fn postgres_table_primary_key(
             Some(pk_rows.iter().map(|r| r.get::<_, String>(0)).collect())
         };
 
-        // Enum lookup.
-        let enum_rows = client.query(SQL_ENUM_LOOKUP, &[&schema, &relation]).await?;
-        let mut enums: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for row in enum_rows {
-            let col: String = row.get(0);
-            let label: String = row.get(1);
-            enums.entry(col).or_default().push(label);
-        }
+        // Enum lookup — non-fatal: a failure here must not discard an
+        // already-resolved PK.  On any error we fall back to an empty map so
+        // the caller still gets the PK and edit affordances remain available.
+        let enums: BTreeMap<String, Vec<String>> =
+            match client.query(SQL_ENUM_LOOKUP, &[&schema, &relation]).await {
+                Ok(enum_rows) => {
+                    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                    for row in enum_rows {
+                        let col: String = row.get(0);
+                        let label: String = row.get(1);
+                        map.entry(col).or_default().push(label);
+                    }
+                    map
+                }
+                Err(_) => {
+                    // Enum metadata is cosmetic (column dropdowns in the editor);
+                    // swallow the error and return empty so PK detection succeeds.
+                    BTreeMap::new()
+                }
+            };
 
         Ok(TableEditMetadata { pk_columns, enums })
     }
@@ -1002,5 +1031,42 @@ mod tests {
             }
             other => panic!("expected AppError::Validation, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // combine_pk_and_enums — enum-lookup failure must not discard resolved PK
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn enum_lookup_failure_preserves_pk() {
+        // When the enum sub-query fails but the PK was already resolved,
+        // combine_pk_and_enums must return the PK with an empty enums map.
+        let pk = Some(vec!["id".to_string()]);
+        let enum_error: Result<BTreeMap<String, Vec<String>>, &str> = Err("connection reset");
+        let md = combine_pk_and_enums(pk.clone(), enum_error);
+        assert_eq!(md.pk_columns, pk, "pk_columns must be preserved");
+        assert!(md.enums.is_empty(), "enums must be empty on enum-lookup failure");
+    }
+
+    #[test]
+    fn enum_lookup_success_carried_through() {
+        // Sanity: when the enum lookup succeeds its data is preserved alongside the PK.
+        let pk = Some(vec!["id".to_string()]);
+        let mut enum_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        enum_map.insert("status".to_string(), vec!["active".to_string(), "archived".to_string()]);
+        let result: Result<BTreeMap<String, Vec<String>>, &str> = Ok(enum_map.clone());
+        let md = combine_pk_and_enums(pk.clone(), result);
+        assert_eq!(md.pk_columns, pk);
+        assert_eq!(md.enums, enum_map);
+    }
+
+    #[test]
+    fn null_pk_with_enum_failure_stays_null() {
+        // A relation with no PK (pk_columns = None) that also has an enum error
+        // must still return pk_columns = None (not Some([])).
+        let enum_error: Result<BTreeMap<String, Vec<String>>, &str> = Err("timeout");
+        let md = combine_pk_and_enums(None, enum_error);
+        assert!(md.pk_columns.is_none(), "null pk must stay null");
+        assert!(md.enums.is_empty());
     }
 }

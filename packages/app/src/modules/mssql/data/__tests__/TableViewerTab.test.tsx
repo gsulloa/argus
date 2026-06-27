@@ -8,8 +8,8 @@
  * - columnNotes from contextDoc.human.column_notes flow into structure rendering.
  */
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, type Mock } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TabsProvider } from "@/platform/shell/tabs/TabsContext";
 import { MssqlTableViewerTab } from "../TableViewerTab";
 import type { Tab } from "@/platform/shell/tabs/types";
@@ -147,6 +147,7 @@ import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import type { ObjectListItem, ObjectDoc } from "@/modules/context/types";
 import { useEditBuffer } from "../useEditBuffer";
 import { useTableData } from "../useTableData";
+import { dataApi } from "../api";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -509,5 +510,79 @@ describe("MssqlTableViewerTab — guarded refresh (discard-pending-changes)", ()
     expect(screen.queryByRole("button", { name: /^Discard$/i })).toBeNull();
     // Refresh called immediately.
     expect(tableData.refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5.1/5.2 — PK lookup error state: error banner, Retry, genuine no-PK banner
+// ---------------------------------------------------------------------------
+
+describe("MssqlTableViewerTab — PK lookup error state", () => {
+  const tablePrimaryKeyMock = dataApi.tablePrimaryKey as Mock;
+
+  beforeEach(() => {
+    // Reset call history and restore default success state before each test
+    tablePrimaryKeyMock.mockClear();
+    tablePrimaryKeyMock.mockResolvedValue({ columns: ["id"] });
+  });
+
+  it("shows error banner (not 'No primary key') when PK lookup rejects", async () => {
+    tablePrimaryKeyMock.mockRejectedValue(new Error("connection timeout"));
+
+    renderViewer(makeTab());
+
+    await waitFor(() => {
+      expect(screen.getByText(/Could not determine primary key/i)).toBeInTheDocument();
+    });
+
+    // Error message is surfaced
+    expect(screen.getByText(/connection timeout/i)).toBeInTheDocument();
+
+    // Retry button is present
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+
+    // The "No primary key" banner must NOT appear
+    expect(screen.queryByText(/No primary key — existing rows cannot be edited/i)).toBeNull();
+  });
+
+  it("Retry re-invokes the PK command and removes the error banner on success", async () => {
+    // First call fails, second call succeeds with a PK
+    tablePrimaryKeyMock
+      .mockRejectedValueOnce(new Error("transient error"))
+      .mockResolvedValueOnce({ columns: ["id"] });
+
+    renderViewer(makeTab());
+
+    // Wait for the error banner to appear
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    });
+
+    // Click Retry
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+    // After successful retry, the error banner disappears
+    await waitFor(() => {
+      expect(screen.queryByText(/Could not determine primary key/i)).toBeNull();
+    });
+
+    // tablePrimaryKey was called twice (initial + retry)
+    expect(tablePrimaryKeyMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows 'No primary key' banner when PK lookup succeeds with columns: null", async () => {
+    tablePrimaryKeyMock.mockResolvedValue({ columns: null });
+
+    renderViewer(makeTab());
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No primary key — existing rows cannot be edited/i),
+      ).toBeInTheDocument();
+    });
+
+    // Error banner must NOT appear
+    expect(screen.queryByText(/Could not determine primary key/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
   });
 });

@@ -20,7 +20,7 @@ import { useSaveShortcut } from "@/platform/shell/useSaveShortcut";
 import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import { DocsSubtab } from "@/modules/context/components/DocsSubtab";
 import { useActiveMssqlConnections } from "../useActiveConnections";
-import { AppError } from "@/platform/errors/AppError";
+import { AppError, toAppError } from "@/platform/errors/AppError";
 import { dataApi } from "./api";
 import { DataGrid, type DataGridHandle, type UnifiedRow } from "./DataGrid";
 import { FilterBar } from "./FilterBar";
@@ -137,6 +137,7 @@ function MssqlTableViewer({
   // Primary key
   const [pkResult, setPkResult] = useState<PrimaryKeyResult | null>(null);
   const [pkLoading, setPkLoading] = useState(false);
+  const [pkError, setPkError] = useState<AppError | null>(null);
   // Whether the PK lookup has settled (resolved or failed). Gates the first
   // data fetch so it carries the PK-derived default order.
   const [pkSettled, setPkSettled] = useState(false);
@@ -234,20 +235,22 @@ function MssqlTableViewer({
   const gridRef = useRef<DataGridHandle | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  // Load PK on mount
-  useEffect(() => {
-    if (!connectionId || !schema || !relation) return;
+  // Load PK — extracted so Retry can re-invoke the same fetch.
+  const loadPk = useCallback(() => {
+    if (!connectionId || !schema || !relation) return () => {};
     let cancelled = false;
     setPkLoading(true);
+    setPkError(null);
     dataApi
       .tablePrimaryKey(connectionId, schema, relation, "auto")
       .then((pk) => {
         if (cancelled) return;
         setPkResult(pk);
       })
-      .catch(() => {
+      .catch((e) => {
         if (cancelled) return;
         setPkResult(null);
+        setPkError(toAppError(e));
       })
       .finally(() => {
         if (!cancelled) {
@@ -259,6 +262,11 @@ function MssqlTableViewer({
       cancelled = true;
     };
   }, [connectionId, schema, relation]);
+
+  // Load PK on mount
+  useEffect(() => {
+    return loadPk();
+  }, [loadPk]);
 
   // §19.6 — dirty-buffer close guard
   useDirtySummary(
@@ -637,8 +645,44 @@ function MssqlTableViewer({
         </div>
       )}
 
-      {/* §19.5 — No-PK banner */}
-      {!pkLoading && pkColumns === null && !isView && (
+      {/* §19.5 — PK lookup error banner (shown when lookup failed, not on genuine no-PK) */}
+      {!pkLoading && pkError && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "3px 10px",
+            fontSize: 11,
+            color: "var(--text-muted)",
+            background: "var(--bg-sidebar)",
+            borderBottom: "1px solid var(--border)",
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ flex: 1 }}>
+            Could not determine primary key — {pkError.message}
+          </span>
+          <button
+            type="button"
+            onClick={loadPk}
+            style={{
+              background: "transparent",
+              border: "1px solid var(--border)",
+              borderRadius: 3,
+              cursor: "pointer",
+              color: "var(--text-muted)",
+              fontSize: 11,
+              padding: "1px 6px",
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* §19.5 — No-PK banner (only on settled success with null columns) */}
+      {!pkLoading && !pkError && pkColumns === null && !isView && (
         <div
           style={{
             padding: "3px 10px",
