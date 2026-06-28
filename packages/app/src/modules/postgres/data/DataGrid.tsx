@@ -4,7 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppError } from "@/platform/errors/AppError";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
-import { copyCellValue, copyRowsTsv } from "@/platform/grid/cellClipboard";
+import { copyCellValue, copyRowsTsv, formatRowsTSV } from "@/platform/grid/cellClipboard";
 import { EditableCell, looksLikeBytea } from "./EditableCell";
 import { RowContextMenu } from "./RowContextMenu";
 import { pixelYToRowIndex } from "./dragRowIndex";
@@ -268,6 +268,37 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     selection.anchor === null
       ? -1
       : Math.max(selection.anchor, selection.active ?? selection.anchor);
+
+  // -----------------------------------------------------------------------
+  // Row-range copy-to-clipboard on Ctrl/Cmd+C.
+  // Early-returns when a single cell is active so the keydown handler owns
+  // that path. Resolves cell values via the edit buffer so pending edits are
+  // reflected in the copied TSV.
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    function handleCopy(e: ClipboardEvent) {
+      // Single-cell takes precedence — handled by the keydown handler.
+      if (activeCell !== null) return;
+      const { anchor, active } = selection;
+      if (anchor === null || active === null) return;
+      const from = Math.min(anchor, active);
+      const to = Math.max(anchor, active);
+      const resolved: unknown[][] = [];
+      for (let i = from; i <= to; i++) {
+        const row = rows[i];
+        if (!row) continue;
+        resolved.push(
+          columns.map((_, colIdx) => resolveCellDisplayValue(rows, columns, buffer, i, colIdx)),
+        );
+      }
+      if (resolved.length > 0) {
+        e.clipboardData?.setData("text/plain", formatRowsTSV(resolved));
+        e.preventDefault();
+      }
+    }
+    window.addEventListener("copy", handleCopy);
+    return () => window.removeEventListener("copy", handleCopy);
+  }, [selection, rows, activeCell, columns, buffer]);
 
   // -----------------------------------------------------------------------
   // Keyboard handler: Backspace / Delete toggles bulk delete; Escape clears;
@@ -590,7 +621,10 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
               const targetRows: unknown[][] = [];
               for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
                 const tr = rows[i];
-                if (tr) targetRows.push(tr.cells);
+                if (!tr) continue;
+                targetRows.push(
+                  columns.map((_, colIdx) => resolveCellDisplayValue(rows, columns, buffer, i, colIdx)),
+                );
               }
               void copyRowsTsv(targetRows, columns.map((c) => c.name));
             }

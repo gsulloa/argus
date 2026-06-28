@@ -22,7 +22,7 @@ import { AppError } from "@/platform/errors/AppError";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import { headerFloorWidthFor } from "@/modules/postgres/data/headerMeasure";
-import { copyCellValue, copyRowsTsv, formatCellValue } from "@/platform/grid/cellClipboard";
+import { copyCellValue, copyRowsTsv, formatCellValue, formatRowsTSV } from "@/platform/grid/cellClipboard";
 import { EditableCell } from "./EditableCell";
 import { RowContextMenu } from "@/modules/postgres/data/RowContextMenu";
 import type { ColumnInfo, OrderBy } from "../types";
@@ -160,6 +160,8 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
 
   // Row-range copy-to-clipboard on Ctrl/Cmd+C (§18.7).
   // Early-returns when a single cell is active so the keydown handler owns that path.
+  // Resolves cell values via the edit buffer so pending edits are reflected in the
+  // copied TSV.
   useEffect(() => {
     function handleCopy(e: ClipboardEvent) {
       // Single-cell takes precedence — handled by the keydown handler.
@@ -168,20 +170,24 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
       if (anchor === null || active === null) return;
       const from = Math.min(anchor, active);
       const to = Math.max(anchor, active);
-      const lines: string[] = [];
+      const columnNames = columns.map((c) => c.name);
+      const resolved: unknown[][] = [];
       for (let i = from; i <= to; i++) {
         const row = rows[i];
         if (!row) continue;
-        lines.push(row.cells.map(formatCellValue).join("\t"));
+        const resolvedCells = columns.map((col) =>
+          buffer.getDisplayValue(row.rowKey, row.cells, columnNames, col.name),
+        );
+        resolved.push(resolvedCells);
       }
-      if (lines.length > 0) {
-        e.clipboardData?.setData("text/plain", lines.join("\n"));
+      if (resolved.length > 0) {
+        e.clipboardData?.setData("text/plain", formatRowsTSV(resolved));
         e.preventDefault();
       }
     }
     window.addEventListener("copy", handleCopy);
     return () => window.removeEventListener("copy", handleCopy);
-  }, [selection, rows, activeCell]);
+  }, [selection, rows, activeCell, columns, buffer]);
 
   function onCellClick(e: React.MouseEvent, rowIdx: number, colIdx: number) {
     if (e.shiftKey && selection.anchor !== null) {
@@ -410,12 +416,16 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
             }
 
             function handleCtxCopyRows() {
+              const columnNames = columns.map((c) => c.name);
               const targetRows: unknown[][] = [];
               for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
                 const tr = rows[i];
-                if (tr) targetRows.push(tr.cells);
+                if (!tr) continue;
+                targetRows.push(
+                  columns.map((col) => buffer.getDisplayValue(tr.rowKey, tr.cells, columnNames, col.name)),
+                );
               }
-              void copyRowsTsv(targetRows, columns.map((c) => c.name));
+              void copyRowsTsv(targetRows, columnNames);
             }
 
             function handleCtxEditCell() {

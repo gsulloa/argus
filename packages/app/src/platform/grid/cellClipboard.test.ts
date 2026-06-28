@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { formatCellValue, copyRowsTsv } from "./cellClipboard";
+import { formatCellValue, formatRowsTSV, copyRowsTsv } from "./cellClipboard";
 
 describe("formatCellValue", () => {
   it("formats null as empty string", () => {
@@ -45,6 +45,24 @@ describe("formatCellValue", () => {
   it("formats a truncated cell envelope as its preview", () => {
     const envelope = { kind: "truncated" as const, preview: "long text…", byte_length: 2048 };
     expect(formatCellValue(envelope)).toBe("long text…");
+  });
+});
+
+describe("formatRowsTSV", () => {
+  it("formats mixed values in one row: number, null, boolean, object", () => {
+    expect(formatRowsTSV([[42, null, true, { a: 1 }]])).toBe('42\t\ttrue\t{"a":1}');
+  });
+
+  it("joins multiple rows with newlines", () => {
+    expect(formatRowsTSV([["a", "b"], ["c", "d"]])).toBe("a\tb\nc\td");
+  });
+
+  it("handles a single row", () => {
+    expect(formatRowsTSV([["hello", 123]])).toBe("hello\t123");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(formatRowsTSV([])).toBe("");
   });
 });
 
