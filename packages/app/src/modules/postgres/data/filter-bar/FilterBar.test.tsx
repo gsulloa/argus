@@ -448,3 +448,107 @@ describe("FilterBar — Apply All with no enabled rows", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Plain Enter / Shift+Enter keyboard behavior (issue #198)
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — plain Enter applies focused row", () => {
+  // 3.1: Plain Enter with focus inside row 1 calls onApplyOnlyRow(1), not onApplyAll.
+  it("plain Enter with focus inside row 1 calls onApplyOnlyRow(1) and not onApplyAll", () => {
+    const onApplyOnlyRow = vi.fn();
+    const onApplyAll = vi.fn();
+    const draft = modelWithRows(2);
+    const { container } = render(
+      <FilterBar {...makeProps({ draft, onApplyOnlyRow, onApplyAll })} />,
+    );
+    // Focus an element inside row 1 (its checkbox).
+    const checkbox1 = container.querySelector(
+      "[data-filter-row-index='1'] input[type='checkbox']",
+    ) as HTMLElement;
+    checkbox1?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter" });
+    expect(onApplyOnlyRow).toHaveBeenCalledWith(1);
+    expect(onApplyAll).not.toHaveBeenCalled();
+  });
+
+  // 3.2: Plain Enter applies focused row even when that row's enabled checkbox is unchecked.
+  it("plain Enter applies the focused row even when its enabled checkbox is unchecked", () => {
+    const onApplyOnlyRow = vi.fn();
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [
+        { enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
+        { enabled: false, column: { kind: "named", name: "country" }, op: "Contains", value: "CL" },
+      ],
+      combinator: "AND",
+    };
+    const { container } = render(
+      <FilterBar {...makeProps({ draft, onApplyOnlyRow, onDraftChange })} />,
+    );
+    // Focus an element inside row 1 (the unchecked row).
+    const checkbox1 = container.querySelector(
+      "[data-filter-row-index='1'] input[type='checkbox']",
+    ) as HTMLElement;
+    checkbox1?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter" });
+    expect(onApplyOnlyRow).toHaveBeenCalledWith(1);
+    // enabled flag must NOT have been changed by the Enter gesture.
+    expect(onDraftChange).not.toHaveBeenCalled();
+  });
+
+  // 3.3: Shift+Enter (no meta) calls onApplyAll, not onApplyOnlyRow.
+  it("Shift+Enter calls onApplyAll and does NOT call onApplyOnlyRow", () => {
+    const onApplyOnlyRow = vi.fn();
+    const onApplyAll = vi.fn();
+    const draft = modelWithRows(2);
+    const { container } = render(
+      <FilterBar {...makeProps({ draft, onApplyOnlyRow, onApplyAll })} />,
+    );
+    const checkbox1 = container.querySelector(
+      "[data-filter-row-index='1'] input[type='checkbox']",
+    ) as HTMLElement;
+    checkbox1?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter", shiftKey: true });
+    expect(onApplyAll).toHaveBeenCalled();
+    expect(onApplyOnlyRow).not.toHaveBeenCalled();
+  });
+
+  // 3.4: Enter in a chip input with non-empty value does NOT call onApplyOnlyRow or onApplyAll.
+  it("Enter in a chip input with non-empty draft text does NOT call onApplyOnlyRow or onApplyAll", () => {
+    const onApplyOnlyRow = vi.fn();
+    const onApplyAll = vi.fn();
+    const draft = modelWithRows(1);
+    const { container } = render(
+      <FilterBar {...makeProps({ draft, onApplyOnlyRow, onApplyAll })} />,
+    );
+    // Simulate a chip input: create a focused input inside the bar root with dataset.chipInput=true and a non-empty value.
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    const fakeChipInput = document.createElement("input");
+    fakeChipInput.dataset.chipInput = "true";
+    fakeChipInput.value = "some text";
+    barRoot.appendChild(fakeChipInput);
+    fakeChipInput.focus();
+    fireEvent.keyDown(barRoot, { key: "Enter" });
+    expect(onApplyOnlyRow).not.toHaveBeenCalled();
+    expect(onApplyAll).not.toHaveBeenCalled();
+    // Cleanup.
+    barRoot.removeChild(fakeChipInput);
+  });
+
+  // 3.5: Footer renders both "Apply row: ↵" and "Apply All: ⇧↵" hints.
+  it("footer hint strip renders 'Apply row:' with ↵ and 'Apply All:' with ⇧↵", () => {
+    render(<FilterBar {...makeProps()} />);
+    expect(screen.getByText(/Apply row:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Apply All:/i)).toBeInTheDocument();
+    // FilterKeyHint renders keys as text inside <kbd> elements.
+    // Check that both key hints exist in the document.
+    const kbdEls = document.querySelectorAll("kbd");
+    const kbdTexts = Array.from(kbdEls).map((el) => el.textContent);
+    expect(kbdTexts).toContain("↵");
+    expect(kbdTexts).toContain("⇧↵");
+  });
+});

@@ -24,7 +24,7 @@ export function RowApplyButton({
       type="button"
       className={[styles.applyBtn, applied ? styles.applied : ""].filter(Boolean).join(" ")}
       aria-label={ariaLabel ?? (applied ? "Applied — click to re-apply" : "Apply only this row")}
-      title={title ?? (applied ? "Applied — click to re-apply" : "Apply only this row (replaces active filter)")}
+      title={title ?? (applied ? "Applied — click to re-apply" : "Apply only this row — Enter (replaces active filter)")}
       disabled={disabled}
       data-filter-control={dataFilterControl}
       onClick={onClick}
