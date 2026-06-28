@@ -195,7 +195,9 @@ mod tests {
 
         // Now register — action should fire immediately
         let action_fired = Arc::new(AtomicBool::new(false));
-        let guard = registry.register(token, flag_action(action_fired.clone())).await;
+        let guard = registry
+            .register(token, flag_action(action_fired.clone()))
+            .await;
 
         // Guard should already be cancelled
         assert!(guard.cancelled());

@@ -912,26 +912,30 @@ pub async fn mysql_run_sql(
 
     // Resolve cancel context: parse token, load params+secret. If anything
     // fails, log and proceed without cancellation (preserve today's behavior).
-    let cancel_info: Option<(Uuid, MysqlCancel)> = match run_token
-        .as_deref()
-        .and_then(|t| Uuid::parse_str(t).ok())
-    {
-        None => None,
-        Some(token) => {
-            let db = app.state::<DbState>();
-            match load_connection_input(&db.0, id) {
-                Ok((params, secret)) => Some((token, MysqlCancel { params, secret })),
-                Err(e) => {
-                    tracing::warn!("mysql_run_sql: could not load cancel context: {e:?}");
-                    None
+    let cancel_info: Option<(Uuid, MysqlCancel)> =
+        match run_token.as_deref().and_then(|t| Uuid::parse_str(t).ok()) {
+            None => None,
+            Some(token) => {
+                let db = app.state::<DbState>();
+                match load_connection_input(&db.0, id) {
+                    Ok((params, secret)) => Some((token, MysqlCancel { params, secret })),
+                    Err(e) => {
+                        tracing::warn!("mysql_run_sql: could not load cancel context: {e:?}");
+                        None
+                    }
                 }
             }
-        }
-    };
+        };
 
     let result = match &cancel_info {
         Some((token, cancel)) => {
-            run_single_sql(&pool, &sql, read_only, Some((&cancel_registry, *token, cancel))).await
+            run_single_sql(
+                &pool,
+                &sql,
+                read_only,
+                Some((&cancel_registry, *token, cancel)),
+            )
+            .await
         }
         None => run_single_sql(&pool, &sql, read_only, None).await,
     };
@@ -1017,22 +1021,20 @@ pub async fn mysql_run_sql_many(
 
     // Resolve cancel context once before the loop. If anything fails, proceed
     // without cancellation (preserve today's behavior).
-    let cancel_info: Option<(Uuid, MysqlCancel)> = match run_token
-        .as_deref()
-        .and_then(|t| Uuid::parse_str(t).ok())
-    {
-        None => None,
-        Some(token) => {
-            let db = app.state::<DbState>();
-            match load_connection_input(&db.0, id) {
-                Ok((params, secret)) => Some((token, MysqlCancel { params, secret })),
-                Err(e) => {
-                    tracing::warn!("mysql_run_sql_many: could not load cancel context: {e:?}");
-                    None
+    let cancel_info: Option<(Uuid, MysqlCancel)> =
+        match run_token.as_deref().and_then(|t| Uuid::parse_str(t).ok()) {
+            None => None,
+            Some(token) => {
+                let db = app.state::<DbState>();
+                match load_connection_input(&db.0, id) {
+                    Ok((params, secret)) => Some((token, MysqlCancel { params, secret })),
+                    Err(e) => {
+                        tracing::warn!("mysql_run_sql_many: could not load cancel context: {e:?}");
+                        None
+                    }
                 }
             }
-        }
-    };
+        };
 
     // Split if single-statement batch is passed (frontend can pass either).
     let stmts: Vec<String> = if statements.len() == 1 {

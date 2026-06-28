@@ -1293,7 +1293,16 @@ pub async fn mssql_run_sql_batch(
         return Ok(Vec::new());
     }
 
-    mssql_run_sql_many(app, registry, cancel_registry, id, flat_stmts, origin, run_token).await
+    mssql_run_sql_many(
+        app,
+        registry,
+        cancel_registry,
+        id,
+        flat_stmts,
+        origin,
+        run_token,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
