@@ -39,6 +39,9 @@ export function ResultPanel({ state, onShowInEditor, connectionName = "" }: Prop
   if (state.status === "running") {
     return <div style={emptyStyle}>Running…</div>;
   }
+  if (state.status === "cancelled") {
+    return <div style={emptyStyle}>Query cancelled</div>;
+  }
   if (state.mode === "single") {
     if (state.error) {
       return (

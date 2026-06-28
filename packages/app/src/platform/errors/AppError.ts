@@ -7,7 +7,8 @@ export type AppErrorKind =
   | "Postgres"
   | "Aws"
   | "Mysql"
-  | "Mssql";
+  | "Mssql"
+  | "Cancelled";
 
 export interface PostgresErrorBody {
   code: string | null;
@@ -78,6 +79,7 @@ const KNOWN_KINDS: AppErrorKind[] = [
   "Aws",
   "Mysql",
   "Mssql",
+  "Cancelled",
 ];
 
 function isPostgresBody(v: unknown): v is PostgresErrorBody {

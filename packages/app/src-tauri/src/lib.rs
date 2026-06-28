@@ -80,6 +80,7 @@ use crate::modules::postgres::{
     postgres_run_sql, postgres_run_sql_many, postgres_table_primary_key, postgres_table_structure,
     postgres_test_connection, PgPoolRegistry,
 };
+use crate::modules::query_cancel::cancel_running_query;
 use crate::modules::query_history::{
     self,
     commands::{
@@ -209,6 +210,7 @@ pub fn run() {
             app.manage(PgPoolRegistry::new());
             app.manage(MysqlPoolRegistry::new());
             app.manage(MssqlPoolRegistry::new());
+            app.manage(crate::modules::query_cancel::RunningQueryRegistry::new());
             app.manage(DynamoClientRegistry::new());
             app.manage(AthenaClientRegistry::new());
             app.manage(CloudwatchClientRegistry::new());
@@ -439,6 +441,8 @@ pub fn run() {
             context_list_linked_queries,
             context_get_project_source,
             context_set_project_source,
+            // Query cancellation command
+            cancel_running_query,
             // Feedback command
             submit_feedback,
             // AI provider commands

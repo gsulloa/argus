@@ -49,22 +49,35 @@ async function call<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
 }
 
 export const sqlApi = {
-  runSql(connectionId: string, sql: string, origin: Origin = "user"): Promise<RunSqlResult> {
+  runSql(
+    connectionId: string,
+    sql: string,
+    origin: Origin = "user",
+    runToken?: string,
+  ): Promise<RunSqlResult> {
     return call<RunSqlResult>("postgres_run_sql", {
       id: connectionId,
       sql,
       origin,
+      runToken,
     });
   },
   runSqlMany(
     connectionId: string,
     statements: string[],
     origin: Origin = "user",
+    runToken?: string,
   ): Promise<RunManyOutcome[]> {
     return call<RunManyOutcome[]>("postgres_run_sql_many", {
       id: connectionId,
       statements,
       origin,
+      runToken,
+    });
+  },
+  cancelQuery(runToken: string): Promise<void> {
+    return invoke<void>("cancel_running_query", { runToken }).catch((e) => {
+      console.warn("[argus.sql] cancel_running_query failed:", e);
     });
   },
 };

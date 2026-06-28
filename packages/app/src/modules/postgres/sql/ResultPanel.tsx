@@ -25,6 +25,9 @@ export function ResultPanel({ state, onShowInEditor }: Props) {
   if (state.status === "running") {
     return <div className={styles.empty}>Running…</div>;
   }
+  if (state.status === "cancelled") {
+    return <div className={styles.empty}>Query cancelled</div>;
+  }
   // done
   if (state.mode === "single") {
     if (state.error) {
