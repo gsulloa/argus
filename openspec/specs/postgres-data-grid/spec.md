@@ -895,7 +895,7 @@ The handler MUST NOT fire on the `Structure` or `Raw` subtab. The handler MUST N
 
 `TableViewerTab` SHALL maintain two filter values for each tab: `draft` and `applied`, each of shape `FilterTree = { rows: FilterRow[], combinator: "AND" | "OR" }`. Only `applied` MUST be passed (after wire-shape conversion) to `postgres_query_table` and `postgres_count_table`. Edits to the filter bar (text input, operator changes, column changes, checkbox toggles, row insertions/removals, combinator menu picks) MUST update `draft` only. The bar MUST display a dirty indicator (a small `●` adjacent to the `Apply All` button) whenever `draft` differs from `applied`.
 
-The `Apply All` button and the `⌘↵` / `⇧⌘↵` shortcuts commit `draft` to `applied`. The per-row `Apply` button commits exactly that single row to `applied` (see "Per-row Apply and Applied visual state"). The `Unset` button resets `draft.rows` but does NOT touch `applied` (see "Filter bar footer Unset, Export, SQL").
+The `Apply All` button and the `⇧↵` / `⌘↵` / `⇧⌘↵` shortcuts commit the enabled-complete subset of `draft` to `applied`. Plain `Enter` (no modifier) and the per-row `Apply` button each commit exactly that single focused row to `applied` (see "Per-row Apply and Applied visual state" and "Filter bar keyboard shortcuts"). The `Unset` button resets `draft.rows` but does NOT touch `applied` (see "Filter bar footer Unset, Export, SQL").
 
 The previous `Reset` button and `Esc` discard-draft shortcut are REMOVED. There is no single-keystroke "revert draft to applied" affordance in the new design.
 
@@ -910,10 +910,17 @@ Mode toggling is REMOVED — the bar has no Structured/Raw mode toggle. The filt
 
 #### Scenario: Apply All commits draft and triggers fetch
 
-- **WHEN** the user has a dirty draft and clicks `Apply All` (or presses `⌘↵`)
+- **WHEN** the user has a dirty draft and clicks `Apply All` (or presses `⇧↵` / `⌘↵`)
 - **THEN** `applied` becomes equal to the enabled-complete subset of `draft.rows` joined by `draft.combinator`
 - **AND** the dirty indicator disappears (because remaining draft rows match applied rows by structural equality)
 - **AND** `postgres.queryTable` is invoked with the new `applied` filters
+
+#### Scenario: Plain Enter commits only the focused row
+
+- **WHEN** the user has three rows in `draft` and presses plain `Enter` (no modifier) while focus is inside the second row
+- **THEN** `applied.rows === [thatRow]`
+- **AND** `applied.combinator === draft.combinator`
+- **AND** `draft` is unchanged
 
 #### Scenario: Esc no longer discards draft
 
@@ -1188,7 +1195,8 @@ While the filter bar is visible AND focus is somewhere inside the bar AND focus 
 | `⌘↑` / `Ctrl+↑` | Move focus to the same logical control (column / op / value) of the row above the focused row. No wrap at top. |
 | `⌘↓` / `Ctrl+↓` | Move focus to the same logical control of the row below the focused row. No wrap at bottom. |
 | `⌘←` / `Ctrl+←` | Open the column picker dropdown on the focused row. No-op if focus is not on a row. |
-| `Enter` | Apply All using the current `draft.combinator` (does NOT force AND or OR). Suppressed when focus is in `ChipInput` and the chip draft is non-empty (Enter commits the chip instead). |
+| `Enter` | Apply ONLY the focused row — commit exactly that single row to `applied` (`{ rows: [focusedRow], combinator: draft.combinator }`), identical to that row's per-row `Apply` button and INDEPENDENT of the row's `enabled` checkbox. The focused row is resolved from the active element's enclosing `[data-filter-row-index]`. If no enclosing row can be resolved, the handler falls back to Apply All using the current combinator. Suppressed when focus is in a `ChipInput` (`In` / `NotIn`) and the chip draft is non-empty (Enter commits the chip instead). |
+| `⇧Enter` / `Shift+Enter` | Apply All using the current `draft.combinator` (does NOT force AND or OR) — commit the enabled-complete subset of `draft.rows`. Suppressed when focus is in a `ChipInput` and the chip draft is non-empty. |
 | `⌘↵` / `Ctrl+Enter` | Apply All with AND – Default (see "Apply All with persistent root combinator") |
 | `⇧⌘↵` / `Ctrl+Shift+Enter` | Apply All with OR |
 
@@ -1232,12 +1240,30 @@ While the filter bar is visible AND focus is somewhere inside the bar AND focus 
 - **THEN** row 0's column picker dropdown opens
 - **AND** keyboard focus is in the dropdown's search input
 
-#### Scenario: Plain Enter on a scalar value input applies all
+#### Scenario: Plain Enter on a value input applies only the focused row
 
-- **WHEN** focus is in row 0's text value input, the row is enabled and complete, and the user presses `Enter` with no modifier
-- **THEN** Apply All is performed
+- **WHEN** `draft.rows` has two rows (R0 enabled+complete, R1 enabled+complete), focus is in row 1's value input, and the user presses `Enter` with no modifier
+- **THEN** `applied` becomes `{ rows: [R1], combinator: draft.combinator }`
 - **AND** `draft.combinator` is NOT changed
 - **AND** `postgres.queryTable` is invoked with the new `applied` filter set
+
+#### Scenario: Plain Enter applies the focused row even when its checkbox is unchecked
+
+- **WHEN** `draft.rows` has R0 (enabled, already applied) and R1 (unchecked, newly typed), focus is in R1's value input, and the user presses `Enter` with no modifier
+- **THEN** `applied` becomes `{ rows: [R1], combinator: draft.combinator }`
+- **AND** R1's `enabled` flag is NOT changed by the Enter gesture
+
+#### Scenario: Shift+Enter applies all enabled rows
+
+- **WHEN** `draft.rows` has R0 (checked) and R1 (unchecked), focus is in R1's value input, and the user presses `Shift+Enter`
+- **THEN** `applied` becomes the enabled-complete subset of `draft.rows` joined by `draft.combinator` (so `applied.rows` contains R0 but not R1)
+- **AND** `draft.combinator` is NOT changed
+
+#### Scenario: Enter in a ChipInput commits the chip instead of applying
+
+- **WHEN** focus is in an `In` / `NotIn` chip input with non-empty draft text and the user presses `Enter`
+- **THEN** the chip is committed
+- **AND** neither per-row Apply nor Apply All is performed
 
 #### Scenario: Shortcuts do not fire when bar is hidden
 
@@ -1258,7 +1284,7 @@ The filter bar SHALL render a footer strip with the following controls, in order
 
 - `Export` button — disabled / placeholder. `aria-disabled="true"`. Tooltip: `Export coming soon`. Clicking it MUST be a no-op.
 - `SQL` button — opens a new `postgres-query` tab on the same connection with a prefilled SELECT reflecting the current `applied` filter set (same behavior as the prior `Open in SQL Editor` action). The button MUST use `applied`, NOT `draft`.
-- Shortcut hint strip: `Show: ⌘F`, `Insert: ⌘I`, `Remove: ⌘⇧I`, `Apply All: ⌘↵`, `Up: ⌘↑`, `Down: ⌘↓`, `Columns: ⌘←`. Each hint MUST be rendered as a non-interactive label using the existing `FilterKeyHint` component.
+- Shortcut hint strip: `Show: ⌘F`, `Insert: ⌘I`, `Remove: ⌘⇧I`, `Apply row: ↵`, `Apply All: ⇧↵`, `Up: ⌘↑`, `Down: ⌘↓`, `Columns: ⌘←`. Each hint MUST be rendered as a non-interactive label using the existing `FilterKeyHint` component. The `Apply row: ↵` and `Apply All: ⇧↵` hints MUST be present so the new per-row-Enter / Apply-All-Shift+Enter shortcuts are discoverable.
 - `Operator: [Unset]` — a button labeled `Unset`. Activating it MUST reset all `draft.rows` to a single empty row (`enabled = true`, `column = any_column`, `op = Contains`, `value = ""`). It MUST NOT modify `applied`. It MUST NOT modify `draft.combinator`. To clear the active filtering, the user must subsequently press `Apply All`.
 - `Apply All ▾` (covered by the "Apply All with persistent root combinator" requirement).
 
@@ -1285,11 +1311,17 @@ The gear icon (`⚙`) visible in some reference designs MUST NOT be rendered.
 - **THEN** the opened SQL editor tab is prefilled with a SELECT that uses the current `applied` filter set
 - **AND** the unapplied draft does NOT appear in the prefilled SQL
 
+#### Scenario: Footer documents the Enter and Shift+Enter shortcuts
+
+- **WHEN** the user inspects the filter-bar footer hint strip
+- **THEN** a `Apply row: ↵` hint is rendered
+- **AND** a `Apply All: ⇧↵` hint is rendered
+
 #### Scenario: Export button is disabled
 
-- **WHEN** the user clicks the `Export` button
-- **THEN** nothing happens (no menu, no file write, no error)
-- **AND** the button presents with `aria-disabled="true"`
+- **WHEN** the user inspects the footer `Export` button
+- **THEN** it is disabled with `aria-disabled="true"` and tooltip `Export coming soon`
+- **AND** clicking it performs no action
 
 ### Requirement: Flat root combinator
 
@@ -1801,7 +1833,7 @@ Closing the tab MUST discard all retained state for that tab. Reopening the same
 
 ### Requirement: Filter Apply always refetches
 
-Every commit from `draft` to `applied` (via **Apply All**, the `⌘↵` / `⇧⌘↵` shortcuts, or the per-row **Apply** button) MUST cause `postgres.queryTable` to be invoked, even when the resulting `applied` value is structurally equal to the previous `applied` value. The user's Apply gesture SHALL be treated as an explicit refresh signal, not merely as a state-equality trigger.
+Every commit from `draft` to `applied` (via **Apply All**, the `⇧↵` / `⌘↵` / `⇧⌘↵` shortcuts, the per-row **Apply** button, or plain `Enter` applying the focused row) MUST cause `postgres.queryTable` to be invoked, even when the resulting `applied` value is structurally equal to the previous `applied` value. The user's Apply gesture SHALL be treated as an explicit refresh signal, not merely as a state-equality trigger.
 
 The implementation MUST NOT rely solely on structural equality of `applied` to decide whether to refetch. A monotonically-advancing token (or equivalent mechanism) MUST be threaded into the data-fetch dependency key so that pressing Apply with an unchanged filter model still produces a network round-trip and a fresh first page.
 
@@ -1815,6 +1847,12 @@ This requirement explicitly overrides any optimisation that would dedupe a fetch
 - **THEN** `applied` is structurally equal to its previous value
 - **AND** `postgres.queryTable` is invoked again
 - **AND** the grid displays the freshly-fetched rows, including any rows created externally since the previous Apply
+
+#### Scenario: Plain Enter refetches even when the single row is unchanged
+
+- **WHEN** `applied.rows === [R1]` and the user presses plain `Enter` while focused in the same `R1` in `draft`
+- **THEN** `applied` is structurally equal to its previous value
+- **AND** `postgres.queryTable` is invoked again
 
 #### Scenario: Per-row Apply refetches even when the single row is unchanged
 
