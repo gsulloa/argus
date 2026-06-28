@@ -1045,7 +1045,10 @@ mod tests {
         let enum_error: Result<BTreeMap<String, Vec<String>>, &str> = Err("connection reset");
         let md = combine_pk_and_enums(pk.clone(), enum_error);
         assert_eq!(md.pk_columns, pk, "pk_columns must be preserved");
-        assert!(md.enums.is_empty(), "enums must be empty on enum-lookup failure");
+        assert!(
+            md.enums.is_empty(),
+            "enums must be empty on enum-lookup failure"
+        );
     }
 
     #[test]
@@ -1053,7 +1056,10 @@ mod tests {
         // Sanity: when the enum lookup succeeds its data is preserved alongside the PK.
         let pk = Some(vec!["id".to_string()]);
         let mut enum_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        enum_map.insert("status".to_string(), vec!["active".to_string(), "archived".to_string()]);
+        enum_map.insert(
+            "status".to_string(),
+            vec!["active".to_string(), "archived".to_string()],
+        );
         let result: Result<BTreeMap<String, Vec<String>>, &str> = Ok(enum_map.clone());
         let md = combine_pk_and_enums(pk.clone(), result);
         assert_eq!(md.pk_columns, pk);
