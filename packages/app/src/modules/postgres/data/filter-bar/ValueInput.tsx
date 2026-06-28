@@ -179,6 +179,26 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
   );
 }
 
+export function RawExpressionInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange(next: string): void;
+}) {
+  return (
+    <input
+      {...noAutoCorrectProps}
+      type="text"
+      className={`${styles.valueInput} ${styles.rawInput}`}
+      value={value}
+      aria-label="Raw SQL expression"
+      placeholder="data->>'estado' = 'activo'"
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}
+
 interface ChipInputProps {
   values: FilterScalar[];
   category: string;

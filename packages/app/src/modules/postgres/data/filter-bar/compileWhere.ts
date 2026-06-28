@@ -39,6 +39,10 @@ export function compileWhere(
 }
 
 function compileRow(row: FilterRow, columns: DataColumn[]): string {
+  if (row.column.kind === "raw") {
+    const expr = typeof row.value === "string" ? row.value.trim() : "";
+    return `(${expr})`;
+  }
   if (row.column.kind === "any_column") {
     return compileAnyColumn(row.op, row.value, columns);
   }

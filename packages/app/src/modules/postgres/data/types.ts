@@ -40,12 +40,14 @@ export type Operator =
   | "NotIn"
   | "BETWEEN"
   | "IS NULL"
-  | "IS NOT NULL";
+  | "IS NOT NULL"
+  | "RAW";
 
-/** Either a named column or the special "Any column" pseudo-column. */
+/** Either a named column or the special "Any column" pseudo-column, or a raw SQL expression column. */
 export type ColumnRef =
   | { kind: "named"; name: string }
-  | { kind: "any_column" };
+  | { kind: "any_column" }
+  | { kind: "raw" };
 
 /** Scalar value bindable to a filter parameter. The backend rejects null. */
 export type FilterScalar = string | number | boolean;
@@ -260,6 +262,7 @@ export function isCompleteRow(row: FilterRow): boolean {
   const { column, op, value } = row;
   if (!column) return false;
   if (column.kind === "named" && !column.name) return false;
+  if (op === "RAW") return typeof value === "string" && value.trim() !== "";
 
   if (op === "IS NULL" || op === "IS NOT NULL") return true;
 
