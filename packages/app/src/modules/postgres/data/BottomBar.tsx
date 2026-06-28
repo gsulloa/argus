@@ -20,6 +20,11 @@ interface Props {
   readOnlyBanner: boolean;
   /** When `true`, the no-PK banner is shown alongside the Add-row button. */
   noPkBanner: boolean;
+  /** When non-null, shows a PK lookup error banner with a Retry action. Takes
+   *  precedence over noPkBanner (they are mutually exclusive by state). */
+  pkErrorBanner: string | null;
+  /** Called when the user clicks Retry on the PK error banner. */
+  onRetryPk(): void;
   /** Sum of dirty entries (updates + inserts + deletes) — drives the Save badge. */
   dirtyCount: number;
   /** Number of currently-selected rows. Chip renders when >= 2. */
@@ -53,6 +58,8 @@ export function BottomBar(props: Props) {
     canInsert,
     readOnlyBanner,
     noPkBanner,
+    pkErrorBanner,
+    onRetryPk,
     dirtyCount,
     selectedCount,
     onPageSizeChange,
@@ -108,6 +115,18 @@ export function BottomBar(props: Props) {
       {readOnlyBanner ? (
         <span className={styles.banner} title="The connection is in read-only mode">
           Read-only connection — edits disabled
+        </span>
+      ) : pkErrorBanner !== null ? (
+        <span className={styles.banner} title={pkErrorBanner}>
+          Could not determine primary key: {pkErrorBanner}
+          <button
+            type="button"
+            className={styles.chipBtn}
+            onClick={onRetryPk}
+            aria-label="Retry primary key lookup"
+          >
+            Retry
+          </button>
         </span>
       ) : noPkBanner ? (
         <span className={styles.banner} title="Existing rows cannot be edited or deleted; INSERT is allowed">

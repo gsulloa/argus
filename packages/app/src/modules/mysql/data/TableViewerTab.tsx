@@ -16,7 +16,7 @@ import { useSaveShortcut } from "@/platform/shell/useSaveShortcut";
 import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import { DocsSubtab } from "@/modules/context/components/DocsSubtab";
 import { useActiveMysqlConnections } from "../useActiveConnections";
-import { AppError } from "@/platform/errors/AppError";
+import { AppError, toAppError } from "@/platform/errors/AppError";
 import { dataApi } from "./api";
 import { DataGrid, type DataGridHandle, type UnifiedRow } from "./DataGrid";
 import { FilterBar } from "./FilterBar";
@@ -101,6 +101,8 @@ function MysqlTableViewer({
   // Primary key
   const [pkResult, setPkResult] = useState<PrimaryKeyResult | null>(null);
   const [pkLoading, setPkLoading] = useState(false);
+  // Explicit error state — distinct from pkResult === null (= "resolved, no PK").
+  const [pkError, setPkError] = useState<AppError | null>(null);
   // Whether the PK lookup has settled (resolved or failed). Gates the first
   // data fetch so it carries the PK-derived default order.
   const [pkSettled, setPkSettled] = useState(false);
@@ -188,21 +190,23 @@ function MysqlTableViewer({
   const gridRef = useRef<DataGridHandle | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  // Load PK on mount
-  useEffect(() => {
-    if (!connectionId || !schema || !relation) return;
+  // Reusable PK fetch — called on mount and on Retry.
+  const loadPk = useCallback(() => {
+    if (!connectionId || !schema || !relation) return () => {};
     let cancelled = false;
     setPkLoading(true);
+    setPkError(null);
     dataApi
       .tablePrimaryKey(connectionId, schema, relation, "auto")
       .then((pk) => {
         if (cancelled) return;
         setPkResult(pk);
       })
-      .catch(() => {
+      .catch((e) => {
         if (cancelled) return;
-        // Set to null to indicate no PK detected or error fetching PK.
+        // Keep the error separate — do NOT conflate with pkResult === null ("no PK").
         setPkResult(null);
+        setPkError(toAppError(e));
       })
       .finally(() => {
         if (!cancelled) {
@@ -214,6 +218,12 @@ function MysqlTableViewer({
       cancelled = true;
     };
   }, [connectionId, schema, relation]);
+
+  // Load PK on mount (and when connection/schema/relation changes).
+  useEffect(() => {
+    const cancel = loadPk();
+    return cancel;
+  }, [loadPk]);
 
   // §19.6 — dirty-buffer close guard: register with DirtySummary registry
   // so the disconnect-confirmation dialog can list unsaved work.
@@ -511,8 +521,44 @@ function MysqlTableViewer({
         </div>
       )}
 
-      {/* §19.5 — No-PK banner (shown below toolbar) */}
-      {!pkLoading && pkColumns === null && !isView && (
+      {/* §19.5 — PK error banner: shown when the lookup failed (regardless of isView) */}
+      {!pkLoading && pkError && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "3px 10px",
+            fontSize: 11,
+            color: "var(--danger)",
+            background: "var(--bg-sidebar)",
+            borderBottom: "1px solid var(--border)",
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ flex: 1 }}>
+            Could not determine primary key: {pkError.message}
+          </span>
+          <button
+            type="button"
+            onClick={loadPk}
+            style={{
+              fontSize: 11,
+              padding: "1px 7px",
+              borderRadius: 3,
+              border: "1px solid var(--danger)",
+              background: "transparent",
+              color: "var(--danger)",
+              cursor: "pointer",
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* §19.5 — No-PK banner: only shown on a settled success with no PK */}
+      {!pkLoading && !pkError && pkColumns === null && !isView && (
         <div
           style={{
             padding: "3px 10px",
