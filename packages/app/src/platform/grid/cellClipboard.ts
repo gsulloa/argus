@@ -55,3 +55,30 @@ export async function copyCellValue(value: unknown): Promise<void> {
     console.warn("[cellClipboard] clipboard write failed:", err);
   }
 }
+
+/**
+ * Copy multiple rows to the clipboard as a TSV (tab-separated values) string.
+ * Each row is an array of cell values ordered to match `columns`.
+ * Cells are joined by `\t`, rows by `\n`. Each cell is formatted via
+ * `formatCellValue`. Errors are swallowed like `copyCellValue`.
+ *
+ * @param rows    Array of cell-value arrays, one per row (`rows[i][j]` maps to
+ *                `columns[j]`).
+ * @param columns Column names — passed for context / future header support;
+ *                not used by the current implementation.
+ */
+export async function copyRowsTsv(
+  rows: unknown[][],
+  columns: string[],
+): Promise<void> {
+  void columns; // reserved for future header-row support
+  const lines = rows.map((cells) =>
+    cells.map((cell) => formatCellValue(cell)).join("\t"),
+  );
+  const text = lines.join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    console.warn("[cellClipboard] clipboard write failed:", err);
+  }
+}
