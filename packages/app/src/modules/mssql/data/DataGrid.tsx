@@ -22,8 +22,9 @@ import { AppError } from "@/platform/errors/AppError";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import { headerFloorWidthFor } from "@/modules/postgres/data/headerMeasure";
-import { copyCellValue, formatCellValue } from "@/platform/grid/cellClipboard";
+import { copyCellValue, copyRowsTsv, formatCellValue, formatRowsTSV } from "@/platform/grid/cellClipboard";
 import { EditableCell } from "./EditableCell";
+import { RowContextMenu } from "@/modules/postgres/data/RowContextMenu";
 import type { ColumnInfo, OrderBy } from "../types";
 import type { CellValue, EditValue } from "./types";
 import type { UseEditBufferResult } from "./useEditBuffer";
@@ -147,6 +148,11 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
   // Single-cell active selection — mutually exclusive with row range.
   const [activeCell, setActiveCell] = useState<{ rowIdx: number; colIdx: number } | null>(null);
 
+  // Context menu target — set on right-click, read by menu callbacks.
+  const [ctxTarget, setCtxTarget] = useState<{ rowIdx: number; colIdx: number } | null>(null);
+  const ctxTargetRef = useRef<{ rowIdx: number; colIdx: number } | null>(null);
+  ctxTargetRef.current = ctxTarget;
+
   // Reset active cell when rows/columns change (sort, filter, page, data refresh).
   useEffect(() => {
     setActiveCell(null);
@@ -154,6 +160,8 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
 
   // Row-range copy-to-clipboard on Ctrl/Cmd+C (§18.7).
   // Early-returns when a single cell is active so the keydown handler owns that path.
+  // Resolves cell values via the edit buffer so pending edits are reflected in the
+  // copied TSV.
   useEffect(() => {
     function handleCopy(e: ClipboardEvent) {
       // Single-cell takes precedence — handled by the keydown handler.
@@ -162,20 +170,24 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
       if (anchor === null || active === null) return;
       const from = Math.min(anchor, active);
       const to = Math.max(anchor, active);
-      const lines: string[] = [];
+      const columnNames = columns.map((c) => c.name);
+      const resolved: unknown[][] = [];
       for (let i = from; i <= to; i++) {
         const row = rows[i];
         if (!row) continue;
-        lines.push(row.cells.map(formatCellValue).join("\t"));
+        const resolvedCells = columns.map((col) =>
+          buffer.getDisplayValue(row.rowKey, row.cells, columnNames, col.name),
+        );
+        resolved.push(resolvedCells);
       }
-      if (lines.length > 0) {
-        e.clipboardData?.setData("text/plain", lines.join("\n"));
+      if (resolved.length > 0) {
+        e.clipboardData?.setData("text/plain", formatRowsTSV(resolved));
         e.preventDefault();
       }
     }
     window.addEventListener("copy", handleCopy);
     return () => window.removeEventListener("copy", handleCopy);
-  }, [selection, rows, activeCell]);
+  }, [selection, rows, activeCell, columns, buffer]);
 
   function onCellClick(e: React.MouseEvent, rowIdx: number, colIdx: number) {
     if (e.shiftKey && selection.anchor !== null) {
@@ -352,9 +364,100 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
             const isDeleted = rowEdits?.kind === "delete";
             const isInsert = unifiedRow.source === "insert";
 
-            return (
+            // ------------------------------------------------------------------
+            // Context menu state for this row
+            // ------------------------------------------------------------------
+            const isCtxRow = ctxTarget !== null && ctxTarget.rowIdx === rowIdx;
+            const ctxColIdx = isCtxRow ? ctxTarget.colIdx : 0;
+            const ctxCol = columns[ctxColIdx];
+            const ctxIsPk = ctxCol ? (pkColumns?.includes(ctxCol.name) ?? false) : false;
+            const ctxCellReadOnly = isReadOnly || (ctxIsPk && !isInsert);
+
+            const ctxRangeStart = isSelected && isCtxRow ? (selFrom ?? rowIdx) : rowIdx;
+            const ctxRangeEnd   = isSelected && isCtxRow ? (selTo   ?? rowIdx) : rowIdx;
+            const isMulti = ctxRangeEnd > ctxRangeStart;
+
+            const canEditCell = !ctxCellReadOnly;
+            const canDeleteRows =
+              !isReadOnly &&
+              (() => {
+                for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
+                  const tr = rows[i];
+                  if (!tr || !tr.rowKey) continue;
+                  if (tr.source === "insert") return true;
+                  if (pkColumns !== null) return true;
+                }
+                return false;
+              })();
+            const deleteIsRestore = (() => {
+              for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
+                const tr = rows[i];
+                if (!tr || !tr.rowKey) continue;
+                if (!buffer.isRowDeleted(tr.rowKey)) return false;
+              }
+              return true;
+            })();
+            const editCellDisabledReason = isReadOnly ? "Grid is read-only" : "This cell can't be edited";
+            const deleteDisabledReason = isReadOnly ? "Grid is read-only" : "Requires a primary key";
+
+            function handleCtxCopyCell() {
+              const target = ctxTargetRef.current;
+              if (!target) return;
+              const tr = rows[target.rowIdx];
+              if (!tr) return;
+              const col = columns[target.colIdx];
+              const displayVal = buffer.getDisplayValue(
+                tr.rowKey,
+                tr.cells,
+                columns.map((c) => c.name),
+                col?.name ?? "",
+              );
+              void copyCellValue(displayVal);
+            }
+
+            function handleCtxCopyRows() {
+              const columnNames = columns.map((c) => c.name);
+              const targetRows: unknown[][] = [];
+              for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
+                const tr = rows[i];
+                if (!tr) continue;
+                targetRows.push(
+                  columns.map((col) => buffer.getDisplayValue(tr.rowKey, tr.cells, columnNames, col.name)),
+                );
+              }
+              void copyRowsTsv(targetRows, columnNames);
+            }
+
+            function handleCtxEditCell() {
+              const target = ctxTargetRef.current;
+              if (!target) return;
+              if (!canEditCell) return;
+              setEditingCell({ rowIdx: target.rowIdx, colIdx: target.colIdx });
+            }
+
+            function handleCtxToggleDelete() {
+              const entries: Array<{
+                rowKey: string;
+                source: "insert" | "server";
+                pk?: Record<string, EditValue>;
+                currentlyDeleted: boolean;
+              }> = [];
+              for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
+                const tr = rows[i];
+                if (!tr || !tr.rowKey) continue;
+                if (tr.source === "insert") {
+                  entries.push({ rowKey: tr.rowKey, source: "insert", currentlyDeleted: false });
+                } else {
+                  if (!pkColumns) continue;
+                  const pk = buildPkMap(tr, columns, pkColumns);
+                  entries.push({ rowKey: tr.rowKey, source: "server", pk, currentlyDeleted: buffer.isRowDeleted(tr.rowKey) });
+                }
+              }
+              if (entries.length > 0) buffer.bulkDeleteToggle(entries);
+            }
+
+            const rowEl = (
               <div
-                key={vItem.key}
                 data-index={rowIdx}
                 ref={virtualizer.measureElement}
                 style={{
@@ -373,6 +476,16 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   opacity: isDeleted ? 0.5 : 1,
                   textDecoration: isDeleted ? "line-through" : "none",
                   cursor: "default",
+                }}
+                onContextMenu={(e) => {
+                  const cellEl = (e.target as HTMLElement).closest("[data-col]") as HTMLElement | null;
+                  const colIdx = cellEl ? parseInt(cellEl.dataset.col ?? "0", 10) : 0;
+                  const insideSelection = isSelected;
+                  if (!insideSelection) {
+                    setActiveCell({ rowIdx, colIdx });
+                    onSelectionChange({ anchor: null, active: null });
+                  }
+                  setCtxTarget({ rowIdx, colIdx });
                 }}
               >
                 {/* Gutter with row number / indicator */}
@@ -419,6 +532,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   return (
                     <div
                       key={col.name}
+                      data-col={colIdx}
                       style={{
                         width: w,
                         flexShrink: 0,
@@ -478,6 +592,25 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   );
                 })}
               </div>
+            );
+
+            return (
+              <RowContextMenu
+                key={vItem.key}
+                target={{ rowIndex: rowIdx, colIndex: ctxColIdx }}
+                isMulti={isMulti}
+                canEditCell={canEditCell}
+                editCellDisabledReason={editCellDisabledReason}
+                canDeleteRows={canDeleteRows}
+                deleteDisabledReason={deleteDisabledReason}
+                deleteIsRestore={deleteIsRestore}
+                onCopyCell={handleCtxCopyCell}
+                onCopyRows={handleCtxCopyRows}
+                onEditCell={handleCtxEditCell}
+                onToggleDelete={handleCtxToggleDelete}
+              >
+                {rowEl}
+              </RowContextMenu>
             );
           })}
         </div>

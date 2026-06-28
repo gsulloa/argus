@@ -1,0 +1,54 @@
+.menu {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  min-width: 160px;
+  z-index: 100;
+}
+
+.item {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  outline: none;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  user-select: none;
+}
+
+.item:hover,
+.item[data-highlighted] {
+  background: var(--bg-hover);
+}
+
+.item[data-disabled] {
+  color: var(--text-subtle);
+  cursor: default;
+  pointer-events: none;
+}
+
+.itemDanger {
+  color: var(--danger);
+}
+
+.itemDanger:hover,
+.itemDanger[data-highlighted] {
+  background: var(--bg-hover);
+}
+
+.separator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.disabledHint {
+  font-size: 11px;
+  color: var(--text-subtle);
+  padding: 2px 8px;
+  display: none;
+}

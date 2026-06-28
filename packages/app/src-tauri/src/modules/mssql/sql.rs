@@ -6,6 +6,7 @@
 //! - `mssql_run_sql_many(app, id, statements, origin?)` — run pre-split statements.
 //! - `mssql_run_sql_batch(app, id, sql, origin?)` — split then run.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -19,8 +20,10 @@ use crate::modules::activity_log::{
     emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
 };
 use crate::modules::mssql::binding::{bind_kind_for_type, decode_row_value, BindKind};
+use crate::modules::mssql::cancel::{capture_spid, fire_mssql_cancel};
 use crate::modules::mssql::errors::map_tiberius_error;
 use crate::modules::mssql::pool::MssqlPoolRegistry;
+use crate::modules::query_cancel::{CancelAction, RunningQueryRegistry};
 use crate::modules::query_history::{self, HistoryOrigin, HistoryStatus, NewEntry};
 use crate::platform::DbState;
 
@@ -936,9 +939,11 @@ fn record_mssql_history_err(
 pub async fn mssql_run_sql(
     app: AppHandle,
     registry: State<'_, MssqlPoolRegistry>,
+    cancel_registry: State<'_, RunningQueryRegistry>,
     id: Uuid,
     sql: String,
     origin: Option<Origin>,
+    run_token: Option<String>,
 ) -> AppResult<RunSqlResult> {
     let started_wall_ms = now_unix_ms();
     let started = Instant::now();
@@ -951,6 +956,35 @@ pub async fn mssql_run_sql(
     let mut client = registry.acquire(id).await?;
     let read_only = registry.read_only_for(id).unwrap_or(false);
     let connection_name = fetch_connection_name(&app, id);
+
+    // Register with the cancel registry if a run_token was supplied.
+    let guard = if let Some(ref tok_str) = run_token {
+        if let Ok(token) = Uuid::parse_str(tok_str) {
+            if let Some((_, _, params, password)) = registry.encrypt_mode_for(id) {
+                let spid = capture_spid(&mut client).await.unwrap_or(-1);
+                if spid > 0 {
+                    let p = params.clone();
+                    let pw = password.clone();
+                    let action: CancelAction = Arc::new(move || {
+                        let p = p.clone();
+                        let pw = pw.clone();
+                        Box::pin(async move {
+                            let _ = fire_mssql_cancel(spid, &p, &pw).await;
+                        })
+                    });
+                    Some(cancel_registry.register(token, action).await)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let result = tokio::time::timeout(
         RUN_SQL_TIMEOUT,
@@ -966,6 +1000,11 @@ pub async fn mssql_run_sql(
         })
     })
     .and_then(|r| r);
+
+    // If the run was cancelled, override any result/error with the neutral cancelled error.
+    if guard.as_ref().map_or(false, |g| g.cancelled()) {
+        return Err(AppError::cancelled());
+    }
 
     let duration_ms = started.elapsed().as_millis() as u64;
 
@@ -1033,9 +1072,11 @@ pub async fn mssql_run_sql(
 pub async fn mssql_run_sql_many(
     app: AppHandle,
     registry: State<'_, MssqlPoolRegistry>,
+    cancel_registry: State<'_, RunningQueryRegistry>,
     id: Uuid,
     statements: Vec<String>,
     origin: Option<Origin>,
+    run_token: Option<String>,
 ) -> AppResult<Vec<RunSqlOutcome>> {
     let started_wall_ms = now_unix_ms();
     let started = Instant::now();
@@ -1044,6 +1085,35 @@ pub async fn mssql_run_sql_many(
 
     let mut client = registry.acquire(id).await?;
     let read_only = registry.read_only_for(id).unwrap_or(false);
+
+    // Register with the cancel registry once for the whole batch.
+    let guard = if let Some(ref tok_str) = run_token {
+        if let Ok(token) = Uuid::parse_str(tok_str) {
+            if let Some((_, _, params, password)) = registry.encrypt_mode_for(id) {
+                let spid = capture_spid(&mut client).await.unwrap_or(-1);
+                if spid > 0 {
+                    let p = params.clone();
+                    let pw = password.clone();
+                    let action: CancelAction = Arc::new(move || {
+                        let p = p.clone();
+                        let pw = pw.clone();
+                        Box::pin(async move {
+                            let _ = fire_mssql_cancel(spid, &p, &pw).await;
+                        })
+                    });
+                    Some(cancel_registry.register(token, action).await)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let mut outcomes: Vec<RunSqlOutcome> = Vec::with_capacity(statements.len());
     let mut errored = false;
@@ -1093,6 +1163,11 @@ pub async fn mssql_run_sql_many(
             run_single_sql_inner(&mut client, stmt, read_only),
         )
         .await;
+
+        // If the batch was cancelled during this statement, stop immediately.
+        if guard.as_ref().map_or(false, |g| g.cancelled()) {
+            return Err(AppError::cancelled());
+        }
 
         match stmt_result {
             Ok(Ok(res)) => {
@@ -1191,9 +1266,11 @@ pub async fn mssql_run_sql_many(
 pub async fn mssql_run_sql_batch(
     app: AppHandle,
     registry: State<'_, MssqlPoolRegistry>,
+    cancel_registry: State<'_, RunningQueryRegistry>,
     id: Uuid,
     sql: String,
     origin: Option<Origin>,
+    run_token: Option<String>,
 ) -> AppResult<Vec<RunSqlOutcome>> {
     if sql.trim().is_empty() {
         return Err(AppError::Validation("empty SQL".into()));
@@ -1216,7 +1293,16 @@ pub async fn mssql_run_sql_batch(
         return Ok(Vec::new());
     }
 
-    mssql_run_sql_many(app, registry, id, flat_stmts, origin).await
+    mssql_run_sql_many(
+        app,
+        registry,
+        cancel_registry,
+        id,
+        flat_stmts,
+        origin,
+        run_token,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------

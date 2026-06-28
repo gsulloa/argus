@@ -191,13 +191,25 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
 
         const meta = e.metaKey || e.ctrlKey;
 
-        if (e.key === "Enter" && !meta && !e.shiftKey && !e.altKey) {
+        if (e.key === "Enter" && !meta && !e.altKey) {
           const active = document.activeElement as HTMLElement | null;
+          // Chip inputs (In/NotIn) commit a chip on Enter when the draft is non-empty.
           if (active?.dataset.chipInput === "true" && (active as HTMLInputElement).value !== "") {
             return;
           }
           e.preventDefault();
-          handleApplyAll();
+          // Shift+Enter → Apply All (enabled+complete rows, current combinator).
+          if (e.shiftKey) {
+            handleApplyAll();
+            return;
+          }
+          // Plain Enter → apply only the focused row (replaces the active filter),
+          // mirroring that row's per-row Apply button. Falls back to Apply All if
+          // focus is not inside a row.
+          const rowEl = active?.closest("[data-filter-row-index]") as HTMLElement | null;
+          const idx = rowEl ? parseInt(rowEl.dataset.filterRowIndex ?? "-1", 10) : -1;
+          if (idx >= 0) onApplyOnlyRow(idx);
+          else handleApplyAll();
           return;
         }
 
@@ -323,7 +335,7 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
           return;
         }
       },
-      [rootRef, draft, onDraftChange, handleApplyAll, onClose],
+      [rootRef, draft, onDraftChange, handleApplyAll, onApplyOnlyRow, onClose],
     );
 
     // ── Imperative focus handle ───────────────────────────────────────────────
@@ -414,7 +426,10 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
                   Remove: <FilterKeyHint keys="⌘⇧I" />
                 </span>
                 <span className={styles.hintItem}>
-                  Apply All: <FilterKeyHint keys="⌘↵" />
+                  Apply row: <FilterKeyHint keys="↵" />
+                </span>
+                <span className={styles.hintItem}>
+                  Apply All: <FilterKeyHint keys="⇧↵" />
                 </span>
                 <span className={styles.hintItem}>
                   Up: <FilterKeyHint keys="⌘↑" />

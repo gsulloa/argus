@@ -8,13 +8,21 @@
  *  - data_scanned_bytes in the summary
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { AppError } from "@/platform/errors/AppError";
 import { athenaApi } from "../api";
 import { splitStatements, getStatementUnderCursor } from "@/modules/mysql/sql/splitStatements";
 import type { AthenaStatementOutcome, AthenaRunSqlResult } from "../types";
 
 export type { AthenaStatementOutcome, AthenaRunSqlResult };
+
+function isTauriRuntime() {
+  return (
+    typeof window !== "undefined" &&
+    "__TAURI_INTERNALS__" in (window as unknown as Record<string, unknown>)
+  );
+}
 
 export interface SingleRunState {
   mode: "single";
@@ -33,6 +41,7 @@ export interface MultiRunState {
 export type RunState =
   | { status: "idle" }
   | { status: "running" }
+  | { status: "cancelled" }
   | ({ status: "done" } & (SingleRunState | MultiRunState));
 
 export interface UseQueryRunResult {
@@ -47,6 +56,7 @@ export interface UseQueryRunResult {
     cursor: number;
     forceAll?: boolean;
   }): Promise<void>;
+  cancel(): void;
   reset(): void;
 }
 
@@ -54,9 +64,56 @@ export function useAthenaQueryRun(): UseQueryRunResult {
   const [state, setState] = useState<RunState>({ status: "idle" });
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
 
+  // Tracks the in-flight query execution id for cancellation (set by backend event).
+  const activeQueryRef = useRef<{
+    connectionId: string;
+    queryExecutionId: string;
+  } | null>(null);
+
+  const cancelRequestedRef = useRef(false);
+
+  // Listen for athena:query-started event to capture queryExecutionId.
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    listen<{ connection_id: string; query_execution_id: string }>(
+      "athena:query-started",
+      (event) => {
+        activeQueryRef.current = {
+          connectionId: event.payload.connection_id,
+          queryExecutionId: event.payload.query_execution_id,
+        };
+      },
+    ).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const reset = useCallback(() => {
     setState({ status: "idle" });
     setRunStartedAt(null);
+    activeQueryRef.current = null;
+    cancelRequestedRef.current = false;
+  }, []);
+
+  const cancel = useCallback(() => {
+    cancelRequestedRef.current = true;
+    const active = activeQueryRef.current;
+    if (active) {
+      void athenaApi
+        .cancelQuery(active.connectionId, active.queryExecutionId)
+        .catch((e) => {
+          console.warn("[athena] cancel failed:", e);
+        });
+    }
   }, []);
 
   const run = useCallback(
@@ -110,6 +167,10 @@ export function useAthenaQueryRun(): UseQueryRunResult {
 
       if (!plan) return;
 
+      // Reset cancel flag and active query ref for the new run.
+      cancelRequestedRef.current = false;
+      activeQueryRef.current = null;
+
       setState({ status: "running" });
       setRunStartedAt(Date.now());
 
@@ -125,20 +186,30 @@ export function useAthenaQueryRun(): UseQueryRunResult {
             error: null,
           });
         } catch (e) {
-          const err = e instanceof AppError ? e : new AppError("Internal", String(e));
-          setState({
-            status: "done",
-            mode: "single",
-            sql: plan.sql,
-            startOffset: plan.startOffset,
-            result: null,
-            error: {
-              message: err.aws?.message ?? err.message,
-              code: err.aws?.code ?? null,
-              position: null,
-            },
-          });
+          if (cancelRequestedRef.current) {
+            // Cancelled — show neutral cancelled state.
+            setState({ status: "cancelled" });
+          } else {
+            const err = e instanceof AppError ? e : new AppError("Internal", String(e));
+            if (err.kind === "Cancelled") {
+              setState({ status: "cancelled" });
+            } else {
+              setState({
+                status: "done",
+                mode: "single",
+                sql: plan.sql,
+                startOffset: plan.startOffset,
+                result: null,
+                error: {
+                  message: err.aws?.message ?? err.message,
+                  code: err.aws?.code ?? null,
+                  position: null,
+                },
+              });
+            }
+          }
         }
+        activeQueryRef.current = null;
         setRunStartedAt(null);
         return;
       }
@@ -157,35 +228,45 @@ export function useAthenaQueryRun(): UseQueryRunResult {
           outcomes: rawOutcomes,
         });
       } catch (e) {
-        const err = e instanceof AppError ? e : new AppError("Internal", String(e));
-        const synthetic: AthenaStatementOutcome[] = plan.statements.map((_, idx) => {
-          if (idx === 0) {
-            return {
-              statement_index: idx,
-              outcome: "err" as const,
-              error: {
-                message: err.aws?.message ?? err.message,
-                code: err.aws?.code ?? null,
-                position: null,
-              },
-            };
+        if (cancelRequestedRef.current) {
+          // Cancelled — show neutral cancelled state.
+          setState({ status: "cancelled" });
+        } else {
+          const err = e instanceof AppError ? e : new AppError("Internal", String(e));
+          if (err.kind === "Cancelled") {
+            setState({ status: "cancelled" });
+          } else {
+            const synthetic: AthenaStatementOutcome[] = plan.statements.map((_, idx) => {
+              if (idx === 0) {
+                return {
+                  statement_index: idx,
+                  outcome: "err" as const,
+                  error: {
+                    message: err.aws?.message ?? err.message,
+                    code: err.aws?.code ?? null,
+                    position: null,
+                  },
+                };
+              }
+              return { statement_index: idx, outcome: "skipped" as const };
+            });
+            setState({
+              status: "done",
+              mode: "multi",
+              statements: plan.statements,
+              outcomes: synthetic,
+            });
           }
-          return { statement_index: idx, outcome: "skipped" as const };
-        });
-        setState({
-          status: "done",
-          mode: "multi",
-          statements: plan.statements,
-          outcomes: synthetic,
-        });
+        }
       }
+      activeQueryRef.current = null;
       setRunStartedAt(null);
     },
     [],
   );
 
   const summary = summarize(state);
-  return { state, summary, runStartedAt, run, reset };
+  return { state, summary, runStartedAt, run, cancel, reset };
 }
 
 function formatBytes(bytes: number): string {
@@ -197,6 +278,7 @@ function formatBytes(bytes: number): string {
 
 function summarize(state: RunState): string | null {
   if (state.status === "running") return "Running…";
+  if (state.status === "cancelled") return "Query cancelled";
   if (state.status !== "done") return null;
   if (state.mode === "single") {
     if (state.error) return `error · ${state.error.code ?? "—"}`;

@@ -312,7 +312,11 @@ export interface PrimaryKey {
   auto_increment_column: string | null;
 }
 
-export type PrimaryKeyResult = PrimaryKey;
+/** Result from `mysql_table_primary_key`; `columns` is null when the table has no primary key. */
+export interface PrimaryKeyResult {
+  columns: string[] | null;
+  auto_increment_column: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // SQL editor types

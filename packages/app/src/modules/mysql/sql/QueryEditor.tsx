@@ -111,6 +111,8 @@ export interface QueryEditorProps {
   onRun(): void;
   onRunAll(): void;
   onSave?(): void;
+  /** Called when the user presses Mod-. or Escape (cancel in-flight query). Optional. */
+  onCancel?(): void;
 }
 
 export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
@@ -127,6 +129,8 @@ export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
     onRunAllRef.current = props.onRunAll;
     const onSaveRef = useRef(props.onSave);
     onSaveRef.current = props.onSave;
+    const onCancelRef = useRef(props.onCancel);
+    onCancelRef.current = props.onCancel;
     const connectionIdRef = useRef(props.connectionId);
     connectionIdRef.current = props.connectionId;
 
@@ -181,6 +185,24 @@ export const QueryEditor = forwardRef<QueryEditorHandle, QueryEditorProps>(
             run: () => {
               onSaveRef.current?.();
               return true;
+            },
+          },
+          {
+            key: "Mod-.",
+            preventDefault: true,
+            run: () => {
+              onCancelRef.current?.();
+              return true;
+            },
+          },
+          {
+            key: "Escape",
+            run: () => {
+              if (onCancelRef.current) {
+                onCancelRef.current();
+                return true;
+              }
+              return false;
             },
           },
           ...tabBindings,

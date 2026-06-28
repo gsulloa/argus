@@ -457,6 +457,13 @@
   width: 110px;
 }
 
+.rawInput {
+  font-family: var(--font-mono, "Geist Mono", monospace);
+  font-feature-settings: "zero" on;
+  min-width: 280px;
+  flex: 1 1 280px;
+}
+
 .betweenSep {
   font-size: 10px;
   color: var(--text-subtle);

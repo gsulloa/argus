@@ -212,6 +212,50 @@ describe("compileWhere", () => {
     );
     expect(r.body).toBe(`(FALSE)`);
   });
+
+  // ---------------------------------------------------------------------------
+  // RAW rows
+  // ---------------------------------------------------------------------------
+
+  it("RAW row compiles to (<expr>)", () => {
+    const r = compileWhere(
+      model([row({ column: { kind: "raw" }, op: "RAW", value: "data->>'estado' = 'activo'" })]),
+    );
+    expect(r.body).toBe(`(data->>'estado' = 'activo')`);
+  });
+
+  it("RAW row trims leading/trailing whitespace in expr", () => {
+    const r = compileWhere(
+      model([row({ column: { kind: "raw" }, op: "RAW", value: "  id > 0  " })]),
+    );
+    expect(r.body).toBe(`(id > 0)`);
+  });
+
+  it("RAW row combined with a structured row under AND", () => {
+    const r = compileWhere(
+      model(
+        [
+          row({ column: { kind: "named", name: "status" }, op: "=", value: "active" }),
+          row({ column: { kind: "raw" }, op: "RAW", value: "data->>'flag' = 'true'" }),
+        ],
+        "AND",
+      ),
+    );
+    expect(r.body).toBe(`"status" = 'active' AND (data->>'flag' = 'true')`);
+  });
+
+  it("RAW row combined with a structured row under OR", () => {
+    const r = compileWhere(
+      model(
+        [
+          row({ column: { kind: "named", name: "status" }, op: "=", value: "active" }),
+          row({ column: { kind: "raw" }, op: "RAW", value: "data->>'flag' = 'true'" }),
+        ],
+        "OR",
+      ),
+    );
+    expect(r.body).toBe(`"status" = 'active' OR (data->>'flag' = 'true')`);
+  });
 });
 
 describe("compilePrefilledSelect", () => {

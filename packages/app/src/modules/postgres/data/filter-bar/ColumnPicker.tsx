@@ -38,7 +38,11 @@ export function ColumnPicker({ value, columns, onChange }: Props) {
   }, [open]);
 
   const label =
-    value.kind === "any_column" ? "Any column" : value.name || "(choose column)";
+    value.kind === "raw"
+      ? "Raw SQL"
+      : value.kind === "any_column"
+        ? "Any column"
+        : value.name || "(choose column)";
 
   const filteredColumns = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -86,6 +90,15 @@ export function ColumnPicker({ value, columns, onChange }: Props) {
           >
             <span>Any column</span>
             <span className={styles.columnOptionType}>all text-castable</span>
+          </button>
+          <button
+            type="button"
+            className={styles.columnOption}
+            data-active={value.kind === "raw" ? "true" : "false"}
+            onClick={() => pick({ kind: "raw" })}
+          >
+            <span>Raw SQL</span>
+            <span className={styles.columnOptionType}>free expression</span>
           </button>
           {filteredColumns.map((c) => {
             const active = value.kind === "named" && value.name === c.name;

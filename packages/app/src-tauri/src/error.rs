@@ -72,9 +72,16 @@ pub enum AppError {
 
     #[error("mssql: {}", .0.message)]
     Mssql(MssqlErrorBody),
+
+    #[error("cancelled: {0}")]
+    Cancelled(String),
 }
 
 impl AppError {
+    pub fn cancelled() -> Self {
+        AppError::Cancelled("Query cancelled".into())
+    }
+
     pub fn aws(code: impl Into<String>, message: impl Into<String>, retryable: bool) -> Self {
         AppError::Aws(AwsErrorBody {
             code: code.into(),

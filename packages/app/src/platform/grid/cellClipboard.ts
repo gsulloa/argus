@@ -43,6 +43,17 @@ export function formatCellValue(value: unknown): string {
 }
 
 /**
+ * Serialize a 2-D array of cell values to a TSV string suitable for pasting
+ * into a spreadsheet. Each row's cells are joined by `\t`; rows are joined by
+ * `\n`. Cell values are formatted via `formatCellValue` so output is
+ * byte-for-byte identical to a sequence of single-cell copies. An empty input
+ * array returns `""`.
+ */
+export function formatRowsTSV(rows: unknown[][]): string {
+  return rows.map((cells) => cells.map(formatCellValue).join("\t")).join("\n");
+}
+
+/**
  * Write a cell value to the system clipboard. Formats via `formatCellValue`,
  * then writes with `navigator.clipboard.writeText`. Any error is swallowed
  * (logged as a warning) so callers never need to handle clipboard failures.
@@ -51,6 +62,29 @@ export async function copyCellValue(value: unknown): Promise<void> {
   const text = formatCellValue(value);
   try {
     await navigator.clipboard.writeText(text);
+  } catch (err) {
+    console.warn("[cellClipboard] clipboard write failed:", err);
+  }
+}
+
+/**
+ * Copy multiple rows to the clipboard as a TSV (tab-separated values) string.
+ * Each row is an array of cell values ordered to match `columns`.
+ * Cells are joined by `\t`, rows by `\n`. Each cell is formatted via
+ * `formatCellValue`. Errors are swallowed like `copyCellValue`.
+ *
+ * @param rows    Array of cell-value arrays, one per row (`rows[i][j]` maps to
+ *                `columns[j]`).
+ * @param columns Column names — passed for context / future header support;
+ *                not used by the current implementation.
+ */
+export async function copyRowsTsv(
+  rows: unknown[][],
+  columns: string[],
+): Promise<void> {
+  void columns; // reserved for future header-row support
+  try {
+    await navigator.clipboard.writeText(formatRowsTSV(rows));
   } catch (err) {
     console.warn("[cellClipboard] clipboard write failed:", err);
   }

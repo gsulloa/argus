@@ -23,6 +23,7 @@ export function operatorsForColumn(
   dataType: string | null,
   isNullable: boolean,
 ): Operator[] {
+  if (column.kind === "raw") return ["RAW"];
   if (column.kind === "any_column") {
     return ANY_COLUMN_OPERATORS.slice();
   }

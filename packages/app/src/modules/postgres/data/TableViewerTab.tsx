@@ -223,8 +223,10 @@ export function TableViewer({
   const pkLookup = useTablePrimaryKey(connectionId, schema, relation);
   const pkColumns = pkLookup.metadata?.pk_columns ?? null;
   const enumValuesByColumn = pkLookup.metadata?.enums ?? {};
-  // The PK lookup has settled once it is `ready` or `error` (an error is
-  // treated as "no PK" → no default order).
+  // The PK lookup has settled once it is `ready` or `error`. An error is NOT
+  // treated as "no PK" — it is a distinct retryable failure state. We still
+  // allow `pkResolved` to be true on error so the data fetch is not blocked,
+  // but the no-PK banner must only fire on a confirmed `ready` + null outcome.
   const pkResolved = pkLookup.status === "ready" || pkLookup.status === "error";
 
   // Effective order: a persisted value wins (including an explicit empty array);
@@ -810,7 +812,9 @@ export function TableViewer({
           editable={!isReadOnly && relationKind === "table"}
           canInsert={!isReadOnly && relationKind === "table"}
           readOnlyBanner={isReadOnly}
-          noPkBanner={!isReadOnly && relationKind === "table" && pkColumns === null}
+          noPkBanner={!isReadOnly && relationKind === "table" && pkLookup.status === "ready" && pkColumns === null}
+          pkErrorBanner={!isReadOnly && pkLookup.status === "error" ? (pkLookup.error?.message ?? "Failed to determine primary key") : null}
+          onRetryPk={pkLookup.refresh}
           dirtyCount={
             buffer.dirtyCounts.updates +
             buffer.dirtyCounts.inserts +

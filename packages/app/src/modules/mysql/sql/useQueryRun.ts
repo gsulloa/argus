@@ -9,7 +9,7 @@
  *   Mod-Shift-Enter → run all statements in the buffer
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { AppError } from "@/platform/errors/AppError";
 import { sqlApi } from "./api";
 import { splitStatements, getStatementUnderCursor, validateBatch } from "./splitStatements";
@@ -34,6 +34,7 @@ export interface MultiRunState {
 export type RunState =
   | { status: "idle" }
   | { status: "running" }
+  | { status: "cancelled" }
   | ({ status: "done" } & (SingleRunState | MultiRunState));
 
 export interface UseQueryRunResult {
@@ -48,16 +49,27 @@ export interface UseQueryRunResult {
     cursor: number;
     forceAll?: boolean;
   }): Promise<void>;
+  /** Cancel the in-flight query (best-effort; no-op when idle). */
+  cancel(): void;
   reset(): void;
 }
 
 export function useQueryRun(): UseQueryRunResult {
   const [state, setState] = useState<RunState>({ status: "idle" });
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const runTokenRef = useRef<string | null>(null);
 
   const reset = useCallback(() => {
     setState({ status: "idle" });
     setRunStartedAt(null);
+  }, []);
+
+  const cancel = useCallback(() => {
+    const token = runTokenRef.current;
+    if (!token) return;
+    sqlApi.cancelQuery(token).catch((e) => {
+      console.warn("[argus.mysql.sql] cancel failed:", e);
+    });
   }, []);
 
   const run = useCallback(
@@ -129,12 +141,14 @@ export function useQueryRun(): UseQueryRunResult {
         }
       }
 
+      const runToken = crypto.randomUUID();
+      runTokenRef.current = runToken;
       setState({ status: "running" });
       setRunStartedAt(Date.now());
 
       if (plan.mode === "single") {
         try {
-          const result = await sqlApi.runSql(connectionId, plan.sql, "user");
+          const result = await sqlApi.runSql(connectionId, plan.sql, "user", runToken);
           setState({
             status: "done",
             mode: "single",
@@ -144,6 +158,12 @@ export function useQueryRun(): UseQueryRunResult {
             error: null,
           });
         } catch (e) {
+          if (e instanceof AppError && e.kind === "Cancelled") {
+            setState({ status: "cancelled" });
+            setRunStartedAt(null);
+            runTokenRef.current = null;
+            return;
+          }
           const err = e instanceof AppError ? e : new AppError("Internal", String(e));
           setState({
             status: "done",
@@ -158,6 +178,7 @@ export function useQueryRun(): UseQueryRunResult {
             },
           });
         }
+        runTokenRef.current = null;
         setRunStartedAt(null);
         return;
       }
@@ -168,6 +189,7 @@ export function useQueryRun(): UseQueryRunResult {
           connectionId,
           plan.statements.map((s) => s.sql),
           "user",
+          runToken,
         );
         setState({
           status: "done",
@@ -176,6 +198,12 @@ export function useQueryRun(): UseQueryRunResult {
           outcomes: rawOutcomes,
         });
       } catch (e) {
+        if (e instanceof AppError && e.kind === "Cancelled") {
+          setState({ status: "cancelled" });
+          setRunStartedAt(null);
+          runTokenRef.current = null;
+          return;
+        }
         const err = e instanceof AppError ? e : new AppError("Internal", String(e));
         const synthetic: StatementOutcome[] = plan.statements.map((_, idx) => {
           if (idx === 0) {
@@ -198,17 +226,19 @@ export function useQueryRun(): UseQueryRunResult {
           outcomes: synthetic,
         });
       }
+      runTokenRef.current = null;
       setRunStartedAt(null);
     },
     [],
   );
 
   const summary = summarize(state);
-  return { state, summary, runStartedAt, run, reset };
+  return { state, summary, runStartedAt, run, cancel, reset };
 }
 
 function summarize(state: RunState): string | null {
   if (state.status === "running") return "Running…";
+  if (state.status === "cancelled") return "Query cancelled";
   if (state.status !== "done") return null;
   if (state.mode === "single") {
     if (state.error) return `error · ${state.error.code ?? "—"}`;

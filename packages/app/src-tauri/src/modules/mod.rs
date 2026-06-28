@@ -8,5 +8,6 @@ pub mod feedback;
 pub mod mssql;
 pub mod mysql;
 pub mod postgres;
+pub mod query_cancel;
 pub mod query_history;
 pub mod saved_queries;

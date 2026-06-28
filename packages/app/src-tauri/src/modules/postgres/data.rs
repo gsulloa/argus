@@ -89,16 +89,20 @@ pub enum Operator {
     IsNull,
     #[serde(rename = "IS NOT NULL")]
     IsNotNull,
+    #[serde(rename = "RAW")]
+    Raw,
 }
 
-/// Either a named column or the special "Any column" pseudo-column. The wire
-/// form is internally tagged: `{ kind: "named", name: "..." }` or
-/// `{ kind: "any_column" }`.
+/// Either a named column, the special "Any column" pseudo-column, or a raw
+/// SQL boolean expression. The wire form is internally tagged:
+/// `{ kind: "named", name: "..." }`, `{ kind: "any_column" }`, or
+/// `{ kind: "raw" }`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ColumnRef {
     Named { name: String },
     AnyColumn,
+    Raw,
 }
 
 /// A single condition leaf — a column / operator / optional value triple. The
@@ -228,14 +232,15 @@ fn binary_op_sql(col_with_cast: &str, op: Operator, placeholder: &str) -> String
         }
         Operator::StartsWith => format!("{col_with_cast} ILIKE {placeholder} || '%'"),
         Operator::EndsWith => format!("{col_with_cast} ILIKE '%' || {placeholder}"),
-        // Multi-bound / value-less operators are not handled here — callers
+        // Multi-bound / value-less / raw operators are not handled here — callers
         // must dispatch on operator before calling this.
         Operator::In
         | Operator::NotIn
         | Operator::Between
         | Operator::IsNull
-        | Operator::IsNotNull => {
-            unreachable!("binary_op_sql called with multi-bound or value-less operator");
+        | Operator::IsNotNull
+        | Operator::Raw => {
+            unreachable!("binary_op_sql called with multi-bound, value-less, or raw operator");
         }
     }
 }
@@ -479,6 +484,30 @@ fn expand_any_column(
     Ok(format!("({})", parts.join(" OR ")))
 }
 
+/// Compile a RAW condition: the value is an arbitrary SQL boolean expression
+/// emitted verbatim, wrapped in one pair of parentheses. No bind parameter is
+/// allocated and no identifier quoting is applied — this is the single
+/// interpolated path, reachable only via ColumnRef::Raw + Operator::Raw.
+fn compile_raw(op: Operator, value: Option<&JsonValue>) -> AppResult<String> {
+    if !matches!(op, Operator::Raw) {
+        return Err(AppError::Validation(
+            "a raw column requires the RAW operator".into(),
+        ));
+    }
+    let v =
+        value.ok_or_else(|| AppError::Validation("RAW requires a SQL expression value".into()))?;
+    let s = v
+        .as_str()
+        .ok_or_else(|| AppError::Validation("RAW value must be a string".into()))?;
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(
+            "RAW expression must not be empty".into(),
+        ));
+    }
+    Ok(format!("({trimmed})"))
+}
+
 fn compile_condition(
     cond: &Condition,
     columns: &[DataColumn],
@@ -487,12 +516,18 @@ fn compile_condition(
 ) -> AppResult<String> {
     match &cond.column {
         ColumnRef::Named { name } => {
+            if matches!(cond.op, Operator::Raw) {
+                return Err(AppError::Validation(
+                    "RAW operator is only valid with a raw column".into(),
+                ));
+            }
             let kind = column_index.kind_for(name).ok_or_else(|| {
                 AppError::Validation(format!("filter references unknown column '{name}'"))
             })?;
             predicate_for(name, cond.op, cond.value.as_ref(), "", kind, params)
         }
         ColumnRef::AnyColumn => expand_any_column(cond.op, cond.value.as_ref(), columns, params),
+        ColumnRef::Raw => compile_raw(cond.op, cond.value.as_ref()),
     }
 }
 
@@ -2070,5 +2105,88 @@ mod tests {
             "(\"a\"::text ILIKE '%' || $1 || '%' OR \"b\"::text ILIKE '%' || $1 || '%')"
         );
         assert_eq!(params.len(), 1);
+    }
+
+    // --- RAW operator / ColumnRef::Raw tests -----------------------------------
+
+    fn raw_cond(op: Operator, value: Option<JsonValue>) -> FilterNode {
+        FilterNode::Condition(Condition {
+            column: ColumnRef::Raw,
+            op,
+            value,
+        })
+    }
+
+    #[test]
+    fn raw_condition_compiles_verbatim() {
+        let expr = "data->>'estado' = 'activo'";
+        let tree = FilterTree {
+            children: vec![raw_cond(Operator::Raw, Some(json!(expr)))],
+            ..Default::default()
+        };
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+        let body = compile_filter_tree(&tree, &[], &mut params).unwrap();
+        assert_eq!(body, format!("({expr})"));
+        assert!(params.is_empty(), "RAW must not push any params");
+    }
+
+    #[test]
+    fn raw_combines_with_bound_row_under_and() {
+        let tree = FilterTree {
+            children: vec![
+                cond("country", Operator::Eq, Some(json!("CL"))),
+                raw_cond(
+                    Operator::Raw,
+                    Some(json!("payload @> '{\"source\":\"webhook\"}'")),
+                ),
+            ],
+            combinator: RootCombinator::And,
+        };
+        let cols = vec![col("country", "text")];
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+        let body = compile_filter_tree(&tree, &cols, &mut params).unwrap();
+        assert_eq!(
+            body,
+            "\"country\" = $1 AND (payload @> '{\"source\":\"webhook\"}')"
+        );
+        assert_eq!(params.len(), 1, "only the Eq condition should bind a param");
+    }
+
+    #[test]
+    fn raw_empty_value_rejected() {
+        // Empty string
+        let err = compile_raw(Operator::Raw, Some(&json!(""))).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+
+        // Whitespace-only string
+        let err2 = compile_raw(Operator::Raw, Some(&json!("   "))).unwrap_err();
+        assert!(matches!(err2, AppError::Validation(_)));
+
+        // Absent value (None)
+        let err3 = compile_raw(Operator::Raw, None).unwrap_err();
+        assert!(matches!(err3, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn raw_operator_on_named_column_rejected() {
+        let tree = FilterTree {
+            children: vec![cond("data", Operator::Raw, Some(json!("x = 1")))],
+            ..Default::default()
+        };
+        let cols = vec![col("data", "text")];
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+        let err = compile_filter_tree(&tree, &cols, &mut params).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn non_raw_operator_on_raw_column_rejected() {
+        let tree = FilterTree {
+            children: vec![raw_cond(Operator::Eq, Some(json!("1")))],
+            ..Default::default()
+        };
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+        let err = compile_filter_tree(&tree, &[], &mut params).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 }

@@ -83,9 +83,9 @@ The structured filter payload accepted by `postgres_query_table` (and `postgres_
 - `{ kind: "condition", column: ColumnRef, op: Operator, value?: Value | Array<Value> | { min: Value, max: Value } }`
 - `{ kind: "or_group", children: Array<Condition> }` (a flat OR-group containing only condition leaves; the connector is implicitly OR; nesting another `or_group` inside an `or_group` MUST be rejected)
 
-A `ColumnRef` is `{ kind: "named", name: string }` or `{ kind: "any_column" }`.
+A `ColumnRef` is `{ kind: "named", name: string }`, `{ kind: "any_column" }`, or `{ kind: "raw" }`.
 
-The `Operator` set MUST be one of: `=`, `!=`, `<`, `<=`, `>`, `>=`, `LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `Contains`, `StartsWith`, `EndsWith`, `In`, `NotIn`, `BETWEEN`, `IS NULL`, `IS NOT NULL`. The backend MUST reject any other operator with `AppError::Validation`.
+The `Operator` set MUST be one of: `=`, `!=`, `<`, `<=`, `>`, `>=`, `LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `Contains`, `StartsWith`, `EndsWith`, `In`, `NotIn`, `BETWEEN`, `IS NULL`, `IS NOT NULL`, `RAW`. The backend MUST reject any other operator with `AppError::Validation`.
 
 Per-operator value rules:
 
@@ -96,6 +96,12 @@ Per-operator value rules:
 - `In`, `NotIn` — `value` MUST be a non-empty array of scalars. Compiles to `IN ($n, $n+1, ...)` / `NOT IN (...)` with each element bound. Empty arrays MUST be rejected with `AppError::Validation`.
 - `BETWEEN` — `value` MUST be `{ min, max }`. Compiles to `BETWEEN $a AND $b`. Inclusive on both bounds.
 - `IS NULL`, `IS NOT NULL` — `value` MUST be absent. Providing one MUST be rejected.
+- `RAW` — `value` MUST be a non-empty string holding an arbitrary SQL boolean expression. It compiles to the trimmed expression wrapped in a single pair of parentheses (`(<expr>)`) and is emitted **verbatim** into the `WHERE` body — it is NOT a bound parameter and no identifier quoting is applied to it. An empty/whitespace-only `value`, an absent `value`, or a non-string `value` MUST be rejected with `AppError::Validation`.
+
+Operator–column pairing rules:
+
+- `op: "RAW"` is valid ONLY with `column: { kind: "raw" }`. A `RAW` operator paired with a `named` or `any_column` reference MUST be rejected with `AppError::Validation`.
+- A `column: { kind: "raw" }` reference is valid ONLY with `op: "RAW"`. Any other operator on a `raw` column MUST be rejected with `AppError::Validation`.
 
 Per-column-type rules in the frontend:
 
@@ -103,8 +109,9 @@ Per-column-type rules in the frontend:
 - Text columns: surface `=`, `!=`, `LIKE`, `NOT LIKE`, `ILIKE`, `NOT ILIKE`, `Contains`, `StartsWith`, `EndsWith`, `In`, `NotIn`, plus null variants if nullable.
 - Boolean columns: surface `=`, `!=`, plus null variants.
 - Other types (uuid, json, enum, etc.): surface `=`, `!=`, `In`, `NotIn`, plus null variants.
+- `RAW` is NOT surfaced as a per-column operator. It is reached by selecting the `Raw SQL` entry in the column picker (see "Raw SQL filter row"), which fixes the row's operator to `RAW`.
 
-Values MUST be passed as bound parameters in Structured mode, never interpolated. The frontend MUST surface every operator from the filter bar (not from a per-column header popover; see "Filter bar surface").
+Values MUST be passed as bound parameters in Structured mode, never interpolated — with the sole exception of the `RAW` operator, whose `value` is an explicitly trusted free-form expression interpolated verbatim. RAW rows participate in the same `filter_tree` as bound rows and join them under the tree's root combinator; mixing RAW and bound rows in one tree MUST be supported. The frontend MUST surface every operator from the filter bar (not from a per-column header popover; see "Filter bar surface").
 
 #### Scenario: Unknown operator is rejected
 
@@ -137,6 +144,34 @@ Values MUST be passed as bound parameters in Structured mode, never interpolated
 #### Scenario: IS NULL with a value is rejected
 
 - **WHEN** the user forwards `{ op: "IS NULL", value: "x" }`
+- **THEN** the command returns `AppError::Validation` and no SQL is dispatched
+
+#### Scenario: RAW expression compiles verbatim into the WHERE body
+
+- **WHEN** the user forwards `{ kind: "condition", column: { kind: "raw" }, op: "RAW", value: "data->>'estado' = 'activo'" }`
+- **THEN** the issued SQL `WHERE` body is `(data->>'estado' = 'activo')`
+- **AND** the expression is emitted verbatim with no bound parameter slot allocated for it
+- **AND** no identifier quoting is applied to the expression
+
+#### Scenario: RAW row combines with a bound row under the root combinator
+
+- **WHEN** the tree has root combinator `AND` and children `[{ column: { kind: "named", name: "country" }, op: "=", value: "CL" }, { column: { kind: "raw" }, op: "RAW", value: "payload @> '{\"source\":\"webhook\"}'" }]`
+- **THEN** the issued SQL `WHERE` body is `"country" = $1 AND (payload @> '{"source":"webhook"}')`
+- **AND** `$1 = "CL"` is bound while the RAW fragment carries no parameter
+
+#### Scenario: Empty RAW value is rejected
+
+- **WHEN** the user forwards `{ column: { kind: "raw" }, op: "RAW", value: "" }` (or a whitespace-only or absent value)
+- **THEN** the command returns `AppError::Validation` and no SQL is dispatched
+
+#### Scenario: RAW operator on a named column is rejected
+
+- **WHEN** the user forwards `{ column: { kind: "named", name: "data" }, op: "RAW", value: "data->>'x' = '1'" }`
+- **THEN** the command returns `AppError::Validation` and no SQL is dispatched
+
+#### Scenario: Non-RAW operator on a raw column is rejected
+
+- **WHEN** the user forwards `{ column: { kind: "raw" }, op: "=", value: "1" }`
 - **THEN** the command returns `AppError::Validation` and no SQL is dispatched
 
 ### Requirement: Count rows command
@@ -860,7 +895,7 @@ The handler MUST NOT fire on the `Structure` or `Raw` subtab. The handler MUST N
 
 `TableViewerTab` SHALL maintain two filter values for each tab: `draft` and `applied`, each of shape `FilterTree = { rows: FilterRow[], combinator: "AND" | "OR" }`. Only `applied` MUST be passed (after wire-shape conversion) to `postgres_query_table` and `postgres_count_table`. Edits to the filter bar (text input, operator changes, column changes, checkbox toggles, row insertions/removals, combinator menu picks) MUST update `draft` only. The bar MUST display a dirty indicator (a small `●` adjacent to the `Apply All` button) whenever `draft` differs from `applied`.
 
-The `Apply All` button and the `⌘↵` / `⇧⌘↵` shortcuts commit `draft` to `applied`. The per-row `Apply` button commits exactly that single row to `applied` (see "Per-row Apply and Applied visual state"). The `Unset` button resets `draft.rows` but does NOT touch `applied` (see "Filter bar footer Unset, Export, SQL").
+The `Apply All` button and the `⇧↵` / `⌘↵` / `⇧⌘↵` shortcuts commit the enabled-complete subset of `draft` to `applied`. Plain `Enter` (no modifier) and the per-row `Apply` button each commit exactly that single focused row to `applied` (see "Per-row Apply and Applied visual state" and "Filter bar keyboard shortcuts"). The `Unset` button resets `draft.rows` but does NOT touch `applied` (see "Filter bar footer Unset, Export, SQL").
 
 The previous `Reset` button and `Esc` discard-draft shortcut are REMOVED. There is no single-keystroke "revert draft to applied" affordance in the new design.
 
@@ -875,10 +910,17 @@ Mode toggling is REMOVED — the bar has no Structured/Raw mode toggle. The filt
 
 #### Scenario: Apply All commits draft and triggers fetch
 
-- **WHEN** the user has a dirty draft and clicks `Apply All` (or presses `⌘↵`)
+- **WHEN** the user has a dirty draft and clicks `Apply All` (or presses `⇧↵` / `⌘↵`)
 - **THEN** `applied` becomes equal to the enabled-complete subset of `draft.rows` joined by `draft.combinator`
 - **AND** the dirty indicator disappears (because remaining draft rows match applied rows by structural equality)
 - **AND** `postgres.queryTable` is invoked with the new `applied` filters
+
+#### Scenario: Plain Enter commits only the focused row
+
+- **WHEN** the user has three rows in `draft` and presses plain `Enter` (no modifier) while focus is inside the second row
+- **THEN** `applied.rows === [thatRow]`
+- **AND** `applied.combinator === draft.combinator`
+- **AND** `draft` is unchanged
 
 #### Scenario: Esc no longer discards draft
 
@@ -899,6 +941,56 @@ Mode toggling is REMOVED — the bar has no Structured/Raw mode toggle. The filt
 - **WHEN** the user inspects the filter bar's UI
 - **THEN** there is no `Reset` button anywhere in the bar (footer or otherwise)
 - **AND** the closest equivalent is `Unset` which clears `draft.rows` only (see "Filter bar footer Unset, Export, SQL")
+
+### Requirement: Raw SQL filter row
+
+The filter bar SHALL let the user add a **RAW** filter row that carries a free-form SQL boolean expression, so that predicates the structured operators cannot express — most notably reaching inside `jsonb` columns (`->`, `->>`, `@>`, `?`, …) — are reachable from the data grid.
+
+A RAW row is entered through the column picker: in addition to the named columns and the existing `Any column` pseudo-entry, the picker MUST offer a `Raw SQL` entry. Selecting `Raw SQL` MUST set the row's column to `{ kind: "raw" }` and fix its operator to `RAW`. While a row is in RAW mode:
+
+- The operator picker MUST be hidden or disabled (the operator is implicitly `RAW`).
+- In place of the structured value input, the row MUST render a single free-form expression input that spans the operator+value region, using the monospace token from `DESIGN.md`, with a placeholder illustrating the intended use (e.g. `data->>'estado' = 'activo'`).
+- The row MUST retain its checkbox, per-row `Apply` / `Applied` affordance, and `−` / `+` buttons, identical to every other row.
+
+A RAW row is **complete** (eligible for `Apply All` and per-row `Apply`) iff its expression is a non-empty, non-whitespace string. Incomplete RAW rows MUST be excluded from the wire payload exactly as incomplete structured rows are.
+
+RAW rows MUST combine with structured rows: they are emitted into the same `filter_tree` and joined with the other enabled-complete rows under the bar's root combinator (`AND` / `OR`). The user MUST be able to clear a RAW row the same way as any other row — via its `−` button or via `Unset` (which clears all draft rows). Switching a row's column back from `Raw SQL` to a named column or `Any column` MUST restore the structured operator + value inputs.
+
+The footer `SQL` preview and any copy-WHERE / export-of-WHERE path MUST render a RAW row's expression verbatim (wrapped in parentheses) interleaved with the parametrized fragments of the other rows, consistent with what the backend executes.
+
+#### Scenario: Raw SQL entry appears in the column picker
+
+- **WHEN** the user opens a filter row's column picker
+- **THEN** a `Raw SQL` entry is listed alongside the named columns and the `Any column` entry
+
+#### Scenario: Selecting Raw SQL switches the row to an expression input
+
+- **WHEN** the user picks `Raw SQL` in a row's column picker
+- **THEN** the operator picker is no longer shown (the operator is fixed to `RAW`)
+- **AND** a single free-form expression input is rendered in place of the structured value input, with a `jsonb` example placeholder
+
+#### Scenario: Empty RAW row is not applied
+
+- **WHEN** the user has a RAW row with an empty expression and clicks `Apply All`
+- **THEN** the RAW row is omitted from the applied filter and from the wire payload
+- **AND** no `RAW` condition is sent to `postgres_query_table`
+
+#### Scenario: RAW row queries inside a jsonb column and combines with a structured row
+
+- **WHEN** the user has an enabled structured row `country = 'CL'` and an enabled RAW row `data->>'estado' = 'activo'` with the root combinator `AND`, and clicks `Apply All`
+- **THEN** the grid re-fetches with a `filter_tree` containing both conditions
+- **AND** only rows where `country = 'CL'` AND `data->>'estado' = 'activo'` are returned
+
+#### Scenario: RAW row is cleared like any other row
+
+- **WHEN** the user clicks the `−` button on a RAW row (or clicks `Unset`)
+- **THEN** the RAW row is removed from the draft
+- **AND** the remaining rows are unaffected
+
+#### Scenario: Footer SQL preview shows the RAW expression verbatim
+
+- **WHEN** the user has an applied RAW row `data->>'estado' = 'activo'` and opens the footer `SQL` preview
+- **THEN** the previewed `WHERE` contains `(data->>'estado' = 'activo')` verbatim, joined with any other rows under the root combinator
 
 ### Requirement: Filter bar visibility persistence
 
@@ -1103,7 +1195,8 @@ While the filter bar is visible AND focus is somewhere inside the bar AND focus 
 | `⌘↑` / `Ctrl+↑` | Move focus to the same logical control (column / op / value) of the row above the focused row. No wrap at top. |
 | `⌘↓` / `Ctrl+↓` | Move focus to the same logical control of the row below the focused row. No wrap at bottom. |
 | `⌘←` / `Ctrl+←` | Open the column picker dropdown on the focused row. No-op if focus is not on a row. |
-| `Enter` | Apply All using the current `draft.combinator` (does NOT force AND or OR). Suppressed when focus is in `ChipInput` and the chip draft is non-empty (Enter commits the chip instead). |
+| `Enter` | Apply ONLY the focused row — commit exactly that single row to `applied` (`{ rows: [focusedRow], combinator: draft.combinator }`), identical to that row's per-row `Apply` button and INDEPENDENT of the row's `enabled` checkbox. The focused row is resolved from the active element's enclosing `[data-filter-row-index]`. If no enclosing row can be resolved, the handler falls back to Apply All using the current combinator. Suppressed when focus is in a `ChipInput` (`In` / `NotIn`) and the chip draft is non-empty (Enter commits the chip instead). |
+| `⇧Enter` / `Shift+Enter` | Apply All using the current `draft.combinator` (does NOT force AND or OR) — commit the enabled-complete subset of `draft.rows`. Suppressed when focus is in a `ChipInput` and the chip draft is non-empty. |
 | `⌘↵` / `Ctrl+Enter` | Apply All with AND – Default (see "Apply All with persistent root combinator") |
 | `⇧⌘↵` / `Ctrl+Shift+Enter` | Apply All with OR |
 
@@ -1147,12 +1240,30 @@ While the filter bar is visible AND focus is somewhere inside the bar AND focus 
 - **THEN** row 0's column picker dropdown opens
 - **AND** keyboard focus is in the dropdown's search input
 
-#### Scenario: Plain Enter on a scalar value input applies all
+#### Scenario: Plain Enter on a value input applies only the focused row
 
-- **WHEN** focus is in row 0's text value input, the row is enabled and complete, and the user presses `Enter` with no modifier
-- **THEN** Apply All is performed
+- **WHEN** `draft.rows` has two rows (R0 enabled+complete, R1 enabled+complete), focus is in row 1's value input, and the user presses `Enter` with no modifier
+- **THEN** `applied` becomes `{ rows: [R1], combinator: draft.combinator }`
 - **AND** `draft.combinator` is NOT changed
 - **AND** `postgres.queryTable` is invoked with the new `applied` filter set
+
+#### Scenario: Plain Enter applies the focused row even when its checkbox is unchecked
+
+- **WHEN** `draft.rows` has R0 (enabled, already applied) and R1 (unchecked, newly typed), focus is in R1's value input, and the user presses `Enter` with no modifier
+- **THEN** `applied` becomes `{ rows: [R1], combinator: draft.combinator }`
+- **AND** R1's `enabled` flag is NOT changed by the Enter gesture
+
+#### Scenario: Shift+Enter applies all enabled rows
+
+- **WHEN** `draft.rows` has R0 (checked) and R1 (unchecked), focus is in R1's value input, and the user presses `Shift+Enter`
+- **THEN** `applied` becomes the enabled-complete subset of `draft.rows` joined by `draft.combinator` (so `applied.rows` contains R0 but not R1)
+- **AND** `draft.combinator` is NOT changed
+
+#### Scenario: Enter in a ChipInput commits the chip instead of applying
+
+- **WHEN** focus is in an `In` / `NotIn` chip input with non-empty draft text and the user presses `Enter`
+- **THEN** the chip is committed
+- **AND** neither per-row Apply nor Apply All is performed
 
 #### Scenario: Shortcuts do not fire when bar is hidden
 
@@ -1173,7 +1284,7 @@ The filter bar SHALL render a footer strip with the following controls, in order
 
 - `Export` button — disabled / placeholder. `aria-disabled="true"`. Tooltip: `Export coming soon`. Clicking it MUST be a no-op.
 - `SQL` button — opens a new `postgres-query` tab on the same connection with a prefilled SELECT reflecting the current `applied` filter set (same behavior as the prior `Open in SQL Editor` action). The button MUST use `applied`, NOT `draft`.
-- Shortcut hint strip: `Show: ⌘F`, `Insert: ⌘I`, `Remove: ⌘⇧I`, `Apply All: ⌘↵`, `Up: ⌘↑`, `Down: ⌘↓`, `Columns: ⌘←`. Each hint MUST be rendered as a non-interactive label using the existing `FilterKeyHint` component.
+- Shortcut hint strip: `Show: ⌘F`, `Insert: ⌘I`, `Remove: ⌘⇧I`, `Apply row: ↵`, `Apply All: ⇧↵`, `Up: ⌘↑`, `Down: ⌘↓`, `Columns: ⌘←`. Each hint MUST be rendered as a non-interactive label using the existing `FilterKeyHint` component. The `Apply row: ↵` and `Apply All: ⇧↵` hints MUST be present so the new per-row-Enter / Apply-All-Shift+Enter shortcuts are discoverable.
 - `Operator: [Unset]` — a button labeled `Unset`. Activating it MUST reset all `draft.rows` to a single empty row (`enabled = true`, `column = any_column`, `op = Contains`, `value = ""`). It MUST NOT modify `applied`. It MUST NOT modify `draft.combinator`. To clear the active filtering, the user must subsequently press `Apply All`.
 - `Apply All ▾` (covered by the "Apply All with persistent root combinator" requirement).
 
@@ -1200,11 +1311,17 @@ The gear icon (`⚙`) visible in some reference designs MUST NOT be rendered.
 - **THEN** the opened SQL editor tab is prefilled with a SELECT that uses the current `applied` filter set
 - **AND** the unapplied draft does NOT appear in the prefilled SQL
 
+#### Scenario: Footer documents the Enter and Shift+Enter shortcuts
+
+- **WHEN** the user inspects the filter-bar footer hint strip
+- **THEN** a `Apply row: ↵` hint is rendered
+- **AND** a `Apply All: ⇧↵` hint is rendered
+
 #### Scenario: Export button is disabled
 
-- **WHEN** the user clicks the `Export` button
-- **THEN** nothing happens (no menu, no file write, no error)
-- **AND** the button presents with `aria-disabled="true"`
+- **WHEN** the user inspects the footer `Export` button
+- **THEN** it is disabled with `aria-disabled="true"` and tooltip `Export coming soon`
+- **AND** clicking it performs no action
 
 ### Requirement: Flat root combinator
 
@@ -1716,7 +1833,7 @@ Closing the tab MUST discard all retained state for that tab. Reopening the same
 
 ### Requirement: Filter Apply always refetches
 
-Every commit from `draft` to `applied` (via **Apply All**, the `⌘↵` / `⇧⌘↵` shortcuts, or the per-row **Apply** button) MUST cause `postgres.queryTable` to be invoked, even when the resulting `applied` value is structurally equal to the previous `applied` value. The user's Apply gesture SHALL be treated as an explicit refresh signal, not merely as a state-equality trigger.
+Every commit from `draft` to `applied` (via **Apply All**, the `⇧↵` / `⌘↵` / `⇧⌘↵` shortcuts, the per-row **Apply** button, or plain `Enter` applying the focused row) MUST cause `postgres.queryTable` to be invoked, even when the resulting `applied` value is structurally equal to the previous `applied` value. The user's Apply gesture SHALL be treated as an explicit refresh signal, not merely as a state-equality trigger.
 
 The implementation MUST NOT rely solely on structural equality of `applied` to decide whether to refetch. A monotonically-advancing token (or equivalent mechanism) MUST be threaded into the data-fetch dependency key so that pressing Apply with an unchanged filter model still produces a network round-trip and a fresh first page.
 
@@ -1730,6 +1847,12 @@ This requirement explicitly overrides any optimisation that would dedupe a fetch
 - **THEN** `applied` is structurally equal to its previous value
 - **AND** `postgres.queryTable` is invoked again
 - **AND** the grid displays the freshly-fetched rows, including any rows created externally since the previous Apply
+
+#### Scenario: Plain Enter refetches even when the single row is unchanged
+
+- **WHEN** `applied.rows === [R1]` and the user presses plain `Enter` while focused in the same `R1` in `draft`
+- **THEN** `applied` is structurally equal to its previous value
+- **AND** `postgres.queryTable` is invoked again
 
 #### Scenario: Per-row Apply refetches even when the single row is unchanged
 

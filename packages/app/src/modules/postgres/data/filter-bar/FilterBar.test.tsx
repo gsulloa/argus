@@ -430,6 +430,94 @@ describe("FilterBar — forwardRef focus() handle", () => {
 });
 
 // ---------------------------------------------------------------------------
+// RAW filter row
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — RAW filter row", () => {
+  it("picking Raw SQL shows the expression input and hides the operator picker", async () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "any_column" }, op: "Contains", value: "" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+
+    // Open the column picker
+    const columnTrigger = screen.getByRole("button", { name: /Any column/i });
+    fireEvent.click(columnTrigger);
+
+    // Click "Raw SQL"
+    const rawSqlOption = screen.getByRole("button", { name: /Raw SQL/i });
+    fireEvent.click(rawSqlOption);
+
+    // onDraftChange should have been called with a RAW row
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows[0]!.column).toEqual({ kind: "raw" });
+    expect(next.rows[0]!.op).toBe("RAW");
+  });
+
+  it("RAW row renders expression input (aria-label 'Raw SQL expression') and hides operator picker", () => {
+    const draft: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft })} />);
+
+    // Expression input must be present
+    expect(screen.getByRole("textbox", { name: /Raw SQL expression/i })).toBeInTheDocument();
+    // Operator picker must NOT be present (no combobox/select with aria-label "Operator")
+    expect(screen.queryByRole("combobox", { name: /Operator/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Operator/i })).toBeNull();
+  });
+
+  it("switching back from Raw SQL to a named column restores the operator picker", async () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [{ enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+
+    // Open column picker (button shows "Raw SQL")
+    const columnTrigger = screen.getByRole("button", { name: /Raw SQL/i });
+    fireEvent.click(columnTrigger);
+
+    // Pick a named column
+    const countryOption = screen.getByRole("button", { name: /^country/i });
+    fireEvent.click(countryOption);
+
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows[0]!.column).toEqual({ kind: "named", name: "country" });
+    // op should no longer be RAW (coerced to a valid op for the named column)
+    expect(next.rows[0]!.op).not.toBe("RAW");
+  });
+
+  it("RAW row can be removed via the − button without affecting sibling rows", () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [
+        { enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "active" },
+        { enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" },
+      ],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+
+    const removeBtns = screen.getAllByRole("button", { name: /Remove row/i });
+    // Remove the second row (index 1, the RAW row)
+    fireEvent.click(removeBtns[1]!);
+
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows).toHaveLength(1);
+    expect(next.rows[0]!.column).toEqual({ kind: "named", name: "status" });
+    expect(next.rows[0]!.value).toBe("active");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // No filters enabled transient status
 // ---------------------------------------------------------------------------
 
@@ -446,5 +534,109 @@ describe("FilterBar — Apply All with no enabled rows", () => {
     await waitFor(() =>
       expect(screen.getByText(/No filters enabled/i)).toBeInTheDocument(),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plain Enter / Shift+Enter keyboard behavior (issue #198)
+// ---------------------------------------------------------------------------
+
+describe("FilterBar — plain Enter applies focused row", () => {
+  // 3.1: Plain Enter with focus inside row 1 calls onApplyOnlyRow(1), not onApplyAll.
+  it("plain Enter with focus inside row 1 calls onApplyOnlyRow(1) and not onApplyAll", () => {
+    const onApplyOnlyRow = vi.fn();
+    const onApplyAll = vi.fn();
+    const draft = modelWithRows(2);
+    const { container } = render(
+      <FilterBar {...makeProps({ draft, onApplyOnlyRow, onApplyAll })} />,
+    );
+    // Focus an element inside row 1 (its checkbox).
+    const checkbox1 = container.querySelector(
+      "[data-filter-row-index='1'] input[type='checkbox']",
+    ) as HTMLElement;
+    checkbox1?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter" });
+    expect(onApplyOnlyRow).toHaveBeenCalledWith(1);
+    expect(onApplyAll).not.toHaveBeenCalled();
+  });
+
+  // 3.2: Plain Enter applies focused row even when that row's enabled checkbox is unchecked.
+  it("plain Enter applies the focused row even when its enabled checkbox is unchecked", () => {
+    const onApplyOnlyRow = vi.fn();
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [
+        { enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
+        { enabled: false, column: { kind: "named", name: "country" }, op: "Contains", value: "CL" },
+      ],
+      combinator: "AND",
+    };
+    const { container } = render(
+      <FilterBar {...makeProps({ draft, onApplyOnlyRow, onDraftChange })} />,
+    );
+    // Focus an element inside row 1 (the unchecked row).
+    const checkbox1 = container.querySelector(
+      "[data-filter-row-index='1'] input[type='checkbox']",
+    ) as HTMLElement;
+    checkbox1?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter" });
+    expect(onApplyOnlyRow).toHaveBeenCalledWith(1);
+    // enabled flag must NOT have been changed by the Enter gesture.
+    expect(onDraftChange).not.toHaveBeenCalled();
+  });
+
+  // 3.3: Shift+Enter (no meta) calls onApplyAll, not onApplyOnlyRow.
+  it("Shift+Enter calls onApplyAll and does NOT call onApplyOnlyRow", () => {
+    const onApplyOnlyRow = vi.fn();
+    const onApplyAll = vi.fn();
+    const draft = modelWithRows(2);
+    const { container } = render(
+      <FilterBar {...makeProps({ draft, onApplyOnlyRow, onApplyAll })} />,
+    );
+    const checkbox1 = container.querySelector(
+      "[data-filter-row-index='1'] input[type='checkbox']",
+    ) as HTMLElement;
+    checkbox1?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter", shiftKey: true });
+    expect(onApplyAll).toHaveBeenCalled();
+    expect(onApplyOnlyRow).not.toHaveBeenCalled();
+  });
+
+  // 3.4: Enter in a chip input with non-empty value does NOT call onApplyOnlyRow or onApplyAll.
+  it("Enter in a chip input with non-empty draft text does NOT call onApplyOnlyRow or onApplyAll", () => {
+    const onApplyOnlyRow = vi.fn();
+    const onApplyAll = vi.fn();
+    const draft = modelWithRows(1);
+    const { container } = render(
+      <FilterBar {...makeProps({ draft, onApplyOnlyRow, onApplyAll })} />,
+    );
+    // Simulate a chip input: create a focused input inside the bar root with dataset.chipInput=true and a non-empty value.
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    const fakeChipInput = document.createElement("input");
+    fakeChipInput.dataset.chipInput = "true";
+    fakeChipInput.value = "some text";
+    barRoot.appendChild(fakeChipInput);
+    fakeChipInput.focus();
+    fireEvent.keyDown(barRoot, { key: "Enter" });
+    expect(onApplyOnlyRow).not.toHaveBeenCalled();
+    expect(onApplyAll).not.toHaveBeenCalled();
+    // Cleanup.
+    barRoot.removeChild(fakeChipInput);
+  });
+
+  // 3.5: Footer renders both "Apply row: ↵" and "Apply All: ⇧↵" hints.
+  it("footer hint strip renders 'Apply row:' with ↵ and 'Apply All:' with ⇧↵", () => {
+    render(<FilterBar {...makeProps()} />);
+    expect(screen.getByText(/Apply row:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Apply All:/i)).toBeInTheDocument();
+    // FilterKeyHint renders keys as text inside <kbd> elements.
+    // Check that both key hints exist in the document.
+    const kbdEls = document.querySelectorAll("kbd");
+    const kbdTexts = Array.from(kbdEls).map((el) => el.textContent);
+    expect(kbdTexts).toContain("↵");
+    expect(kbdTexts).toContain("⇧↵");
   });
 });

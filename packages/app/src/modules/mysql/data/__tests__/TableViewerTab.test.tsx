@@ -15,8 +15,8 @@
  * Node.js heap. See the vi.mock factories below for the correct pattern.
  */
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TabsProvider } from "@/platform/shell/tabs/TabsContext";
 
 // ---------------------------------------------------------------------------
@@ -147,6 +147,7 @@ import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import type { ObjectListItem, ObjectDoc } from "@/modules/context/types";
 import { useTableData } from "@/modules/mysql/data/useTableData";
 import { useEditBuffer } from "@/modules/mysql/data/useEditBuffer";
+import { dataApi } from "@/modules/mysql/data/api";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -436,5 +437,99 @@ describe("MysqlTableViewerTab — guarded refresh", () => {
     expect(stableBuffer.clear).not.toHaveBeenCalled();
     expect(stableTableData.refresh).not.toHaveBeenCalled();
     expect(screen.queryByText(/Discard \d+ pending edit/)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PK error / retry tests (task 4.3)
+// ---------------------------------------------------------------------------
+
+describe("MysqlTableViewerTab — PK error state and Retry", () => {
+  const tablePrimaryKeyMock = vi.mocked(dataApi.tablePrimaryKey);
+  const useConnectionsMock = vi.mocked(useConnections);
+  const useContextObjectsMock = vi.mocked(useContextObjects);
+  const useContextObjectMock = vi.mocked(useContextObject);
+
+  beforeEach(() => {
+    useConnectionsMock.mockReturnValue(mockConnections(null));
+    useContextObjectsMock.mockReturnValue({
+      data: [],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+    useContextObjectMock.mockReturnValue({
+      data: null,
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    tablePrimaryKeyMock.mockReset();
+    // Restore the default so other test suites are not affected.
+    tablePrimaryKeyMock.mockResolvedValue({ columns: ["id"], auto_increment_column: null });
+  });
+
+  it("4.3a: a rejected tablePrimaryKey shows the error/retry banner and NOT 'No primary key'", async () => {
+    tablePrimaryKeyMock.mockRejectedValue(new Error("connection refused"));
+
+    await act(async () => {
+      renderViewer(makeTab());
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Could not determine primary key/i)).toBeInTheDocument();
+      expect(screen.getByText(/connection refused/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/No primary key/i)).toBeNull();
+  });
+
+  it("4.3b: Retry re-invokes tablePrimaryKey; on success the error banner is removed", async () => {
+    // First call rejects, second call succeeds with a PK.
+    tablePrimaryKeyMock
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockResolvedValueOnce({ columns: ["id"], auto_increment_column: null });
+
+    await act(async () => {
+      renderViewer(makeTab());
+    });
+
+    // Error banner should be present.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument();
+    });
+
+    // Click Retry and wait for the banner to disappear.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Could not determine primary key/i)).toBeNull();
+      expect(screen.queryByRole("button", { name: /Retry/i })).toBeNull();
+    });
+
+    // tablePrimaryKey should have been called twice: once on mount, once on Retry.
+    expect(tablePrimaryKeyMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("4.3c: genuine columns: null success shows the no-PK banner (not the error banner)", async () => {
+    // Resolve with null columns — table has no PK.
+    tablePrimaryKeyMock.mockResolvedValue({ columns: null, auto_increment_column: null });
+
+    await act(async () => {
+      renderViewer(makeTab());
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/No primary key/i)).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Could not determine primary key/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Retry/i })).toBeNull();
   });
 });

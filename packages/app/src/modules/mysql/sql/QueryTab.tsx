@@ -415,26 +415,38 @@ function MysqlQueryTab({ tabId, payload }: InnerProps) {
             {connectionName}
           </span>
           <span className={styles.toolbarDivider} aria-hidden="true" />
-          <button
-            type="button"
-            className={styles.toolbarButton}
-            onClick={onRun}
-            title={`Run current statement (${RUN_HINT})`}
-            disabled={runner.state.status === "running"}
-          >
-            Run
-            <span className={styles.kbd}>{RUN_HINT}</span>
-          </button>
-          <button
-            type="button"
-            className={styles.toolbarButton}
-            onClick={onRunAll}
-            title={`Run all statements (${RUN_ALL_HINT})`}
-            disabled={runner.state.status === "running"}
-          >
-            Run All
-            <span className={styles.kbd}>{RUN_ALL_HINT}</span>
-          </button>
+          {runner.state.status === "running" ? (
+            <button
+              type="button"
+              className={styles.toolbarButton}
+              onClick={() => runner.cancel()}
+              style={{ color: "var(--danger)" }}
+              title="Stop query (Mod+.)"
+            >
+              Stop
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className={styles.toolbarButton}
+                onClick={onRun}
+                title={`Run current statement (${RUN_HINT})`}
+              >
+                Run
+                <span className={styles.kbd}>{RUN_HINT}</span>
+              </button>
+              <button
+                type="button"
+                className={styles.toolbarButton}
+                onClick={onRunAll}
+                title={`Run all statements (${RUN_ALL_HINT})`}
+              >
+                Run All
+                <span className={styles.kbd}>{RUN_ALL_HINT}</span>
+              </button>
+            </>
+          )}
           <span className={styles.toolbarDivider} aria-hidden="true" />
           <button
             type="button"
@@ -477,6 +489,7 @@ function MysqlQueryTab({ tabId, payload }: InnerProps) {
           onChange={() => {}}
           onRun={onRun}
           onRunAll={onRunAll}
+          onCancel={() => runner.cancel()}
         />
       </div>
 
