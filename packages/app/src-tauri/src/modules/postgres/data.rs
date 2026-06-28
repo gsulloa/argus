@@ -494,8 +494,8 @@ fn compile_raw(op: Operator, value: Option<&JsonValue>) -> AppResult<String> {
             "a raw column requires the RAW operator".into(),
         ));
     }
-    let v = value
-        .ok_or_else(|| AppError::Validation("RAW requires a SQL expression value".into()))?;
+    let v =
+        value.ok_or_else(|| AppError::Validation("RAW requires a SQL expression value".into()))?;
     let s = v
         .as_str()
         .ok_or_else(|| AppError::Validation("RAW value must be a string".into()))?;
