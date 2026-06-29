@@ -16,9 +16,7 @@
         "title": "Argus",
         "width": 760,
         "height": 600,
-        "minWidth": 520,
-        "minHeight": 420,
-        "resizable": true,
+        "resizable": false,
         "fullscreen": false
       }
     ],
