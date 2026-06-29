@@ -231,9 +231,8 @@ pub async fn ensure_manager_window(app: AppHandle) -> AppResult<()> {
     // Manager was closed — recreate it loading the same app bundle.
     WebviewWindowBuilder::new(&app, "manager", WebviewUrl::App("index.html".into()))
         .title("Argus")
-        .inner_size(1280.0, 800.0)
-        .min_inner_size(800.0, 500.0)
-        .resizable(true)
+        .inner_size(760.0, 600.0)
+        .resizable(false)
         .build()
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
