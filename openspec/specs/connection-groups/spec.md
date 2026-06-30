@@ -148,7 +148,7 @@ The connections section in the sidebar SHALL render connections grouped under th
 
 ### Requirement: Drag and drop reorders and re-parents connections
 
-The connections section SHALL support drag-and-drop to (a) reorder a connection within its group, (b) move a connection between groups, (c) reorder groups themselves, and (d) drop a connection onto any group's header — including a group with zero member connections — to append it to that group. All connection drags MUST be detected by a single drag context that spans every group section and the ungrouped sentinel section, so that a draggable started in any section can target a droppable in any other section. Each completed drop MUST result in exactly one IPC call: either `connections.move` for connection drops, or `connection_groups.update` for group reorderings. Drag-and-drop MUST be keyboard-operable and MUST announce its result to assistive technology.
+The connections section SHALL support drag-and-drop to (a) reorder a connection within its group, (b) move a connection between groups, (c) reorder groups themselves, and (d) drop a connection onto any group's header — including a group with zero member connections — to append it to that group. All connection drags MUST be detected by a single drag context that spans every group section and the ungrouped sentinel section, so that a draggable started in any section can target a droppable in any other section. Collision detection within that single context MUST be scoped by the type of the active draggable: while a **group** is being dragged, the drop target MUST resolve only among group rows (other group sortables), and connection rows, group-header append droppables, and the ungrouped header MUST NOT be eligible drop targets; while a **connection** is being dragged, group sortables MUST NOT be eligible drop targets so that connection rows, group-header append droppables, and the ungrouped header continue to win. Each completed drop MUST result in exactly one IPC call: either `connections.move` for connection drops, or `connection_groups.update` for group reorderings. Drag-and-drop MUST be keyboard-operable and MUST announce its result to assistive technology.
 
 #### Scenario: Reorder within the same group
 
@@ -182,6 +182,13 @@ The connections section SHALL support drag-and-drop to (a) reorder a connection 
 - **WHEN** the user drags a group from position 1 to position 3
 - **THEN** exactly one `connection_groups.update` call is made with the new `sort_order`
 - **AND** the order of the group's child connections is unchanged
+
+#### Scenario: Reorder a group across intervening connection rows
+
+- **WHEN** the source group and its destination position have one or more expanded groups, connection rows, or the ungrouped header rendered between them
+- **AND** the user drags the source group's handle so the pointer passes over those connection rows and finally rests over the destination group's row
+- **THEN** the drop resolves to the destination group (not to any connection row or header it passed over)
+- **AND** exactly one `connection_groups.update` call is made placing the group at the destination position
 
 #### Scenario: Group reorder ignores non-group drop targets
 
