@@ -114,6 +114,8 @@ The command SHALL emit one `argus:activity-log` event PER statement that actuall
 
 The frontend SHALL register a tab kind `postgres-query` and SHALL render it in the center work area when the user activates a "New Query" entry point (sidebar button, palette command, double-click on a saved query). The tab payload MUST be `{ initialConnectionId?: string, initialConnectionName?: string, initialSql: string, savedQueryId?: string }`. The tab MUST have an id of the form `pgquery:<uuid>` where `<uuid>` is a fresh v4 UUID generated on tab creation; the id MUST NOT embed the connection id (the connection is mutable in runtime — see "Connection selector in editor toolbar").
 
+When opening a `postgres-query` tab, the shell MUST route the tab to the per-connection tab set identified by the payload's `initialConnectionId` when present, and MUST do so regardless of whether any connection is currently focused. Only when the payload carries no `initialConnectionId` MAY the shell fall back to the currently focused connection. The shell MUST NOT require a focused connection to open a `postgres-query` tab that already names its connection in the payload. (This makes the `Open` / `Open in new tab` / double-click actions on a saved query reliable even when the saved-queries panel is shown without a focused connection.)
+
 The current connection of a tab MUST live in per-tab state (`useQueryTabState`), not in the tab payload or in the tab id. When the tab is created, the current connection is initialized from `initialConnectionId` (or from the most recently-used connection of the saved query if `savedQueryId` is provided and the persisted `last_connection_id` references an existing connection), or unset if neither is available.
 
 The default tab title MUST be:
@@ -140,6 +142,19 @@ Activating "New Query" with no `savedQueryId` MUST always create a new tab (neve
 - **AND** the user selects `Open in new tab` from the context menu on saved query `abc`
 - **THEN** a second `postgres-query` tab is created with `state.savedQueryId === "abc"` and a fresh `pgquery:<uuid>` id
 - **AND** both tabs coexist in the tab strip
+
+#### Scenario: Saved query opens its tab when no connection is focused
+
+- **WHEN** no connection is currently focused
+- **AND** the user double-clicks (or selects `Open` / `Open in new tab` on) a Postgres saved query `abc` whose `last_connection_id` is `conn-prod`, a currently registered connection
+- **THEN** a `postgres-query` tab is created in the `conn-prod` tab set loaded with the saved query's SQL
+- **AND** the open action is not a silent no-op
+
+#### Scenario: Saved query tab routes to its own connection, not the focused one
+
+- **WHEN** connection `conn-a` is focused
+- **AND** the user opens a Postgres saved query bound to `conn-prod`
+- **THEN** the new `postgres-query` tab is created in the `conn-prod` tab set (identified by the payload `initialConnectionId`), not in the focused `conn-a` set
 
 #### Scenario: Saved query restores last_connection_id when present
 
