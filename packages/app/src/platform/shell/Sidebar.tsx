@@ -24,6 +24,7 @@ import {
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
 } from "@dnd-kit/core";
 import {
@@ -45,6 +46,23 @@ import { SavedQueriesPanel } from "@/modules/saved-queries/SavedQueriesPanel";
 import { noAutoCorrectProps } from "../../modules/shared/text-input-hygiene";
 
 export { UNGROUPED_DROPPABLE_ID, ConnectionsSection };
+
+// Collision detection is scoped by the type of the active draggable. The
+// connections sidebar mixes two sortable types in one DndContext: group
+// headers (`group-sortable:<id>`) and connection rows (plain UUIDs). Without
+// scoping, dragging a group resolves `over` to a nearby connection row, which
+// the group-drag handler discards — so groups never reorder. NOTE: this assumes
+// exactly two types (group vs. connection); a third type must extend this predicate.
+const connectionsCollisionDetection: CollisionDetection = (args) => {
+  const isGroupDrag = String(args.active.id).startsWith("group-sortable:");
+  const droppableContainers = args.droppableContainers.filter((c) => {
+    const id = String(c.id);
+    return isGroupDrag
+      ? id.startsWith("group-sortable:")
+      : !id.startsWith("group-sortable:");
+  });
+  return closestCenter({ ...args, droppableContainers });
+};
 
 export function Sidebar() {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -349,7 +367,7 @@ function ConnectionsSection({
       {!loading && !error && (connections.items.length > 0 || groups.items.length > 0) && (
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCenter}
+          collisionDetection={connectionsCollisionDetection}
           onDragEnd={(event: DragEndEvent) => {
             if (String(event.active.id).startsWith("group-sortable:")) {
               void handleGroupDragEnd(event);
