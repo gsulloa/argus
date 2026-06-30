@@ -57,15 +57,18 @@ function nextId(prefix: string) {
 // Helper: extract connectionId from a tab payload (best-effort).
 // ---------------------------------------------------------------------------
 
-function extractConnectionId(input: OpenInput): string | null {
-  const payload = input.payload as { connectionId?: unknown } | null | undefined;
-  if (
-    payload !== null &&
-    payload !== undefined &&
-    typeof payload === "object" &&
-    typeof payload.connectionId === "string"
-  ) {
-    return payload.connectionId;
+// MySQL/MSSQL tab payloads carry the connection as `connectionId`.
+// Postgres `postgres-query` payloads use `initialConnectionId` instead.
+// We check `connectionId` first to preserve MySQL/MSSQL precedence.
+export function extractConnectionId(input: OpenInput): string | null {
+  const payload = input.payload as
+    | { connectionId?: unknown; initialConnectionId?: unknown }
+    | null
+    | undefined;
+  if (payload !== null && payload !== undefined && typeof payload === "object") {
+    if (typeof payload.connectionId === "string") return payload.connectionId;
+    if (typeof payload.initialConnectionId === "string")
+      return payload.initialConnectionId;
   }
   return null;
 }
