@@ -299,8 +299,11 @@ The frontend SHALL render a `Saved Queries` panel in the sidebar between the `Co
 The panel MUST provide a right-click context menu and keyboard shortcuts on tree nodes:
 
 **On a query node:**
-- `Open` (default action; also bound to `Enter` and double-click): invokes the open flow per the `postgres-sql-editor` capability.
-- `Open in new tab`: forces a new tab even if one already exists for this query.
+- `Open` (default action; also bound to `Enter` and double-click): invokes the open flow per the `postgres-sql-editor` capability. The open flow MUST reliably surface the query's tab to the user — it MUST NOT silently no-op. Specifically:
+  - When the query is bound to a **live** connection (`last_connection_id` references a connection in the registry), the open flow MUST switch the focused connection to that connection so the opened (or re-focused) tab is visible in the tab strip.
+  - When the query has **no** `last_connection_id`, or references a connection that is not live, the open flow MUST open the tab against the currently focused connection when one exists.
+  - When no connection is focused **and** the query resolves to no live connection, the open flow MUST NOT do nothing: it MUST surface a clear affordance directing the user to focus/select a connection (rather than swallowing the action).
+- `Open in new tab`: forces a new tab even if one already exists for this query. The same tab-surfacing and connection-resolution rules above apply.
 - `Rename` (also `F2`): activates inline rename.
 - `Duplicate`: invokes `saved_queries_duplicate`.
 - `Move to folder…`: opens a folder-picker modal.
@@ -332,6 +335,24 @@ Inline rename: the row's label becomes a `<input>` pre-filled with the current n
 
 - **WHEN** the user invokes `Delete` on a folder containing 1 subfolder + 3 queries
 - **THEN** the confirmation dialog reads `Delete folder "<name>" and all 4 items inside?`
+
+#### Scenario: Opening a query bound to a non-focused connection surfaces its tab
+
+- **WHEN** connection A is focused and the user opens a saved query whose `last_connection_id` references live connection B
+- **THEN** the focused connection switches to B
+- **AND** the query's tab is visible and active in B's tab strip
+
+#### Scenario: Opening a query with no live connection uses the focused connection
+
+- **WHEN** a connection is focused and the user opens a saved query that has no `last_connection_id` (or references a connection that is not live)
+- **THEN** the query's tab opens against the focused connection with an empty connection selector
+- **AND** the tab is visible and active
+
+#### Scenario: Opening a query with no resolvable connection and no focus is not silently dropped
+
+- **WHEN** no connection is focused and the user opens a saved query that resolves to no live connection
+- **THEN** the app surfaces an affordance directing the user to focus/select a connection
+- **AND** the action is not silently discarded (no invisible tab, no no-op)
 
 ### Requirement: Drag-and-drop reorganization
 
