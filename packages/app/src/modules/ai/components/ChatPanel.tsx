@@ -20,6 +20,8 @@ import type { ChatTurn, ToolUseRecord } from "@/modules/ai/types";
 import { captureResult, type AttachedResult } from "@/modules/ai/attachments";
 import type { AiReadiness } from "@/modules/ai/useAiReadiness";
 import { CommandRegistry } from "@/platform/command-palette/CommandRegistry";
+import { writeClipboardText, COPY_FAILED_MESSAGE } from "@/platform/clipboard";
+import { useToast } from "@/platform/toast";
 
 import styles from "./ChatPanel.module.css";
 import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
@@ -137,6 +139,7 @@ interface CodeBlockProps {
 
 function CodeBlock({ code, lang, editorRef, applied, onApply }: CodeBlockProps) {
   const canApply = isSqlLike(lang);
+  const toast = useToast();
 
   const handleApply = useCallback(() => {
     const trimmed = code.trim();
@@ -162,12 +165,9 @@ function CodeBlock({ code, lang, editorRef, applied, onApply }: CodeBlockProps) 
   }, [code, editorRef]);
 
   const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(code.trim());
-    } catch {
-      /* ignore */
-    }
-  }, [code]);
+    const ok = await writeClipboardText(code.trim());
+    if (!ok) toast.show(COPY_FAILED_MESSAGE, "error");
+  }, [code, toast]);
 
   return (
     <div className={styles.codeBlock}>

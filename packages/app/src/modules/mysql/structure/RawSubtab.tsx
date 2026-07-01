@@ -21,6 +21,8 @@ import {
 import { sql, MySQL } from "@codemirror/lang-sql";
 import type { TableStructureCache } from "./useTableStructureCache";
 import styles from "./RawSubtab.module.css";
+import { writeClipboardText, COPY_FAILED_MESSAGE } from "@/platform/clipboard";
+import { useToast } from "@/platform/toast";
 
 interface Props {
   schema: string;
@@ -37,15 +39,16 @@ export function RawSubtab({ schema, relation, cache }: Props) {
 
   const ddl = cache.ddlState.ddl ?? "";
   const [copied, setCopied] = useState(false);
+  const toast = useToast();
 
   const onCopy = async () => {
     if (!ddl) return;
-    try {
-      await navigator.clipboard.writeText(ddl);
+    const ok = await writeClipboardText(ddl);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch (e) {
-      console.error("[argus.mysql.structure] copy failed", e);
+    } else {
+      toast.show(COPY_FAILED_MESSAGE, "error");
     }
   };
 

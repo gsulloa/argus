@@ -34,6 +34,8 @@ import { TableSearchInput } from "./TableSearchInput";
 import { TableLeafLabel, TableLeafBadge } from "./TableLeaf";
 import { openTableTab } from "./openTableTab";
 import { openDynamoPartiQLTab } from "@/modules/dynamo/sql";
+import { writeClipboardText, COPY_FAILED_MESSAGE } from "@/platform/clipboard";
+import { useToast } from "@/platform/toast";
 import styles from "./DynamoConnectionSubtree.module.css";
 import sidebarStyles from "@/platform/shell/Sidebar.module.css";
 
@@ -70,6 +72,7 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
 
   const sidebarScrollRef = useSidebarScrollRef();
   const tabs = useTabs();
+  const toast = useToast();
   const { getActive } = useActiveDynamoConnections();
 
   // ── Context folder integration ─────────────────────────────────────────────
@@ -277,9 +280,9 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
   const handleContextCopyName = useCallback(() => {
     const name = contextMenuTableRef.current;
     if (name) {
-      void navigator.clipboard.writeText(name);
+      void writeClipboardText(name).then((ok) => { if (!ok) toast.show(COPY_FAILED_MESSAGE, "error"); });
     }
-  }, []);
+  }, [toast]);
 
   const handleContextCopyArn = useCallback(() => {
     const name = contextMenuTableRef.current;
@@ -288,7 +291,7 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
     // Prefer cached ARN if available.
     const descSlot = describe.get(name);
     if (descSlot?.status === "ready" && descSlot.value.table_arn) {
-      void navigator.clipboard.writeText(descSlot.value.table_arn);
+      void writeClipboardText(descSlot.value.table_arn).then((ok) => { if (!ok) toast.show(COPY_FAILED_MESSAGE, "error"); });
       return;
     }
 
@@ -296,8 +299,8 @@ export function DynamoConnectionSubtree({ connectionId, connectionName }: Props)
     const active = getActive(connectionId);
     if (!active) return;
     const arn = `arn:aws:dynamodb:${active.region}:${active.account_id}:table/${name}`;
-    void navigator.clipboard.writeText(arn);
-  }, [describe, getActive, connectionId]);
+    void writeClipboardText(arn).then((ok) => { if (!ok) toast.show(COPY_FAILED_MESSAGE, "error"); });
+  }, [describe, getActive, connectionId, toast]);
 
   // Is the ARN copy action available?
   // It's always enabled when the connection is active (can reconstruct).

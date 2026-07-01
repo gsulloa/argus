@@ -26,6 +26,8 @@ import {
 import { sql, MSSQL } from "@codemirror/lang-sql";
 import type { TableStructureCache } from "./useTableStructureCache";
 import styles from "./RawSubtab.module.css";
+import { writeClipboardText, COPY_FAILED_MESSAGE } from "@/platform/clipboard";
+import { useToast } from "@/platform/toast";
 
 const ENCRYPTED_MARKER = "__ENCRYPTED__";
 
@@ -46,18 +48,19 @@ export function RawSubtab({ schema, relation, objectKind = "table", cache }: Pro
 
   const ddl = cache.ddlState.ddl ?? "";
   const [copied, setCopied] = useState(false);
+  const toast = useToast();
 
   const isEncrypted = ddl === ENCRYPTED_MARKER || ddl.startsWith("-- ENCRYPTED:");
   const isTable = objectKind === "table";
 
   const onCopy = async () => {
     if (!ddl || isEncrypted) return;
-    try {
-      await navigator.clipboard.writeText(ddl);
+    const ok = await writeClipboardText(ddl);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch (e) {
-      console.error("[argus.mssql.structure] copy failed", e);
+    } else {
+      toast.show(COPY_FAILED_MESSAGE, "error");
     }
   };
 

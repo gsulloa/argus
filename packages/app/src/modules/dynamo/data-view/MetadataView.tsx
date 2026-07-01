@@ -9,6 +9,8 @@
 
 import { useCallback, useState } from "react";
 import { Copy, Loader2, RefreshCw } from "lucide-react";
+import { writeClipboardText, COPY_FAILED_MESSAGE } from "@/platform/clipboard";
+import { useToast } from "@/platform/toast";
 import { dynamoTablesApi } from "@/modules/dynamo/tables/api";
 import type { GsiInfo, KeySchemaElement, LsiInfo, TableDescription } from "@/modules/dynamo/tables/types";
 import styles from "./MetadataView.module.css";
@@ -52,13 +54,18 @@ function keySchemaLine(
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
+  const toast = useToast();
 
   const handleClick = useCallback(() => {
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+    void writeClipboardText(text).then((ok) => {
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      } else {
+        toast.show(COPY_FAILED_MESSAGE, "error");
+      }
     });
-  }, [text]);
+  }, [text, toast]);
 
   return (
     <button

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { writeClipboardText, COPY_FAILED_MESSAGE } from "@/platform/clipboard";
+import { useToast } from "@/platform/toast";
 import { toAppError } from "@/platform/errors/AppError";
 import { connectionsApi } from "@/platform/connection-registry/api";
 import { useConnections } from "@/platform/connection-registry/useConnections";
@@ -147,6 +149,7 @@ export function DynamoConnectionForm({
   onConnected,
 }: DynamoConnectionFormProps) {
   const { items, create, update, refresh: refreshConnections } = useConnections();
+  const toast = useToast();
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
@@ -741,7 +744,7 @@ export function DynamoConnectionForm({
                       className={styles.copyButton}
                       onClick={() => {
                         const cmd = extractSsoCommand(test.result.error)!;
-                        void navigator.clipboard.writeText(cmd);
+                        void writeClipboardText(cmd).then((ok) => { if (!ok) toast.show(COPY_FAILED_MESSAGE, "error"); });
                       }}
                     >
                       Copy command

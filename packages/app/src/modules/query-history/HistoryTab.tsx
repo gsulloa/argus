@@ -19,6 +19,8 @@ import {
 import styles from "./HistoryTab.module.css";
 import dialogStyles from "@/platform/shell/Dialog.module.css";
 import { noAutoCorrectProps } from "../shared/text-input-hygiene";
+import { writeClipboardText, COPY_FAILED_MESSAGE } from "@/platform/clipboard";
+import { useToast } from "@/platform/toast";
 
 export const QUERY_HISTORY_KIND = "query-history";
 export const QUERY_HISTORY_TAB_ID = "history";
@@ -109,6 +111,7 @@ interface ConnectionOption {
 function HistoryTab() {
   const tabs = useTabs();
   const { items: liveConnections } = useConnections();
+  const toast = useToast();
 
   const [filters, setFilters] = useState<UiFilters>(INITIAL_FILTERS);
   const [searchInput, setSearchInput] = useState("");
@@ -245,11 +248,11 @@ function HistoryTab() {
     }
   }
 
-  function handleCopySql(entry: HistoryEntry) {
-    void navigator.clipboard.writeText(entry.sql).catch((e) => {
-      console.error("[argus] copy sql failed:", e);
+  const handleCopySql = (entry: HistoryEntry) => {
+    void writeClipboardText(entry.sql).then((ok) => {
+      if (!ok) toast.show(COPY_FAILED_MESSAGE, "error");
     });
-  }
+  };
 
   async function handleClearConfirm() {
     try {

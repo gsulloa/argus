@@ -17,6 +17,8 @@ import type { InsightsColumnInfo } from "../types";
 import { copyCellValue } from "@/platform/grid/cellClipboard";
 import { sortResultRows, type SortOrder } from "@/platform/table/sortResultRows";
 import { formatLogTs, prettyMaybeJson } from "../logFormat";
+import { COPY_FAILED_MESSAGE } from "@/platform/clipboard";
+import { useToast } from "@/platform/toast";
 import styles from "./ResultPanel.module.css";
 
 // Re-use the Athena export infra. The ExportMenu accepts { name, ty }[] columns;
@@ -200,6 +202,7 @@ function InsightsTable({
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
   const [orderBy, setOrderBy] = useState<SortOrder[]>([]);
+  const toast = useToast();
 
   const columnsSig = columns.map((c) => c.name).join("|");
   const sortedRows = useMemo(
@@ -222,7 +225,9 @@ function InsightsTable({
           const row = sortedRows[activeCell.row];
           const value = row ? (row[activeCell.col] ?? null) : null;
           e.preventDefault();
-          void copyCellValue(value);
+          void copyCellValue(value).then((ok) => {
+            if (!ok) toast.show(COPY_FAILED_MESSAGE, "error");
+          });
           return;
         }
       }

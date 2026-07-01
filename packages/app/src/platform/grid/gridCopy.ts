@@ -1,18 +1,8 @@
 import { copyCellValue, copyRowsTsv, formatRowsTSV } from "./cellClipboard";
+import { COPY_FAILED_MESSAGE, writeClipboardText } from "../clipboard";
 
-/**
- * Write plain text to the system clipboard. Returns `true` on success, `false`
- * on failure so callers can decide whether to surface the failure to the user.
- */
-export async function writeClipboardText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch (err) {
-    console.warn("[gridCopy] clipboard write failed:", err);
-    return false;
-  }
-}
+// Re-exported so existing grid call sites keep importing from "./gridCopy".
+export { writeClipboardText };
 
 /**
  * Minimal structural shape of the keyboard event the row-copy path needs. Kept
@@ -41,8 +31,6 @@ export interface CopyRowRangeDeps {
   /** Called with a user-facing message when the clipboard write fails. */
   onError?: (message: string) => void;
 }
-
-const COPY_FAILED_MESSAGE = "Copy failed";
 
 /**
  * Handle ⌘C / Ctrl+C row-range copy from the grid's keydown handler.
