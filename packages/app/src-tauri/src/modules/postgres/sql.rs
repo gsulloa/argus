@@ -357,12 +357,7 @@ impl<'a> FromSql<'a> for PgInet {
         let is_cidr = raw[2];
         let addr_len = raw[3] as usize;
         if raw.len() != 4 + addr_len {
-            return Err(format!(
-                "inet: expected {} bytes, got {}",
-                4 + addr_len,
-                raw.len()
-            )
-            .into());
+            return Err(format!("inet: expected {} bytes, got {}", 4 + addr_len, raw.len()).into());
         }
         let addr_bytes = &raw[4..];
         let s = match family {
@@ -411,9 +406,7 @@ impl<'a> FromSql<'a> for PgMacAddr {
         raw: &'a [u8],
     ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         if raw.len() != 6 && raw.len() != 8 {
-            return Err(
-                format!("macaddr: expected 6 or 8 bytes, got {}", raw.len()).into(),
-            );
+            return Err(format!("macaddr: expected 6 or 8 bytes, got {}", raw.len()).into());
         }
         let s = raw
             .iter()
