@@ -122,8 +122,12 @@ describe("copyRowsTsv", () => {
     expect(writeText).toHaveBeenCalledWith('1\t\ttrue\nhello\t{"x":2}\tfalse');
   });
 
-  it("swallows clipboard errors without throwing", async () => {
+  it("returns true on success", async () => {
+    await expect(copyRowsTsv([["test"]], ["col"])).resolves.toBe(true);
+  });
+
+  it("returns false (not throwing) on clipboard error", async () => {
     writeText.mockRejectedValueOnce(new Error("denied"));
-    await expect(copyRowsTsv([["test"]], ["col"])).resolves.toBeUndefined();
+    await expect(copyRowsTsv([["test"]], ["col"])).resolves.toBe(false);
   });
 });

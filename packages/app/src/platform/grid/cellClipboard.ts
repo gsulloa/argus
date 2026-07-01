@@ -55,15 +55,17 @@ export function formatRowsTSV(rows: unknown[][]): string {
 
 /**
  * Write a cell value to the system clipboard. Formats via `formatCellValue`,
- * then writes with `navigator.clipboard.writeText`. Any error is swallowed
- * (logged as a warning) so callers never need to handle clipboard failures.
+ * then writes with `navigator.clipboard.writeText`. Returns `true` on success,
+ * `false` on failure (error is logged as a warning).
  */
-export async function copyCellValue(value: unknown): Promise<void> {
+export async function copyCellValue(value: unknown): Promise<boolean> {
   const text = formatCellValue(value);
   try {
     await navigator.clipboard.writeText(text);
+    return true;
   } catch (err) {
     console.warn("[cellClipboard] clipboard write failed:", err);
+    return false;
   }
 }
 
@@ -71,7 +73,8 @@ export async function copyCellValue(value: unknown): Promise<void> {
  * Copy multiple rows to the clipboard as a TSV (tab-separated values) string.
  * Each row is an array of cell values ordered to match `columns`.
  * Cells are joined by `\t`, rows by `\n`. Each cell is formatted via
- * `formatCellValue`. Errors are swallowed like `copyCellValue`.
+ * `formatCellValue`. Returns `true` on success, `false` on failure (error is
+ * logged as a warning).
  *
  * @param rows    Array of cell-value arrays, one per row (`rows[i][j]` maps to
  *                `columns[j]`).
@@ -81,11 +84,13 @@ export async function copyCellValue(value: unknown): Promise<void> {
 export async function copyRowsTsv(
   rows: unknown[][],
   columns: string[],
-): Promise<void> {
+): Promise<boolean> {
   void columns; // reserved for future header-row support
   try {
     await navigator.clipboard.writeText(formatRowsTSV(rows));
+    return true;
   } catch (err) {
     console.warn("[cellClipboard] clipboard write failed:", err);
+    return false;
   }
 }
