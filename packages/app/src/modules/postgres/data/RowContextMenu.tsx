@@ -8,6 +8,12 @@ export interface RowContextMenuProps {
   target: { rowIndex: number; colIndex: number };
   /** True when the action target spans multiple rows. Controls "(s)" pluralisation. */
   isMulti: boolean;
+  /**
+   * When true, render ONLY the "Copy cell" and "Copy row(s)" items — omit the
+   * separator, "Edit cell", and "Delete/Restore row(s)". Intended for read-only
+   * grids (e.g. AdhocResultGrid). Existing editable-grid callers are unaffected.
+   */
+  copyOnly?: boolean;
   /** Whether "Edit cell" can be invoked on the target cell. */
   canEditCell: boolean;
   /** Reason Edit cell is disabled (shown as tooltip / title). Empty string when enabled. */
@@ -38,6 +44,7 @@ export interface RowContextMenuProps {
 export function RowContextMenu({
   children,
   isMulti,
+  copyOnly,
   canEditCell,
   editCellDisabledReason,
   canDeleteRows,
@@ -72,29 +79,34 @@ export function RowContextMenu({
             {`Copy row${s}`}
           </ContextMenu.Item>
 
-          <ContextMenu.Separator className={styles.separator} />
+          {/* Edit/Delete items hidden in copy-only mode (e.g. read-only ad-hoc grids) */}
+          {!copyOnly && (
+            <>
+              <ContextMenu.Separator className={styles.separator} />
 
-          {/* Edit cell — disabled when read-only or no-PK or non-editable cell */}
-          <ContextMenu.Item
-            className={styles.item}
-            disabled={!canEditCell}
-            onSelect={onEditCell}
-          >
-            <span title={!canEditCell ? editCellDisabledReason : undefined}>
-              Edit cell
-            </span>
-          </ContextMenu.Item>
+              {/* Edit cell — disabled when read-only or no-PK or non-editable cell */}
+              <ContextMenu.Item
+                className={styles.item}
+                disabled={!canEditCell}
+                onSelect={onEditCell}
+              >
+                <span title={!canEditCell ? editCellDisabledReason : undefined}>
+                  Edit cell
+                </span>
+              </ContextMenu.Item>
 
-          {/* Delete / Restore row(s) — disabled when read-only or no-PK */}
-          <ContextMenu.Item
-            className={`${styles.item} ${canDeleteRows ? styles.itemDanger : ""}`}
-            disabled={!canDeleteRows}
-            onSelect={onToggleDelete}
-          >
-            <span title={!canDeleteRows ? deleteDisabledReason : undefined}>
-              {deleteLabel}
-            </span>
-          </ContextMenu.Item>
+              {/* Delete / Restore row(s) — disabled when read-only or no-PK */}
+              <ContextMenu.Item
+                className={`${styles.item} ${canDeleteRows ? styles.itemDanger : ""}`}
+                disabled={!canDeleteRows}
+                onSelect={onToggleDelete}
+              >
+                <span title={!canDeleteRows ? deleteDisabledReason : undefined}>
+                  {deleteLabel}
+                </span>
+              </ContextMenu.Item>
+            </>
+          )}
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>

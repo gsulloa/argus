@@ -347,7 +347,7 @@ When neither schemas, relations, nor columns are loaded for the current connecti
 Each `postgres-query` tab SHALL render a result panel below the editor. The panel MUST:
 
 - Render a hint state when no run has occurred yet in this tab. The hint MUST advertise both run and autocomplete shortcuts so the user discovers them on first use; the recommended copy is `Press ⌘↩ to run · Tab to autocomplete`.
-- Render a virtualized read-only data grid (the `<AdhocResultGrid />` provided by `postgres-data-grid`) for `kind: "rows"` results, displaying the `columns` and `rows` from the response. The grid MUST support row selection that drives the shell's right inspector (when the inspector is expanded). Column widths inside the grid MUST default to the type-derived base widths defined by `column-width-preferences` and MUST be user-resizable; resizing MUST NOT persist to disk across runs or sessions, but MUST persist within the same `<AdhocResultGrid />` instance for as long as the columns prop shape is unchanged.
+- Render a virtualized read-only data grid (the `<AdhocResultGrid />` provided by `postgres-data-grid`) for `kind: "rows"` results, displaying the `columns` and `rows` from the response. The grid MUST support **row-range selection** (via a row-number gutter: plain click, shift-click, and drag) as well as single-cell selection, and the current row selection MUST drive the shell's right inspector (when the inspector is expanded) — a single-row selection shows one row, a multi-row selection shows all selected rows. The grid MUST support ⌘C / Ctrl+C copy (single cell or the selected row range as TSV), ⌘A / Ctrl+A select-all, and a read-only right-click context menu (Copy cell / Copy row(s)), per the `grid-cell-copy`, `grid-row-copy`, `grid-row-selection`, `grid-select-all`, and `grid-context-menu` capabilities. Column widths inside the grid MUST default to the type-derived base widths defined by `column-width-preferences` and MUST be user-resizable; resizing MUST NOT persist to disk across runs or sessions, but MUST persist within the same `<AdhocResultGrid />` instance for as long as the columns prop shape is unchanged.
 - Render a compact summary line for `kind: "affected"` results: `<command_tag> · <affected_rows> rows affected · <query_ms> ms`. Example: `INSERT 0 3 · 3 rows affected · 12 ms`.
 - Display a banner above the grid `Result truncated at 10,000 rows — add a LIMIT clause to refine.` whenever the response has `truncated: true`.
 
@@ -363,7 +363,17 @@ The panel's height MUST be resizable via a drag handle on its top edge (between 
 
 - **WHEN** a SELECT returns 50 rows with 4 columns
 - **THEN** the panel renders an `<AdhocResultGrid />` with those 50 rows and 4 columns
-- **AND** clicking a row populates the shell's right inspector with that row's column-value list
+- **AND** selecting a row from the gutter populates the shell's right inspector with that row's column-value list
+
+#### Scenario: Multi-row selection drives the inspector
+
+- **WHEN** the user selects a range of rows (e.g. rows 2–4) via the gutter in the result grid
+- **THEN** the shell's right inspector shows the column-value view for all selected rows
+
+#### Scenario: Copy selected rows from the result grid
+
+- **WHEN** the user selects rows 2–4 in the result grid and presses ⌘C
+- **THEN** those three rows are copied to the clipboard as TSV
 
 #### Scenario: Affected result renders the compact summary
 
