@@ -9,6 +9,7 @@
 //! wire, but doing the check in this module lets us return a clean validation
 //! error before dispatch and lets multi-statement runs halt cleanly.
 
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,7 +20,7 @@ use tauri::{AppHandle, Manager, State};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime, PrimitiveDateTime, Time};
 use tokio::time::timeout;
-use tokio_postgres::types::Type as PgType;
+use tokio_postgres::types::{FromSql, Type as PgType};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -209,6 +210,217 @@ fn binary_envelope(preview: String, byte_length: usize) -> JsonValue {
     })
 }
 
+// --------------------------------------------------------------------------
+// Newtype FromSql decoders for types not handled by tokio-postgres builtins
+// --------------------------------------------------------------------------
+
+/// Postgres INTERVAL wire format: 16 bytes big-endian
+///   bytes  0..8  → i64 microseconds
+///   bytes  8..12 → i32 days
+///   bytes 12..16 → i32 months
+struct PgInterval(String);
+
+impl<'a> FromSql<'a> for PgInterval {
+    fn from_sql(
+        _ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() != 16 {
+            return Err(format!("interval: expected 16 bytes, got {}", raw.len()).into());
+        }
+        let micros = i64::from_be_bytes(raw[0..8].try_into().unwrap());
+        let days = i32::from_be_bytes(raw[8..12].try_into().unwrap());
+        let months = i32::from_be_bytes(raw[12..16].try_into().unwrap());
+
+        let years = months / 12;
+        let mons = months % 12;
+
+        let mut parts: Vec<String> = Vec::new();
+
+        if years != 0 {
+            if years.abs() == 1 {
+                parts.push(format!("{} year", years));
+            } else {
+                parts.push(format!("{} years", years));
+            }
+        }
+        if mons != 0 {
+            if mons.abs() == 1 {
+                parts.push(format!("{} mon", mons));
+            } else {
+                parts.push(format!("{} mons", mons));
+            }
+        }
+        if days != 0 {
+            if days.abs() == 1 {
+                parts.push(format!("{} day", days));
+            } else {
+                parts.push(format!("{} days", days));
+            }
+        }
+
+        // Time component from microseconds (independent sign from days/months).
+        let neg_time = micros < 0;
+        let abs_micros = micros.unsigned_abs();
+        let us_rem = abs_micros % 1_000_000;
+        let total_secs = abs_micros / 1_000_000;
+        let secs = total_secs % 60;
+        let total_mins = total_secs / 60;
+        let mins = total_mins % 60;
+        let hours = total_mins / 60;
+
+        // Always emit the time component — it's part of the canonical interval
+        // representation (Postgres does not suppress it for date-only values).
+        let time_str = if us_rem == 0 {
+            if neg_time {
+                format!("-{:02}:{:02}:{:02}", hours, mins, secs)
+            } else {
+                format!("{:02}:{:02}:{:02}", hours, mins, secs)
+            }
+        } else {
+            // Trim trailing zeros from fractional seconds.
+            let frac = format!("{:06}", us_rem);
+            let frac = frac.trim_end_matches('0');
+            if neg_time {
+                format!("-{:02}:{:02}:{:02}.{}", hours, mins, secs, frac)
+            } else {
+                format!("{:02}:{:02}:{:02}.{}", hours, mins, secs, frac)
+            }
+        };
+
+        parts.push(time_str);
+
+        Ok(PgInterval(parts.join(" ")))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::INTERVAL
+    }
+}
+
+/// Postgres XID (transaction id) — 4-byte big-endian u32.
+struct PgXid(u32);
+
+impl<'a> FromSql<'a> for PgXid {
+    fn from_sql(
+        _ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() != 4 {
+            return Err(format!("xid: expected 4 bytes, got {}", raw.len()).into());
+        }
+        Ok(PgXid(u32::from_be_bytes(raw[0..4].try_into().unwrap())))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::XID
+    }
+}
+
+/// Postgres XID8 — 8-byte big-endian u64.
+struct PgXid8(u64);
+
+impl<'a> FromSql<'a> for PgXid8 {
+    fn from_sql(
+        _ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() != 8 {
+            return Err(format!("xid8: expected 8 bytes, got {}", raw.len()).into());
+        }
+        Ok(PgXid8(u64::from_be_bytes(raw[0..8].try_into().unwrap())))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::XID8
+    }
+}
+
+/// Postgres INET / CIDR wire format:
+///   byte 0: family (2 = IPv4, 3 = IPv6)
+///   byte 1: bits (prefix length)
+///   byte 2: is_cidr (0 or 1)
+///   byte 3: addr_len (4 or 16)
+///   bytes 4..: address bytes (addr_len of them)
+struct PgInet(String);
+
+impl<'a> FromSql<'a> for PgInet {
+    fn from_sql(
+        _ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() < 4 {
+            return Err(format!("inet: expected at least 4 bytes, got {}", raw.len()).into());
+        }
+        let family = raw[0];
+        let bits = raw[1];
+        let is_cidr = raw[2];
+        let addr_len = raw[3] as usize;
+        if raw.len() != 4 + addr_len {
+            return Err(format!("inet: expected {} bytes, got {}", 4 + addr_len, raw.len()).into());
+        }
+        let addr_bytes = &raw[4..];
+        let s = match family {
+            2 => {
+                // IPv4
+                if addr_len != 4 {
+                    return Err(format!("inet: IPv4 addr_len must be 4, got {}", addr_len).into());
+                }
+                let ip = Ipv4Addr::new(addr_bytes[0], addr_bytes[1], addr_bytes[2], addr_bytes[3]);
+                if is_cidr == 0 && bits == 32 {
+                    ip.to_string()
+                } else {
+                    format!("{}/{}", ip, bits)
+                }
+            }
+            3 => {
+                // IPv6
+                if addr_len != 16 {
+                    return Err(format!("inet: IPv6 addr_len must be 16, got {}", addr_len).into());
+                }
+                let mut octets = [0u8; 16];
+                octets.copy_from_slice(addr_bytes);
+                let ip = Ipv6Addr::from(octets);
+                if is_cidr == 0 && bits == 128 {
+                    ip.to_string()
+                } else {
+                    format!("{}/{}", ip, bits)
+                }
+            }
+            _ => return Err(format!("inet: unknown address family {}", family).into()),
+        };
+        Ok(PgInet(s))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::INET || *ty == PgType::CIDR
+    }
+}
+
+/// Postgres MACADDR (6 bytes) / MACADDR8 (8 bytes) — lowercase colon-separated hex.
+struct PgMacAddr(String);
+
+impl<'a> FromSql<'a> for PgMacAddr {
+    fn from_sql(
+        _ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() != 6 && raw.len() != 8 {
+            return Err(format!("macaddr: expected 6 or 8 bytes, got {}", raw.len()).into());
+        }
+        let s = raw
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join(":");
+        Ok(PgMacAddr(s))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::MACADDR || *ty == PgType::MACADDR8
+    }
+}
+
 /// Convert a `tokio_postgres::Row` value at `idx` into a `JsonValue`. We try
 /// the most likely Rust types first and fall back to a String of the Postgres
 /// representation when nothing matches. Large strings and binary collapse to
@@ -314,6 +526,36 @@ fn cell_to_json(
         },
         PgType::UUID => match row.try_get::<_, Option<Uuid>>(idx) {
             Ok(Some(v)) => return JsonValue::String(v.to_string()),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
+        PgType::OID => match row.try_get::<_, Option<u32>>(idx) {
+            Ok(Some(v)) => return JsonValue::Number(u64::from(v).into()),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
+        PgType::XID => match row.try_get::<_, Option<PgXid>>(idx) {
+            Ok(Some(v)) => return JsonValue::Number(u64::from(v.0).into()),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
+        PgType::XID8 => match row.try_get::<_, Option<PgXid8>>(idx) {
+            Ok(Some(v)) => return JsonValue::Number(v.0.into()),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
+        PgType::INTERVAL => match row.try_get::<_, Option<PgInterval>>(idx) {
+            Ok(Some(v)) => return JsonValue::String(v.0),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
+        PgType::INET | PgType::CIDR => match row.try_get::<_, Option<PgInet>>(idx) {
+            Ok(Some(v)) => return JsonValue::String(v.0),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
+        PgType::MACADDR | PgType::MACADDR8 => match row.try_get::<_, Option<PgMacAddr>>(idx) {
+            Ok(Some(v)) => return JsonValue::String(v.0),
             Ok(None) => return JsonValue::Null,
             Err(_) => {}
         },
@@ -1069,5 +1311,193 @@ mod tests {
         let e = v.get("error").unwrap();
         assert_eq!(e.get("code").unwrap(), "42601");
         assert_eq!(e.get("position").unwrap(), 7);
+    }
+
+    // ------------------------------------------------------------------
+    // Newtype decoder tests (no live DB needed — pure byte-level)
+    // ------------------------------------------------------------------
+
+    /// Build a 16-byte INTERVAL wire buffer from components.
+    fn interval_bytes(micros: i64, days: i32, months: i32) -> Vec<u8> {
+        let mut b = Vec::with_capacity(16);
+        b.extend_from_slice(&micros.to_be_bytes());
+        b.extend_from_slice(&days.to_be_bytes());
+        b.extend_from_slice(&months.to_be_bytes());
+        b
+    }
+
+    #[test]
+    fn interval_full_components() {
+        // 1 year 2 mons 3 days 04:05:06
+        // months = 1*12 + 2 = 14
+        // micros for 04:05:06 = (4*3600 + 5*60 + 6) * 1_000_000 = 14706 * 1_000_000
+        let micros: i64 = (4 * 3600 + 5 * 60 + 6) * 1_000_000;
+        let raw = interval_bytes(micros, 3, 14);
+        let s = PgInterval::from_sql(&PgType::INTERVAL, &raw).unwrap().0;
+        assert_eq!(s, "1 year 2 mons 3 days 04:05:06");
+    }
+
+    #[test]
+    fn interval_sub_second() {
+        // 0 years 0 mons 0 days 00:00:01.500000 → trimmed → 00:00:01.5
+        let micros: i64 = 1_500_000;
+        let raw = interval_bytes(micros, 0, 0);
+        let s = PgInterval::from_sql(&PgType::INTERVAL, &raw).unwrap().0;
+        assert_eq!(s, "00:00:01.5");
+    }
+
+    #[test]
+    fn interval_sub_second_no_trailing_zeros() {
+        // 123456 microseconds = 0.123456 seconds, no trailing zeros to trim
+        let micros: i64 = 123_456;
+        let raw = interval_bytes(micros, 0, 0);
+        let s = PgInterval::from_sql(&PgType::INTERVAL, &raw).unwrap().0;
+        assert_eq!(s, "00:00:00.123456");
+    }
+
+    #[test]
+    fn interval_negative_time() {
+        // -04:05:06
+        let micros: i64 = -((4 * 3600 + 5 * 60 + 6) * 1_000_000);
+        let raw = interval_bytes(micros, 0, 0);
+        let s = PgInterval::from_sql(&PgType::INTERVAL, &raw).unwrap().0;
+        assert_eq!(s, "-04:05:06");
+    }
+
+    #[test]
+    fn interval_all_zero() {
+        let raw = interval_bytes(0, 0, 0);
+        let s = PgInterval::from_sql(&PgType::INTERVAL, &raw).unwrap().0;
+        assert_eq!(s, "00:00:00");
+    }
+
+    #[test]
+    fn interval_singular_units() {
+        // 1 year 1 mon 1 day 00:00:01
+        let micros: i64 = 1_000_000;
+        let raw = interval_bytes(micros, 1, 13); // 13 months = 1 year 1 mon
+        let s = PgInterval::from_sql(&PgType::INTERVAL, &raw).unwrap().0;
+        assert_eq!(s, "1 year 1 mon 1 day 00:00:01");
+    }
+
+    #[test]
+    fn interval_plural_units() {
+        // 2 years 3 mons 5 days 00:00:00
+        let raw = interval_bytes(0, 5, 27); // 27 months = 2 years 3 mons
+        let s = PgInterval::from_sql(&PgType::INTERVAL, &raw).unwrap().0;
+        assert_eq!(s, "2 years 3 mons 5 days 00:00:00");
+    }
+
+    #[test]
+    fn interval_bad_length_is_err() {
+        let raw = vec![0u8; 8]; // too short
+        assert!(PgInterval::from_sql(&PgType::INTERVAL, &raw).is_err());
+        let raw = vec![0u8; 17]; // too long
+        assert!(PgInterval::from_sql(&PgType::INTERVAL, &raw).is_err());
+    }
+
+    #[test]
+    fn xid_roundtrip() {
+        let val: u32 = 0xDEAD_BEEF;
+        let raw = val.to_be_bytes();
+        let decoded = PgXid::from_sql(&PgType::XID, &raw).unwrap();
+        assert_eq!(decoded.0, val);
+    }
+
+    #[test]
+    fn xid_bad_length_is_err() {
+        assert!(PgXid::from_sql(&PgType::XID, &[0u8; 8]).is_err());
+        assert!(PgXid::from_sql(&PgType::XID, &[]).is_err());
+    }
+
+    #[test]
+    fn xid8_roundtrip() {
+        let val: u64 = 0x0102_0304_0506_0708;
+        let raw = val.to_be_bytes();
+        let decoded = PgXid8::from_sql(&PgType::XID8, &raw).unwrap();
+        assert_eq!(decoded.0, val);
+    }
+
+    #[test]
+    fn xid8_bad_length_is_err() {
+        assert!(PgXid8::from_sql(&PgType::XID8, &[0u8; 4]).is_err());
+        assert!(PgXid8::from_sql(&PgType::XID8, &[]).is_err());
+    }
+
+    #[test]
+    fn inet_ipv4_host_no_suffix() {
+        // family=2, bits=32 (full), is_cidr=0, addr_len=4, addr=192.168.0.1
+        let raw = vec![2u8, 32, 0, 4, 192, 168, 0, 1];
+        let s = PgInet::from_sql(&PgType::INET, &raw).unwrap().0;
+        assert_eq!(s, "192.168.0.1");
+    }
+
+    #[test]
+    fn inet_ipv4_cidr() {
+        // family=2, bits=8, is_cidr=1, addr_len=4, addr=10.0.0.0
+        let raw = vec![2u8, 8, 1, 4, 10, 0, 0, 0];
+        let s = PgInet::from_sql(&PgType::CIDR, &raw).unwrap().0;
+        assert_eq!(s, "10.0.0.0/8");
+    }
+
+    #[test]
+    fn inet_ipv4_host_with_prefix() {
+        // family=2, bits=24, is_cidr=0, addr_len=4, addr=192.168.1.100
+        let raw = vec![2u8, 24, 0, 4, 192, 168, 1, 100];
+        let s = PgInet::from_sql(&PgType::INET, &raw).unwrap().0;
+        assert_eq!(s, "192.168.1.100/24");
+    }
+
+    #[test]
+    fn inet_ipv6_host_no_suffix() {
+        // family=3, bits=128, is_cidr=0, addr_len=16, addr=::1
+        let mut raw = vec![3u8, 128, 0, 16];
+        raw.extend_from_slice(&[0u8; 15]);
+        raw.push(1u8);
+        let s = PgInet::from_sql(&PgType::INET, &raw).unwrap().0;
+        assert_eq!(s, "::1");
+    }
+
+    #[test]
+    fn inet_ipv6_cidr() {
+        // family=3, bits=64, is_cidr=1, addr_len=16, addr=2001:db8::
+        let mut raw = vec![3u8, 64, 1, 16];
+        // 2001:0db8:0000:0000:0000:0000:0000:0000
+        raw.extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8]);
+        raw.extend_from_slice(&[0u8; 12]);
+        let s = PgInet::from_sql(&PgType::CIDR, &raw).unwrap().0;
+        assert_eq!(s, "2001:db8::/64");
+    }
+
+    #[test]
+    fn inet_bad_length_is_err() {
+        // Only 3 header bytes — missing addr_len byte
+        assert!(PgInet::from_sql(&PgType::INET, &[2u8, 32, 0]).is_err());
+        // Header says addr_len=4 but only 3 address bytes follow
+        assert!(PgInet::from_sql(&PgType::INET, &[2u8, 32, 0, 4, 192, 168, 0]).is_err());
+    }
+
+    #[test]
+    fn macaddr_6byte() {
+        let raw = vec![0x08u8, 0x00, 0x2b, 0x01, 0x02, 0x03];
+        let s = PgMacAddr::from_sql(&PgType::MACADDR, &raw).unwrap().0;
+        assert_eq!(s, "08:00:2b:01:02:03");
+    }
+
+    #[test]
+    fn macaddr8_8byte() {
+        let raw = vec![0x08u8, 0x00, 0x2b, 0xff, 0xfe, 0x01, 0x02, 0x03];
+        let s = PgMacAddr::from_sql(&PgType::MACADDR8, &raw).unwrap().0;
+        assert_eq!(s, "08:00:2b:ff:fe:01:02:03");
+    }
+
+    #[test]
+    fn macaddr_bad_length_is_err() {
+        // 5 bytes — invalid
+        let raw = vec![0u8; 5];
+        assert!(PgMacAddr::from_sql(&PgType::MACADDR, &raw).is_err());
+        // 7 bytes — invalid
+        let raw = vec![0u8; 7];
+        assert!(PgMacAddr::from_sql(&PgType::MACADDR, &raw).is_err());
     }
 }
