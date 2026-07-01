@@ -20,7 +20,9 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useTabs } from "@/platform/shell/tabs";
 import { SidebarTree, type TreeNode as SidebarTreeNode, type DndDropResult } from "@/platform/shell/SidebarTree";
 import { useSidebarScrollRef } from "@/platform/shell/sidebarScroll";
+import { useFocusedConnection } from "@/platform/shell/FocusedConnectionContext";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useOpenConnections } from "@/platform/connection-registry/useOpenConnections";
 import { useToast } from "@/platform/toast";
 import { getSetting, setSetting } from "@/platform/settings/api";
 import { useActiveConnections } from "@/modules/postgres/useActiveConnections";
@@ -685,6 +687,8 @@ export function SavedQueriesPanel() {
   const tabs = useTabs();
   const { items: connections } = useConnections();
   const toast = useToast();
+  const { focusedConnectionId, setFocused } = useFocusedConnection();
+  const { isOpen } = useOpenConnections();
   const sidebarScrollRef = useSidebarScrollRef();
 
   // ---- Context queries state ----
@@ -1110,11 +1114,22 @@ export function SavedQueriesPanel() {
     }
   }
 
+  // ---- Open saved query (shared handler for activate + context menu) ----
+  const handleOpenSaved = useCallback((id: string, forceNew: boolean) => {
+    const ctx = { focusedConnectionId, setFocused, isOpen };
+    const result = forceNew
+      ? openSavedQueryInNew(tabs, { items: connections }, id, ctx)
+      : openSavedQuery(tabs, { items: connections }, id, ctx);
+    if (result === "no-target") {
+      toast.show("Open or focus a connection to open this saved query.", "info");
+    }
+  }, [focusedConnectionId, setFocused, isOpen, tabs, connections, toast]);
+
   // ---- Activate (double-click / Enter) ----
   function onActivate(sidebarNode: SidebarTreeNode) {
     const parsed = parseNodeId(sidebarNode.id);
     if (!parsed || parsed.kind !== "query") return;
-    openSavedQuery(tabs, { items: connections }, parsed.rawId);
+    handleOpenSaved(parsed.rawId, false);
   }
 
   // ---- Render icon ----
@@ -1303,8 +1318,8 @@ export function SavedQueriesPanel() {
               <ContextMenu.Content className={styles.contextMenu}>
                 <SavedQueriesContextMenuItems
                   target={contextTarget}
-                  onOpen={(id) => openSavedQuery(tabs, { items: connections }, id)}
-                  onOpenInNewTab={(id) => openSavedQueryInNew(tabs, { items: connections }, id)}
+                  onOpen={(id) => handleOpenSaved(id, false)}
+                  onOpenInNewTab={(id) => handleOpenSaved(id, true)}
                   onRename={(node) => {
                     const prefix = node.kind === "folder" ? "folder:" : "query:";
                     setRenamingId(`${prefix}${node.id}`);
