@@ -3,9 +3,7 @@
 ## Purpose
 
 Provide a uniform Cmd+A / Ctrl+A "select all rows" gesture for the row-range-capable data grids (Postgres, MySQL, MSSQL). It extends an existing grid selection to every loaded row without disturbing inline editing or the browser's native select-all in text inputs, and stays inert when the grid has no active selection.
-
 ## Requirements
-
 ### Requirement: Select all rows with Cmd+A
 
 When a data grid that supports row-range selection — Postgres, MySQL, and MSSQL — holds keyboard focus, a selection is already active (either a single active cell or a row range), and the focus is NOT inside an inline cell editor or other text input, pressing `Cmd+A` (macOS) or `Ctrl+A` (other platforms) SHALL select every row currently loaded in the grid and SHALL prevent the browser's default select-all behavior.
@@ -57,3 +55,31 @@ While a cell is in edit mode or the keyboard focus is inside an `<input>`, `<tex
 - **WHEN** a cell is in edit mode, the user has focus inside its input, and presses `Cmd+A`
 - **THEN** the text inside the editor is selected by the browser
 - **AND** the grid does not override it by selecting all rows
+
+### Requirement: Select all rows with Cmd+A in the ad-hoc SQL result grid
+
+When the read-only ad-hoc SQL result grid (`AdhocResultGrid`, used by the Postgres SQL editor) holds keyboard focus, a selection is already active (either a single active cell or a row range), and the focus is NOT inside a text input, pressing `Cmd+A` (macOS) or `Ctrl+A` (other platforms) SHALL select every row currently loaded in the grid and SHALL prevent the browser's default select-all behavior.
+
+Selecting all rows MUST set the row-range selection to `{ anchor: 0, active: rows.length - 1 }`. Because single-cell selection and row-range selection are mutually exclusive, the active cell (if any) MUST be cleared as part of selecting all rows.
+
+`Cmd+A` / `Ctrl+A` MUST be inert when there is no active grid selection (neither a row range nor a single active cell is set) or the grid holds no loaded rows: the handler MUST NOT call `preventDefault` and MUST leave native select-all intact.
+
+#### Scenario: Cmd+A extends a single-row selection to all rows
+
+- **WHEN** the ad-hoc SQL result grid has focus, exactly one row is selected, and the user presses `Cmd+A`
+- **THEN** the selection becomes `{ anchor: 0, active: rows.length - 1 }`
+- **AND** every loaded row renders as selected
+- **AND** the browser default select-all is prevented
+
+#### Scenario: Cmd+A from an active cell selects all rows
+
+- **WHEN** the ad-hoc SQL result grid has focus, a single cell is the active cell (no row range), and the user presses `Cmd+A`
+- **THEN** the active cell is cleared
+- **AND** the selection becomes `{ anchor: 0, active: rows.length - 1 }`
+- **AND** the browser default select-all is prevented
+
+#### Scenario: Cmd+A is inert without an active grid selection
+
+- **WHEN** neither a row range nor a single active cell is set in the ad-hoc SQL result grid and the user presses `Cmd+A`
+- **THEN** the grid does not call `preventDefault` and native select-all is left intact
+
