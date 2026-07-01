@@ -2,6 +2,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logUpdater } from "@/platform/updater";
+import { writeClipboardText, COPY_FAILED_MESSAGE } from "@/platform/clipboard";
+import { useToast } from "@/platform/toast";
 import overlayStyles from "./Dialog.module.css";
 import styles from "./VersionIndicator.module.css";
 
@@ -22,6 +24,7 @@ export function UpdaterLogsDialog({ open, onClose }: Props) {
   const [isLoading, setIsLoading] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
   const [copyLabel, setCopyLabel] = useState<"Copy" | "Copied">("Copy");
+  const toast = useToast();
 
   const fetchLogs = useCallback(async () => {
     setIsLoading(true);
@@ -53,14 +56,14 @@ export function UpdaterLogsDialog({ open, onClose }: Props) {
   }, []);
 
   const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(logs);
+    const ok = await writeClipboardText(logs);
+    if (ok) {
       setCopyLabel("Copied");
       window.setTimeout(() => setCopyLabel("Copy"), 1_500);
-    } catch {
-      // clipboard may be unavailable in some environments — silently ignore
+    } else {
+      toast.show(COPY_FAILED_MESSAGE, "error");
     }
-  }, [logs]);
+  }, [logs, toast]);
 
   const revealLabel = isRevealLabel();
 
