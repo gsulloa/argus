@@ -22,7 +22,7 @@
 - [x] 3.3 MySQL `DataGrid.tsx`: wire the existing 32px gutter cell (`:478`) — add `onClick`: shift+anchor → extend; else `setActiveCell(null)` + `onSelectionChange({anchor: rowIdx, active: rowIdx})`; add `cursor:pointer` + hover; focus the grid root (`(e.currentTarget.closest('[tabindex]') as HTMLElement)?.focus()`) so ⌘C works.
 - [x] 3.4 MSSQL `DataGrid.tsx`: identical to MySQL (mirrors its structure).
 - [x] 3.5 Tests: extend `DataGrid.copy.test.tsx` (Postgres) — click a gutter cell selects the row (`onSelectionChange` with `{anchor:i,active:i}` + `onActiveCellChange(null)`), then ⌘C copies that row's TSV; shift-click extends. Add a MySQL (and/or MSSQL) grid test that clicking the gutter selects the row.
-- [ ] 3.6 **Verification gate (manual):** in the packaged app, single-click a row's gutter number in Postgres → whole row highlights → ⌘C → one TSV line. Shift-click to extend. Repeat in MySQL/MSSQL.
+- [x] 3.6 **Verification gate (manual):** in the packaged app, single-click a row's gutter number in Postgres → whole row highlights → ⌘C → one TSV line. Shift-click to extend. Repeat in MySQL/MSSQL.
 
 ## 4. Commit 3 — consolidation + failure feedback
 
