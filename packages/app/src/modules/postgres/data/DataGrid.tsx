@@ -4,7 +4,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { AppError } from "@/platform/errors/AppError";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
-import { copyCellValue, copyRowsTsv, formatRowsTSV } from "@/platform/grid/cellClipboard";
+import { copyCell, copyRows, copyRowRangeFromKeydown, writeClipboardText } from "@/platform/grid/gridCopy";
+import { useToast } from "@/platform/toast";
 import { EditableCell, looksLikeBytea } from "./EditableCell";
 import { RowContextMenu } from "./RowContextMenu";
 import { pixelYToRowIndex } from "./dragRowIndex";
@@ -18,6 +19,7 @@ import styles from "./DataGrid.module.css";
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
 const STATUS_ROW_HEIGHT = 28;
+const GUTTER_WIDTH = 32;
 const SCROLL_LOOKAHEAD_ROWS = (pageSize: number) => pageSize * 2;
 
 // ---------------------------------------------------------------------------
@@ -160,6 +162,9 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     onRetryNextPage,
   } = props;
 
+  const toast = useToast();
+  const onCopyError = (msg: string) => toast.show(msg, "error");
+
   // Map DataColumn[] to the shape useColumnWidths expects.
   // isKey: true when the column is part of the primary key (PK columns are
   // provided by the parent via `pkColumns`). The +16px KEY_BADGE_PAD widens
@@ -270,37 +275,6 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
       : Math.max(selection.anchor, selection.active ?? selection.anchor);
 
   // -----------------------------------------------------------------------
-  // Row-range copy-to-clipboard on Ctrl/Cmd+C.
-  // Early-returns when a single cell is active so the keydown handler owns
-  // that path. Resolves cell values via the edit buffer so pending edits are
-  // reflected in the copied TSV.
-  // -----------------------------------------------------------------------
-  useEffect(() => {
-    function handleCopy(e: ClipboardEvent) {
-      // Single-cell takes precedence — handled by the keydown handler.
-      if (activeCell !== null) return;
-      const { anchor, active } = selection;
-      if (anchor === null || active === null) return;
-      const from = Math.min(anchor, active);
-      const to = Math.max(anchor, active);
-      const resolved: unknown[][] = [];
-      for (let i = from; i <= to; i++) {
-        const row = rows[i];
-        if (!row) continue;
-        resolved.push(
-          columns.map((_, colIdx) => resolveCellDisplayValue(rows, columns, buffer, i, colIdx)),
-        );
-      }
-      if (resolved.length > 0) {
-        e.clipboardData?.setData("text/plain", formatRowsTSV(resolved));
-        e.preventDefault();
-      }
-    }
-    window.addEventListener("copy", handleCopy);
-    return () => window.removeEventListener("copy", handleCopy);
-  }, [selection, rows, activeCell, columns, buffer]);
-
-  // -----------------------------------------------------------------------
   // Keyboard handler: Backspace / Delete toggles bulk delete; Escape clears;
   // ⌘C / Ctrl+C copies the active cell value when a single cell is selected.
   // -----------------------------------------------------------------------
@@ -319,11 +293,27 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
           if (row) {
             const displayValue = resolveCellDisplayValue(rows, columns, buffer, activeCell.row, activeCell.col);
             e.preventDefault();
-            void copyCellValue(displayValue);
+            void copyCell(displayValue, onCopyError);
           }
           return;
         }
       }
+
+      // Row-range copy (issue #213): handled here, not via a native window
+      // "copy" event, which WKWebView does not fire for CSS-only row selections.
+      void copyRowRangeFromKeydown(e, {
+        editing: editing !== null,
+        activeCell,
+        selection,
+        columnNames: columns.map((c) => c.name),
+        resolveRow: (i) =>
+          rows[i]
+            ? columns.map((_, c) => resolveCellDisplayValue(rows, columns, buffer, i, c))
+            : null,
+        write: writeClipboardText,
+        onError: onCopyError,
+      });
+      return;
     }
 
     // ⌘A / Ctrl+A — select all loaded rows. Only fires when a selection is
@@ -481,8 +471,9 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
       onKeyDown={onGridKeyDown}
     >
       <div className={styles.viewport} ref={viewportRef}>
-        <div className={styles.thead} style={{ width: totalWidth }}>
+        <div className={styles.thead} style={{ width: totalWidth + GUTTER_WIDTH }}>
           <div className={styles.headerRow} style={{ height: HEADER_HEIGHT }}>
+            <div className={styles.gutterHeader} style={{ width: GUTTER_WIDTH }} />
             {columns.map((col) => {
               const sortIdx = sortIndexFor(col.name, orderBy);
               const sortDir =
@@ -522,7 +513,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
           className={styles.body}
           style={{
             height: virtualizer.getTotalSize(),
-            width: totalWidth,
+            width: totalWidth + GUTTER_WIDTH,
             position: "relative",
           }}
         >
@@ -614,7 +605,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
               const target = ctxTargetRef.current;
               if (!target) return;
               const val = resolveCellDisplayValue(rows, columns, buffer, target.rowIndex, target.colIndex);
-              void copyCellValue(val);
+              void copyCell(val, onCopyError);
             }
 
             function handleCtxCopyRows() {
@@ -626,7 +617,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   columns.map((_, colIdx) => resolveCellDisplayValue(rows, columns, buffer, i, colIdx)),
                 );
               }
-              void copyRowsTsv(targetRows, columns.map((c) => c.name));
+              void copyRows(targetRows, columns.map((c) => c.name), onCopyError);
             }
 
             function handleCtxEditCell() {
@@ -691,6 +682,34 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   setCtxTarget({ rowIndex: vi.index, colIndex: colIdx });
                 }}
               >
+                <div
+                  className={styles.gutterCell}
+                  style={{ width: GUTTER_WIDTH }}
+                  onMouseDown={(e) => {
+                    if (e.button !== 0) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.shiftKey && selection.anchor !== null) {
+                      onSelectionChange({ anchor: selection.anchor, active: vi.index });
+                      onActiveCellChange(null);
+                      return;
+                    }
+                    onActiveCellChange(null);
+                    onSelectionChange({ anchor: vi.index, active: vi.index });
+                    dragRef.current = {
+                      status: "active",
+                      anchorIndex: vi.index,
+                      anchorColIndex: 0,
+                      anchorClientX: e.clientX,
+                      anchorClientY: e.clientY,
+                    };
+                    dragClientYRef.current = e.clientY;
+                    setDragActive(true);
+                  }}
+                  title="Select row"
+                >
+                  {isInsert ? "+" : isDeleted ? "−" : vi.index + 1}
+                </div>
                 {columns.map((col) => {
                   const colIdx = columns.findIndex((c) => c.name === col.name);
                   const serverValue = r.cells[colIdx] ?? null;
@@ -807,7 +826,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
             className={`${styles.statusRow} ${
               status === "next-error" ? styles.errorRow : ""
             }`}
-            style={{ height: STATUS_ROW_HEIGHT, width: totalWidth }}
+            style={{ height: STATUS_ROW_HEIGHT, width: totalWidth + GUTTER_WIDTH }}
           >
             {status === "loading-next" && (
               <>
