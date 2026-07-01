@@ -343,3 +343,31 @@ textarea.cellEditor {
   color: var(--warning);
   padding-top: 4px;
 }
+
+.gutterHeader {
+  flex: 0 0 auto;
+  height: 28px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.gutterCell {
+  flex: 0 0 auto;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 4px;
+  border-right: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.gutterCell:hover {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}

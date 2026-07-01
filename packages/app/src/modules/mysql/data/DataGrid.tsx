@@ -21,7 +21,9 @@ import { AppError } from "@/platform/errors/AppError";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import { headerFloorWidthFor } from "@/modules/postgres/data/headerMeasure";
-import { copyCellValue, copyRowsTsv, formatCellValue, formatRowsTSV } from "@/platform/grid/cellClipboard";
+import { formatCellValue } from "@/platform/grid/cellClipboard";
+import { copyCell, copyRows, copyRowRangeFromKeydown, writeClipboardText } from "@/platform/grid/gridCopy";
+import { useToast } from "@/platform/toast";
 import { EditableCell } from "./EditableCell";
 import { RowContextMenu } from "@/modules/postgres/data/RowContextMenu";
 import type { ColumnInfo, OrderBy } from "../types";
@@ -90,6 +92,9 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     onCellSelect,
   } = props;
 
+  const toast = useToast();
+  const onCopyError = (msg: string) => toast.show(msg, "error");
+
   const mappedColumns = useMemo(
     () =>
       columns.map((c) => {
@@ -156,37 +161,6 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     setActiveCell(null);
   }, [rows, columns]);
 
-  // Row-range copy-to-clipboard on Ctrl/Cmd+C.
-  // Early-returns when a single cell is active so the keydown handler owns that path.
-  // Resolves cell values via the edit buffer so pending edits are reflected in the
-  // copied TSV.
-  useEffect(() => {
-    function handleCopy(e: ClipboardEvent) {
-      // Single-cell takes precedence — handled by the keydown handler.
-      if (activeCell !== null) return;
-      const { anchor, active } = selection;
-      if (anchor === null || active === null) return;
-      const from = Math.min(anchor, active);
-      const to = Math.max(anchor, active);
-      const columnNames = columns.map((c) => c.name);
-      const resolved: unknown[][] = [];
-      for (let i = from; i <= to; i++) {
-        const row = rows[i];
-        if (!row) continue;
-        const resolvedCells = columns.map((col) =>
-          buffer.getDisplayValue(row.rowKey, row.cells, columnNames, col.name),
-        );
-        resolved.push(resolvedCells);
-      }
-      if (resolved.length > 0) {
-        e.clipboardData?.setData("text/plain", formatRowsTSV(resolved));
-        e.preventDefault();
-      }
-    }
-    window.addEventListener("copy", handleCopy);
-    return () => window.removeEventListener("copy", handleCopy);
-  }, [selection, rows, activeCell, columns, buffer]);
-
   function onCellClick(e: React.MouseEvent, rowIdx: number, colIdx: number) {
     if (e.shiftKey && selection.anchor !== null) {
       // Shift-click extends row range — keep row-range mode, clear active cell.
@@ -218,11 +192,29 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
               columns[activeCell.colIdx]?.name ?? "",
             );
             e.preventDefault();
-            void copyCellValue(displayVal);
+            void copyCell(displayVal, onCopyError);
           }
           return;
         }
       }
+
+      // Row-range copy (issue #213): handled here, not via a native window
+      // "copy" event, which WKWebView does not fire for CSS-only row selections.
+      void copyRowRangeFromKeydown(e, {
+        editing: editingCell !== null,
+        activeCell,
+        selection,
+        columnNames: columns.map((c) => c.name),
+        resolveRow: (i) => {
+          const r = rows[i];
+          if (!r) return null;
+          const columnNames = columns.map((c) => c.name);
+          return columns.map((col) => buffer.getDisplayValue(r.rowKey, r.cells, columnNames, col.name));
+        },
+        write: writeClipboardText,
+        onError: onCopyError,
+      });
+      return;
     }
 
     // ⌘A / Ctrl+A — select all loaded rows. Only fires when a selection is
@@ -411,7 +403,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                 columns.map((c) => c.name),
                 col?.name ?? "",
               );
-              void copyCellValue(displayVal);
+              void copyCell(displayVal, onCopyError);
             }
 
             function handleCtxCopyRows() {
@@ -424,7 +416,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                   columns.map((col) => buffer.getDisplayValue(tr.rowKey, tr.cells, columnNames, col.name)),
                 );
               }
-              void copyRowsTsv(targetRows, columnNames);
+              void copyRows(targetRows, columnNames, onCopyError);
             }
 
             function handleCtxEditCell() {
@@ -505,7 +497,20 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                       ? "var(--danger)"
                       : "var(--text-subtle)",
                     fontVariantNumeric: "tabular-nums",
+                    cursor: "pointer",
+                    userSelect: "none",
                   }}
+                  onClick={(e) => {
+                    if (e.shiftKey && selection.anchor !== null) {
+                      onSelectionChange({ anchor: selection.anchor, active: rowIdx });
+                      setActiveCell(null);
+                    } else {
+                      setActiveCell(null);
+                      onSelectionChange({ anchor: rowIdx, active: rowIdx });
+                    }
+                    (e.currentTarget.closest("[tabindex]") as HTMLElement | null)?.focus();
+                  }}
+                  title="Select row"
                 >
                   {isInsert ? "+" : isDeleted ? "−" : rowIdx + 1}
                 </div>
