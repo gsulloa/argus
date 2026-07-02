@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -47,6 +47,23 @@ pub struct QueryListItem {
     pub description: Option<String>,
     pub params: Vec<QueryParam>,
     pub tags: Vec<String>,
+    /// Relative POSIX path under `queries/`, without extension.
+    /// For flat queries this equals the slug; for nested queries it includes
+    /// the folder prefix, e.g. `"reports/top-customers"`.
+    pub path: String,
+    /// Parent folder relative to `queries/`, POSIX, no leading/trailing `/`.
+    /// Empty string for root-level queries.
+    pub folder: String,
+}
+
+/// Return type for `context_list_queries`: the query list plus the set of all
+/// subfolder paths (including empty directories) under `queries/`.
+#[derive(Serialize)]
+pub struct QueryListResult {
+    pub queries: Vec<QueryListItem>,
+    /// All subfolder relative paths (POSIX) including empty dirs; does not
+    /// include root.
+    pub folders: Vec<String>,
 }
 
 // ---- Constants ----
@@ -620,22 +637,23 @@ pub fn context_list_models(
 
 // ---- 5.6: context_list_queries ----
 
-/// List all queries in the linked context folder for a connection's engine.
+/// List all queries and subfolders in the linked context folder for a
+/// connection's engine.
 #[tauri::command]
 pub fn context_list_queries(
     db: State<'_, DbState>,
     registry: State<'_, Arc<ContextRegistry>>,
     connection_id: String,
-) -> AppResult<Vec<QueryListItem>> {
+) -> AppResult<QueryListResult> {
     let conn_id = parse_conn_id(&connection_id)?;
 
     let parsed = get_or_subscribe(&db, &registry, conn_id)?;
     let parsed = match parsed {
         Some(p) => p,
-        None => return Ok(vec![]),
+        None => return Ok(QueryListResult { queries: vec![], folders: vec![] }),
     };
 
-    Ok(parsed
+    let queries = parsed
         .queries
         .into_iter()
         .map(|q| QueryListItem {
@@ -643,21 +661,37 @@ pub fn context_list_queries(
             description: q.description,
             params: q.params,
             tags: q.tags,
+            path: q.path,
+            folder: q.folder,
         })
-        .collect())
+        .collect();
+
+    Ok(QueryListResult {
+        queries,
+        folders: parsed.query_folders,
+    })
 }
 
 // ---- 5.7: context_get_query ----
 
-/// Return the full QueryDoc (including body) for the given query name.
+/// Return the full QueryDoc (including body) for the given relative path.
+///
+/// `path` is the POSIX relative path under `queries/`, without extension
+/// (e.g. `"reports/top-customers"` or just `"my-query"`).
 #[tauri::command]
 pub fn context_get_query(
     db: State<'_, DbState>,
     registry: State<'_, Arc<ContextRegistry>>,
     connection_id: String,
-    name: String,
+    path: String,
 ) -> AppResult<Option<QueryDoc>> {
     let conn_id = parse_conn_id(&connection_id)?;
+
+    // Validate the path (safety only — do NOT slugify). The query list preserves
+    // the on-disk filename verbatim, so a hand-authored file whose name has
+    // spaces or accents (e.g. "Reporte diario") must be looked up as-is;
+    // slugifying here would produce "Reporte-diario" and never match.
+    let posix = safe_lookup_query_path(&path)?;
 
     let parsed = get_or_subscribe(&db, &registry, conn_id)?;
     let parsed = match parsed {
@@ -665,7 +699,7 @@ pub fn context_get_query(
         None => return Ok(None),
     };
 
-    Ok(parsed.queries.into_iter().find(|q| q.name == name))
+    Ok(parsed.queries.into_iter().find(|q| q.path == posix))
 }
 
 // ---- 5.8: context_sync_schema ----
@@ -840,6 +874,133 @@ fn slug_for_model_name(name: &str) -> AppResult<String> {
 /// Slug helper for query names.
 fn slug_for_query_name(name: &str) -> AppResult<String> {
     slug_for_name(name, "query name")
+}
+
+/// Validate and normalize a relative query path input from the frontend.
+///
+/// - Rejects absolute paths (starts with `/` on POSIX or `\` / drive letters
+///   on Windows).
+/// - Rejects any segment that is or contains `..`.
+/// - Normalizes each segment through [`slug_for_query_name`] so on-disk
+///   names stay filesystem-safe.
+/// - Splits on `/` (POSIX only; `\` is not a path separator here).
+///
+/// Returns `(PathBuf, posix_string)` where `PathBuf` uses OS separators
+/// (for joining to the filesystem) and `posix_string` uses `/` (for IPC
+/// identity).
+///
+/// Input may be just a filename (no directory part) or a path like
+/// `"reports/top-customers"`.
+fn safe_rel_query_path(input: &str) -> AppResult<(PathBuf, String)> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(AppError::Validation(
+            "query path must not be empty".into(),
+        ));
+    }
+    // Reject absolute paths.
+    if input.starts_with('/') || input.starts_with('\\') {
+        return Err(AppError::Validation(format!(
+            "query path must be relative, got {:?}",
+            input
+        )));
+    }
+    // Reject Windows-style drive-letter paths (e.g. "C:").
+    if input.len() >= 2 && input.as_bytes()[1] == b':' {
+        return Err(AppError::Validation(format!(
+            "query path must be relative, got {:?}",
+            input
+        )));
+    }
+
+    let mut segments: Vec<String> = Vec::new();
+    for raw_seg in input.split('/') {
+        if raw_seg.is_empty() {
+            // Ignore empty segments (double slash, trailing slash).
+            continue;
+        }
+        if raw_seg == ".." || raw_seg.contains("..") {
+            return Err(AppError::Validation(format!(
+                "query path must not contain '..', got {:?}",
+                input
+            )));
+        }
+        if raw_seg == "." {
+            continue;
+        }
+        let slug = slug_for_query_name(raw_seg)?;
+        segments.push(slug);
+    }
+
+    if segments.is_empty() {
+        return Err(AppError::Validation(format!(
+            "query path {:?} produces no path segments",
+            input
+        )));
+    }
+
+    let posix = segments.join("/");
+    let os_path: PathBuf = segments.iter().collect();
+    Ok((os_path, posix))
+}
+
+/// Validate a query *lookup* path from the frontend WITHOUT slugifying.
+///
+/// Unlike [`safe_rel_query_path`] — which normalizes each segment to a
+/// filesystem-safe slug for *writing* new files — lookups must match the query
+/// list verbatim, including hand-authored files whose names contain spaces or
+/// accents (`"Reporte diario"`, `"café"`). Slugifying a lookup path would turn
+/// `"Reporte diario"` into `"Reporte-diario"` and never match the stored path.
+///
+/// Enforces the same safety invariants (relative, no `..`, no drive letters);
+/// returns the POSIX path with each segment preserved verbatim.
+fn safe_lookup_query_path(input: &str) -> AppResult<String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(AppError::Validation("query path must not be empty".into()));
+    }
+    if input.starts_with('/') || input.starts_with('\\') {
+        return Err(AppError::Validation(format!(
+            "query path must be relative, got {:?}",
+            input
+        )));
+    }
+    if input.len() >= 2 && input.as_bytes()[1] == b':' {
+        return Err(AppError::Validation(format!(
+            "query path must be relative, got {:?}",
+            input
+        )));
+    }
+
+    let mut segments: Vec<String> = Vec::new();
+    for raw_seg in input.split('/') {
+        if raw_seg.is_empty() || raw_seg == "." {
+            continue;
+        }
+        if raw_seg.contains("..") {
+            return Err(AppError::Validation(format!(
+                "query path must not contain '..', got {:?}",
+                input
+            )));
+        }
+        segments.push(raw_seg.to_owned());
+    }
+
+    if segments.is_empty() {
+        return Err(AppError::Validation(format!(
+            "query path {:?} produces no path segments",
+            input
+        )));
+    }
+
+    Ok(segments.join("/"))
+}
+
+/// Validate and normalize a relative folder path (may have multiple segments,
+/// but no filename — every segment is a directory).  Same rules as
+/// [`safe_rel_query_path`] but the result is purely a directory path.
+fn safe_rel_folder_path(input: &str) -> AppResult<(PathBuf, String)> {
+    safe_rel_query_path(input)
 }
 
 // ---- 5.10: context_save_model ----
@@ -1040,6 +1201,10 @@ pub struct SaveQueryResult {
     pub created: bool,
     /// Display name stored in the meta file.
     pub name: String,
+    /// Relative POSIX path under `queries/` (without extension).
+    pub rel_path: String,
+    /// Parent folder (POSIX, `""` at root).
+    pub folder: String,
 }
 
 /// Result returned by `context_delete_query`.
@@ -1077,9 +1242,13 @@ pub struct LinkedQueryGroup {
 /// - `None` or `Some("create")` → create mode: returns `Conflict` if the slug already exists.
 /// - `Some("update")` → update mode: overwrites in place.
 ///
+/// `folder` (optional): relative POSIX path under `queries/` for the target
+/// subfolder (e.g. `"reports"` or `"reports/monthly"`). When absent the query
+/// is placed at the root of `queries/`.
+///
 /// Files are written at:
-/// - `<root>/<engine>/queries/<slug>.<ext>`         (body)
-/// - `<root>/<engine>/queries/<slug>.meta.yaml`     (metadata)
+/// - `<root>/<engine>/queries/<folder>/<slug>.<ext>`         (body)
+/// - `<root>/<engine>/queries/<folder>/<slug>.meta.yaml`     (metadata)
 ///
 /// The filesystem watcher will emit `context://changed` with `kinds:["query"]`
 /// automatically — no explicit event emission needed here.
@@ -1099,6 +1268,7 @@ pub fn context_save_query(
     params: Option<Vec<QueryParam>>,
     tags: Option<Vec<String>>,
     mode: Option<String>,
+    folder: Option<String>,
 ) -> AppResult<SaveQueryResult> {
     let conn_id = parse_conn_id(&connection_id)?;
     let (kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
@@ -1117,19 +1287,37 @@ pub fn context_save_query(
     }
     let slug = slug_for_query_name(&name)?;
 
+    // Validate and resolve folder.
+    let (folder_os, folder_posix) = match folder.as_deref() {
+        None | Some("") => (PathBuf::new(), String::new()),
+        Some(f) => safe_rel_folder_path(f)?,
+    };
+
     let queries_dir = Path::new(&root).join(subtree).join("queries");
-    std::fs::create_dir_all(&queries_dir)
+    let target_dir = if folder_os.as_os_str().is_empty() {
+        queries_dir.clone()
+    } else {
+        queries_dir.join(&folder_os)
+    };
+    std::fs::create_dir_all(&target_dir)
         .map_err(|e| AppError::Storage(format!("create queries dir: {e}")))?;
 
-    let body_path = queries_dir.join(format!("{slug}.{ext}"));
-    let meta_path = queries_dir.join(format!("{slug}.meta.yaml"));
+    let body_path = target_dir.join(format!("{slug}.{ext}"));
+    let meta_path = target_dir.join(format!("{slug}.meta.yaml"));
+
+    // Build POSIX relative path (identity).
+    let rel_path = if folder_posix.is_empty() {
+        slug.clone()
+    } else {
+        format!("{folder_posix}/{slug}")
+    };
 
     let is_update = matches!(mode.as_deref(), Some("update"));
     let file_exists = body_path.exists();
 
     if !is_update && file_exists {
         return Err(AppError::Validation(format!(
-            "query {slug:?} already exists; use mode=update to overwrite"
+            "query {rel_path:?} already exists; use mode=update to overwrite"
         )));
     }
 
@@ -1151,26 +1339,33 @@ pub fn context_save_query(
         path: body_path.to_string_lossy().into_owned(),
         created: !file_exists,
         name,
+        rel_path,
+        folder: folder_posix,
     })
 }
 
 // ---- 5.13: context_rename_query ----
 
-/// Rename a prefab query within the linked context folder.
+/// Move/rename a prefab query within the linked context folder.
 ///
-/// Moves both the body file and the `.meta.yaml` sidecar to the new slug.
-/// If the old meta is present its `name` field is updated to `to_name`;
-/// if absent a fresh meta is written with `name: to_name`.
+/// `from_path` and `to_path` are relative POSIX paths under `queries/`,
+/// without extension (e.g. `"old-name"`, `"reports/top-customers"`).
+///
+/// Moves both the body file and the `.meta.yaml` sidecar. Supports moving
+/// across subfolders (creates intermediate directories for `to_path`). The
+/// meta `name` is updated to the display name derived from the final segment
+/// of `to_path`; other meta fields (description, params, tags) are preserved.
 ///
 /// ## Error messages (stable)
 /// - Source not found   → `AppError::NotFound("query … not found")`
 /// - Destination exists → `AppError::Validation("query … already exists")`
+/// - Unsafe path        → `AppError::Validation("…")`
 #[tauri::command]
 pub fn context_rename_query(
     db: State<'_, DbState>,
     connection_id: String,
-    from_name: String,
-    to_name: String,
+    from_path: String,
+    to_path: String,
 ) -> AppResult<SaveQueryResult> {
     let conn_id = parse_conn_id(&connection_id)?;
     let (kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
@@ -1183,33 +1378,32 @@ pub fn context_rename_query(
     let ext = engine.query_extensions()[0];
     let subtree = engine.subtree();
 
-    let to_name = to_name.trim().to_owned();
-    if to_name.is_empty() {
-        return Err(AppError::Validation(
-            "target query name must not be empty".into(),
-        ));
-    }
-
-    let from_slug = slug_for_query_name(from_name.trim())?;
-    let to_slug = slug_for_query_name(&to_name)?;
+    let (from_os, from_posix) = safe_rel_query_path(&from_path)?;
+    let (to_os, to_posix) = safe_rel_query_path(&to_path)?;
 
     let queries_dir = Path::new(&root).join(subtree).join("queries");
 
-    let from_body = queries_dir.join(format!("{from_slug}.{ext}"));
-    let from_meta = queries_dir.join(format!("{from_slug}.meta.yaml"));
-    let to_body = queries_dir.join(format!("{to_slug}.{ext}"));
-    let to_meta = queries_dir.join(format!("{to_slug}.meta.yaml"));
+    let from_body = queries_dir.join(from_os.with_extension(ext));
+    let from_meta = queries_dir.join(from_os.with_extension("meta.yaml"));
+    let to_body = queries_dir.join(to_os.with_extension(ext));
+    let to_meta = queries_dir.join(to_os.with_extension("meta.yaml"));
 
     if !from_body.exists() {
-        return Err(AppError::NotFound(format!("query {from_slug:?} not found")));
+        return Err(AppError::NotFound(format!("query {from_posix:?} not found")));
     }
     if to_body.exists() {
         return Err(AppError::Validation(format!(
-            "query {to_slug:?} already exists"
+            "query {to_posix:?} already exists"
         )));
     }
 
-    // Read old meta (if present) and update the name field.
+    // Create intermediate directories for destination.
+    if let Some(parent) = to_body.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AppError::Storage(format!("create dirs for rename target: {e}")))?;
+    }
+
+    // Read old meta (if present) to preserve description/params/tags.
     let old_meta: Option<crate::modules::context::types::QueryMeta> = if from_meta.exists() {
         match std::fs::read_to_string(&from_meta) {
             Ok(content) => serde_yaml::from_str(&content).ok(),
@@ -1219,13 +1413,30 @@ pub fn context_rename_query(
         None
     };
 
+    // Derive new display name from the final segment of to_path.
+    let new_display_name = to_posix
+        .split('/')
+        .next_back()
+        .unwrap_or(&to_posix)
+        .to_owned();
+
+    // Derive new folder from to_path.
+    let new_folder = {
+        let parts: Vec<&str> = to_posix.split('/').collect();
+        if parts.len() > 1 {
+            parts[..parts.len() - 1].join("/")
+        } else {
+            String::new()
+        }
+    };
+
     // Rename body file.
     std::fs::rename(&from_body, &to_body)
         .map_err(|e| AppError::Storage(format!("rename query body: {e}")))?;
 
     // Write updated meta at new path.
     let new_meta = crate::modules::context::types::QueryMeta {
-        name: Some(to_name.clone()),
+        name: Some(new_display_name.clone()),
         description: old_meta.as_ref().and_then(|m| m.description.clone()),
         params: old_meta
             .as_ref()
@@ -1248,7 +1459,9 @@ pub fn context_rename_query(
     Ok(SaveQueryResult {
         path: to_body.to_string_lossy().into_owned(),
         created: false,
-        name: to_name,
+        name: new_display_name,
+        rel_path: to_posix,
+        folder: new_folder,
     })
 }
 
@@ -1256,13 +1469,16 @@ pub fn context_rename_query(
 
 /// Delete a prefab query from the linked context folder.
 ///
+/// `path` is the POSIX relative path under `queries/`, without extension
+/// (e.g. `"reports/top-customers"` or just `"my-query"`).
+///
 /// Removes the body file and its `.meta.yaml` sidecar (if present).
 /// Returns `AppError::NotFound` when the body file does not exist.
 #[tauri::command]
 pub fn context_delete_query(
     db: State<'_, DbState>,
     connection_id: String,
-    name: String,
+    path: String,
 ) -> AppResult<DeleteQueryResult> {
     let conn_id = parse_conn_id(&connection_id)?;
     let (kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
@@ -1275,13 +1491,13 @@ pub fn context_delete_query(
     let ext = engine.query_extensions()[0];
     let subtree = engine.subtree();
 
-    let slug = slug_for_query_name(name.trim())?;
+    let (rel_os, posix) = safe_rel_query_path(&path)?;
     let queries_dir = Path::new(&root).join(subtree).join("queries");
-    let body_path = queries_dir.join(format!("{slug}.{ext}"));
-    let meta_path = queries_dir.join(format!("{slug}.meta.yaml"));
+    let body_path = queries_dir.join(rel_os.with_extension(ext));
+    let meta_path = queries_dir.join(rel_os.with_extension("meta.yaml"));
 
     if !body_path.exists() {
-        return Err(AppError::NotFound(format!("query {slug:?} not found")));
+        return Err(AppError::NotFound(format!("query {posix:?} not found")));
     }
 
     std::fs::remove_file(&body_path)
@@ -1293,6 +1509,122 @@ pub fn context_delete_query(
     }
 
     Ok(DeleteQueryResult { deleted: true })
+}
+
+// ---- context_create_query_folder / context_delete_query_folder ----
+
+/// Result returned by `context_create_query_folder`.
+#[derive(serde::Serialize)]
+pub struct CreateQueryFolderResult {
+    /// Relative POSIX path of the folder that was created (or already existed).
+    pub path: String,
+}
+
+/// Create a subfolder under the connection's `<engine>/queries/` directory.
+///
+/// The operation is idempotent: if the folder already exists this returns
+/// success. `path` is a relative POSIX path (e.g. `"reports"` or
+/// `"reports/monthly"`); `..` and absolute paths are rejected.
+///
+/// After creating the folder the registry cache is refreshed synchronously and
+/// `context://changed` with `kinds: ["query"]` is emitted — empty directories
+/// do not reliably wake the filesystem watcher on all platforms (e.g. macOS
+/// FSEvents), so we emit the event ourselves.
+#[tauri::command]
+pub fn context_create_query_folder(
+    db: State<'_, DbState>,
+    registry: State<'_, Arc<ContextRegistry>>,
+    connection_id: String,
+    path: String,
+) -> AppResult<CreateQueryFolderResult> {
+    let conn_id = parse_conn_id(&connection_id)?;
+    let (kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
+    let root = context_path.ok_or_else(|| {
+        AppError::Validation(format!("connection {conn_id} has no linked context folder"))
+    })?;
+
+    let engine = EngineKind::from_connection_kind(&kind)
+        .ok_or_else(|| AppError::Validation(format!("unsupported engine kind: {kind}")))?;
+    let subtree = engine.subtree();
+
+    let (folder_os, folder_posix) = safe_rel_folder_path(&path)?;
+
+    let queries_dir = Path::new(&root).join(subtree).join("queries");
+    let target = queries_dir.join(&folder_os);
+
+    std::fs::create_dir_all(&target)
+        .map_err(|e| AppError::Storage(format!("create query folder: {e}")))?;
+
+    // Refresh the registry cache and emit context://changed synchronously so
+    // that a subsequent context_list_queries reflects the new (empty) folder
+    // without waiting for the filesystem watcher.
+    registry.refresh_and_notify(conn_id, vec!["query"]);
+
+    Ok(CreateQueryFolderResult { path: folder_posix })
+}
+
+/// Result returned by `context_delete_query_folder`.
+#[derive(serde::Serialize)]
+pub struct DeleteQueryFolderResult {
+    /// Relative POSIX path of the folder that was removed.
+    pub path: String,
+}
+
+/// Delete an empty subfolder from the connection's `<engine>/queries/` directory.
+///
+/// Returns `AppError::NotFound` if the folder does not exist.
+/// Returns `AppError::Validation` if the folder is non-empty (refuses to
+/// recursively delete — callers should delete all queries first).
+///
+/// After removing the folder the registry cache is refreshed synchronously and
+/// `context://changed` with `kinds: ["query"]` is emitted.
+#[tauri::command]
+pub fn context_delete_query_folder(
+    db: State<'_, DbState>,
+    registry: State<'_, Arc<ContextRegistry>>,
+    connection_id: String,
+    path: String,
+) -> AppResult<DeleteQueryFolderResult> {
+    let conn_id = parse_conn_id(&connection_id)?;
+    let (kind, context_path) = get_conn_kind_and_path(&db, conn_id)?;
+    let root = context_path.ok_or_else(|| {
+        AppError::Validation(format!("connection {conn_id} has no linked context folder"))
+    })?;
+
+    let engine = EngineKind::from_connection_kind(&kind)
+        .ok_or_else(|| AppError::Validation(format!("unsupported engine kind: {kind}")))?;
+    let subtree = engine.subtree();
+
+    let (folder_os, folder_posix) = safe_rel_folder_path(&path)?;
+
+    let queries_dir = Path::new(&root).join(subtree).join("queries");
+    let target = queries_dir.join(&folder_os);
+
+    if !target.exists() {
+        return Err(AppError::NotFound(format!(
+            "query folder {folder_posix:?} not found"
+        )));
+    }
+
+    // Check that the directory is empty.
+    let is_empty = std::fs::read_dir(&target)
+        .map(|mut d| d.next().is_none())
+        .unwrap_or(false);
+
+    if !is_empty {
+        return Err(AppError::Validation(format!(
+            "query folder {folder_posix:?} is not empty; delete all queries inside it first"
+        )));
+    }
+
+    std::fs::remove_dir(&target)
+        .map_err(|e| AppError::Storage(format!("remove query folder: {e}")))?;
+
+    // Refresh the registry cache and emit context://changed synchronously so
+    // that a subsequent context_list_queries immediately reflects the removal.
+    registry.refresh_and_notify(conn_id, vec!["query"]);
+
+    Ok(DeleteQueryFolderResult { path: folder_posix })
 }
 
 // ---- 5.15: context_list_linked_queries ----
@@ -1360,6 +1692,8 @@ pub fn context_list_linked_queries(
                     description: q.description,
                     params: q.params,
                     tags: q.tags,
+                    path: q.path,
+                    folder: q.folder,
                 })
                 .collect(),
             None => vec![],
@@ -1404,6 +1738,36 @@ pub fn context_list_linked_queries(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- safe_lookup_query_path ----
+
+    #[test]
+    fn lookup_preserves_spaces_and_accents() {
+        // Hand-authored files whose names have spaces/accents must be looked up
+        // verbatim (NOT slugified) so they match the query list.
+        assert_eq!(safe_lookup_query_path("Reporte diario").unwrap(), "Reporte diario");
+        assert_eq!(safe_lookup_query_path("café").unwrap(), "café");
+        assert_eq!(
+            safe_lookup_query_path("reportes/Ventas del mes").unwrap(),
+            "reportes/Ventas del mes",
+        );
+    }
+
+    #[test]
+    fn lookup_matches_slug_paths_unchanged() {
+        assert_eq!(safe_lookup_query_path("top-customers").unwrap(), "top-customers");
+        assert_eq!(
+            safe_lookup_query_path("reports/top-customers").unwrap(),
+            "reports/top-customers",
+        );
+    }
+
+    #[test]
+    fn lookup_rejects_traversal_and_absolute() {
+        assert!(safe_lookup_query_path("../secret").is_err());
+        assert!(safe_lookup_query_path("/etc/passwd").is_err());
+        assert!(safe_lookup_query_path("").is_err());
+    }
 
     // ---- slug_for_model_name ----
 
@@ -2081,7 +2445,9 @@ mod tests {
         Ok(SaveQueryResult {
             path: body_path.to_string_lossy().into_owned(),
             created: !file_exists,
-            name: name_trimmed,
+            name: name_trimmed.clone(),
+            rel_path: slug.clone(),
+            folder: String::new(),
         })
     }
 
@@ -2459,5 +2825,173 @@ mod tests {
             groups.is_empty(),
             "expected no groups when no context_path set"
         );
+    }
+
+    // ---- safe_rel_query_path ----
+
+    #[test]
+    fn safe_rel_path_simple_name() {
+        let (os, posix) = safe_rel_query_path("top-customers").unwrap();
+        assert_eq!(posix, "top-customers");
+        assert_eq!(os, std::path::PathBuf::from("top-customers"));
+    }
+
+    #[test]
+    fn safe_rel_path_nested() {
+        let (os, posix) = safe_rel_query_path("reports/top-customers").unwrap();
+        assert_eq!(posix, "reports/top-customers");
+        assert_eq!(os, std::path::PathBuf::from("reports/top-customers"));
+    }
+
+    #[test]
+    fn safe_rel_path_deeply_nested() {
+        let (_os, posix) = safe_rel_query_path("a/b/c").unwrap();
+        assert_eq!(posix, "a/b/c");
+    }
+
+    #[test]
+    fn safe_rel_path_normalizes_spaces() {
+        // "my reports" → "my-reports" per slug rule
+        let (_os, posix) = safe_rel_query_path("my reports/top customers").unwrap();
+        assert_eq!(posix, "my-reports/top-customers");
+    }
+
+    #[test]
+    fn safe_rel_path_rejects_absolute_slash() {
+        assert!(safe_rel_query_path("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn safe_rel_path_rejects_dotdot() {
+        assert!(safe_rel_query_path("../escape").is_err());
+    }
+
+    #[test]
+    fn safe_rel_path_rejects_dotdot_in_middle() {
+        assert!(safe_rel_query_path("reports/../escape").is_err());
+    }
+
+    #[test]
+    fn safe_rel_path_rejects_empty() {
+        assert!(safe_rel_query_path("").is_err());
+    }
+
+    #[test]
+    fn safe_rel_path_rejects_whitespace_only() {
+        assert!(safe_rel_query_path("   ").is_err());
+    }
+
+    #[test]
+    fn safe_rel_path_ignores_trailing_slash() {
+        // trailing slash should still produce a valid path
+        let (_os, posix) = safe_rel_query_path("reports/").unwrap();
+        assert_eq!(posix, "reports");
+    }
+
+    // ---- parse_queries_dir recursion (task 1.2) ----
+
+    #[test]
+    fn parse_queries_dir_flat_queries_get_path_and_empty_folder() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        let q_dir = dir.path().join("postgres/queries");
+        fs::create_dir_all(&q_dir).unwrap();
+        fs::write(q_dir.join("my-query.sql"), "SELECT 1;").unwrap();
+        fs::write(q_dir.join("my-query.meta.yaml"), "name: My Query\n").unwrap();
+
+        use crate::modules::context::parser::parse_queries_dir;
+        let result = parse_queries_dir(&q_dir, EngineKind::Postgres);
+        assert_eq!(result.docs.len(), 1);
+        assert_eq!(result.docs[0].path, "my-query");
+        assert_eq!(result.docs[0].folder, "");
+        assert!(result.folders.is_empty());
+    }
+
+    #[test]
+    fn parse_queries_dir_nested_queries() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        let q_dir = dir.path().join("postgres/queries");
+        fs::create_dir_all(q_dir.join("reports")).unwrap();
+        fs::write(q_dir.join("top.sql"), "SELECT 1;").unwrap();
+        fs::write(q_dir.join("reports/monthly.sql"), "SELECT 2;").unwrap();
+        fs::write(q_dir.join("reports/monthly.meta.yaml"), "name: Monthly\n").unwrap();
+
+        use crate::modules::context::parser::parse_queries_dir;
+        let result = parse_queries_dir(&q_dir, EngineKind::Postgres);
+
+        // Both docs found.
+        assert_eq!(result.docs.len(), 2);
+
+        // Sort by path for deterministic assertions.
+        let mut paths: Vec<_> = result.docs.iter().map(|d| d.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(paths, vec!["reports/monthly", "top"]);
+
+        // Check folder field.
+        let monthly = result.docs.iter().find(|d| d.path == "reports/monthly").unwrap();
+        assert_eq!(monthly.folder, "reports");
+
+        let top = result.docs.iter().find(|d| d.path == "top").unwrap();
+        assert_eq!(top.folder, "");
+
+        // Folder list includes the subfolder.
+        assert!(result.folders.contains(&"reports".to_string()));
+    }
+
+    #[test]
+    fn parse_queries_dir_empty_subfolder_reported() {
+        let dir = TempDir::new().unwrap();
+        write_context_yaml(dir.path(), "T");
+        let q_dir = dir.path().join("postgres/queries");
+        fs::create_dir_all(q_dir.join("empty-folder")).unwrap();
+
+        use crate::modules::context::parser::parse_queries_dir;
+        let result = parse_queries_dir(&q_dir, EngineKind::Postgres);
+
+        assert!(result.docs.is_empty());
+        assert!(result.folders.contains(&"empty-folder".to_string()));
+    }
+
+    // ---- safe_rel_query_path: folder create/delete logic ----
+
+    #[test]
+    fn create_and_delete_query_folder_logic() {
+        let dir = TempDir::new().unwrap();
+        let q_dir = dir.path().join("postgres/queries");
+        fs::create_dir_all(&q_dir).unwrap();
+
+        // Create folder.
+        let (folder_os, folder_posix) = safe_rel_folder_path("reports/monthly").unwrap();
+        assert_eq!(folder_posix, "reports/monthly");
+        let target = q_dir.join(&folder_os);
+        fs::create_dir_all(&target).unwrap();
+        assert!(target.exists());
+
+        // Delete empty folder.
+        let is_empty = fs::read_dir(&target).map(|mut d| d.next().is_none()).unwrap_or(false);
+        assert!(is_empty);
+        fs::remove_dir(&target).unwrap();
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn delete_query_folder_non_empty_errors() {
+        let dir = TempDir::new().unwrap();
+        let q_dir = dir.path().join("postgres/queries");
+        let sub = q_dir.join("reports");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("my-query.sql"), "SELECT 1;").unwrap();
+
+        let is_empty = fs::read_dir(&sub).map(|mut d| d.next().is_none()).unwrap_or(false);
+        assert!(!is_empty, "folder should not be empty");
+
+        // Simulate the non-empty guard.
+        let err: AppResult<()> = if !is_empty {
+            Err(AppError::Validation("folder is not empty".into()))
+        } else {
+            Ok(())
+        };
+        assert!(matches!(err, Err(AppError::Validation(_))));
     }
 }

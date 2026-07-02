@@ -72,6 +72,8 @@ export interface PostgresQueryPayload {
   contextQuery?: {
     name: string;
     params: QueryParam[];
+    /** Folder the query lives in ("" = root); used so saves target the right file. */
+    folder?: string;
   };
 }
 
@@ -412,19 +414,20 @@ function QueryTab({ tabId, payload }: InnerProps) {
   // Save flow (task 7.3 - 7.7)
   // ---------------------------------------------------------------------------
   const [showSaveAs, setShowSaveAs] = useState(false);
-  const [defaultSaveFolder, setDefaultSaveFolder] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Track the context-query name when a tab was saved to a context folder
-  // (for tabs NOT opened from an existing local saved query).
-  const [contextSavedName, setContextSavedName] = useState<string | null>(null);
+  // Track the context-query name + folder when a tab is bound to a context
+  // folder — either opened from an existing prefab query (initialized from the
+  // payload) or saved there via "Save as". A non-null name routes Cmd+S to an
+  // in-place update instead of re-prompting for a name.
+  const [contextSavedName, setContextSavedName] = useState<string | null>(
+    payload.contextQuery?.name ?? null,
+  );
+  const [contextSavedFolder, setContextSavedFolder] = useState<string>(
+    payload.contextQuery?.folder ?? "",
+  );
 
-  // Load the lastUsedFolder setting when opening SaveAs.
   const openSaveAsModal = useCallback(() => {
-    // Load last-used folder.
-    getSetting("savedQueries:lastUsedFolder")
-      .then((raw) => setDefaultSaveFolder(raw ?? null))
-      .catch(() => setDefaultSaveFolder(null));
     setShowSaveAs(true);
   }, []);
 
@@ -462,7 +465,10 @@ function QueryTab({ tabId, payload }: InnerProps) {
       if (isSaving) return;
       setIsSaving(true);
       contextApi
-        .saveQuery(tabState.currentConnectionId, contextSavedName, currentSql, { mode: "update" })
+        .saveQuery(tabState.currentConnectionId, contextSavedName, currentSql, {
+          mode: "update",
+          folder: contextSavedFolder,
+        })
         .then(() => {
           toast.show("Saved", "success");
         })
@@ -474,11 +480,11 @@ function QueryTab({ tabId, payload }: InnerProps) {
       // First save — open modal.
       openSaveAsModal();
     }
-  }, [tabState, isSaving, contextSavedName, tabActions, openSaveAsModal, setTabTitle, tabId, toast]);
+  }, [tabState, isSaving, contextSavedName, contextSavedFolder, tabActions, openSaveAsModal, setTabTitle, tabId, toast]);
 
   // SaveAs modal confirm handler — routes to context folder (not local DB).
   const handleSaveAsConfirm = useCallback(
-    async ({ name }: { name: string; folderId: string | null }) => {
+    async ({ name }: { name: string }) => {
       const currentSql = editorRef.current?.getSql() ?? "";
       const connId = tabState.currentConnectionId;
       setShowSaveAs(false);
@@ -489,6 +495,7 @@ function QueryTab({ tabId, payload }: InnerProps) {
       try {
         await contextApi.saveQuery(connId, name, currentSql, { mode: "create" });
         setContextSavedName(name);
+        setContextSavedFolder("");
         setTabTitle(tabId, name);
         toast.show(`Saved as "${name}"`, "success");
       } catch (e) {
@@ -788,7 +795,6 @@ function QueryTab({ tabId, payload }: InnerProps) {
       <SaveAsModal
         open={showSaveAs}
         defaultName={saveAsDefaultName}
-        defaultFolderId={defaultSaveFolder}
         onClose={() => setShowSaveAs(false)}
         onConfirm={(result) => void handleSaveAsConfirm(result)}
       />

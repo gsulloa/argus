@@ -81,7 +81,9 @@ import {
 } from "@/modules/cloudwatch";
 import { ContextQueriesBranch } from "@/modules/context/components/ContextQueriesBranch";
 import { openContextQuery } from "@/modules/context/openContextQuery";
+import { contextApi } from "@/modules/context/api";
 import { useTabs } from "@/platform/shell/tabs";
+import { useToast } from "@/platform/toast";
 import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
 import { listDirtySummaries } from "@/platform/shell/tabs/useDirtySummary";
 import { DisconnectConfirmDialog } from "./DisconnectConfirmDialog";
@@ -127,7 +129,8 @@ export function ConnectionRow({
   const cwActive = useActiveCloudwatchConnections();
   // Cross-engine open registry — used in manager mode for the open/closed dot.
   const openRegistry = useOpenConnections();
-  const { items: allConnections, remove, move } = useConnections();
+  const { items: allConnections, remove, move, refresh: refreshConnections } = useConnections();
+  const toast = useToast();
   const { items: groups } = useConnectionGroups();
   const pgForm = usePostgresForm();
   const dyForm = useDynamoForm();
@@ -140,6 +143,32 @@ export function ConnectionRow({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+
+  // ---------------------------------------------------------------------------
+  // Context query creation — invoked by ContextQueriesBranch's "New query"
+  // ---------------------------------------------------------------------------
+
+  function makeNewContextQueryHandler(
+    engine: "postgres" | "mysql" | "mssql" | "dynamo",
+  ) {
+    return async (name: string, folder?: string) => {
+      try {
+        const result = await contextApi.saveQuery(connection.id, name, "", { folder });
+        // Open the newly created query by path (supports nested folders)
+        await openContextQuery(tabs, connection.id, connection.name, engine, {
+          name: result.name,
+          description: null,
+          params: [],
+          tags: [],
+          path: result.rel_path,
+          folder: result.folder,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        toast.show(`Failed to create query: ${msg}`, "error");
+      }
+    };
+  }
 
   const isPostgres = connection.kind === POSTGRES_KIND;
   const isDynamo = connection.kind === DYNAMO_KIND;
@@ -994,6 +1023,8 @@ export function ConnectionRow({
             onActivate={(q) => {
               void openContextQuery(tabs, connection.id, connection.name, "postgres", q);
             }}
+            onNewQuery={makeNewContextQueryHandler("postgres")}
+            onFolderLinked={() => void refreshConnections()}
           />
         </div>
       )}
@@ -1008,6 +1039,8 @@ export function ConnectionRow({
             onActivate={(q) => {
               void openContextQuery(tabs, connection.id, connection.name, "mysql", q);
             }}
+            onNewQuery={makeNewContextQueryHandler("mysql")}
+            onFolderLinked={() => void refreshConnections()}
           />
         </div>
       )}
@@ -1022,6 +1055,8 @@ export function ConnectionRow({
             onActivate={(q) => {
               void openContextQuery(tabs, connection.id, connection.name, "mssql", q);
             }}
+            onNewQuery={makeNewContextQueryHandler("mssql")}
+            onFolderLinked={() => void refreshConnections()}
           />
         </div>
       )}
@@ -1036,6 +1071,8 @@ export function ConnectionRow({
             onActivate={(q) => {
               void openContextQuery(tabs, connection.id, connection.name, "dynamo", q);
             }}
+            onNewQuery={makeNewContextQueryHandler("dynamo")}
+            onFolderLinked={() => void refreshConnections()}
           />
         </div>
       )}

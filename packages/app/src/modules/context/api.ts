@@ -9,6 +9,7 @@ import type {
   ObjectListItem,
   QueryDoc,
   QueryListItem,
+  QueryListResult,
   SaveQueryResult,
   SyncReport,
 } from "./types";
@@ -41,10 +42,10 @@ export const contextApi = {
     call<ObjectDoc | null>("context_get_object", { connectionId, identityStr: identity }),
 
   listQueries: (connectionId: string) =>
-    call<QueryListItem[]>("context_list_queries", { connectionId }),
+    call<QueryListResult>("context_list_queries", { connectionId }),
 
-  getQuery: (connectionId: string, name: string) =>
-    call<QueryDoc | null>("context_get_query", { connectionId, name }),
+  getQuery: (connectionId: string, path: string) =>
+    call<QueryDoc | null>("context_get_query", { connectionId, path }),
 
   syncSchema: (connectionId: string) =>
     call<SyncReport>("context_sync_schema", { connectionId }),
@@ -64,6 +65,7 @@ export const contextApi = {
       params?: QueryListItem["params"];
       tags?: string[];
       mode?: "create" | "update";
+      folder?: string;
     },
   ) =>
     call<SaveQueryResult>("context_save_query", {
@@ -74,13 +76,20 @@ export const contextApi = {
       params: opts?.params,
       tags: opts?.tags,
       mode: opts?.mode,
+      folder: opts?.folder,
     }),
 
-  renameQuery: (connectionId: string, fromName: string, toName: string) =>
-    call<SaveQueryResult>("context_rename_query", { connectionId, fromName, toName }),
+  renameQuery: (connectionId: string, fromPath: string, toPath: string) =>
+    call<SaveQueryResult>("context_rename_query", { connectionId, fromPath, toPath }),
 
-  deleteQuery: (connectionId: string, name: string) =>
-    call<{ deleted: boolean }>("context_delete_query", { connectionId, name }),
+  deleteQuery: (connectionId: string, path: string) =>
+    call<{ deleted: boolean }>("context_delete_query", { connectionId, path }),
+
+  createQueryFolder: (connectionId: string, path: string) =>
+    call<{ path: string }>("context_create_query_folder", { connectionId, path }),
+
+  deleteQueryFolder: (connectionId: string, path: string) =>
+    call<{ path: string }>("context_delete_query_folder", { connectionId, path }),
 
   listLinkedQueries: () =>
     call<LinkedQueryGroup[]>("context_list_linked_queries"),
