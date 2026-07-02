@@ -367,6 +367,28 @@ signed and notarized for macOS, and distributed to the team via auto-updater. Th
 one-time setup (Apple Developer cert, AWS release hosting via `ArgusReleasesStack`,
 updater keypair, GH Secrets) is documented in [docs/release-setup.md](docs/release-setup.md).
 
+### Changelog
+
+The single source of truth for release notes is `CHANGELOG.md` at the repo root,
+following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format with
+[Semantic Versioning](https://semver.org/spec/v2.0.0/) headers
+(`## [X.Y.Z] - YYYY-MM-DD`).
+
+**Contributing**: add user-facing changes under `## [Unreleased]` in your PR.
+Use the standard groups (`### Added`, `### Changed`, `### Fixed`, `### Removed`)
+with a concise bullet per change.
+
+**Release flow**: `scripts/release.sh` calls `bump-version.mjs`, which promotes
+`## [Unreleased]` to a dated version section and inserts a fresh empty
+`## [Unreleased]` above it — all within the single `chore: release vX.Y.Z`
+commit. The GitHub Actions "Extract release notes" step reads the same file to
+populate the GitHub Release body.
+
+**In-app viewer**: the changelog is bundled at build time
+(`packages/app/src/generated/changelog.md`, gitignored) and surfaced through the
+command palette as **Help: Show changelog**. Users who have just auto-updated see
+it automatically on first launch after an update.
+
 ## Traffic & download analytics
 
 CloudFront standard access logs are written to a private S3 bucket provisioned by

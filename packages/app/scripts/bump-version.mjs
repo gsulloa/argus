@@ -15,7 +15,7 @@
 // Prints the new version on stdout so CI can capture it for tag creation.
 // Exits 0 silently if no change is needed (file already at target).
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -91,6 +91,71 @@ export function setLockfileVersion(lockContent, pkgName, version) {
   return out;
 }
 
+/**
+ * Pure function: promote the `## [Unreleased]` section of a Keep a Changelog
+ * file into a dated version section and insert a fresh empty `## [Unreleased]`
+ * above it.
+ *
+ * Rules:
+ *   - If there is no `## [Unreleased]` heading, returns the text unchanged.
+ *   - If the `[Unreleased]` body (lines between the heading and the next
+ *     `## [` heading, or end of file) contains no non-blank content, a single
+ *     placeholder line `_No user-facing changes._` is inserted so the
+ *     GitHub Release body is never blank.
+ *   - A fresh empty `## [Unreleased]` section is prepended above the newly
+ *     dated section, separated by a blank line.
+ *
+ * @param {string} changelogText  - full CHANGELOG.md text
+ * @param {string} version        - new version string, e.g. "0.7.6"
+ * @param {string} date           - ISO date string, e.g. "2026-07-02"
+ * @returns {string}  updated changelog text
+ */
+export function promoteUnreleased(changelogText, version, date) {
+  const lines = changelogText.split("\n");
+
+  // Find the line index of `## [Unreleased]`
+  const unreleasedIdx = lines.findIndex((l) => /^## \[Unreleased\]/i.test(l));
+  if (unreleasedIdx === -1) {
+    return changelogText;
+  }
+
+  // Find the start of the next `## [` heading (the next version section).
+  let nextSectionIdx = lines.length;
+  for (let i = unreleasedIdx + 1; i < lines.length; i++) {
+    if (/^## \[/.test(lines[i])) {
+      nextSectionIdx = i;
+      break;
+    }
+  }
+
+  // Extract the body between [Unreleased] heading and the next section.
+  const bodyLines = lines.slice(unreleasedIdx + 1, nextSectionIdx);
+  const hasContent = bodyLines.some((l) => l.trim() !== "");
+
+  // Build the promoted section lines.
+  const promotedHeading = `## [${version}] - ${date}`;
+  const promotedBody = hasContent ? bodyLines : ["", "_No user-facing changes._"];
+
+  // Construct the replacement: fresh [Unreleased] + blank line + promoted section.
+  const replacement = [
+    "## [Unreleased]",
+    "",
+    promotedHeading,
+    ...promotedBody,
+  ];
+
+  // Splice: replace from unreleasedIdx through nextSectionIdx (exclusive).
+  const before = lines.slice(0, unreleasedIdx);
+  const after = lines.slice(nextSectionIdx);
+
+  // Ensure a blank line separates the replacement from the following section,
+  // but only if `after` starts with a non-empty line (avoid double blanks).
+  const joinedAfter =
+    after.length > 0 && after[0] !== "" ? ["", ...after] : after;
+
+  return [...before, ...replacement, ...joinedAfter].join("\n");
+}
+
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -142,6 +207,17 @@ function main() {
   // lockfile never lags the manifest (the historical "build error" cause).
   const lock = readFileSync(cargoLockPath, "utf8");
   writeFileSync(cargoLockPath, setLockfileVersion(lock, "argus", next));
+
+  // Root CHANGELOG.md — promote [Unreleased] → [X.Y.Z] - <UTC date>.
+  // repo root = packages/app/../../  (two levels up from `root` which is packages/app)
+  const repoRoot = join(root, "..", "..");
+  const changelogPath = join(repoRoot, "CHANGELOG.md");
+  if (existsSync(changelogPath)) {
+    const changelogText = readFileSync(changelogPath, "utf8");
+    const today = new Date().toISOString().slice(0, 10);
+    const updated = promoteUnreleased(changelogText, next, today);
+    writeFileSync(changelogPath, updated, "utf8");
+  }
 
   process.stdout.write(next);
 }
