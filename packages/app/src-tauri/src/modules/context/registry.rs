@@ -261,7 +261,11 @@ impl ContextRegistry {
                 Some(c) => c.clone(),
                 None => return, // not subscribed — nothing to do
             };
-            let engine = match lock.entries.get(&canon).and_then(|e| e.subscribers.get(&conn_id)) {
+            let engine = match lock
+                .entries
+                .get(&canon)
+                .and_then(|e| e.subscribers.get(&conn_id))
+            {
                 Some(eng) => *eng,
                 None => return,
             };
@@ -781,11 +785,7 @@ mod tests {
             .ok();
 
         // Create a new empty query folder on disk (no watcher flush expected).
-        let folder_path = dir
-            .path()
-            .join("postgres")
-            .join("queries")
-            .join("reports");
+        let folder_path = dir.path().join("postgres").join("queries").join("reports");
         fs::create_dir_all(&folder_path).unwrap();
 
         // Before refresh, the cached parse should not include "reports".
@@ -823,11 +823,7 @@ mod tests {
         write_file(dir.path(), "context.yaml", minimal_manifest());
 
         // Pre-create a subfolder so it appears on first subscribe.
-        let folder_path = dir
-            .path()
-            .join("postgres")
-            .join("queries")
-            .join("archive");
+        let folder_path = dir.path().join("postgres").join("queries").join("archive");
         fs::create_dir_all(&folder_path).unwrap();
 
         let (registry, events) = make_registry();
@@ -863,7 +859,11 @@ mod tests {
 
         // One event must have fired.
         let ev = events.lock().unwrap();
-        assert_eq!(ev.len(), 1, "expected exactly one event after delete+refresh");
+        assert_eq!(
+            ev.len(),
+            1,
+            "expected exactly one event after delete+refresh"
+        );
         assert!(
             ev[0].kinds.contains(&"query"),
             "event kinds must include 'query'"

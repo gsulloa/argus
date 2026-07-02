@@ -198,7 +198,11 @@ pub fn parse_queries_dir(dir: &Path, engine: EngineKind) -> ParsedQueriesDir {
     let mut warnings: Vec<LoadWarning> = Vec::new();
 
     if !dir.exists() {
-        return ParsedQueriesDir { docs, folders, warnings };
+        return ParsedQueriesDir {
+            docs,
+            folders,
+            warnings,
+        };
     }
 
     // Recursive walk helper.  `current` is the OS path being scanned;
@@ -210,14 +214,18 @@ pub fn parse_queries_dir(dir: &Path, engine: EngineKind) -> ParsedQueriesDir {
     folders.sort();
     docs.sort_by(|a, b| a.path.cmp(&b.path));
 
-    ParsedQueriesDir { docs, folders, warnings }
+    ParsedQueriesDir {
+        docs,
+        folders,
+        warnings,
+    }
 }
 
 /// Recursive inner walker.
 fn parse_queries_dir_inner(
     queries_root: &Path,
     current: &Path,
-    rel_prefix: &str,   // POSIX, no trailing slash, "" at root
+    rel_prefix: &str, // POSIX, no trailing slash, "" at root
     engine: EngineKind,
     docs: &mut Vec<QueryDoc>,
     folders: &mut Vec<String>,
@@ -817,7 +825,11 @@ mod tests {
             "name: Top customers\ndescription: Ranking\nparams:\n  - name: since\n    type: timestamp\ntags: [analytics]\n",
         );
         let result = parse_queries_dir(dir.path(), EngineKind::Postgres);
-        assert!(result.warnings.is_empty(), "unexpected warnings: {:?}", result.warnings);
+        assert!(
+            result.warnings.is_empty(),
+            "unexpected warnings: {:?}",
+            result.warnings
+        );
         assert_eq!(result.docs.len(), 1);
         assert_eq!(result.docs[0].name, "Top customers");
         assert_eq!(result.docs[0].description.as_deref(), Some("Ranking"));
@@ -863,7 +875,8 @@ mod tests {
         write_file(dir.path(), "sub/nested.sql", "SELECT 2;");
         let result = parse_queries_dir(dir.path(), EngineKind::Postgres);
         assert_eq!(result.docs.len(), 2);
-        let paths: std::collections::HashSet<_> = result.docs.iter().map(|d| d.path.as_str()).collect();
+        let paths: std::collections::HashSet<_> =
+            result.docs.iter().map(|d| d.path.as_str()).collect();
         assert!(paths.contains("root"));
         assert!(paths.contains("sub/nested"));
         assert!(result.folders.contains(&"sub".to_string()));

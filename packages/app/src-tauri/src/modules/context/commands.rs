@@ -650,7 +650,12 @@ pub fn context_list_queries(
     let parsed = get_or_subscribe(&db, &registry, conn_id)?;
     let parsed = match parsed {
         Some(p) => p,
-        None => return Ok(QueryListResult { queries: vec![], folders: vec![] }),
+        None => {
+            return Ok(QueryListResult {
+                queries: vec![],
+                folders: vec![],
+            })
+        }
     };
 
     let queries = parsed
@@ -894,9 +899,7 @@ fn slug_for_query_name(name: &str) -> AppResult<String> {
 fn safe_rel_query_path(input: &str) -> AppResult<(PathBuf, String)> {
     let input = input.trim();
     if input.is_empty() {
-        return Err(AppError::Validation(
-            "query path must not be empty".into(),
-        ));
+        return Err(AppError::Validation("query path must not be empty".into()));
     }
     // Reject absolute paths.
     if input.starts_with('/') || input.starts_with('\\') {
@@ -1389,7 +1392,9 @@ pub fn context_rename_query(
     let to_meta = queries_dir.join(to_os.with_extension("meta.yaml"));
 
     if !from_body.exists() {
-        return Err(AppError::NotFound(format!("query {from_posix:?} not found")));
+        return Err(AppError::NotFound(format!(
+            "query {from_posix:?} not found"
+        )));
     }
     if to_body.exists() {
         return Err(AppError::Validation(format!(
@@ -1745,7 +1750,10 @@ mod tests {
     fn lookup_preserves_spaces_and_accents() {
         // Hand-authored files whose names have spaces/accents must be looked up
         // verbatim (NOT slugified) so they match the query list.
-        assert_eq!(safe_lookup_query_path("Reporte diario").unwrap(), "Reporte diario");
+        assert_eq!(
+            safe_lookup_query_path("Reporte diario").unwrap(),
+            "Reporte diario"
+        );
         assert_eq!(safe_lookup_query_path("café").unwrap(), "café");
         assert_eq!(
             safe_lookup_query_path("reportes/Ventas del mes").unwrap(),
@@ -1755,7 +1763,10 @@ mod tests {
 
     #[test]
     fn lookup_matches_slug_paths_unchanged() {
-        assert_eq!(safe_lookup_query_path("top-customers").unwrap(), "top-customers");
+        assert_eq!(
+            safe_lookup_query_path("top-customers").unwrap(),
+            "top-customers"
+        );
         assert_eq!(
             safe_lookup_query_path("reports/top-customers").unwrap(),
             "reports/top-customers",
@@ -2929,7 +2940,11 @@ mod tests {
         assert_eq!(paths, vec!["reports/monthly", "top"]);
 
         // Check folder field.
-        let monthly = result.docs.iter().find(|d| d.path == "reports/monthly").unwrap();
+        let monthly = result
+            .docs
+            .iter()
+            .find(|d| d.path == "reports/monthly")
+            .unwrap();
         assert_eq!(monthly.folder, "reports");
 
         let top = result.docs.iter().find(|d| d.path == "top").unwrap();
@@ -2969,7 +2984,9 @@ mod tests {
         assert!(target.exists());
 
         // Delete empty folder.
-        let is_empty = fs::read_dir(&target).map(|mut d| d.next().is_none()).unwrap_or(false);
+        let is_empty = fs::read_dir(&target)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
         assert!(is_empty);
         fs::remove_dir(&target).unwrap();
         assert!(!target.exists());
@@ -2983,7 +3000,9 @@ mod tests {
         fs::create_dir_all(&sub).unwrap();
         fs::write(sub.join("my-query.sql"), "SELECT 1;").unwrap();
 
-        let is_empty = fs::read_dir(&sub).map(|mut d| d.next().is_none()).unwrap_or(false);
+        let is_empty = fs::read_dir(&sub)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false);
         assert!(!is_empty, "folder should not be empty");
 
         // Simulate the non-empty guard.
