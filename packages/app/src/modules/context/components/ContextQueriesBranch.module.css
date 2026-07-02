@@ -128,3 +128,381 @@
   font-size: 11px;
   color: var(--danger);
 }
+
+/* Empty hint (linked-but-empty) */
+.emptyHint {
+  padding: 4px 8px 4px 18px;
+  font-size: 11px;
+  color: var(--text-subtle);
+  font-style: italic;
+}
+
+/* Header row — wraps the collapse button + header action buttons */
+.headerRow {
+  display: flex;
+  align-items: center;
+}
+
+/* Override .header to not be full-width when in headerRow */
+.headerRow .header {
+  flex: 1;
+}
+
+/* Group of icon buttons in the header (New query + New folder) */
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+/* New query (+) / New folder button in the branch header */
+.newQueryBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  flex-shrink: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--text-subtle);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 80ms ease, background 80ms ease, color 80ms ease;
+}
+
+/* Show header action buttons on branch hover */
+.headerRow:hover .newQueryBtn {
+  opacity: 1;
+}
+
+.headerRow .newQueryBtn:last-child {
+  margin-right: 4px;
+}
+
+.newQueryBtn:hover {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------------------
+ * Folder nodes
+ * --------------------------------------------------------------------------- */
+
+.folderGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.folderRow {
+  display: flex;
+  align-items: center;
+  border-radius: 3px;
+  padding-right: 2px;
+}
+
+.folderRow:hover {
+  background: var(--surface-2);
+}
+
+.folderRowTarget {
+  background: var(--accent-soft);
+}
+
+/* Drop-target highlight while a query is dragged over this folder. */
+.folderRowDropTarget {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Root drop zone highlight (drag a query onto the branch body → top level). */
+.bodyDropTarget {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: 4px;
+}
+
+.folderBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 3px 4px 3px 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: 12px;
+  border-radius: 3px;
+}
+
+.folderBtn:hover {
+  color: var(--text);
+}
+
+.folderCaret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--text-subtle);
+  transition: transform 120ms ease;
+}
+
+.folderCaret[data-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.folderIcon {
+  flex-shrink: 0;
+  color: var(--text-subtle);
+  display: inline-flex;
+}
+
+.folderName {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.folderChildren {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Folder action buttons (new query in folder, new subfolder) */
+.folderActions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.folderRow:hover .folderActions {
+  opacity: 1;
+}
+
+.folderActionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--text-subtle);
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease;
+}
+
+.folderActionBtn:hover {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+/* Setup CTA — rendered when contextPath is null */
+.ctaHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 3px 18px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: var(--text-subtle);
+  user-select: none;
+}
+
+.ctaBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 8px 4px 18px;
+}
+
+.ctaHint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* Known-folder reuse list */
+.ctaKnownList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
+.ctaKnownItem {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px;
+  background: var(--elevated, var(--surface));
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  min-width: 0;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+
+.ctaKnownItem:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+
+.ctaKnownItem:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ctaFolderIcon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.ctaKnownName {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* CTA action buttons */
+.ctaBtnGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ctaBtn {
+  background: transparent;
+  color: var(--text-subtle);
+  border: 1px solid var(--border-strong);
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: var(--font-ui, inherit);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ctaBtn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border-color: var(--text-subtle);
+}
+
+.ctaBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ctaError {
+  font-size: 11px;
+  color: var(--danger);
+}
+
+/* ---------------------------------------------------------------------------
+ * Context menu (right-click on query rows and folder rows)
+ * Mirrors SavedQueriesPanel contextMenu/contextItem styles.
+ * --------------------------------------------------------------------------- */
+
+.contextMenu {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  min-width: 160px;
+  z-index: 60;
+}
+
+.contextItem {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  outline: none;
+  color: var(--text);
+  user-select: none;
+}
+
+.contextItem:hover,
+.contextItem[data-highlighted] {
+  background: var(--surface-2);
+}
+
+.contextItemDanger {
+  color: var(--danger);
+}
+
+.contextSeparator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Move-to-folder picker list inside the dialog
+ * --------------------------------------------------------------------------- */
+
+.folderPickerList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--elevated, var(--surface));
+  padding: 4px;
+  margin-bottom: 16px;
+}
+
+.folderPickerItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 80ms ease, color 80ms ease;
+}
+
+.folderPickerItem:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.folderPickerItemSelected {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-left: 2px solid var(--accent);
+}

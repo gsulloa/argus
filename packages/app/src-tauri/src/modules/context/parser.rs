@@ -178,65 +178,110 @@ pub fn parse_object_doc(path: &Path) -> Result<ObjectDoc, ParserError> {
 
 // ---- 3.3: parse_queries_dir ----
 
-/// Walk the top-level files in `dir` (non-recursive) and pair body files with
-/// their optional `.meta.yaml` sidecars.
+/// Result of `parse_queries_dir`.
+pub struct ParsedQueriesDir {
+    pub docs: Vec<QueryDoc>,
+    /// All subfolder paths (relative POSIX) under the `queries/` root,
+    /// including empty directories. Does not include the root itself.
+    pub folders: Vec<String>,
+    pub warnings: Vec<LoadWarning>,
+}
+
+/// Walk `dir` recursively and pair body files with their optional `.meta.yaml`
+/// sidecars. Skips dotfiles/symlinks/hidden directories.
 ///
-/// Returns a tuple of `(docs, warnings)`. If `dir` does not exist the result
-/// is `(vec![], vec![])`.
-pub fn parse_queries_dir(dir: &Path, engine: EngineKind) -> (Vec<QueryDoc>, Vec<LoadWarning>) {
+/// Returns a [`ParsedQueriesDir`]. If `dir` does not exist the result has
+/// empty vecs.
+pub fn parse_queries_dir(dir: &Path, engine: EngineKind) -> ParsedQueriesDir {
+    let mut docs: Vec<QueryDoc> = Vec::new();
+    let mut folders: Vec<String> = Vec::new();
+    let mut warnings: Vec<LoadWarning> = Vec::new();
+
     if !dir.exists() {
-        return (vec![], vec![]);
+        return ParsedQueriesDir {
+            docs,
+            folders,
+            warnings,
+        };
     }
 
-    let read_dir = match std::fs::read_dir(dir) {
+    // Recursive walk helper.  `current` is the OS path being scanned;
+    // `rel_prefix` is the POSIX relative path from `queries/` to `current`
+    // (empty string at root level).
+    parse_queries_dir_inner(dir, dir, "", engine, &mut docs, &mut folders, &mut warnings);
+
+    // Sort for deterministic ordering.
+    folders.sort();
+    docs.sort_by(|a, b| a.path.cmp(&b.path));
+
+    ParsedQueriesDir {
+        docs,
+        folders,
+        warnings,
+    }
+}
+
+/// Recursive inner walker.
+fn parse_queries_dir_inner(
+    queries_root: &Path,
+    current: &Path,
+    rel_prefix: &str, // POSIX, no trailing slash, "" at root
+    engine: EngineKind,
+    docs: &mut Vec<QueryDoc>,
+    folders: &mut Vec<String>,
+    warnings: &mut Vec<LoadWarning>,
+) {
+    let read_dir = match std::fs::read_dir(current) {
         Ok(rd) => rd,
-        Err(_) => return (vec![], vec![]),
+        Err(_) => return,
     };
 
-    // Collect all files by their "basename" (the logical name without extension).
-    // Key: basename string
-    // Value: (body_path, meta_path)
+    // Collect files and subdirectories in one pass.
     let mut body_files: HashMap<String, PathBuf> = HashMap::new();
     let mut meta_files: HashMap<String, PathBuf> = HashMap::new();
+    let mut subdirs: Vec<PathBuf> = Vec::new();
 
     for entry in read_dir.flatten() {
         let path = entry.path();
-        if !path.is_file() {
+
+        // Skip symlinks entirely.
+        if path.is_symlink() {
             continue;
         }
+
         let file_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n.to_string(),
             None => continue,
         };
 
-        if file_name.ends_with(".meta.yaml") {
-            // Basename is everything before ".meta.yaml"
-            let basename = file_name[..file_name.len() - ".meta.yaml".len()].to_string();
-            meta_files.insert(basename, path);
-        } else {
-            // Check if the extension is a recognised body extension
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if engine.query_extensions().contains(&ext) {
-                let stem = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                // If there's already a body for this stem, prefer the earlier
-                // extension in the list and warn about the duplicate.
-                if !body_files.contains_key(&stem) {
-                    body_files.insert(stem, path);
+        // Skip dotfiles / hidden names.
+        if file_name.starts_with('.') {
+            continue;
+        }
+
+        if path.is_dir() {
+            subdirs.push(path);
+        } else if path.is_file() {
+            if file_name.ends_with(".meta.yaml") {
+                let basename = file_name[..file_name.len() - ".meta.yaml".len()].to_string();
+                meta_files.insert(basename, path);
+            } else {
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if engine.query_extensions().contains(&ext) {
+                    let stem = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !body_files.contains_key(&stem) {
+                        body_files.insert(stem, path);
+                    }
                 }
-                // Duplicate body files for the same stem are silently ignored
-                // (first-wins by iteration order, which is good enough).
             }
         }
     }
 
-    let mut docs: Vec<QueryDoc> = Vec::new();
-    let mut warnings: Vec<LoadWarning> = Vec::new();
-
-    // Process basenames that appear in meta_files (orphan detection)
+    // Orphan detection (meta with no body).
     for (basename, meta_path) in &meta_files {
         if !body_files.contains_key(basename) {
             warnings.push(LoadWarning {
@@ -246,7 +291,7 @@ pub fn parse_queries_dir(dir: &Path, engine: EngineKind) -> (Vec<QueryDoc>, Vec<
         }
     }
 
-    // Process basenames that appear in body_files
+    // Build docs for body files.
     for (basename, body_path) in &body_files {
         let body = match std::fs::read_to_string(body_path) {
             Ok(s) => s,
@@ -283,12 +328,22 @@ pub fn parse_queries_dir(dir: &Path, engine: EngineKind) -> (Vec<QueryDoc>, Vec<
             None
         };
 
+        // Compute POSIX path relative to queries/ root.
+        let posix_path = if rel_prefix.is_empty() {
+            basename.clone()
+        } else {
+            format!("{rel_prefix}/{basename}")
+        };
+        let folder = rel_prefix.to_owned();
+
         let doc = match meta {
             Some(m) => QueryDoc {
                 name: m.name.unwrap_or_else(|| basename.clone()),
                 description: m.description,
                 params: m.params,
                 tags: m.tags,
+                path: posix_path,
+                folder,
                 body,
                 source_path: body_path.clone(),
             },
@@ -297,6 +352,8 @@ pub fn parse_queries_dir(dir: &Path, engine: EngineKind) -> (Vec<QueryDoc>, Vec<
                 description: None,
                 params: vec![],
                 tags: vec![],
+                path: posix_path,
+                folder,
                 body,
                 source_path: body_path.clone(),
             },
@@ -304,7 +361,33 @@ pub fn parse_queries_dir(dir: &Path, engine: EngineKind) -> (Vec<QueryDoc>, Vec<
         docs.push(doc);
     }
 
-    (docs, warnings)
+    // Recurse into subdirectories.
+    for subdir in subdirs {
+        let dir_name = match subdir.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_owned(),
+            None => continue,
+        };
+
+        let child_rel = if rel_prefix.is_empty() {
+            dir_name.clone()
+        } else {
+            format!("{rel_prefix}/{dir_name}")
+        };
+
+        // Record this subfolder.
+        folders.push(child_rel.clone());
+
+        // Recurse.
+        parse_queries_dir_inner(
+            queries_root,
+            &subdir,
+            &child_rel,
+            engine,
+            docs,
+            folders,
+            warnings,
+        );
+    }
 }
 
 // ---- Template well-formedness (D9) ----
@@ -567,8 +650,8 @@ pub fn load_folder(root: &Path, engine: EngineKind) -> Result<ParsedContext, Par
 
     // Queries
     let queries_dir = engine_root.join("queries");
-    let (queries, query_warnings) = parse_queries_dir(&queries_dir, engine);
-    warnings.extend(query_warnings);
+    let parsed_queries = parse_queries_dir(&queries_dir, engine);
+    warnings.extend(parsed_queries.warnings);
 
     // Optional prose files
     let overview = read_optional_text(&root.join("ai").join("overview.md"));
@@ -581,7 +664,8 @@ pub fn load_folder(root: &Path, engine: EngineKind) -> Result<ParsedContext, Par
         glossary,
         readme,
         objects,
-        queries,
+        queries: parsed_queries.docs,
+        query_folders: parsed_queries.folders,
         warnings,
     })
 }
@@ -740,37 +824,84 @@ mod tests {
             "top-customers.meta.yaml",
             "name: Top customers\ndescription: Ranking\nparams:\n  - name: since\n    type: timestamp\ntags: [analytics]\n",
         );
-        let (docs, warnings) = parse_queries_dir(dir.path(), EngineKind::Postgres);
-        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-        assert_eq!(docs.len(), 1);
-        assert_eq!(docs[0].name, "Top customers");
-        assert_eq!(docs[0].description.as_deref(), Some("Ranking"));
-        assert_eq!(docs[0].params.len(), 1);
-        assert_eq!(docs[0].tags, vec!["analytics"]);
-        assert_eq!(docs[0].body, "SELECT 1;");
+        let result = parse_queries_dir(dir.path(), EngineKind::Postgres);
+        assert!(
+            result.warnings.is_empty(),
+            "unexpected warnings: {:?}",
+            result.warnings
+        );
+        assert_eq!(result.docs.len(), 1);
+        assert_eq!(result.docs[0].name, "Top customers");
+        assert_eq!(result.docs[0].description.as_deref(), Some("Ranking"));
+        assert_eq!(result.docs[0].params.len(), 1);
+        assert_eq!(result.docs[0].tags, vec!["analytics"]);
+        assert_eq!(result.docs[0].body, "SELECT 1;");
+        // New fields: flat query gets path = slug, folder = "".
+        assert_eq!(result.docs[0].path, "top-customers");
+        assert_eq!(result.docs[0].folder, "");
     }
 
     #[test]
     fn query_body_without_meta_uses_defaults() {
         let dir = TempDir::new().unwrap();
         write_file(dir.path(), "raw.sql", "SELECT 2;");
-        let (docs, warnings) = parse_queries_dir(dir.path(), EngineKind::Postgres);
-        assert!(warnings.is_empty());
-        assert_eq!(docs.len(), 1);
-        assert_eq!(docs[0].name, "raw");
-        assert!(docs[0].description.is_none());
-        assert!(docs[0].params.is_empty());
-        assert!(docs[0].tags.is_empty());
+        let result = parse_queries_dir(dir.path(), EngineKind::Postgres);
+        assert!(result.warnings.is_empty());
+        assert_eq!(result.docs.len(), 1);
+        assert_eq!(result.docs[0].name, "raw");
+        assert!(result.docs[0].description.is_none());
+        assert!(result.docs[0].params.is_empty());
+        assert!(result.docs[0].tags.is_empty());
+        assert_eq!(result.docs[0].path, "raw");
+        assert_eq!(result.docs[0].folder, "");
     }
 
     #[test]
     fn query_orphan_meta_emits_warning() {
         let dir = TempDir::new().unwrap();
         write_file(dir.path(), "ghost.meta.yaml", "name: Ghost\n");
-        let (docs, warnings) = parse_queries_dir(dir.path(), EngineKind::Postgres);
-        assert!(docs.is_empty());
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].message.contains("orphaned meta file"));
+        let result = parse_queries_dir(dir.path(), EngineKind::Postgres);
+        assert!(result.docs.is_empty());
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].message.contains("orphaned meta file"));
+    }
+
+    // ---- recursive parse tests ----
+
+    #[test]
+    fn parse_queries_dir_recursive_nested() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "root.sql", "SELECT 1;");
+        write_file(dir.path(), "sub/nested.sql", "SELECT 2;");
+        let result = parse_queries_dir(dir.path(), EngineKind::Postgres);
+        assert_eq!(result.docs.len(), 2);
+        let paths: std::collections::HashSet<_> =
+            result.docs.iter().map(|d| d.path.as_str()).collect();
+        assert!(paths.contains("root"));
+        assert!(paths.contains("sub/nested"));
+        assert!(result.folders.contains(&"sub".to_string()));
+    }
+
+    #[test]
+    fn parse_queries_dir_empty_subfolder_is_reported() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("empty-folder")).unwrap();
+        let result = parse_queries_dir(dir.path(), EngineKind::Postgres);
+        assert!(result.docs.is_empty());
+        assert!(result.folders.contains(&"empty-folder".to_string()));
+    }
+
+    #[test]
+    fn parse_queries_dir_dotfile_skipped() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), ".hidden.sql", "SELECT 1;");
+        write_file(dir.path(), "visible.sql", "SELECT 2;");
+        let result = parse_queries_dir(dir.path(), EngineKind::Postgres);
+        // .hidden.sql has the wrong extension format (`.hidden.sql` — stem is `.hidden`,
+        // which starts with dot so the file_name check triggers first).
+        // The visible one is found.
+        assert_eq!(result.docs.len(), 1);
+        assert_eq!(result.docs[0].path, "visible");
     }
 
     // ---- load_folder tests ----

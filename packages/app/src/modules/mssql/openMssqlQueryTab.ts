@@ -31,6 +31,8 @@ export interface OpenMssqlQueryTabArgs {
     /** basename or meta.name; used as the tab title */
     name: string;
     params: QueryParam[];
+    /** Folder the query lives in ("" = root); used so saves target the right file. */
+    folder?: string;
   };
 }
 

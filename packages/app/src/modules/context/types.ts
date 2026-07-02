@@ -61,6 +61,10 @@ export interface QueryListItem {
   description: string | null;
   params: QueryParam[];
   tags: string[];
+  /** Relative POSIX path under `queries/`, no extension. e.g. `"reports/top-customers"`. Flat queries use `name` as path. */
+  path: string;
+  /** Parent directory, `""` at root. e.g. `"reports"`. */
+  folder: string;
 }
 
 /** Returned by `context_get_query` — includes the body. */
@@ -70,6 +74,17 @@ export interface QueryDoc {
   params: QueryParam[];
   tags: string[];
   body: string;
+  /** Relative POSIX path under `queries/`, no extension. */
+  path: string;
+  /** Parent directory, `""` at root. */
+  folder: string;
+}
+
+/** Shape returned by `context_list_queries`. */
+export interface QueryListResult {
+  queries: QueryListItem[];
+  /** All subfolder paths under `queries/`, including empty ones. */
+  folders: string[];
 }
 
 export interface OrphanedNote {
@@ -150,6 +165,10 @@ export interface SaveQueryResult {
   path: string;
   created: boolean;
   name: string;
+  /** Relative path under `queries/`, no extension. snake_case to match IPC. */
+  rel_path: string;
+  /** Parent directory, `""` at root. snake_case to match IPC. */
+  folder: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,5 +183,6 @@ export interface LinkedQueryGroup {
   engine: string;
   connection_ids: string[];
   representative_connection_id: string;
+  /** Queries carry `path` and `folder` for type consistency. */
   queries: QueryListItem[];
 }

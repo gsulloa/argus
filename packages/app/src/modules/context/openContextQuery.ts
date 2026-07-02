@@ -35,35 +35,35 @@ export async function openContextQuery(
 ): Promise<void> {
   switch (engine) {
     case "postgres": {
-      const doc = await contextApi.getQuery(connectionId, query.name);
+      const doc = await contextApi.getQuery(connectionId, query.path);
       if (!doc) return;
       openQueryTab(tabs, {
         initialConnectionId: connectionId,
         initialConnectionName: connectionName,
         initialSql: doc.body,
-        contextQuery: { name: doc.name, params: doc.params },
+        contextQuery: { name: doc.name, params: doc.params, folder: query.folder },
       });
       return;
     }
     case "mysql": {
-      const doc = await contextApi.getQuery(connectionId, query.name);
+      const doc = await contextApi.getQuery(connectionId, query.path);
       if (!doc) return;
       openMysqlQueryTab(tabs, {
         connectionId,
         connectionName,
         sql: doc.body,
-        contextQuery: { name: doc.name, params: doc.params },
+        contextQuery: { name: doc.name, params: doc.params, folder: query.folder },
       });
       return;
     }
     case "mssql": {
-      const doc = await contextApi.getQuery(connectionId, query.name);
+      const doc = await contextApi.getQuery(connectionId, query.path);
       if (!doc) return;
       openMssqlQueryTab(tabs, {
         connectionId,
         connectionName,
         sql: doc.body,
-        contextQuery: { name: doc.name, params: doc.params },
+        contextQuery: { name: doc.name, params: doc.params, folder: query.folder },
       });
       return;
     }
@@ -71,7 +71,7 @@ export async function openContextQuery(
       await openDynamoQuery(tabs, connectionId, connectionName, query);
       return;
     case "athena": {
-      const doc = await contextApi.getQuery(connectionId, query.name);
+      const doc = await contextApi.getQuery(connectionId, query.path);
       if (!doc) return;
       openAthenaQueryTab(tabs, {
         connectionId,

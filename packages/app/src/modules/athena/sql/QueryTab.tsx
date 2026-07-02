@@ -305,15 +305,11 @@ function AthenaQueryTab({ tabId, payload }: InnerProps) {
   // §23.3 — Save query flow (routes to context folder).
   // -------------------------------------------------------------------------
   const [showSaveAs, setShowSaveAs] = useState(false);
-  const [defaultSaveFolder, setDefaultSaveFolder] = useState<string | null>(null);
   const [isSavingCtx, setIsSavingCtx] = useState(false);
   // Track context-query name for subsequent saves
   const [contextSavedName, setContextSavedName] = useState<string | null>(null);
 
   const openSaveAsModal = useCallback(() => {
-    getSetting("savedQueries:lastUsedFolder")
-      .then((raw) => setDefaultSaveFolder(raw ?? null))
-      .catch(() => setDefaultSaveFolder(null));
     setShowSaveAs(true);
   }, []);
 
@@ -332,7 +328,7 @@ function AthenaQueryTab({ tabId, payload }: InnerProps) {
   }, [connectionId, contextSavedName, isSavingCtx, openSaveAsModal, toast]);
 
   const handleSaveAsConfirm = useCallback(
-    async ({ name }: { name: string; folderId: string | null }) => {
+    async ({ name }: { name: string }) => {
       const currentSql = editorRef.current?.getSql() ?? "";
       setShowSaveAs(false);
       try {
@@ -655,7 +651,6 @@ function AthenaQueryTab({ tabId, payload }: InnerProps) {
       <SaveAsModal
         open={showSaveAs}
         defaultName=""
-        defaultFolderId={defaultSaveFolder}
         onClose={() => setShowSaveAs(false)}
         onConfirm={(result) => void handleSaveAsConfirm(result)}
       />

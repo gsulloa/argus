@@ -245,6 +245,57 @@ impl ContextRegistry {
         }
     }
 
+    /// Synchronously re-parse a connection's context and emit `context://changed`.
+    ///
+    /// Intended for commands that mutate the filesystem directly (e.g.
+    /// `context_create_query_folder`, `context_delete_query_folder`) and need
+    /// the registry cache to reflect the change immediately — before any
+    /// filesystem-watcher flush arrives (which may never arrive for empty dirs).
+    ///
+    /// If `conn_id` is not subscribed, returns quietly (no panic).
+    pub fn refresh_and_notify(&self, conn_id: Uuid, kinds: Vec<&'static str>) {
+        // Resolve canon path and engine while holding the lock briefly.
+        let (canon, engine) = {
+            let lock = self.inner.lock().unwrap();
+            let canon = match lock.conn_to_path.get(&conn_id) {
+                Some(c) => c.clone(),
+                None => return, // not subscribed — nothing to do
+            };
+            let engine = match lock
+                .entries
+                .get(&canon)
+                .and_then(|e| e.subscribers.get(&conn_id))
+            {
+                Some(eng) => *eng,
+                None => return,
+            };
+            (canon, engine)
+        };
+
+        // Re-parse and update cache (lock held only for the update).
+        {
+            let mut lock = self.inner.lock().unwrap();
+            if let Some(entry) = lock.entries.get_mut(&canon) {
+                match load_folder(canon.as_path(), engine) {
+                    Ok(parsed) => {
+                        entry.parsed_by_engine.insert(engine, parsed);
+                    }
+                    Err(_) => {
+                        entry.status = EntryStatus::Unavailable;
+                        entry.parsed_by_engine.clear();
+                    }
+                }
+            }
+        }
+
+        // Emit exactly one event (lock not held during emit, matching on_flush).
+        let event = ContextChangedEvent {
+            path: canon.as_path().to_string_lossy().into_owned(),
+            kinds,
+        };
+        self.emitter.emit_changed(&event);
+    }
+
     /// Called by the watcher worker thread to re-parse after a debounced flush.
     /// Emits `context://changed` with the appropriate `kinds`.
     fn on_flush(&self, canon: &CanonPath, kinds: Vec<&'static str>, root_deleted: bool) {
@@ -708,5 +759,114 @@ mod tests {
             assert_eq!(entry.status, EntryStatus::Unavailable);
         }
         // If entry was already cleaned up, that's fine too.
+    }
+
+    // ---- refresh_and_notify tests ----
+
+    #[test]
+    fn refresh_and_notify_unknown_conn_is_noop() {
+        // Calling with an unknown conn_id must not panic.
+        let (registry, events) = make_registry();
+        registry.refresh_and_notify(Uuid::new_v4(), vec!["query"]);
+        let ev = events.lock().unwrap();
+        assert_eq!(ev.len(), 0, "no event expected for unknown connection");
+    }
+
+    #[test]
+    fn refresh_and_notify_reflects_new_empty_folder() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+
+        let (registry, events) = make_registry();
+        let conn_id = Uuid::new_v4();
+
+        registry
+            .subscribe(conn_id, dir.path(), EngineKind::Postgres)
+            .ok();
+
+        // Create a new empty query folder on disk (no watcher flush expected).
+        let folder_path = dir.path().join("postgres").join("queries").join("reports");
+        fs::create_dir_all(&folder_path).unwrap();
+
+        // Before refresh, the cached parse should not include "reports".
+        {
+            let parsed = registry.get(conn_id).unwrap().unwrap();
+            assert!(
+                !parsed.query_folders.contains(&"reports".to_string()),
+                "folder should not be visible before refresh"
+            );
+        }
+
+        // Now call refresh_and_notify.
+        registry.refresh_and_notify(conn_id, vec!["query"]);
+
+        // After refresh the folder must appear.
+        let parsed = registry.get(conn_id).unwrap().unwrap();
+        assert!(
+            parsed.query_folders.contains(&"reports".to_string()),
+            "folder must be visible immediately after refresh_and_notify; got: {:?}",
+            parsed.query_folders
+        );
+
+        // Exactly one event must have been emitted.
+        let ev = events.lock().unwrap();
+        assert_eq!(ev.len(), 1, "expected exactly one event");
+        assert!(
+            ev[0].kinds.contains(&"query"),
+            "event kinds must include 'query'"
+        );
+    }
+
+    #[test]
+    fn refresh_and_notify_reflects_deleted_folder() {
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "context.yaml", minimal_manifest());
+
+        // Pre-create a subfolder so it appears on first subscribe.
+        let folder_path = dir.path().join("postgres").join("queries").join("archive");
+        fs::create_dir_all(&folder_path).unwrap();
+
+        let (registry, events) = make_registry();
+        let conn_id = Uuid::new_v4();
+
+        registry
+            .subscribe(conn_id, dir.path(), EngineKind::Postgres)
+            .ok();
+
+        // Confirm folder is visible in the initial parse.
+        {
+            let parsed = registry.get(conn_id).unwrap().unwrap();
+            assert!(
+                parsed.query_folders.contains(&"archive".to_string()),
+                "folder must be present before deletion; got: {:?}",
+                parsed.query_folders
+            );
+        }
+
+        // Delete the folder on disk.
+        fs::remove_dir(&folder_path).unwrap();
+
+        // Refresh the registry.
+        registry.refresh_and_notify(conn_id, vec!["query"]);
+
+        // The folder must no longer appear.
+        let parsed = registry.get(conn_id).unwrap().unwrap();
+        assert!(
+            !parsed.query_folders.contains(&"archive".to_string()),
+            "deleted folder must not appear after refresh_and_notify; got: {:?}",
+            parsed.query_folders
+        );
+
+        // One event must have fired.
+        let ev = events.lock().unwrap();
+        assert_eq!(
+            ev.len(),
+            1,
+            "expected exactly one event after delete+refresh"
+        );
+        assert!(
+            ev[0].kinds.contains(&"query"),
+            "event kinds must include 'query'"
+        );
     }
 }
