@@ -1195,3 +1195,127 @@ a {
     display: none;
   }
 }
+
+/* ─── Legal / prose pages ─────────────────────────────────────────────── */
+.legal {
+  padding-top: 96px;
+  padding-bottom: 72px;
+  min-height: 100vh;
+}
+
+.legal-doc {
+  max-width: 68ch;
+  margin: 0 auto;
+}
+
+.legal-doc h1 {
+  font-size: clamp(32px, 4vw, 44px);
+  letter-spacing: -0.03em;
+  font-weight: 600;
+  line-height: 1.08;
+  margin-bottom: 16px;
+}
+
+.legal-doc h2 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin-top: 40px;
+  border-top: 1px solid var(--border);
+  padding-top: 28px;
+}
+
+.legal-doc h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 20px;
+  margin-bottom: 6px;
+}
+
+.legal-doc p,
+.legal-doc li {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.legal-doc p {
+  margin-top: 12px;
+}
+
+.legal-doc strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.legal-doc ul,
+.legal-doc ol {
+  padding-left: 22px;
+  margin-top: 10px;
+}
+
+.legal-doc li {
+  margin-bottom: 6px;
+  padding-left: 4px;
+}
+
+.legal-doc li::marker {
+  color: var(--text-subtle);
+}
+
+.legal-doc a {
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-strong);
+  transition: color var(--duration-instant) var(--ease-out),
+    border-color var(--duration-instant) var(--ease-out);
+}
+
+.legal-doc a:hover {
+  color: var(--accent-hover);
+  border-bottom-color: var(--accent-hover);
+}
+
+.legal-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-subtle);
+  letter-spacing: 0.04em;
+  margin-top: 8px;
+  margin-bottom: 28px;
+}
+
+.legal-draft {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 5px 10px;
+  margin-bottom: 36px;
+}
+
+.legal-back {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin-bottom: 28px;
+  display: block;
+}
+
+.legal-back a {
+  color: var(--text-subtle);
+  border-bottom: 1px solid var(--border-strong);
+  transition: color var(--duration-instant) var(--ease-out);
+}
+
+.legal-back a:hover {
+  color: var(--accent-hover);
+  border-bottom-color: var(--accent-hover);
+}
