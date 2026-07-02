@@ -264,6 +264,10 @@ fi
 # ---------- commit the bump ---------------------------------------------------
 
 step "Committing version bump"
+# Also stage the root CHANGELOG.md — bump-version.mjs promotes [Unreleased] there.
+# git commit -a covers tracked files repo-wide, but we explicitly add CHANGELOG.md
+# so the commit always includes it even on the first release after it was added.
+run "git -C '$ROOT' add '../../CHANGELOG.md'"
 run "git -C '$ROOT' commit -am 'chore: release v$NEXT'"
 
 # ---------- push release branch -----------------------------------------------
