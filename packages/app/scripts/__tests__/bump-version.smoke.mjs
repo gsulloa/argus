@@ -6,7 +6,7 @@
 //
 // Usage: node scripts/__tests__/bump-version.smoke.mjs
 
-import { nextVersion, setLockfileVersion } from "../bump-version.mjs";
+import { nextVersion, setLockfileVersion, promoteUnreleased } from "../bump-version.mjs";
 
 function fail(msg) {
   console.error(`FAIL: ${msg}`);
@@ -141,6 +141,82 @@ version = "0.7.0"
   }
   if (!threw) fail(`missing pkg: expected a throw but got no error`);
   console.log("PASS: setLockfileVersion(missing pkg) throws");
+}
+
+// --- promoteUnreleased -------------------------------------------------------
+
+// 1. Non-empty [Unreleased] → promoted with content preserved, fresh [Unreleased] above.
+{
+  const input = [
+    "# Changelog",
+    "",
+    "## [Unreleased]",
+    "",
+    "### Added",
+    "- New feature",
+    "",
+    "## [0.7.5] - 2026-07-01",
+    "",
+    "### Fixed",
+    "- Old fix",
+  ].join("\n");
+
+  const result = promoteUnreleased(input, "0.7.6", "2026-07-02");
+  const lines = result.split("\n");
+
+  const unrelIdx = lines.findIndex((l) => l === "## [Unreleased]");
+  const promotedIdx = lines.findIndex((l) => l === "## [0.7.6] - 2026-07-02");
+  const oldIdx = lines.findIndex((l) => l === "## [0.7.5] - 2026-07-01");
+
+  if (unrelIdx === -1) fail("promoteUnreleased (non-empty): missing fresh [Unreleased] heading");
+  if (promotedIdx === -1) fail("promoteUnreleased (non-empty): missing promoted version heading");
+  if (unrelIdx >= promotedIdx) fail("promoteUnreleased (non-empty): [Unreleased] must appear before promoted section");
+  if (oldIdx === -1 || promotedIdx >= oldIdx) fail("promoteUnreleased (non-empty): promoted section must appear before old section");
+  if (!result.includes("- New feature")) fail("promoteUnreleased (non-empty): body content not preserved");
+  if (result.includes("_No user-facing changes._")) fail("promoteUnreleased (non-empty): placeholder must NOT appear for non-empty body");
+  console.log("PASS: promoteUnreleased(non-empty) promoted with content preserved");
+}
+
+// 2. Empty [Unreleased] → placeholder inserted in promoted section.
+{
+  const input = [
+    "# Changelog",
+    "",
+    "## [Unreleased]",
+    "",
+    "## [0.7.5] - 2026-07-01",
+    "",
+    "### Fixed",
+    "- Old fix",
+  ].join("\n");
+
+  const result = promoteUnreleased(input, "0.7.6", "2026-07-02");
+  const lines = result.split("\n");
+
+  const unrelIdx = lines.findIndex((l) => l === "## [Unreleased]");
+  const promotedIdx = lines.findIndex((l) => l === "## [0.7.6] - 2026-07-02");
+
+  if (unrelIdx === -1) fail("promoteUnreleased (empty): missing fresh [Unreleased] heading");
+  if (promotedIdx === -1) fail("promoteUnreleased (empty): missing promoted version heading");
+  if (!result.includes("_No user-facing changes._")) fail("promoteUnreleased (empty): placeholder must be inserted");
+  console.log("PASS: promoteUnreleased(empty) inserts placeholder");
+}
+
+// 3. Missing [Unreleased] → text returned unchanged.
+{
+  const input = [
+    "# Changelog",
+    "",
+    "## [0.7.5] - 2026-07-01",
+    "",
+    "### Fixed",
+    "- Old fix",
+  ].join("\n");
+
+  const result = promoteUnreleased(input, "0.7.6", "2026-07-02");
+  if (result !== input) fail("promoteUnreleased (missing): text should be returned unchanged");
+  if (result.includes("0.7.6")) fail("promoteUnreleased (missing): new version must NOT appear");
+  console.log("PASS: promoteUnreleased(missing [Unreleased]) returns text unchanged");
 }
 
 console.log("All bump-version cases passed.");

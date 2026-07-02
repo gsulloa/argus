@@ -37,7 +37,9 @@ import {
 } from "@/modules/cloudwatch";
 import { ContextQueriesBranch } from "@/modules/context/components/ContextQueriesBranch";
 import { openContextQuery } from "@/modules/context/openContextQuery";
+import { contextApi } from "@/modules/context/api";
 import { useTabs } from "@/platform/shell/tabs";
+import { useToast } from "@/platform/toast";
 import sidebarStyles from "./Sidebar.module.css";
 
 interface Props {
@@ -54,11 +56,36 @@ interface Props {
 export function ConnectionSubtree({ connectionId }: Props) {
   const { items } = useConnections();
   const tabs = useTabs();
+  const toast = useToast();
 
   const connection = items.find((c) => c.id === connectionId);
   if (!connection) return null;
 
   const { kind, name, context_path } = connection;
+
+  // Context query creation — invoked by ContextQueriesBranch's "New query".
+  // Mirrors ConnectionRow.makeNewContextQueryHandler so the Workspace subtree
+  // behaves identically to the Manager connection list.
+  function makeNewContextQueryHandler(
+    engine: "postgres" | "mysql" | "mssql" | "dynamo",
+  ) {
+    return async (queryName: string, folder?: string) => {
+      try {
+        const result = await contextApi.saveQuery(connectionId, queryName, "", { folder });
+        await openContextQuery(tabs, connectionId, name, engine, {
+          name: result.name,
+          description: null,
+          params: [],
+          tags: [],
+          path: result.rel_path,
+          folder: result.folder,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        toast.show(`Failed to create query: ${msg}`, "error");
+      }
+    };
+  }
 
   const isPostgres = kind === POSTGRES_KIND;
   const isMySQL = kind === MYSQL_KIND;
@@ -80,6 +107,7 @@ export function ConnectionSubtree({ connectionId }: Props) {
             onActivate={(q) => {
               void openContextQuery(tabs, connectionId, name, "postgres", q);
             }}
+            onNewQuery={makeNewContextQueryHandler("postgres")}
           />
         </div>
       )}
@@ -94,6 +122,7 @@ export function ConnectionSubtree({ connectionId }: Props) {
             onActivate={(q) => {
               void openContextQuery(tabs, connectionId, name, "mysql", q);
             }}
+            onNewQuery={makeNewContextQueryHandler("mysql")}
           />
         </div>
       )}
@@ -108,6 +137,7 @@ export function ConnectionSubtree({ connectionId }: Props) {
             onActivate={(q) => {
               void openContextQuery(tabs, connectionId, name, "mssql", q);
             }}
+            onNewQuery={makeNewContextQueryHandler("mssql")}
           />
         </div>
       )}
@@ -122,6 +152,7 @@ export function ConnectionSubtree({ connectionId }: Props) {
             onActivate={(q) => {
               void openContextQuery(tabs, connectionId, name, "dynamo", q);
             }}
+            onNewQuery={makeNewContextQueryHandler("dynamo")}
           />
         </div>
       )}

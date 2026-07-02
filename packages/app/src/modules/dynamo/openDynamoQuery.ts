@@ -28,7 +28,7 @@ export async function openDynamoQuery(
   connectionName: string,
   query: QueryListItem,
 ): Promise<void> {
-  const doc = await contextApi.getQuery(connectionId, query.name);
+  const doc = await contextApi.getQuery(connectionId, query.path);
   if (!doc) return;
 
   // Build param values from declared defaults (fall back to empty string).

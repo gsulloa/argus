@@ -1,4 +1,5 @@
 import { type ReactNode, type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PrivacyPolicy, TermsOfService } from "./legal";
 
 /* ── Release manifest ──────────────────────────────────────────────────── */
 
@@ -240,6 +241,8 @@ function useReveal() {
 /* ── App ───────────────────────────────────────────────────────────────── */
 
 export default function App() {
+  const path = typeof window !== "undefined" ? window.location.pathname.replace(/\/+$/, "") : "";
+
   const [state, setState] = useState<ManifestState>({ status: "loading" });
   const isArm = useRef<boolean>(true);
   const os = useRef<OsFamily>("mac");
@@ -295,6 +298,22 @@ export default function App() {
     os.current === "windows" ? WindowsLogo :
     os.current === "linux"   ? LinuxLogo   :
     AppleLogo;
+
+  // Legal page routing — after all hooks to satisfy Rules of Hooks
+  if (path === "/privacy") return (
+    <>
+      <div className="atmosphere" />
+      <div className="grain" />
+      <div className="shell"><PrivacyPolicy /></div>
+    </>
+  );
+  if (path === "/terms") return (
+    <>
+      <div className="atmosphere" />
+      <div className="grain" />
+      <div className="shell"><TermsOfService /></div>
+    </>
+  );
 
   // Per-card meta: title, sub, glyph, ext
   function cardMeta(key: string): { title: string; sub: string; Glyph: ComponentType<{ size?: number }>; ext: string } {
@@ -625,6 +644,8 @@ export default function App() {
               <a href="#console">Console</a>
               <a href="#features">Features</a>
               <a href="#download">Download</a>
+              <a href="/privacy">Privacy</a>
+              <a href="/terms">Terms</a>
               {state.status === "ready"
                 ? <span>v{manifest!.version}</span>
                 : <Skel w="40px" h="11px" />

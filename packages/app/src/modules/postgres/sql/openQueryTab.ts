@@ -17,8 +17,9 @@ interface TabsApi {
 
 /**
  * App-global counter for naming ad-hoc query tabs ("Query 1", "Query 2", …).
- * Resets on app launch (in-memory only, not persisted). No longer per-connection
- * since tabs are now connection-agnostic.
+ * Resets on app launch (in-memory only, not persisted).
+ * Note: tabs are scoped to the focused connection's set; opening a saved query
+ * switches focus to its connection first so the tab is immediately visible.
  */
 let globalQueryCounter = 0;
 
@@ -56,6 +57,8 @@ export interface OpenQueryTabArgs {
     /** basename or meta.name; used as the tab title */
     name: string;
     params: QueryParam[];
+    /** Folder the query lives in ("" = root); used so saves target the right file. */
+    folder?: string;
   };
 }
 

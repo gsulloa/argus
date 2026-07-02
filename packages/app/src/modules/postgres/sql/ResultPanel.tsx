@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AdhocResultGrid } from "../data/AdhocResultGrid";
 import { Inspector as RowInspector } from "../data/Inspector";
 import { useEditBuffer } from "../data/useEditBuffer";
-import type { CellValue, DataColumn } from "../data/types";
+import type { CellValue, DataColumn, EditValue } from "../data/types";
 import type { RunManyOutcome, RunSqlResult } from "./api";
 import { MultiStatementTabs } from "./MultiStatementTabs";
 import { ResultErrorBlock } from "./ResultErrorBlock";
@@ -100,8 +100,11 @@ function RowsResultView({
 }: {
   result: Extract<RunSqlResult, { kind: "rows" }>;
 }) {
-  // Local row-selection state drives the inspector for this query result.
-  const [selectedRow, setSelectedRow] = useState<number | null>(null);
+  // Row-range selection state drives the inspector for this query result.
+  const [selection, setSelection] = useState<{ anchor: number | null; active: number | null }>({
+    anchor: null,
+    active: null,
+  });
   // Client-side sort state (issue #91). SQL results have no table context to
   // re-query, so sorting reorders the loaded rows in-memory.
   const [orderBy, setOrderBy] = useState<SortOrder[]>([]);
@@ -111,10 +114,11 @@ function RowsResultView({
   // the "no PK / no edits" branch as fully read-only.
   const dummyBuffer = useEditBuffer();
 
-  // Reset the sort whenever the result's column shape changes (new query).
+  // Reset the sort (and selection) whenever the result's column shape changes (new query).
   const columnsSig = result.columns.map((c) => c.name).join("|");
   useEffect(() => {
     setOrderBy([]);
+    setSelection({ anchor: null, active: null });
   }, [columnsSig]);
 
   // Sort the loaded rows client-side; the original result is never mutated.
@@ -129,6 +133,27 @@ function RowsResultView({
     [result.rows, result.columns, orderBy],
   );
 
+  // Compute selected rows from anchor/active range to pass to inspector.
+  const inspectorRows = useMemo(() => {
+    if (selection.anchor === null || selection.active === null) return [];
+    const from = Math.min(selection.anchor, selection.active);
+    const to = Math.max(selection.anchor, selection.active);
+    const result: Array<{
+      rowKey: string;
+      row: CellValue[];
+      pk: Record<string, EditValue>;
+      source: "server";
+      isDeleted: boolean;
+    }> = [];
+    for (let i = from; i <= to; i++) {
+      const row = sortedRows[i];
+      if (row) {
+        result.push({ rowKey: "", row, pk: {}, source: "server" as const, isDeleted: false });
+      }
+    }
+    return result;
+  }, [selection, sortedRows]);
+
   return (
     <div className={styles.rowsLayout}>
       {result.truncated ? (
@@ -141,8 +166,7 @@ function RowsResultView({
           <AdhocResultGrid
             columns={result.columns}
             rows={sortedRows}
-            selectedRowIndex={selectedRow}
-            onSelectRow={setSelectedRow}
+            onSelectionChange={setSelection}
             orderBy={orderBy}
             onSortChange={setOrderBy}
             emptyState={<div className={styles.empty}>(0 rows)</div>}
@@ -151,19 +175,7 @@ function RowsResultView({
         <div className={styles.rowsInspector}>
           <RowInspector
             columns={result.columns}
-            selectedRows={
-              selectedRow !== null && sortedRows[selectedRow]
-                ? [
-                    {
-                      rowKey: "",
-                      row: sortedRows[selectedRow]!,
-                      pk: {},
-                      source: "server" as const,
-                      isDeleted: false,
-                    },
-                  ]
-                : []
-            }
+            selectedRows={inspectorRows}
             bulkEditAvailable={false}
             isReadOnly={true}
             pkColumns={null}

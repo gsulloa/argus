@@ -272,19 +272,15 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          CHANGELOG="packages/app/CHANGELOG.md"
-          # Slice the section for v${VERSION} from the changelog.
-          # Headers are of the form: #### [vX.Y.Z](...)
-          # Capture lines AFTER the matching header up to (but not including) the next ####.
-          awk -v ver="v${VERSION}" '
-            /^#### \[/ {
+          CHANGELOG="CHANGELOG.md"
+          # Slice the section for ${VERSION} from the root Keep a Changelog file.
+          # Headers are of the form: ## [X.Y.Z] - YYYY-MM-DD
+          # Capture lines AFTER the matching header up to (but not including) the next ## [.
+          awk -v ver="${VERSION}" '
+            /^## \[/ {
               if (found) exit
-              if (index($0, "[" ver "]") > 0 || index($0, "[" ver "(") > 0) {
-                found=1
-                next
-              }
+              if (index($0, "[" ver "]") > 0) { found=1; next }
             }
-            found && /^#### / { exit }
             found { print }
           ' "$CHANGELOG" | sed -e '/./,$!d' -e 's/[[:space:]]*$//' > RELEASE_NOTES.md
           # Emit has_notes output

@@ -9,20 +9,22 @@ import {
 } from "./types";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
-import { copyCellValue } from "@/platform/grid/cellClipboard";
+import { copyCell, copyRows, copyRowRangeFromKeydown, writeClipboardText } from "@/platform/grid/gridCopy";
+import { useToast } from "@/platform/toast";
+import { RowContextMenu } from "./RowContextMenu";
+import { pixelYToRowIndex } from "./dragRowIndex";
 import type { SortOrder } from "@/platform/table/sortResultRows";
 import styles from "./DataGrid.module.css";
 
 const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
+const GUTTER_WIDTH = 32;
 
 export interface AdhocResultGridProps {
   columns: DataColumn[];
   rows: CellValue[][];
-  /** -1 means no row selected. */
-  selectedRowIndex?: number | null;
-  /** Called with the row index on click (or `null` on toggle-off). */
-  onSelectRow?(index: number | null): void;
+  /** Called when the row-range selection changes. */
+  onSelectionChange?(sel: { anchor: number | null; active: number | null }): void;
   /**
    * Current client-side sort state (issue #91). When provided together with
    * `onSortChange`, column headers become click-to-sort and show ↑/↓ indicators.
@@ -50,8 +52,7 @@ export interface AdhocResultGridProps {
 export function AdhocResultGrid({
   columns,
   rows,
-  selectedRowIndex,
-  onSelectRow,
+  onSelectionChange,
   orderBy,
   onSortChange,
   emptyState,
@@ -70,8 +71,7 @@ export function AdhocResultGrid({
       key={columnsSignature}
       columns={columns}
       rows={rows}
-      selectedRowIndex={selectedRowIndex}
-      onSelectRow={onSelectRow}
+      onSelectionChange={onSelectionChange}
       orderBy={orderBy}
       onSortChange={onSortChange}
       emptyState={emptyState}
@@ -89,22 +89,44 @@ export function AdhocResultGrid({
 function AdhocResultGridInner({
   columns,
   rows,
-  selectedRowIndex,
-  onSelectRow,
+  onSelectionChange,
   orderBy,
   onSortChange,
   emptyState,
   style,
 }: AdhocResultGridProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  // Single-cell active selection — mutually exclusive with row selection.
-  const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
+  const toast = useToast();
+  const onCopyError = (msg: string) => toast.show(msg, "error");
 
-  // Reset active cell when the dataset changes.
+  // Single-cell active selection — mutually exclusive with row range selection.
+  const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
+  // Multi-row range selection — mutually exclusive with activeCell.
+  const [selection, setSelection] = useState<{ anchor: number | null; active: number | null }>({
+    anchor: null,
+    active: null,
+  });
+
+  // Internal helpers to keep mutual exclusivity enforced.
+  function applySelection(next: { anchor: number | null; active: number | null }) {
+    setSelection(next);
+    setActiveCell(null);
+    onSelectionChange?.(next);
+  }
+  function applyActiveCell(next: { row: number; col: number } | null) {
+    setActiveCell(next);
+    setSelection({ anchor: null, active: null });
+    // Always report the cleared selection to the parent so it can update the inspector.
+    onSelectionChange?.({ anchor: null, active: null });
+  }
+
+  // Reset active cell and selection when the dataset changes.
   useEffect(() => {
     setActiveCell(null);
+    setSelection({ anchor: null, active: null });
   }, [columns, rows]);
 
   const sortable = !!onSortChange;
@@ -155,6 +177,201 @@ function AdhocResultGridInner({
 
   const effectiveTotalWidth = Math.max(totalWidth, 1);
 
+  // Derived range bounds from selection.
+  const rangeStart =
+    selection.anchor === null
+      ? -1
+      : Math.min(selection.anchor, selection.active ?? selection.anchor);
+  const rangeEnd =
+    selection.anchor === null
+      ? -1
+      : Math.max(selection.anchor, selection.active ?? selection.anchor);
+
+  // -----------------------------------------------------------------------
+  // Drag-to-select state (mirrors DataGrid)
+  // -----------------------------------------------------------------------
+  interface DragState {
+    status: "pending" | "active";
+    anchorIndex: number;
+    anchorColIndex: number;
+    anchorClientX: number;
+    anchorClientY: number;
+  }
+  const dragRef = useRef<DragState | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+  // Last known clientY during an active drag — read by the RAF auto-scroll loop.
+  const dragClientYRef = useRef<number>(0);
+
+  // -----------------------------------------------------------------------
+  // Drag event effect (mirrors DataGrid)
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    if (!dragActive) return;
+
+    let rafId: number | null = null;
+
+    function getBodyRect(): DOMRect | null {
+      return bodyRef.current?.getBoundingClientRect() ?? null;
+    }
+
+    function getScrollTop(): number {
+      return viewportRef.current?.scrollTop ?? 0;
+    }
+
+    function computeActiveIndex(clientY: number): number {
+      const bodyRect = getBodyRect();
+      if (!bodyRect) return dragRef.current?.anchorIndex ?? 0;
+      const scrollTop = getScrollTop();
+      return pixelYToRowIndex(scrollTop, clientY, bodyRect.top, ROW_HEIGHT, rows.length);
+    }
+
+    function handleMouseMove(e: MouseEvent) {
+      const drag = dragRef.current;
+      if (!drag) return;
+      dragClientYRef.current = e.clientY;
+
+      if (drag.status === "pending") {
+        const dx = e.clientX - drag.anchorClientX;
+        const dy = e.clientY - drag.anchorClientY;
+        if (Math.sqrt(dx * dx + dy * dy) >= 4) {
+          drag.status = "active";
+          applySelection({ anchor: drag.anchorIndex, active: drag.anchorIndex });
+        }
+      }
+
+      if (drag.status === "active") {
+        const rowIndex = computeActiveIndex(e.clientY);
+        applySelection({ anchor: drag.anchorIndex, active: rowIndex });
+      }
+    }
+
+    function handleMouseUp(e: MouseEvent) {
+      const drag = dragRef.current;
+      if (!drag) {
+        setDragActive(false);
+        return;
+      }
+
+      if (drag.status === "active") {
+        // Drag completed — finalize row-range selection; clear active cell.
+        const rowIndex = computeActiveIndex(e.clientY);
+        applySelection({ anchor: drag.anchorIndex, active: rowIndex });
+      } else {
+        // Click (pending, never crossed threshold) — set the active cell;
+        // clear any row-range selection (mutually exclusive).
+        applyActiveCell({ row: drag.anchorIndex, col: drag.anchorColIndex });
+      }
+
+      // Focus the grid root so Escape / ⌘C work immediately after click.
+      rootRef.current?.focus();
+
+      dragRef.current = null;
+      setDragActive(false);
+    }
+
+    // Auto-scroll RAF loop.
+    function startAutoScroll() {
+      function tick() {
+        const drag = dragRef.current;
+        if (!drag || drag.status !== "active") return;
+        const bodyRect = getBodyRect();
+        if (!bodyRect || !viewportRef.current) return;
+        const clientY = dragClientYRef.current;
+        let scrolled = false;
+        if (clientY < bodyRect.top + 20) {
+          const speed = (bodyRect.top + 20 - clientY) * 0.5;
+          viewportRef.current.scrollTop = Math.max(0, viewportRef.current.scrollTop - speed);
+          scrolled = true;
+        } else if (clientY > bodyRect.bottom - 20) {
+          const speed = (clientY - (bodyRect.bottom - 20)) * 0.5;
+          viewportRef.current.scrollTop += speed;
+          scrolled = true;
+        }
+        if (scrolled) {
+          // After scrolling, update active row to follow cursor.
+          const rowIndex = computeActiveIndex(clientY);
+          applySelection({ anchor: drag.anchorIndex, active: rowIndex });
+        }
+        rafId = requestAnimationFrame(tick);
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    startAutoScroll();
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragActive, rows.length]);
+
+  // -----------------------------------------------------------------------
+  // Keyboard handler
+  // -----------------------------------------------------------------------
+  function onGridKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    // Skip when focus is in a native editing context.
+    const target = e.target as HTMLElement;
+    const tag = target.tagName.toUpperCase();
+    const isEditing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+
+    if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C")) {
+      // Single-cell copy takes precedence.
+      if (activeCell !== null && !isEditing) {
+        const row = rows[activeCell.row];
+        if (row) {
+          const value = row[activeCell.col] ?? null;
+          e.preventDefault();
+          void copyCell(value, onCopyError);
+        }
+        return;
+      }
+
+      // Row-range copy path (mirroring DataGrid).
+      void copyRowRangeFromKeydown(e, {
+        editing: false,
+        activeCell,
+        selection,
+        columnNames: columns.map((c) => c.name),
+        resolveRow: (i) => (rows[i] ? [...rows[i]] : null),
+        write: writeClipboardText,
+        onError: onCopyError,
+      });
+      return;
+    }
+
+    // ⌘A / Ctrl+A — select all loaded rows. Only fires when a selection is
+    // already active (row range or active cell) and focus is not in a native
+    // editing context; otherwise the browser's select-all-text applies.
+    if ((e.metaKey || e.ctrlKey) && (e.key === "a" || e.key === "A")) {
+      if (isEditing) return;
+      if ((selection.anchor === null && activeCell === null) || rows.length === 0) return;
+      e.preventDefault();
+      applySelection({ anchor: 0, active: rows.length - 1 });
+      return;
+    }
+
+    if (e.key === "Escape") {
+      if (activeCell !== null) {
+        applyActiveCell(null);
+        return;
+      }
+      if (selection.anchor !== null) {
+        applySelection({ anchor: null, active: null });
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Context menu state
+  // -----------------------------------------------------------------------
+  const [ctxTarget, setCtxTarget] = useState<{ rowIndex: number; colIndex: number } | null>(null);
+  const ctxTargetRef = useRef<{ rowIndex: number; colIndex: number } | null>(null);
+  ctxTargetRef.current = ctxTarget;
+
   if (rows.length === 0 && emptyState) {
     // Empty state: the header keeps its column-derived width (so it can
     // scroll horizontally if there are many columns), but the empty body
@@ -163,8 +380,9 @@ function AdhocResultGridInner({
     return (
       <div className={styles.root} style={style}>
         <div className={styles.viewport}>
-          <div className={styles.thead} style={{ width: effectiveTotalWidth }}>
+          <div className={styles.thead} style={{ width: effectiveTotalWidth + GUTTER_WIDTH }}>
             <div className={styles.headerRow} style={{ height: HEADER_HEIGHT }}>
+              <div className={styles.gutterHeader} style={{ width: GUTTER_WIDTH }} />
               {columns.map((col) => (
                 <div
                   key={col.name}
@@ -192,27 +410,6 @@ function AdhocResultGridInner({
     );
   }
 
-  function onGridKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C")) {
-      if (activeCell !== null) {
-        const target = e.target as HTMLElement;
-        const tag = target.tagName.toUpperCase();
-        if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT" && !target.isContentEditable) {
-          const row = rows[activeCell.row];
-          const value = row ? (row[activeCell.col] ?? null) : null;
-          e.preventDefault();
-          void copyCellValue(value);
-          return;
-        }
-      }
-    }
-    if (e.key === "Escape") {
-      if (activeCell !== null) {
-        setActiveCell(null);
-      }
-    }
-  }
-
   return (
     <div
       ref={rootRef}
@@ -222,8 +419,9 @@ function AdhocResultGridInner({
       onKeyDown={onGridKeyDown}
     >
       <div className={styles.viewport} ref={viewportRef}>
-        <div className={styles.thead} style={{ width: effectiveTotalWidth }}>
+        <div className={styles.thead} style={{ width: effectiveTotalWidth + GUTTER_WIDTH }}>
           <div className={styles.headerRow} style={{ height: HEADER_HEIGHT }}>
+            <div className={styles.gutterHeader} style={{ width: GUTTER_WIDTH }} />
             {columns.map((col) => {
               const dir = sortDirFor(col.name);
               return (
@@ -255,20 +453,48 @@ function AdhocResultGridInner({
           </div>
         </div>
         <div
+          ref={bodyRef}
           className={styles.body}
           style={{
             height: virtualizer.getTotalSize(),
-            width: effectiveTotalWidth,
+            width: effectiveTotalWidth + GUTTER_WIDTH,
             position: "relative",
           }}
         >
           {items.map((vi) => {
             const row = rows[vi.index];
             if (!row) return null;
-            const selected = selectedRowIndex === vi.index;
-            return (
+            const selected = vi.index >= rangeStart && vi.index <= rangeEnd;
+
+            // Context menu target resolution for this row.
+            const isCtxRow = ctxTarget !== null && ctxTarget.rowIndex === vi.index;
+            const ctxColIndex = isCtxRow ? ctxTarget.colIndex : 0;
+
+            // Effective range for multi-row context menu operations.
+            const ctxRangeStart = selected && isCtxRow ? rangeStart : vi.index;
+            const ctxRangeEnd   = selected && isCtxRow ? rangeEnd   : vi.index;
+            const isMulti = ctxRangeEnd > ctxRangeStart;
+
+            function handleCtxCopyCell() {
+              const tgt = ctxTargetRef.current;
+              if (!tgt) return;
+              const r = rows[tgt.rowIndex];
+              const value = r ? (r[tgt.colIndex] ?? null) : null;
+              void copyCell(value, onCopyError);
+            }
+
+            function handleCtxCopyRows() {
+              const targetRows: unknown[][] = [];
+              for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
+                const r = rows[i];
+                if (!r) continue;
+                targetRows.push([...r]);
+              }
+              void copyRows(targetRows, columns.map((c) => c.name), onCopyError);
+            }
+
+            const rowEl = (
               <div
-                key={vi.key}
                 className={styles.row}
                 data-selected={selected ? "true" : "false"}
                 style={{
@@ -279,7 +505,69 @@ function AdhocResultGridInner({
                   height: ROW_HEIGHT,
                   transform: `translateY(${vi.start}px)`,
                 }}
+                onMouseDown={(e) => {
+                  // Only respond to primary mouse button.
+                  if (e.button !== 0) return;
+                  // Prevent the browser from starting a native text-selection drag.
+                  e.preventDefault();
+                  // Detect which column was clicked from the nearest data-col attribute.
+                  const cellEl = (e.target as HTMLElement).closest("[data-col]") as HTMLElement | null;
+                  const colIdx = cellEl ? parseInt(cellEl.dataset.col ?? "0", 10) : 0;
+                  dragRef.current = {
+                    status: "pending",
+                    anchorIndex: vi.index,
+                    anchorColIndex: colIdx,
+                    anchorClientX: e.clientX,
+                    anchorClientY: e.clientY,
+                  };
+                  dragClientYRef.current = e.clientY;
+                  setDragActive(true);
+                }}
+                onContextMenu={(e) => {
+                  // Resolve the clicked column from [data-col].
+                  const cellEl = (e.target as HTMLElement).closest("[data-col]") as HTMLElement | null;
+                  const colIdx = cellEl ? parseInt(cellEl.dataset.col ?? "0", 10) : 0;
+
+                  // Retargeting rule:
+                  //   • Right-click INSIDE current selection → keep selection.
+                  //   • Right-click OUTSIDE → set activeCell to the clicked cell, clear range.
+                  const insideSelection = vi.index >= rangeStart && vi.index <= rangeEnd && rangeStart >= 0;
+                  if (!insideSelection) {
+                    applyActiveCell({ row: vi.index, col: colIdx });
+                  }
+                  // Always record the clicked cell as context target.
+                  setCtxTarget({ rowIndex: vi.index, colIndex: colIdx });
+                }}
               >
+                {/* Row-number gutter cell */}
+                <div
+                  className={styles.gutterCell}
+                  style={{ width: GUTTER_WIDTH }}
+                  onMouseDown={(e) => {
+                    if (e.button !== 0) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.shiftKey && selection.anchor !== null) {
+                      applySelection({ anchor: selection.anchor, active: vi.index });
+                      return;
+                    }
+                    applySelection({ anchor: vi.index, active: vi.index });
+                    dragRef.current = {
+                      status: "active",
+                      anchorIndex: vi.index,
+                      anchorColIndex: 0,
+                      anchorClientX: e.clientX,
+                      anchorClientY: e.clientY,
+                    };
+                    dragClientYRef.current = e.clientY;
+                    setDragActive(true);
+                  }}
+                  title="Select row"
+                >
+                  {vi.index + 1}
+                </div>
+
+                {/* Data cells */}
                 {columns.map((col, ci) => {
                   const value = row[ci] ?? null;
                   const isActiveCellHere =
@@ -289,14 +577,9 @@ function AdhocResultGridInner({
                   return (
                     <div
                       key={col.name}
+                      data-col={ci}
                       className={[styles.cell, isActiveCellHere ? styles.cellActive : ""].filter(Boolean).join(" ")}
                       style={{ width: widthFor(col.name), cursor: "pointer" }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActiveCell({ row: vi.index, col: ci });
-                        onSelectRow?.(null); // clear row selection
-                        rootRef.current?.focus();
-                      }}
                     >
                       <span className={styles.cellValue}>
                         <CellContent value={value} column={col} />
@@ -305,6 +588,26 @@ function AdhocResultGridInner({
                   );
                 })}
               </div>
+            );
+
+            return (
+              <RowContextMenu
+                key={vi.key}
+                copyOnly
+                target={{ rowIndex: vi.index, colIndex: ctxColIndex }}
+                isMulti={isMulti}
+                canEditCell={false}
+                editCellDisabledReason=""
+                canDeleteRows={false}
+                deleteDisabledReason=""
+                deleteIsRestore={false}
+                onCopyCell={handleCtxCopyCell}
+                onCopyRows={handleCtxCopyRows}
+                onEditCell={() => {}}
+                onToggleDelete={() => {}}
+              >
+                {rowEl}
+              </RowContextMenu>
             );
           })}
         </div>

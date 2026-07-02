@@ -6,7 +6,7 @@ import {
   type ObjectDoc,
   type ObjectListItem,
   type QueryDoc,
-  type QueryListItem,
+  type QueryListResult,
 } from "./types";
 import { useContextChangeListener, useContextEventBus } from "./eventBus";
 
@@ -59,12 +59,14 @@ export function useContextObjects(
   return { ...state, refresh };
 }
 
+const EMPTY_QUERY_LIST_RESULT: QueryListResult = { queries: [], folders: [] };
+
 export function useContextQueries(
   connectionId: string,
   contextPath: string | null | undefined,
-): AsyncState<QueryListItem[]> & { refresh: () => void } {
+): AsyncState<QueryListResult> & { refresh: () => void } {
   const fetcher = useCallback(() => contextApi.listQueries(connectionId), [connectionId]);
-  const { state, refresh } = useAsync<QueryListItem[]>([], fetcher, !!contextPath);
+  const { state, refresh } = useAsync<QueryListResult>(EMPTY_QUERY_LIST_RESULT, fetcher, !!contextPath);
   useContextChangeListener(contextPath, KINDS_QUERIES, refresh);
   return { ...state, refresh };
 }

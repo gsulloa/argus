@@ -220,6 +220,8 @@ mod tests {
             description: Some("A query".to_string()),
             params: vec![],
             tags: vec![],
+            path: name.to_string(),
+            folder: String::new(),
             body: "SELECT 1;".to_string(),
             source_path: PathBuf::new(),
         }
@@ -233,6 +235,7 @@ mod tests {
             readme: None,
             objects,
             queries: vec![fake_query("list_users")],
+            query_folders: vec![],
             warnings: vec![],
         }
     }

@@ -57,6 +57,8 @@ export interface MysqlQueryPayload {
   contextQuery?: {
     name: string;
     params: QueryParam[];
+    /** Folder the query lives in ("" = root); used so saves target the right file. */
+    folder?: string;
   };
 }
 
@@ -296,15 +298,18 @@ function MysqlQueryTab({ tabId, payload }: InnerProps) {
   // §23.3 — Save query flow.
   // -------------------------------------------------------------------------
   const [showSaveAs, setShowSaveAs] = useState(false);
-  const [defaultSaveFolder, setDefaultSaveFolder] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  // Track context-query name for subsequent saves
-  const [contextSavedName, setContextSavedName] = useState<string | null>(null);
+  // Track context-query name + folder for subsequent saves. Initialized from
+  // the payload when the tab is opened from an existing prefab query, so Cmd+S
+  // updates that file in place instead of re-prompting for a name.
+  const [contextSavedName, setContextSavedName] = useState<string | null>(
+    payload.contextQuery?.name ?? null,
+  );
+  const [contextSavedFolder, setContextSavedFolder] = useState<string>(
+    payload.contextQuery?.folder ?? "",
+  );
 
   const openSaveAsModal = useCallback(() => {
-    getSetting("savedQueries:lastUsedFolder")
-      .then((raw) => setDefaultSaveFolder(raw ?? null))
-      .catch(() => setDefaultSaveFolder(null));
     setShowSaveAs(true);
   }, []);
 
@@ -315,22 +320,26 @@ function MysqlQueryTab({ tabId, payload }: InnerProps) {
       if (isSaving) return;
       setIsSaving(true);
       contextApi
-        .saveQuery(connectionId, contextSavedName, editorRef.current?.getSql() ?? "", { mode: "update" })
+        .saveQuery(connectionId, contextSavedName, editorRef.current?.getSql() ?? "", {
+          mode: "update",
+          folder: contextSavedFolder,
+        })
         .then(() => toast.show("Saved", "success"))
         .catch((e) => toast.show(`Failed to save: ${(e as Error).message ?? String(e)}`, "error"))
         .finally(() => setIsSaving(false));
     } else {
       openSaveAsModal();
     }
-  }, [connectionId, contextSavedName, isSaving, openSaveAsModal, toast]);
+  }, [connectionId, contextSavedName, contextSavedFolder, isSaving, openSaveAsModal, toast]);
 
   const handleSaveAsConfirm = useCallback(
-    async ({ name }: { name: string; folderId: string | null }) => {
+    async ({ name }: { name: string }) => {
       const currentSql = editorRef.current?.getSql() ?? "";
       setShowSaveAs(false);
       try {
         await contextApi.saveQuery(connectionId, name, currentSql, { mode: "create" });
         setContextSavedName(name);
+        setContextSavedFolder("");
         toast.show(`Saved as "${name}"`, "success");
       } catch (e) {
         const msg = (e as Error).message ?? String(e);
@@ -533,7 +542,6 @@ function MysqlQueryTab({ tabId, payload }: InnerProps) {
       <SaveAsModal
         open={showSaveAs}
         defaultName=""
-        defaultFolderId={defaultSaveFolder}
         onClose={() => setShowSaveAs(false)}
         onConfirm={(result) => void handleSaveAsConfirm(result)}
       />

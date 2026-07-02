@@ -239,6 +239,23 @@ vi.mock("@/platform/shell/tabs", () => ({
   }),
 }));
 
+vi.mock("@/platform/shell/FocusedConnectionContext", () => ({
+  useFocusedConnection: () => ({
+    focusedConnectionId: null,
+    setFocused: vi.fn(),
+  }),
+}));
+
+vi.mock("@/platform/connection-registry/useOpenConnections", () => ({
+  useOpenConnections: () => ({
+    items: [],
+    loading: false,
+    isOpen: () => false,
+    getOpen: () => undefined,
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@/assets/logo.svg", () => ({ default: "" }));
 
 // Import after all mocks.

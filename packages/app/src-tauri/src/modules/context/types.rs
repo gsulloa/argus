@@ -121,6 +121,13 @@ pub struct QueryDoc {
     pub description: Option<String>,
     pub params: Vec<QueryParam>,
     pub tags: Vec<String>,
+    /// Relative POSIX path under `queries/`, without extension.
+    /// For flat (root-level) queries this equals the slug; for nested
+    /// queries it includes the folder prefix, e.g. `reports/top-customers`.
+    pub path: String,
+    /// Parent folder relative to `queries/`, POSIX, no leading/trailing `/`.
+    /// Empty string for root-level queries.
+    pub folder: String,
     /// Raw query body, byte-for-byte from the body file.
     /// Serialised out to IPC (frontend reads it) but not required on
     /// deserialise.
@@ -152,6 +159,9 @@ pub struct ParsedContext {
     pub objects: Vec<ObjectDoc>,
     /// Query docs filtered by the engine that loaded this context.
     pub queries: Vec<QueryDoc>,
+    /// All subfolder paths (relative POSIX) under `queries/`, including
+    /// empty folders. Sorted; does NOT include the root (`""`).
+    pub query_folders: Vec<String>,
     pub warnings: Vec<LoadWarning>,
 }
 
