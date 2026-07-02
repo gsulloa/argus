@@ -16,8 +16,8 @@
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "node scripts/sync-changelog.mjs && vite",
+    "build": "node scripts/sync-changelog.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
@@ -25,9 +25,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write .",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "changelog": "npx auto-changelog -p && git add CHANGELOG.md && git commit -m \"docs: update changelog\"",
+    "test": "node scripts/sync-changelog.mjs && vitest",
+    "test:run": "node scripts/sync-changelog.mjs && vitest run",
     "release": "bash scripts/release.sh",
     "release:dry": "bash scripts/release.sh --dry-run"
   },

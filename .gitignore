@@ -29,3 +29,6 @@ download.json
 # CDK
 cdk.out
 packages/infra/cdk.out
+
+# Generated changelog copy (synced from root CHANGELOG.md at build time)
+packages/app/src/generated/
