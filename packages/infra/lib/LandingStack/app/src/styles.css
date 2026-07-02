@@ -1285,20 +1285,6 @@ a {
   margin-bottom: 28px;
 }
 
-.legal-draft {
-  display: inline-flex;
-  align-items: center;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-  background: var(--accent-soft);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  padding: 5px 10px;
-  margin-bottom: 36px;
-}
-
 .legal-back {
   font-family: var(--font-mono);
   font-size: 11px;
