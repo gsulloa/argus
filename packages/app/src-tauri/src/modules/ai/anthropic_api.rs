@@ -150,18 +150,12 @@ impl AiProvider for AnthropicApi {
                 )
             }
             Err(e) => {
-                return fallback_listing(
-                    "anthropic-api",
-                    Some(format!("keyring read failed: {e}")),
-                )
+                return fallback_listing("anthropic-api", Some(format!("keyring read failed: {e}")))
             }
         };
 
         // 2. Build a client with a 3 s timeout and GET /v1/models.
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
-        {
+        let client = match Client::builder().timeout(Duration::from_secs(3)).build() {
             Ok(c) => c,
             Err(e) => {
                 return fallback_listing(
@@ -186,10 +180,7 @@ impl AiProvider for AnthropicApi {
                 )
             }
             Err(e) => {
-                return fallback_listing(
-                    "anthropic-api",
-                    Some(format!("network unreachable: {e}")),
-                )
+                return fallback_listing("anthropic-api", Some(format!("network unreachable: {e}")))
             }
         };
 
@@ -199,10 +190,7 @@ impl AiProvider for AnthropicApi {
             return fallback_listing("anthropic-api", Some("API key rejected".into()));
         }
         if !status.is_success() {
-            return fallback_listing(
-                "anthropic-api",
-                Some(format!("unexpected status {status}")),
-            );
+            return fallback_listing("anthropic-api", Some(format!("unexpected status {status}")));
         }
 
         // 4. Parse `{ "data": [ { "id": "..." }, ... ] }`.

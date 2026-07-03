@@ -1023,7 +1023,10 @@ mod tests {
     #[test]
     fn model_listing_round_trips() {
         let listing = ModelListing {
-            models: vec!["claude-opus-4-8".to_string(), "claude-sonnet-4-6".to_string()],
+            models: vec![
+                "claude-opus-4-8".to_string(),
+                "claude-sonnet-4-6".to_string(),
+            ],
             source: ModelSource::Fallback,
             refreshed_at: None,
             error: Some("no API key stored".into()),
