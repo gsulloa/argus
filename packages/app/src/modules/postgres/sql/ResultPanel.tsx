@@ -28,6 +28,18 @@ export function ResultPanel({ state, onShowInEditor }: Props) {
   if (state.status === "cancelled") {
     return <div className={styles.empty}>Query cancelled</div>;
   }
+  // streaming — grid shows immediately with accumulated rows and a loading banner
+  if (state.status === "streaming") {
+    return (
+      <RowsResultView
+        columns={state.columns}
+        rows={state.rows}
+        truncated={false}
+        truncated_columns={[]}
+        loading={{ count: state.loadedCount }}
+      />
+    );
+  }
   // done
   if (state.mode === "single") {
     if (state.error) {
@@ -92,14 +104,31 @@ function ResultBody({ result }: { result: RunSqlResult }) {
       </div>
     );
   }
-  return <RowsResultView result={result} />;
+  return (
+    <RowsResultView
+      columns={result.columns}
+      rows={result.rows}
+      truncated={result.truncated}
+      truncated_columns={result.truncated_columns}
+    />
+  );
+}
+
+interface RowsResultViewProps {
+  columns: DataColumn[];
+  rows: CellValue[][];
+  truncated: boolean;
+  truncated_columns: string[];
+  /** When set, the grid is still growing (streaming in flight). */
+  loading?: { count: number };
 }
 
 function RowsResultView({
-  result,
-}: {
-  result: Extract<RunSqlResult, { kind: "rows" }>;
-}) {
+  columns,
+  rows,
+  truncated,
+  loading,
+}: RowsResultViewProps) {
   // Row-range selection state drives the inspector for this query result.
   const [selection, setSelection] = useState<{ anchor: number | null; active: number | null }>({
     anchor: null,
@@ -115,22 +144,29 @@ function RowsResultView({
   const dummyBuffer = useEditBuffer();
 
   // Reset the sort (and selection) whenever the result's column shape changes (new query).
-  const columnsSig = result.columns.map((c) => c.name).join("|");
+  // Only reset when NOT loading (streaming) to avoid resetting on each batch.
+  const columnsSig = columns.map((c) => c.name).join("|");
   useEffect(() => {
-    setOrderBy([]);
-    setSelection({ anchor: null, active: null });
+    if (!loading) {
+      setOrderBy([]);
+      setSelection({ anchor: null, active: null });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [columnsSig]);
 
   // Sort the loaded rows client-side; the original result is never mutated.
+  // During streaming, sort is disabled — pass rows as-is.
   const sortedRows = useMemo(
     () =>
-      sortResultRows(
-        result.rows,
-        result.columns.map((c) => c.name),
-        orderBy,
-        (row, i) => row[i],
-      ),
-    [result.rows, result.columns, orderBy],
+      loading
+        ? rows
+        : sortResultRows(
+            rows,
+            columns.map((c) => c.name),
+            orderBy,
+            (row, i) => row[i],
+          ),
+    [rows, columns, orderBy, loading],
   );
 
   // Compute selected rows from anchor/active range to pass to inspector.
@@ -156,7 +192,12 @@ function RowsResultView({
 
   return (
     <div className={styles.rowsLayout}>
-      {result.truncated ? (
+      {loading ? (
+        <div className={styles.loadingBanner}>
+          Loading… {loading.count.toLocaleString()} rows
+        </div>
+      ) : null}
+      {truncated ? (
         <div className={styles.truncationBanner}>
           Result truncated at 10,000 rows — add a LIMIT clause to refine.
         </div>
@@ -164,17 +205,17 @@ function RowsResultView({
       <div className={styles.rowsBody}>
         <div className={styles.rowsGrid}>
           <AdhocResultGrid
-            columns={result.columns}
+            columns={columns}
             rows={sortedRows}
             onSelectionChange={setSelection}
-            orderBy={orderBy}
-            onSortChange={setOrderBy}
+            orderBy={loading ? [] : orderBy}
+            onSortChange={loading ? () => {} : setOrderBy}
             emptyState={<div className={styles.empty}>(0 rows)</div>}
           />
         </div>
         <div className={styles.rowsInspector}>
           <RowInspector
-            columns={result.columns}
+            columns={columns}
             selectedRows={inspectorRows}
             bulkEditAvailable={false}
             isReadOnly={true}

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { AppError } from "@/platform/errors/AppError";
-import { sqlApi, type RunManyOutcome, type RunSqlResult } from "./api";
+import { sqlApi, type RunManyOutcome, type RunSqlResult, type StreamEvent } from "./api";
+import type { CellValue, DataColumn } from "../data/types";
 import {
   splitStatements,
   getStatementUnderCursor,
@@ -23,9 +24,20 @@ export interface MultiRunState {
   outcomes: RunManyOutcome[];
 }
 
+/** Intermediate state while streaming rows are arriving. */
+export interface StreamingRunState {
+  mode: "single";
+  sql: string;
+  startOffset: number;
+  columns: DataColumn[];
+  rows: CellValue[][];      // accumulated so far
+  loadedCount: number;
+}
+
 export type RunState =
   | { status: "idle" }
-  | { status: "running" }
+  | { status: "running" }                                   // dispatched, before columns
+  | ({ status: "streaming" } & StreamingRunState)           // columns known, rows arriving
   | { status: "cancelled" }
   | ({ status: "done" } & (SingleRunState | MultiRunState));
 
@@ -69,6 +81,19 @@ export function useQueryRun(): UseQueryRunResult {
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const runTokenRef = useRef<string | null>(null);
 
+  // Streaming accumulation refs (reset per run).
+  const columnsRef = useRef<DataColumn[] | null>(null);
+  const rowsRef = useRef<CellValue[][]>([]);
+  const loadedRef = useRef<number>(0);
+  const terminalRef = useRef<boolean>(false);
+  const cancelRequestedRef = useRef<boolean>(false);
+  const commitTimerRef = useRef<number | null>(null);
+
+  // Captured per-run values for the commit closure.
+  const streamingSqlRef = useRef<string>("");
+  const streamingStartOffsetRef = useRef<number>(0);
+  const streamingRunTokenRef = useRef<string>("");
+
   const reset = useCallback(() => {
     setState({ status: "idle" });
     setRunStartedAt(null);
@@ -77,6 +102,9 @@ export function useQueryRun(): UseQueryRunResult {
   const cancel = useCallback(() => {
     const token = runTokenRef.current;
     if (!token) return;
+    // Set cancel flag BEFORE calling cancelQuery so the post-await block knows
+    // it was a user cancel when the promise resolves.
+    cancelRequestedRef.current = true;
     sqlApi.cancelQuery(token).catch((e) => {
       console.warn("[argus.sql] cancel failed:", e);
     });
@@ -148,25 +176,210 @@ export function useQueryRun(): UseQueryRunResult {
 
       const runToken = crypto.randomUUID();
       runTokenRef.current = runToken;
-      setState({ status: "running" });
-      setRunStartedAt(Date.now());
 
       if (mode === "single") {
-        try {
-          const result = await sqlApi.runSql(connectionId, sqlToRun, "user", runToken);
+        // Reset streaming refs for this run.
+        columnsRef.current = null;
+        rowsRef.current = [];
+        loadedRef.current = 0;
+        terminalRef.current = false;
+        cancelRequestedRef.current = false;
+        if (commitTimerRef.current !== null) {
+          window.clearTimeout(commitTimerRef.current);
+          commitTimerRef.current = null;
+        }
+        streamingSqlRef.current = sqlToRun;
+        streamingStartOffsetRef.current = startOffset;
+        streamingRunTokenRef.current = runToken;
+
+        setState({ status: "running" });
+        setRunStartedAt(Date.now());
+        const dispatchedAt = Date.now();
+
+        // Coalesced commit: write streaming state to React at most every ~60ms.
+        const commit = () => {
+          commitTimerRef.current = null;
+          // Guard: only commit if still streaming for THIS run token.
+          if (runTokenRef.current !== streamingRunTokenRef.current) return;
+          const cols = columnsRef.current;
+          if (!cols) return;
           setState({
-            status: "done",
+            status: "streaming",
             mode: "single",
-            sql: sqlToRun,
-            startOffset,
-            result,
-            error: null,
+            sql: streamingSqlRef.current,
+            startOffset: streamingStartOffsetRef.current,
+            columns: cols,
+            rows: rowsRef.current.slice(),
+            loadedCount: loadedRef.current,
           });
-        } catch (e) {
-          if (e instanceof AppError && e.kind === "Cancelled") {
-            setState({ status: "cancelled" });
-            setRunStartedAt(null);
+        };
+
+        const scheduleCommit = () => {
+          if (commitTimerRef.current !== null) return;
+          commitTimerRef.current = window.setTimeout(commit, 60);
+        };
+
+        const flushCommit = () => {
+          if (commitTimerRef.current !== null) {
+            window.clearTimeout(commitTimerRef.current);
+            commitTimerRef.current = null;
+          }
+          commit();
+        };
+
+        const onEvent = (ev: StreamEvent) => {
+          // Stale-guard: ignore events from a previous run's channel.
+          if (runTokenRef.current !== runToken) return;
+
+          if (ev.event === "columns") {
+            columnsRef.current = ev.columns;
+            rowsRef.current = [];
+            loadedRef.current = 0;
+            // Immediately switch to streaming so the grid appears at once.
+            setState({
+              status: "streaming",
+              mode: "single",
+              sql: sqlToRun,
+              startOffset,
+              columns: ev.columns,
+              rows: [],
+              loadedCount: 0,
+            });
+          } else if (ev.event === "batch") {
+            for (const row of ev.rows) {
+              rowsRef.current.push(row);
+            }
+            loadedRef.current += ev.rows.length;
+            scheduleCommit();
+          } else if (ev.event === "done") {
+            terminalRef.current = true;
+            flushCommit();
+            setState({
+              status: "done",
+              mode: "single",
+              sql: sqlToRun,
+              startOffset,
+              result: {
+                kind: "rows",
+                columns: columnsRef.current ?? [],
+                rows: rowsRef.current,
+                truncated_columns: ev.truncated_columns,
+                truncated: ev.truncated,
+                query_ms: ev.query_ms,
+              },
+              error: null,
+            });
             runTokenRef.current = null;
+            setRunStartedAt(null);
+          } else if (ev.event === "affected") {
+            terminalRef.current = true;
+            setState({
+              status: "done",
+              mode: "single",
+              sql: sqlToRun,
+              startOffset,
+              result: {
+                kind: "affected",
+                command_tag: ev.command_tag,
+                affected_rows: ev.affected_rows,
+                query_ms: ev.query_ms,
+              },
+              error: null,
+            });
+            runTokenRef.current = null;
+            setRunStartedAt(null);
+          } else if (ev.event === "error") {
+            terminalRef.current = true;
+            setState({
+              status: "done",
+              mode: "single",
+              sql: sqlToRun,
+              startOffset,
+              result: null,
+              error: {
+                message: ev.message,
+                code: ev.code,
+                position: ev.position,
+              },
+            });
+            runTokenRef.current = null;
+            setRunStartedAt(null);
+          }
+        };
+
+        try {
+          await sqlApi.runSqlStream(connectionId, sqlToRun, "user", runToken, onEvent);
+
+          // The command promise resolved. Check if a terminal event handled finalization.
+          if (terminalRef.current) {
+            // Terminal event already set final state; nothing to do.
+            return;
+          }
+
+          // No terminal event arrived — this means either:
+          //   a) The run was cancelled (backend stopped, no terminal event on cancel), OR
+          //   b) A terminal event is still racing in flight.
+          if (!cancelRequestedRef.current) {
+            // Not a user cancel — wait a short grace period for a racing terminal event.
+            await new Promise<void>((r) => setTimeout(r, 120));
+            if (terminalRef.current) {
+              // Terminal arrived during grace period; state already set.
+              return;
+            }
+          }
+
+          // Finalize: cancel-with-partial-rows scenario.
+          flushCommit();
+          if (columnsRef.current !== null) {
+            // We have column metadata — keep partial rows visible as a completed result.
+            setState({
+              status: "done",
+              mode: "single",
+              sql: sqlToRun,
+              startOffset,
+              result: {
+                kind: "rows",
+                columns: columnsRef.current,
+                rows: rowsRef.current,
+                truncated_columns: [],
+                truncated: false,
+                query_ms: Date.now() - dispatchedAt,
+              },
+              error: null,
+            });
+          } else {
+            // Cancelled before any columns arrived.
+            setState({ status: "cancelled" });
+          }
+          runTokenRef.current = null;
+          setRunStartedAt(null);
+        } catch (e) {
+          // Pre-flight reject (empty SQL, bad uuid, no active pool, sslmode/acquire errors).
+          if (e instanceof AppError && e.kind === "Cancelled") {
+            // Cancelled pre-flight.
+            if (columnsRef.current !== null) {
+              // Had partial rows — keep them.
+              flushCommit();
+              setState({
+                status: "done",
+                mode: "single",
+                sql: sqlToRun,
+                startOffset,
+                result: {
+                  kind: "rows",
+                  columns: columnsRef.current,
+                  rows: rowsRef.current,
+                  truncated_columns: [],
+                  truncated: false,
+                  query_ms: Date.now() - dispatchedAt,
+                },
+                error: null,
+              });
+            } else {
+              setState({ status: "cancelled" });
+            }
+            runTokenRef.current = null;
+            setRunStartedAt(null);
             return;
           }
           const err = e instanceof AppError ? e : new AppError("Internal", String(e));
@@ -182,13 +395,16 @@ export function useQueryRun(): UseQueryRunResult {
               position: err.postgres?.position ?? null,
             },
           });
+          runTokenRef.current = null;
+          setRunStartedAt(null);
         }
-        runTokenRef.current = null;
-        setRunStartedAt(null);
         return;
       }
 
-      // Multi.
+      // Multi-statement path — unchanged, non-streaming.
+      setState({ status: "running" });
+      setRunStartedAt(Date.now());
+
       try {
         const outcomes = await sqlApi.runSqlMany(
           connectionId,
@@ -244,6 +460,7 @@ export function useQueryRun(): UseQueryRunResult {
 
 function summarize(state: RunState): string | null {
   if (state.status === "running") return "Running…";
+  if (state.status === "streaming") return `Loading… ${state.loadedCount.toLocaleString()} rows`;
   if (state.status === "cancelled") return "Query cancelled";
   if (state.status !== "done") return null;
   if (state.mode === "single") {
