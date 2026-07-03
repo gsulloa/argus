@@ -512,9 +512,7 @@ pub async fn ai_chat_send(
         registry.open_or_get(&session_id, fallback_pid, conn_uuid, ctx_path_for_new)?;
 
         // For existing sessions, honour the already-bound provider (step 2).
-        registry
-            .provider_id(&session_id)?
-            .unwrap_or(fallback_pid)
+        registry.provider_id(&session_id)?.unwrap_or(fallback_pid)
     };
 
     // Fetch context_path and engine kind from the connection row (if linked).
@@ -589,8 +587,14 @@ pub async fn ai_chat_send(
         let registry = app_clone.state::<ChatSessionRegistry>();
         match provider.chat(req).await {
             Ok(stream) => {
-                drive_stream(stream, &channel_clone, &session_id_clone, &app_clone, &registry)
-                    .await;
+                drive_stream(
+                    stream,
+                    &channel_clone,
+                    &session_id_clone,
+                    &app_clone,
+                    &registry,
+                )
+                .await;
             }
             Err(e) => {
                 let _ = app_clone.emit(&channel_clone, ChatDelta::Error(format!("{e:?}")));
