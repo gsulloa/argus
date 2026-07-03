@@ -12,11 +12,13 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { ChevronDown } from "lucide-react";
 
 import { ChatSession } from "@/modules/ai/session";
 import { useAiSettings, useResolvedProviderId } from "@/modules/ai/store";
-import { PROVIDER_LABELS, type ProviderId } from "@/modules/ai/types";
-import type { ChatTurn, ToolUseRecord } from "@/modules/ai/types";
+import { PROVIDER_LABELS, PROVIDER_IDS, type ProviderId } from "@/modules/ai/types";
+import type { ChatTurn, ProviderListEntry, ToolUseRecord } from "@/modules/ai/types";
 import { captureResult, type AttachedResult } from "@/modules/ai/attachments";
 import type { AiReadiness } from "@/modules/ai/useAiReadiness";
 import { CommandRegistry } from "@/platform/command-palette/CommandRegistry";
@@ -497,6 +499,169 @@ function AssistantTurn({
 }
 
 // ---------------------------------------------------------------------------
+// ProviderSelector sub-component (task 4.1–4.2)
+// ---------------------------------------------------------------------------
+
+interface ProviderSelectorProps {
+  /** The currently active provider for this session. */
+  activeProviderId: ProviderId | null;
+  /** The currently active model for this session (null = provider default). */
+  activeModel: string | null;
+  /** Full provider list from ai_list_providers (capabilities + validation). */
+  providers: ProviderListEntry[];
+  /** Called when the user picks a ready provider + model. */
+  onSelect: (providerId: ProviderId, model: string | null) => void;
+}
+
+function ProviderSelector({
+  activeProviderId,
+  activeModel,
+  providers,
+  onSelect,
+}: ProviderSelectorProps) {
+  const displayLabel = activeProviderId ? PROVIDER_LABELS[activeProviderId] : "Select provider…";
+  const displayModel = activeModel ?? null;
+
+  function handleConfigureProviders() {
+    CommandRegistry.get("ai.configureProviders")?.run();
+  }
+
+  // Build ordered entries from the canonical PROVIDER_IDS list so the order is
+  // always stable regardless of backend response order.
+  const entries = PROVIDER_IDS.map((id) => {
+    const entry = providers.find((p) => p.id === id);
+    return entry ?? null;
+  }).filter((e): e is ProviderListEntry => e !== null);
+
+  // Fall back to backend order if we didn't get all four.
+  const orderedEntries = entries.length > 0 ? entries : providers;
+
+  const hasUnready = orderedEntries.some((p) => p.validation.kind !== "Ready");
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          className={styles.providerSelectorTrigger}
+          aria-label="Select AI provider"
+          title="Select AI provider for this chat session"
+        >
+          <span className={styles.providerSelectorLabel}>
+            {displayLabel}
+            {displayModel ? ` · ${displayModel}` : ""}
+          </span>
+          <ChevronDown size={10} className={styles.providerSelectorChevron} />
+        </button>
+      </DropdownMenu.Trigger>
+
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className={styles.providerSelectorContent}
+          align="start"
+          sideOffset={4}
+        >
+          {orderedEntries.map((entry) => {
+            const isReady = entry.validation.kind === "Ready";
+            const isSelected = entry.id === activeProviderId;
+            const hint =
+              entry.validation.kind === "Missing"
+                ? entry.validation.hint
+                : entry.validation.kind === "Misconfigured"
+                  ? entry.validation.reason
+                  : null;
+
+            // For ready providers, offer model sub-select if the provider has
+            // known models. Otherwise a single click selects with null model.
+            const availableModels = entry.capabilities.available_models;
+
+            if (isReady && availableModels.length > 1) {
+              return (
+                <DropdownMenu.Sub key={entry.id}>
+                  <DropdownMenu.SubTrigger
+                    className={styles.providerSelectorItem}
+                    data-selected={isSelected || undefined}
+                  >
+                    <span className={styles.providerSelectorItemName}>
+                      {PROVIDER_LABELS[entry.id]}
+                    </span>
+                    <span className={styles.providerSelectorItemChevron}>▸</span>
+                  </DropdownMenu.SubTrigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.SubContent
+                      className={styles.providerSelectorContent}
+                      sideOffset={4}
+                    >
+                      {availableModels.map((m) => (
+                        <DropdownMenu.Item
+                          key={m}
+                          className={styles.providerSelectorItem}
+                          data-selected={(isSelected && (activeModel === m || (!activeModel && m === entry.capabilities.default_model))) || undefined}
+                          onSelect={() => onSelect(entry.id, m)}
+                        >
+                          {m}
+                        </DropdownMenu.Item>
+                      ))}
+                    </DropdownMenu.SubContent>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Sub>
+              );
+            }
+
+            if (isReady) {
+              return (
+                <DropdownMenu.Item
+                  key={entry.id}
+                  className={styles.providerSelectorItem}
+                  data-selected={isSelected || undefined}
+                  onSelect={() => onSelect(entry.id, null)}
+                >
+                  <span className={styles.providerSelectorItemName}>
+                    {PROVIDER_LABELS[entry.id]}
+                  </span>
+                </DropdownMenu.Item>
+              );
+            }
+
+            // Not ready — show as disabled with hint.
+            return (
+              <div key={entry.id} className={styles.providerSelectorDisabledGroup}>
+                <DropdownMenu.Item
+                  className={styles.providerSelectorItemDisabled}
+                  disabled
+                >
+                  <span className={styles.providerSelectorItemName}>
+                    {PROVIDER_LABELS[entry.id]}
+                  </span>
+                  <span className={styles.providerSelectorItemBadge}>
+                    {entry.validation.kind === "Missing" ? "Not installed" : "Misconfigured"}
+                  </span>
+                </DropdownMenu.Item>
+                {hint && (
+                  <div className={styles.providerSelectorHint}>{hint}</div>
+                )}
+              </div>
+            );
+          })}
+
+          {hasUnready && (
+            <>
+              <DropdownMenu.Separator className={styles.providerSelectorSeparator} />
+              <DropdownMenu.Item
+                className={styles.providerSelectorConfigureItem}
+                onSelect={handleConfigureProviders}
+              >
+                Configure providers…
+              </DropdownMenu.Item>
+            </>
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // SetupChecklist sub-component
 // ---------------------------------------------------------------------------
 
@@ -590,6 +755,9 @@ const EMPTY_SNAPSHOT: ChatSessionSnapshot = {
   state: "idle",
   errorMessage: null,
   pendingStatus: null,
+  providerId: null,
+  model: null,
+  providerOverridden: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -610,9 +778,6 @@ export function ChatPanel({
   // Session stored in state so React can re-subscribe via useSyncExternalStore
   // when the session instance changes (connectionId change).
   const [session, setSession] = useState<ChatSession | null>(null);
-
-  // Provider binding tracking.
-  const sessionBoundProvider = useRef<ProviderId | null>(null);
 
   // Auto-apply state.
   const [autoApply, setAutoApply] = useState(() =>
@@ -650,7 +815,7 @@ export function ChatPanel({
   const [editorChangedNotice, setEditorChangedNotice] = useState(false);
 
   // AI settings.
-  const { settings } = useAiSettings();
+  const { settings, providers } = useAiSettings();
   const currentResolved = useResolvedProviderId(connectionId);
 
   // Session lifecycle: mint one per (open, connectionId), close on cleanup.
@@ -659,13 +824,21 @@ export function ChatPanel({
   useEffect(() => {
     if (!open || !ready) return;
     const next = new ChatSession(connectionId);
-    sessionBoundProvider.current = null;
     setSession(next);
     return () => {
       void next.close();
       setSession((prev) => (prev === next ? null : prev));
     };
   }, [open, ready, connectionId]);
+
+  // Initialize session provider from resolved provider (override → global default).
+  // Runs whenever session or currentResolved changes. Does not run when the user
+  // has already overridden the provider (initProvider is a no-op then).
+  useEffect(() => {
+    if (!session || !currentResolved) return;
+    const model = getModelForProvider(currentResolved, settings);
+    session.initProvider(currentResolved, model);
+  }, [session, currentResolved, settings]);
 
   // useSyncExternalStore — subscribe to session state reactively.
   const subscribe = useCallback(
@@ -747,11 +920,6 @@ export function ChatPanel({
     if (!trimmed || chatSnapshot.state === "streaming") return;
     if (!session) return;
 
-    // Bind provider on first send.
-    if (sessionBoundProvider.current === null && currentResolved) {
-      sessionBoundProvider.current = currentResolved;
-    }
-
     // Capture editor snapshot for auto-apply comparison.
     editorSnapshotRef.current = editorRef.current?.getSql() ?? null;
     setAutoAppliedBlock(null);
@@ -760,7 +928,7 @@ export function ChatPanel({
     setInput("");
     void session.send(trimmed, attachments);
     setAttachments([]);
-  }, [input, chatSnapshot.state, currentResolved, editorRef, session, attachments]);
+  }, [input, chatSnapshot.state, editorRef, session, attachments]);
 
   // Re-focus textarea after streaming ends.
   useEffect(() => {
@@ -785,11 +953,32 @@ export function ChatPanel({
     void session?.cancel();
   }, [session]);
 
-  // Provider change notice.
+  // Session provider snapshot values (reactive via useSyncExternalStore).
+  const sessionProviderId = chatSnapshot.providerId;
+  const sessionModel = chatSnapshot.model;
+  const providerOverridden = chatSnapshot.providerOverridden;
+
+  // Provider change notice: shown only when the global default changed mid-chat
+  // AND the user has NOT taken explicit control of the session provider.
+  // (task 4.4: suppress once providerOverridden is true)
   const showProviderChangeNotice =
-    sessionBoundProvider.current !== null &&
+    !providerOverridden &&
+    sessionProviderId !== null &&
     currentResolved !== null &&
-    currentResolved !== sessionBoundProvider.current;
+    currentResolved !== sessionProviderId;
+
+  // The provider/model to display in the selector trigger.
+  // Falls back to currentResolved when the session hasn't initialized yet.
+  const displayProvider = sessionProviderId ?? currentResolved;
+  const displayModel = sessionModel;
+
+  // Handler for the provider selector (task 4.3).
+  const handleProviderSelect = useCallback(
+    (providerId: ProviderId, model: string | null) => {
+      session?.setProvider(providerId, model);
+    },
+    [session],
+  );
 
   // Scroll messages to bottom on new turns.
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -805,13 +994,6 @@ export function ChatPanel({
     ? contextPath.split("/").filter(Boolean).pop() ?? contextPath
     : "No context folder";
   const contextTooltip = contextPath ?? "";
-
-  // Provider + model display.
-  const displayProvider = sessionBoundProvider.current ?? currentResolved;
-  const displayModel = displayProvider
-    ? (getModelForProvider(displayProvider, settings) ??
-       displayProvider)
-    : null;
 
   if (!open) return null;
 
@@ -865,12 +1047,13 @@ export function ChatPanel({
           </div>
         </div>
 
-        {displayProvider && (
-          <div className={styles.providerLine}>
-            {PROVIDER_LABELS[displayProvider]}
-            {displayModel ? ` · ${displayModel}` : ""}
-          </div>
-        )}
+        {/* Interactive provider/model selector (replaces read-only badge) */}
+        <ProviderSelector
+          activeProviderId={displayProvider}
+          activeModel={displayModel}
+          providers={providers}
+          onSelect={handleProviderSelect}
+        />
 
         <div
           className={styles.contextBadge}
@@ -889,12 +1072,12 @@ export function ChatPanel({
           <span>Auto-apply</span>
         </label>
 
-        {/* Provider change notice */}
-        {showProviderChangeNotice && currentResolved && sessionBoundProvider.current && (
+        {/* Provider change notice — suppressed once user has explicitly overridden (task 4.4) */}
+        {showProviderChangeNotice && currentResolved && sessionProviderId && (
           <div className={styles.providerChangeNotice}>
             Settings changed — new chats will use{" "}
             {PROVIDER_LABELS[currentResolved]}. This chat continues with{" "}
-            {PROVIDER_LABELS[sessionBoundProvider.current]}.
+            {PROVIDER_LABELS[sessionProviderId]}.
           </div>
         )}
       </div>

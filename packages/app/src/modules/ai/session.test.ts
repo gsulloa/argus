@@ -174,7 +174,15 @@ describe("ChatSession", () => {
 
   it("getSnapshot returns current state", () => {
     const snap = session.getSnapshot();
-    expect(snap).toEqual({ turns: [], state: "idle", errorMessage: null, pendingStatus: null });
+    expect(snap).toEqual({
+      turns: [],
+      state: "idle",
+      errorMessage: null,
+      pendingStatus: null,
+      providerId: null,
+      model: null,
+      providerOverridden: false,
+    });
   });
 
   it("cancel calls chatCancel with sessionId", async () => {

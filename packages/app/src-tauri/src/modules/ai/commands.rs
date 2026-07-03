@@ -416,11 +416,15 @@ pub async fn ai_chat_send(
     session_id: String,
     prompt: String,
     connection_id: Option<String>,
+    provider_id: Option<String>,
+    model: Option<String>,
     attached_results: Vec<AttachedResult>,
     db: State<'_, DbState>,
     registry: State<'_, ChatSessionRegistry>,
     app: AppHandle,
 ) -> AppResult<()> {
+    let channel = format!("ai-chat-delta:{session_id}");
+
     // Parse optional connection id.
     let conn_uuid = match connection_id.as_deref() {
         Some(s) => Some(
@@ -430,14 +434,86 @@ pub async fn ai_chat_send(
         None => None,
     };
 
-    // Resolve provider via AiSettings (honours per-connection overrides).
-    let resolved = AiSettings::resolve(&db, conn_uuid)?;
-    let provider_id = ProviderId::from_kebab(&resolved.provider_id).ok_or_else(|| {
-        AppError::Internal(format!(
-            "unknown provider in settings: {}",
-            resolved.provider_id
-        ))
-    })?;
+    // Parse the explicit provider_id override if provided.
+    // On unknown/invalid value: emit ChatDelta::Error + Done and return without
+    // changing the session binding or appending a user turn.
+    let explicit_provider: Option<ProviderId> = match provider_id.as_deref() {
+        None => None,
+        Some(s) => match ProviderId::from_kebab(s) {
+            Some(pid) => Some(pid),
+            None => {
+                let _ = app.emit(
+                    &channel,
+                    ChatDelta::Error(format!("unknown provider: \"{s}\"")),
+                );
+                let _ = app.emit(
+                    &channel,
+                    ChatDelta::Done {
+                        finish_reason: None,
+                    },
+                );
+                return Ok(());
+            }
+        },
+    };
+
+    // Resolution precedence:
+    // 1. Explicit provider_id from this request → bind/rebind session.
+    // 2. Session's already-bound provider (open_or_get keeps it unchanged for existing sessions).
+    // 3. AiSettings::resolve(...) for brand-new sessions (fallback / initial binding).
+    //
+    // We resolve the settings fallback unconditionally so it is available for new-session
+    // creation. For an explicit override we skip the settings lookup entirely.
+    let resolved_provider_id: ProviderId = if let Some(pid) = explicit_provider {
+        // Step 1: explicit override — check whether the session already exists.
+        let existing_provider = registry.provider_id(&session_id)?;
+        if let Some(existing) = existing_provider {
+            // Session exists — rebind only when the provider actually changed.
+            if existing != pid {
+                registry.rebind(&session_id, pid)?;
+            }
+        }
+        // open_or_get will create the session (no-op if it already exists post-rebind).
+        registry.open_or_get(&session_id, pid, conn_uuid, {
+            // Compute context_path for potential new-session creation (reused below).
+            if let Some(id) = conn_uuid {
+                match crate::modules::context::commands::get_conn_kind_and_path(&db, id) {
+                    Ok((_, path)) => path.map(std::path::PathBuf::from),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        })?;
+        pid
+    } else {
+        // Steps 2 & 3: no explicit override.
+        // open_or_get preserves the bound provider for existing sessions (step 2).
+        // For new sessions we resolve from settings (step 3).
+        let resolved = AiSettings::resolve(&db, conn_uuid)?;
+        let fallback_pid = ProviderId::from_kebab(&resolved.provider_id).ok_or_else(|| {
+            AppError::Internal(format!(
+                "unknown provider in settings: {}",
+                resolved.provider_id
+            ))
+        })?;
+
+        // Fetch context_path for potential new-session creation.
+        let ctx_path_for_new = if let Some(id) = conn_uuid {
+            match crate::modules::context::commands::get_conn_kind_and_path(&db, id) {
+                Ok((_, path)) => path.map(std::path::PathBuf::from),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        // open_or_get: no-op for existing sessions (bound provider unchanged).
+        registry.open_or_get(&session_id, fallback_pid, conn_uuid, ctx_path_for_new)?;
+
+        // For existing sessions, honour the already-bound provider (step 2).
+        registry.provider_id(&session_id)?.unwrap_or(fallback_pid)
+    };
 
     // Fetch context_path and engine kind from the connection row (if linked).
     let (context_path, context_engine) = if let Some(id) = conn_uuid {
@@ -464,9 +540,6 @@ pub async fn ai_chat_send(
             None
         };
 
-    // Open or get session — existing sessions keep their bound provider.
-    registry.open_or_get(&session_id, provider_id, conn_uuid, context_path.clone())?;
-
     // Append the user turn.
     registry.append_user(&session_id, prompt)?;
 
@@ -492,7 +565,10 @@ pub async fn ai_chat_send(
         turns,
         context_path,
         context_payload,
-        model: None,
+        // Thread the session model override through ChatRequest.model so each
+        // provider's resolve_model prefers it over the configured model.
+        // This is never written to ai_settings.
+        model,
         session_id: session_id.clone(),
         provider_state,
         attached_results,
@@ -500,8 +576,8 @@ pub async fn ai_chat_send(
         dynamo_table_match,
     };
 
-    let provider = factory::build(&db, provider_id)?;
-    let channel = format!("ai-chat-delta:{session_id}");
+    let provider = factory::build(&db, resolved_provider_id)?;
+    let channel_clone = channel.clone();
     let session_id_clone = session_id.clone();
     let app_clone = app.clone();
 
@@ -511,12 +587,19 @@ pub async fn ai_chat_send(
         let registry = app_clone.state::<ChatSessionRegistry>();
         match provider.chat(req).await {
             Ok(stream) => {
-                drive_stream(stream, &channel, &session_id_clone, &app_clone, &registry).await;
+                drive_stream(
+                    stream,
+                    &channel_clone,
+                    &session_id_clone,
+                    &app_clone,
+                    &registry,
+                )
+                .await;
             }
             Err(e) => {
-                let _ = app_clone.emit(&channel, ChatDelta::Error(format!("{e:?}")));
+                let _ = app_clone.emit(&channel_clone, ChatDelta::Error(format!("{e:?}")));
                 let _ = app_clone.emit(
-                    &channel,
+                    &channel_clone,
                     ChatDelta::Done {
                         finish_reason: None,
                     },
