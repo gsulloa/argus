@@ -271,10 +271,14 @@ export function TermsOfService() {
 
       <h2>License</h2>
       <p>
-        Argus is provided free of charge for personal and commercial use. You may
-        install and use it on your devices in accordance with these terms. To the extent
-        Argus is distributed under an open-source license, that license governs your
-        rights to the source code and supersedes these terms where the two conflict.
+        Argus is free, open-source software distributed under the MIT License,
+        with source code publicly available at{" "}
+        <a href="https://github.com/gsulloa/argus" target="_blank" rel="noreferrer">
+          github.com/gsulloa/argus
+        </a>
+        . The MIT License governs your rights to the source code and supersedes
+        these terms where the two conflict. You may install and use Argus on your
+        devices for personal and commercial use in accordance with these terms.
       </p>
 
       <h2>No warranty</h2>
