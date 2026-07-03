@@ -362,11 +362,12 @@
  * Size is deliberately small (8 px) — a label-level color cue, never a CTA.
  */
 .colorSwatch {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: var(--radius-sm, 3px);
   border: 1px solid var(--border);
   background: var(--swatch-color);
+  box-shadow: 0 0 0 1px var(--swatch-color, transparent);
   flex-shrink: 0;
   display: inline-block;
 }
