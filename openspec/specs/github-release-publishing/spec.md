@@ -8,9 +8,7 @@ installers attached as assets, idempotently. This gives a human-readable record 
 what shipped at each tag and a canonical place to find release notes and downloadable
 installers, complementing the S3/CloudFront manifest publishing handled by the
 `release-pipeline` and `release-artifact-hosting` capabilities.
-
 ## Requirements
-
 ### Requirement: Each version tag publishes a GitHub Release
 
 The tag-triggered release pipeline (`.github/workflows/release.yml`) SHALL create a
@@ -33,21 +31,23 @@ the Release title MUST be the same tag. The `publish` job MUST be granted
 
 ### Requirement: Release notes come from the changelog with an auto-generated fallback
 
-The Release body SHALL be populated from the `vX.Y.Z` section of
-`packages/app/CHANGELOG.md` when a matching section exists. When no matching section
-is found, the workflow MUST fall back to auto-generated notes describing the commits
-since the previous `v*` tag. The notes source selection MUST be deterministic (it
-MUST NOT depend on runner timing or ordering) so the same tag always yields the same
-notes.
+The Release body SHALL be populated from the `X.Y.Z` section of the root
+`CHANGELOG.md` (Keep a Changelog format, section headers of the form
+`## [X.Y.Z] - YYYY-MM-DD`) when a matching section exists. The extracted body MUST be
+the content between the matching `## [X.Y.Z]` header and the next `## [` header. When
+no matching section is found, the workflow MUST fall back to auto-generated notes
+describing the commits since the previous `v*` tag. The notes source selection MUST be
+deterministic (it MUST NOT depend on runner timing or ordering) so the same tag always
+yields the same notes.
 
 #### Scenario: Notes are extracted from the changelog
 
-- **WHEN** `packages/app/CHANGELOG.md` contains a section for `vX.Y.Z`
+- **WHEN** the root `CHANGELOG.md` contains a `## [X.Y.Z]` section for the pushed tag
 - **THEN** the Release body contains that section's content as the release notes
 
 #### Scenario: Fallback to auto-generated notes
 
-- **WHEN** `packages/app/CHANGELOG.md` has no section matching the pushed tag
+- **WHEN** the root `CHANGELOG.md` has no `## [X.Y.Z]` section matching the pushed tag
 - **THEN** the Release body is auto-generated from the commit log since the previous `v*` tag
 
 ### Requirement: The four platform installers are attached as Release assets
@@ -78,3 +78,4 @@ creating a duplicate Release.
 
 - **WHEN** the workflow runs for `vX.Y.Z` and a GitHub Release already exists for that tag
 - **THEN** the step updates the existing Release's notes and assets and the job succeeds without creating a second Release
+

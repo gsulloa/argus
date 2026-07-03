@@ -376,9 +376,7 @@ following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format with
 [Semantic Versioning](https://semver.org/spec/v2.0.0/) headers
 (`## [X.Y.Z] - YYYY-MM-DD`).
 
-**Contributing**: add user-facing changes under `## [Unreleased]` in your PR.
-Use the standard groups (`### Added`, `### Changed`, `### Fixed`, `### Removed`)
-with a concise bullet per change.
+**Contributing**: changelog entries are auto-generated from Conventional-Commit PR titles at release time. Hand-write a bullet under `## [Unreleased]` only when you want better prose than the PR title; hand-written entries take precedence and are never duplicated by auto-generation.
 
 **Release flow**: `scripts/release.sh` calls `bump-version.mjs`, which promotes
 `## [Unreleased]` to a dated version section and inserts a fresh empty
