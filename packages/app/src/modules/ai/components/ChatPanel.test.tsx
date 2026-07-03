@@ -53,6 +53,9 @@ vi.mock("@/modules/ai/session", () => {
     send = mockSend;
     cancel = mockCancel;
     close = mockClose;
+    // No-ops for provider management — tests assert via snapshot state.
+    initProvider = vi.fn();
+    setProvider = vi.fn();
   }
   return { ChatSession };
 });
@@ -122,6 +125,9 @@ function makeSnapshot(overrides: Partial<ChatSessionSnapshot> = {}): ChatSession
     state: "idle",
     errorMessage: null,
     pendingStatus: null,
+    providerId: null,
+    model: null,
+    providerOverridden: false,
     ...overrides,
   };
 }
@@ -522,7 +528,7 @@ describe("ChatPanel — auto-apply", () => {
     ];
 
     await act(async () => {
-      triggerUpdate({ turns, state: "idle", errorMessage: null, pendingStatus: null });
+      triggerUpdate(makeSnapshot({ turns, state: "idle" }));
     });
 
     await waitFor(() => {
@@ -563,7 +569,7 @@ describe("ChatPanel — auto-apply", () => {
 
     // Simulate turn completing.
     await act(async () => {
-      triggerUpdate({ turns, state: "idle", errorMessage: null, pendingStatus: null });
+      triggerUpdate(makeSnapshot({ turns, state: "idle" }));
     });
 
     await waitFor(() => {

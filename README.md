@@ -329,6 +329,8 @@ Chatting requires **both** prerequisites: a configured AI provider **and** a lin
 
 The panel supports multi-turn conversation; CLI providers (Claude Code, Codex) show their reasoning and tool calls as they work. Use **AI: Focus chat panel** from the command palette (⌘K / Ctrl+K) to open the panel from anywhere.
 
+**Per-conversation provider selector:** the panel header shows the active provider and model as an interactive selector. A new chat starts on the resolved provider (per-connection override if set, otherwise the global default), but you can switch provider or model for just that conversation from the header menu. The choice is scoped to the current chat session — it never changes your global `default_provider` or the per-connection override, so other chats and the rest of the app are unaffected. Switching mid-conversation keeps the existing history and answers the next turn with the newly chosen provider. Only ready providers are selectable; providers that still need setup appear disabled with a hint and a *Configure providers…* shortcut. To make a preference stable, change it in the AI settings panel instead.
+
 **Attach query results:** after running a query, the chat composer offers an "Attach result" chip that hands the executed result rows (first 100 rows / 50 KB, larger results marked truncated) to the next message as context — useful for drill-down follow-ups. Multiple results can be attached and removed individually; attachments live only in the current chat session and are never written to disk.
 
 Current scope: the ✨ button is wired into the Postgres editor only. MySQL, MSSQL, DynamoDB, and CloudWatch editors follow in a subsequent change.
