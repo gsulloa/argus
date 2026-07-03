@@ -4,6 +4,9 @@
   "version": "0.0.0",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
+    "rust:fmt": "cargo fmt --manifest-path packages/app/src-tauri/Cargo.toml",
+    "rust:fmt:check": "cargo fmt --manifest-path packages/app/src-tauri/Cargo.toml --check",
     "dev": "pnpm --filter argus dev",
     "build": "pnpm --filter argus build",
     "preview": "pnpm --filter argus preview",
