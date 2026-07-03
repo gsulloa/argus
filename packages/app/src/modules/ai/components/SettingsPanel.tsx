@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { RefreshCw } from "lucide-react";
 
 import { aiApi } from "@/modules/ai/api";
 import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
@@ -9,12 +10,29 @@ import {
   PROVIDER_LABELS,
   type AiSettingsInput,
   type AiSettingsView,
+  type ModelListing,
   type ProviderId,
   type ProviderListEntry,
   type ValidationResult,
 } from "@/modules/ai/types";
 
 import styles from "./SettingsPanel.module.css";
+
+// ---------------------------------------------------------------------------
+// Helper: format a unix-millis timestamp as a relative time string.
+// Plain Date math — no external dependency.
+// ---------------------------------------------------------------------------
+
+function formatRelativeTime(ms: number): string {
+  const diffSec = Math.floor((Date.now() - ms) / 1000);
+  if (diffSec < 60) return "just now";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -103,6 +121,65 @@ const CLI_HINTS: Partial<Record<ProviderId, { text: string; url: string }>> = {
 };
 
 // ---------------------------------------------------------------------------
+// Provider source labels (used in source indicator)
+// ---------------------------------------------------------------------------
+
+const PROVIDER_SOURCE_LABELS: Record<ProviderId, string> = {
+  "claude-cli": "Claude",
+  "codex-cli": "Codex",
+  "anthropic-api": "Anthropic API",
+  "openai-api": "OpenAI API",
+};
+
+// ---------------------------------------------------------------------------
+// ModelSourceIndicator — discreet muted subtext below the model dropdown
+// ---------------------------------------------------------------------------
+
+interface ModelSourceIndicatorProps {
+  listing: ModelListing | undefined;
+  providerId: ProviderId;
+}
+
+function ModelSourceIndicator({ listing, providerId }: ModelSourceIndicatorProps) {
+  if (!listing || listing.source === "fallback") {
+    // Fallback: built-in list, optionally surface the error discreetly.
+    return (
+      <span
+        className={styles.modelSource}
+        title={listing?.error ?? undefined}
+      >
+        Built-in list
+        {listing?.error && (
+          <span className={styles.modelSourceError}> · {listing.error}</span>
+        )}
+      </span>
+    );
+  }
+
+  const sourceLabel =
+    listing.source === "provider"
+      ? `From ${PROVIDER_SOURCE_LABELS[providerId]}`
+      : "From cache";
+
+  const refreshedPart =
+    listing.refreshed_at != null
+      ? ` · refreshed ${formatRelativeTime(listing.refreshed_at)}`
+      : "";
+
+  return (
+    <span
+      className={styles.modelSource}
+      title={listing.error ?? undefined}
+    >
+      {sourceLabel}{refreshedPart}
+      {listing.error && (
+        <span className={styles.modelSourceError}> · {listing.error}</span>
+      )}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Sub-card
 // ---------------------------------------------------------------------------
 
@@ -117,10 +194,16 @@ function ProviderCard({ entry, modelValue, onModelChange, keyPresent }: Provider
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const { refresh } = useAiSettings();
 
   const badge = validationBadge(entry.validation);
-  const availableModels = entry.capabilities.available_models;
+
+  // Effective model list: dynamic listing when available, curated fallback otherwise.
+  const listing = entry.models;
+  const availableModels = listing?.models ?? entry.capabilities.available_models;
+
+  // Preselect configured model when present in effective list, else fall back to default.
   const effectiveModel =
     modelValue && availableModels.includes(modelValue)
       ? modelValue
@@ -149,6 +232,16 @@ function ProviderCard({ entry, modelValue, onModelChange, keyPresent }: Provider
     }
   }, [entry.id, refresh]);
 
+  const handleRefreshModels = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await aiApi.refreshModels(entry.id);
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [entry.id, refresh]);
+
   const cliHint = CLI_HINTS[entry.id];
 
   return (
@@ -158,12 +251,28 @@ function ProviderCard({ entry, modelValue, onModelChange, keyPresent }: Provider
         <span className={`${styles.badge} ${badge.className}`}>{badge.label}</span>
       </div>
 
-      {/* Model dropdown */}
+      {/* Model dropdown + source indicator + refresh affordance */}
       {availableModels.length > 0 && (
         <div className={styles.fieldRow}>
-          <label className={styles.fieldLabel} htmlFor={`model-${entry.id}`}>
-            Model
-          </label>
+          <div className={styles.modelDropdownRow}>
+            <label className={styles.fieldLabel} htmlFor={`model-${entry.id}`}>
+              Model
+            </label>
+            <button
+              type="button"
+              className={styles.refreshBtn}
+              aria-label="Refresh models"
+              disabled={refreshing}
+              onClick={() => void handleRefreshModels()}
+            >
+              <RefreshCw
+                size={11}
+                aria-hidden="true"
+                className={refreshing ? styles.refreshBtnSpinning : undefined}
+              />
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
           <select
             id={`model-${entry.id}`}
             className={styles.select}
@@ -176,6 +285,8 @@ function ProviderCard({ entry, modelValue, onModelChange, keyPresent }: Provider
               </option>
             ))}
           </select>
+          {/* Source indicator (6.4) */}
+          <ModelSourceIndicator listing={listing} providerId={entry.id} />
         </div>
       )}
 

@@ -78,6 +78,12 @@ impl AiProvider for ClaudeCli {
         cli_detect::validate_cli("claude", "ARGUS_CLAUDE_BIN").await
     }
 
+    async fn list_models(&self) -> crate::modules::ai::types::ModelListing {
+        // CLI providers have no stable non-interactive "list models" command;
+        // return the curated fallback with no error.
+        crate::modules::ai::caps::fallback_listing("claude-cli", None)
+    }
+
     async fn generate_sql(&self, req: GenerateRequest) -> AppResult<GenerateStream> {
         let model = resolve_model(
             &req.model,

@@ -293,6 +293,65 @@
   color: var(--text-muted);
 }
 
+/* ---------------------------------------------------------------------------
+   Model dropdown row (label + refresh button on same line)
+   --------------------------------------------------------------------------- */
+
+.modelDropdownRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Model source indicator — discreet muted subtext */
+.modelSource {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.modelSourceError {
+  color: var(--danger, #f87171);
+  font-size: 11px;
+}
+
+/* Refresh button — small ghost button next to the model label */
+.refreshBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+  padding: 2px 7px;
+  border-radius: var(--radius-md, 5px);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color var(--duration-instant, 80ms) ease-out,
+    background var(--duration-instant, 80ms) ease-out;
+  white-space: nowrap;
+}
+
+.refreshBtn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.refreshBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@keyframes spin-icon {
+  to { transform: rotate(360deg); }
+}
+
+.refreshBtnSpinning {
+  animation: spin-icon 0.6s linear infinite;
+}
+
 /* CLI install hint */
 .cliHint {
   margin: 0;

@@ -9,6 +9,7 @@ pub mod document_tool;
 pub mod factory;
 pub mod keys;
 pub mod mcp_doc_sidecar;
+pub mod model_cache;
 pub mod openai_api;
 pub mod path_fix;
 pub mod provider;

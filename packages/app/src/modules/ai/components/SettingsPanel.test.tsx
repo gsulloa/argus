@@ -5,14 +5,19 @@ import { render, screen, fireEvent, act, waitFor } from "@testing-library/react"
 // Hoisted mocks
 // ---------------------------------------------------------------------------
 
-const { mockUseAiSettings, mockSetSettings, mockSetApiKey, mockDeleteApiKey } = vi.hoisted(
-  () => ({
-    mockUseAiSettings: vi.fn(),
-    mockSetSettings: vi.fn(),
-    mockSetApiKey: vi.fn(),
-    mockDeleteApiKey: vi.fn(),
-  }),
-);
+const {
+  mockUseAiSettings,
+  mockSetSettings,
+  mockSetApiKey,
+  mockDeleteApiKey,
+  mockRefreshModels,
+} = vi.hoisted(() => ({
+  mockUseAiSettings: vi.fn(),
+  mockSetSettings: vi.fn(),
+  mockSetApiKey: vi.fn(),
+  mockDeleteApiKey: vi.fn(),
+  mockRefreshModels: vi.fn(),
+}));
 
 vi.mock("@/modules/ai/store", () => ({
   useAiSettings: () => mockUseAiSettings(),
@@ -23,6 +28,7 @@ vi.mock("@/modules/ai/api", () => ({
     setSettings: (...args: unknown[]) => mockSetSettings(...args),
     setApiKey: (...args: unknown[]) => mockSetApiKey(...args),
     deleteApiKey: (...args: unknown[]) => mockDeleteApiKey(...args),
+    refreshModels: (...args: unknown[]) => mockRefreshModels(...args),
   },
 }));
 
@@ -354,6 +360,135 @@ describe("SettingsPanel — refresh on open", () => {
     });
 
     await waitFor(() => {
+      expect(refresh).toHaveBeenCalled();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dynamic model listing tests (Task 7.5)
+// ---------------------------------------------------------------------------
+
+/** Fixed timestamp ~2 minutes ago so relative time is predictable in tests. */
+const TWO_MINUTES_AGO = Date.now() - 2 * 60 * 1000;
+
+const ANTHROPIC_WITH_DYNAMIC_MODELS: ProviderListEntry = {
+  ...ANTHROPIC_API_ENTRY,
+  models: {
+    models: ["claude-opus-4-8", "claude-new-x"],
+    source: "provider",
+    refreshed_at: TWO_MINUTES_AGO,
+    error: null,
+  },
+};
+
+const OPENAI_WITH_FALLBACK_ERROR: ProviderListEntry = {
+  ...OPENAI_API_ENTRY,
+  models: {
+    models: ["gpt-5.1", "gpt-5.1-mini", "gpt-4o"],
+    source: "fallback",
+    refreshed_at: null,
+    error: "HTTP 401: invalid API key",
+  },
+};
+
+describe("SettingsPanel — dynamic model listing (ModelListing)", () => {
+  beforeEach(() => {
+    mockSetSettings.mockResolvedValue(undefined);
+    mockSetApiKey.mockResolvedValue(undefined);
+    mockDeleteApiKey.mockResolvedValue(undefined);
+    mockRefreshModels.mockResolvedValue({
+      models: ["claude-opus-4-8", "claude-new-x", "claude-next"],
+      source: "provider",
+      refreshed_at: Date.now(),
+      error: null,
+    });
+  });
+
+  it("dropdown renders dynamic model (claude-new-x) when models.source is 'provider'", () => {
+    setupStore({
+      providers: [
+        ANTHROPIC_WITH_DYNAMIC_MODELS,
+        CODEX_CLI_ENTRY,
+        CLAUDE_CLI_ENTRY,
+        OPENAI_API_ENTRY,
+      ],
+    });
+    renderPanel();
+
+    const anthropicSelect = document.getElementById("model-anthropic-api") as HTMLSelectElement;
+    expect(anthropicSelect).toBeTruthy();
+    const options = Array.from(anthropicSelect.options).map((o) => o.value);
+    expect(options).toContain("claude-new-x");
+  });
+
+  it("source indicator shows 'From Anthropic API' and 'refreshed' when source is 'provider'", () => {
+    setupStore({
+      providers: [
+        ANTHROPIC_WITH_DYNAMIC_MODELS,
+        CODEX_CLI_ENTRY,
+        CLAUDE_CLI_ENTRY,
+        OPENAI_API_ENTRY,
+      ],
+    });
+    renderPanel();
+
+    // Should show the provider source text
+    expect(screen.getByText(/from anthropic api/i)).toBeTruthy();
+    // Should show the relative time (e.g. "2m ago" or "just now")
+    expect(screen.getByText(/refreshed/i)).toBeTruthy();
+  });
+
+  it("source indicator shows 'Built-in list' and surfaces error when source is 'fallback'", () => {
+    setupStore({
+      providers: [
+        CLAUDE_CLI_ENTRY,
+        CODEX_CLI_ENTRY,
+        ANTHROPIC_API_ENTRY,
+        OPENAI_WITH_FALLBACK_ERROR,
+      ],
+    });
+    renderPanel();
+
+    // Multiple providers may show "Built-in list"; confirm at least one is present
+    const builtInIndicators = screen.getAllByText(/built-in list/i);
+    expect(builtInIndicators.length).toBeGreaterThan(0);
+
+    // The error text should be surfaced inline in the OpenAI card
+    expect(screen.getByText(/http 401/i)).toBeTruthy();
+  });
+
+  it("clicking Refresh calls aiApi.refreshModels and then refresh()", async () => {
+    const refresh = makeRefresh();
+    setupStore({
+      providers: [
+        CLAUDE_CLI_ENTRY,
+        CODEX_CLI_ENTRY,
+        ANTHROPIC_API_ENTRY,
+        OPENAI_WITH_FALLBACK_ERROR,
+      ],
+      refresh,
+    });
+    renderPanel();
+
+    // Find the refresh button for the openai-api card
+    // The card is identified by the model select label area
+    const openaiSelect = document.getElementById("model-openai-api") as HTMLSelectElement;
+    expect(openaiSelect).toBeTruthy();
+
+    // Find the refresh button in the same card (closest .providerCard > refreshBtn)
+    const openaiCard = openaiSelect.closest("[class*='providerCard']") as HTMLElement;
+    expect(openaiCard).toBeTruthy();
+
+    const refreshBtn = openaiCard.querySelector("[aria-label='Refresh models']") as HTMLButtonElement;
+    expect(refreshBtn).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(refreshBtn);
+    });
+
+    await waitFor(() => {
+      expect(mockRefreshModels).toHaveBeenCalledWith("openai-api");
       expect(refresh).toHaveBeenCalled();
     });
   });

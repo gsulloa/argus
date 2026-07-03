@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use crate::error::{AppError, AppResult};
 use crate::modules::ai::types::{
     Capabilities, ChatDelta, ChatRequest, ChatRole, ChatStream, ChatTurn, GenerateDelta,
-    GenerateRequest, GenerateStream, InspectRequest, ProviderId, ValidationResult,
+    GenerateRequest, GenerateStream, InspectRequest, ModelListing, ProviderId, ValidationResult,
 };
 
 #[async_trait]
@@ -11,6 +11,13 @@ pub trait AiProvider: Send + Sync {
     fn id(&self) -> ProviderId;
     fn capabilities(&self) -> Capabilities;
     async fn validate(&self) -> ValidationResult;
+
+    /// Resolve the provider's available model list at runtime.
+    ///
+    /// API providers attempt a live fetch; CLI providers return the curated
+    /// fallback. Implementations MUST never return an empty list — the curated
+    /// fallback is always a safe last resort.
+    async fn list_models(&self) -> ModelListing;
 
     /// Multi-turn chat with rich event stream. Primary method going forward.
     async fn chat(&self, req: ChatRequest) -> AppResult<ChatStream>;
@@ -103,6 +110,9 @@ mod tests {
         }
         async fn validate(&self) -> ValidationResult {
             ValidationResult::Ready
+        }
+        async fn list_models(&self) -> ModelListing {
+            crate::modules::ai::caps::fallback_listing("anthropic-api", None)
         }
         async fn chat(&self, _req: ChatRequest) -> AppResult<ChatStream> {
             Err(AppError::Validation("not implemented".into()))
