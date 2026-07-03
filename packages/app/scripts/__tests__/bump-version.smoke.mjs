@@ -1,12 +1,24 @@
 #!/usr/bin/env node
 // Smoke test for scripts/bump-version.mjs.
 //
-// Tests the exported `nextVersion` pure function for all bump kinds,
-// suffix handling, and error cases.
+// Tests the exported pure functions for all bump kinds, lockfile patching,
+// changelog promotion, commit parsing, derivation, and merging helpers.
 //
 // Usage: node scripts/__tests__/bump-version.smoke.mjs
 
-import { nextVersion, setLockfileVersion, promoteUnreleased } from "../bump-version.mjs";
+import {
+  nextVersion,
+  setLockfileVersion,
+  promoteUnreleased,
+  parseCommitSubject,
+  existingPrNumbers,
+  deriveEntries,
+  mergeUnreleased,
+  ALLOWED_TYPES,
+  DENIED_SCOPES,
+  REPO_URL,
+  SKIP_PATTERNS,
+} from "../bump-version.mjs";
 
 function fail(msg) {
   console.error(`FAIL: ${msg}`);
@@ -177,12 +189,47 @@ version = "0.7.0"
   console.log("PASS: promoteUnreleased(non-empty) promoted with content preserved");
 }
 
-// 2. Empty [Unreleased] → placeholder inserted in promoted section.
+// 2a. Empty [Unreleased] with no subjects → internal-only fallback placeholder, NO throw.
+//     (This replaces the prior fail-on-empty test, per task 4.6.)
 {
   const input = [
     "# Changelog",
     "",
     "## [Unreleased]",
+    "",
+    "## [0.7.5] - 2026-07-01",
+    "",
+    "### Fixed",
+    "- Old fix",
+  ].join("\n");
+
+  // No subjects → no auto entries → placeholder.
+  const result = promoteUnreleased(input, "0.7.6", "2026-07-02", []);
+  const lines = result.split("\n");
+
+  const unrelIdx = lines.findIndex((l) => l === "## [Unreleased]");
+  const promotedIdx = lines.findIndex((l) => l === "## [0.7.6] - 2026-07-02");
+
+  if (unrelIdx === -1) fail("promoteUnreleased (empty→fallback): missing fresh [Unreleased] heading");
+  if (promotedIdx === -1) fail("promoteUnreleased (empty→fallback): missing promoted version heading");
+  if (!result.includes("_No user-facing changes._")) {
+    fail("promoteUnreleased (empty→fallback): must contain placeholder when body is empty and no subjects");
+  }
+  if (unrelIdx >= promotedIdx) {
+    fail("promoteUnreleased (empty→fallback): [Unreleased] must appear before promoted section");
+  }
+  console.log("PASS: promoteUnreleased(empty, no subjects) → internal-only placeholder, no throw");
+}
+
+// 2b. [Unreleased] with a hand-written "_No user-facing changes._" line →
+//     counts as content, promotes verbatim (no throw).
+{
+  const input = [
+    "# Changelog",
+    "",
+    "## [Unreleased]",
+    "",
+    "_No user-facing changes._",
     "",
     "## [0.7.5] - 2026-07-01",
     "",
@@ -196,10 +243,15 @@ version = "0.7.0"
   const unrelIdx = lines.findIndex((l) => l === "## [Unreleased]");
   const promotedIdx = lines.findIndex((l) => l === "## [0.7.6] - 2026-07-02");
 
-  if (unrelIdx === -1) fail("promoteUnreleased (empty): missing fresh [Unreleased] heading");
-  if (promotedIdx === -1) fail("promoteUnreleased (empty): missing promoted version heading");
-  if (!result.includes("_No user-facing changes._")) fail("promoteUnreleased (empty): placeholder must be inserted");
-  console.log("PASS: promoteUnreleased(empty) inserts placeholder");
+  if (unrelIdx === -1) fail("promoteUnreleased (explicit marker): missing fresh [Unreleased] heading");
+  if (promotedIdx === -1) fail("promoteUnreleased (explicit marker): missing promoted version heading");
+  if (!result.includes("_No user-facing changes._")) {
+    fail("promoteUnreleased (explicit marker): hand-written marker must be preserved in promoted section");
+  }
+  if (unrelIdx >= promotedIdx) {
+    fail("promoteUnreleased (explicit marker): [Unreleased] must appear before promoted section");
+  }
+  console.log("PASS: promoteUnreleased(explicit _No user-facing changes._ marker) promotes verbatim");
 }
 
 // 3. Missing [Unreleased] → text returned unchanged.
@@ -217,6 +269,394 @@ version = "0.7.0"
   if (result !== input) fail("promoteUnreleased (missing): text should be returned unchanged");
   if (result.includes("0.7.6")) fail("promoteUnreleased (missing): new version must NOT appear");
   console.log("PASS: promoteUnreleased(missing [Unreleased]) returns text unchanged");
+}
+
+// --- parseCommitSubject (task 4.1) ------------------------------------------
+
+// Real repo subject: feat with scope and PR number
+{
+  const got = parseCommitSubject("feat(postgres): stream SQL results incrementally (#233)");
+  if (!got) fail(`parseCommitSubject: expected non-null for feat(postgres) subject`);
+  if (got.type !== "feat") fail(`parseCommitSubject: expected type "feat", got "${got.type}"`);
+  if (got.scope !== "postgres") fail(`parseCommitSubject: expected scope "postgres", got "${got.scope}"`);
+  if (!got.description.includes("stream SQL results incrementally")) {
+    fail(`parseCommitSubject: description missing "stream SQL results incrementally": "${got.description}"`);
+  }
+  if (!got.prNumbers.includes(233)) fail(`parseCommitSubject: expected prNumbers to include 233`);
+  if (got.breaking) fail(`parseCommitSubject: expected breaking=false for non-breaking subject`);
+  console.log("PASS: parseCommitSubject(feat(postgres): stream SQL results incrementally (#233))");
+}
+
+// Real repo subject: fix with scope and PR number
+{
+  const got = parseCommitSubject("fix(saved-queries): reliably surface tab when opening a saved query (#220)");
+  if (!got) fail(`parseCommitSubject: expected non-null for fix(saved-queries) subject`);
+  if (got.type !== "fix") fail(`parseCommitSubject: expected type "fix", got "${got.type}"`);
+  if (got.scope !== "saved-queries") fail(`parseCommitSubject: expected scope "saved-queries", got "${got.scope}"`);
+  if (!got.prNumbers.includes(220)) fail(`parseCommitSubject: expected prNumbers to include 220`);
+  console.log("PASS: parseCommitSubject(fix(saved-queries): reliably surface tab when opening a saved query (#220))");
+}
+
+// Real repo subject: chore back-merge → null (not conventional-commit prefix we care about
+// … actually it IS conventional, type=chore, but skipPatterns would catch it; parseCommitSubject should return non-null)
+{
+  const got = parseCommitSubject("chore: back-merge v0.8.0 into dev");
+  if (!got) fail(`parseCommitSubject: expected non-null for chore: back-merge subject`);
+  if (got.type !== "chore") fail(`parseCommitSubject: expected type "chore", got "${got.type}"`);
+  console.log("PASS: parseCommitSubject(chore: back-merge v0.8.0 into dev) → type=chore");
+}
+
+// Real repo subject: Merge pull request → null (no conventional-commit match)
+{
+  const got = parseCommitSubject("Merge pull request #238 from gsulloa/release/v0.8.0");
+  if (got !== null) fail(`parseCommitSubject: expected null for merge commit, got ${JSON.stringify(got)}`);
+  console.log("PASS: parseCommitSubject(Merge pull request ...) → null");
+}
+
+// Real repo subject: feat(landing) → type=feat, scope=landing
+{
+  const got = parseCommitSubject("feat(landing): add /privacy and /terms legal pages (#224)");
+  if (!got) fail(`parseCommitSubject: expected non-null for feat(landing) subject`);
+  if (got.type !== "feat") fail(`parseCommitSubject: expected type "feat", got "${got.type}"`);
+  if (got.scope !== "landing") fail(`parseCommitSubject: expected scope "landing", got "${got.scope}"`);
+  if (!got.prNumbers.includes(224)) fail(`parseCommitSubject: expected prNumbers to include 224`);
+  console.log("PASS: parseCommitSubject(feat(landing): add /privacy and /terms legal pages (#224))");
+}
+
+// Breaking change feat!:
+{
+  const got = parseCommitSubject("feat!: remove deprecated API (#99)");
+  if (!got) fail(`parseCommitSubject: expected non-null for feat!: subject`);
+  if (got.type !== "feat") fail(`parseCommitSubject: expected type "feat", got "${got.type}"`);
+  if (!got.breaking) fail(`parseCommitSubject: expected breaking=true for feat!: subject`);
+  if (!got.prNumbers.includes(99)) fail(`parseCommitSubject: expected prNumbers to include 99`);
+  console.log("PASS: parseCommitSubject(feat!: remove deprecated API (#99)) → breaking=true");
+}
+
+// Multiple trailing (#NNNN) groups → all stripped from description, all captured
+{
+  const got = parseCommitSubject(
+    "feat(postgres): stream SQL results incrementally (#233) (#237)",
+  );
+  if (!got) fail(`parseCommitSubject: expected non-null for multi-PR subject`);
+  if (/\(#\d+\)/.test(got.description))
+    fail(
+      `parseCommitSubject: description should have no leftover (#N), got "${got.description}"`,
+    );
+  if (got.description !== "stream SQL results incrementally")
+    fail(
+      `parseCommitSubject: expected clean description, got "${got.description}"`,
+    );
+  if (!(got.prNumbers.includes(233) && got.prNumbers.includes(237)))
+    fail(`parseCommitSubject: expected prNumbers to include 233 and 237`);
+  console.log(
+    "PASS: parseCommitSubject(multi-PR (#233) (#237)) → description stripped, both captured",
+  );
+}
+
+// Non-conforming line → null
+{
+  const got = parseCommitSubject("just some text");
+  if (got !== null) fail(`parseCommitSubject: expected null for non-conforming line, got ${JSON.stringify(got)}`);
+  console.log("PASS: parseCommitSubject(just some text) → null");
+}
+
+// --- existingPrNumbers (task 4.3) -------------------------------------------
+
+// Parses markdown-link form [#229](...) and bare (# 221) form
+{
+  const body = [
+    "### Added",
+    "- Some feature ([#229](https://github.com/gsulloa/argus/pull/229))",
+    "### Fixed",
+    "- A fix (#221)",
+  ].join("\n");
+
+  const got = existingPrNumbers(body);
+  if (!got.has(229)) fail(`existingPrNumbers: expected to find 229 in set`);
+  if (!got.has(221)) fail(`existingPrNumbers: expected to find 221 in set`);
+  if (got.size !== 2) fail(`existingPrNumbers: expected size 2, got ${got.size}`);
+  console.log("PASS: existingPrNumbers parses [#229](...) and (#221) forms");
+}
+
+// Empty body → empty set
+{
+  const got = existingPrNumbers("");
+  if (got.size !== 0) fail(`existingPrNumbers: expected empty set for empty body, got size ${got.size}`);
+  console.log("PASS: existingPrNumbers('') → empty set");
+}
+
+// --- deriveEntries (task 4.2) ------------------------------------------------
+
+const cfg = {
+  allowedTypes: ALLOWED_TYPES,
+  deniedScopes: DENIED_SCOPES,
+  skipPatterns: SKIP_PATTERNS,
+  repoUrl: REPO_URL,
+};
+
+// Correct type→group mapping; excludes chore/ci/docs/refactor/merge/release and landing scope
+{
+  const subjects = [
+    "feat(postgres): stream SQL results incrementally (#233)",        // → Added
+    "fix(saved-queries): reliably surface tab when opening a saved query (#220)", // → Fixed
+    "chore: back-merge v0.8.0 into dev",                              // → skip (skip pattern)
+    "Merge pull request #238 from gsulloa/release/v0.8.0",           // → skip (no CC match + skip pattern)
+    "feat(landing): add /privacy and /terms legal pages (#224)",      // → skip (denied scope)
+    "ci(rust): fail-fast rustfmt job (#239)",                         // → skip (ci type not allowed)
+    "docs: update README (#100)",                                     // → skip (docs type not allowed)
+    "refactor(db): clean up connection pool (#101)",                  // → skip (refactor not allowed)
+    "perf(query): faster index scan (#150)",                          // → Changed
+    "feat!: remove deprecated API (#99)",                             // → Added (breaking, but still feat)
+    "just some text",                                                  // → skip (no CC match)
+  ];
+
+  const got = deriveEntries(subjects, cfg);
+
+  if (got.Added.length !== 2) fail(`deriveEntries: expected 2 Added entries, got ${got.Added.length}`);
+  if (got.Fixed.length !== 1) fail(`deriveEntries: expected 1 Fixed entry, got ${got.Fixed.length}`);
+  if (got.Changed.length !== 1) fail(`deriveEntries: expected 1 Changed entry, got ${got.Changed.length}`);
+
+  const addedBullets = got.Added.map((e) => e.bullet);
+  if (!addedBullets.some((b) => b.includes("stream SQL results incrementally"))) {
+    fail(`deriveEntries: expected postgres feat in Added`);
+  }
+  if (!addedBullets.some((b) => b.includes("remove deprecated API"))) {
+    fail(`deriveEntries: expected breaking feat in Added`);
+  }
+  if (!got.Fixed[0].bullet.includes("reliably surface tab")) {
+    fail(`deriveEntries: expected saved-queries fix in Fixed`);
+  }
+  if (!got.Changed[0].bullet.includes("faster index scan")) {
+    fail(`deriveEntries: expected perf in Changed`);
+  }
+
+  // Verify PR links are rendered
+  if (!got.Added[0].bullet.includes(`(${REPO_URL}/pull/`)) {
+    fail(`deriveEntries: expected PR link in Added bullet`);
+  }
+
+  console.log("PASS: deriveEntries correct type→group mapping; excludes disallowed types/scopes");
+}
+
+// Subject with no PR number still generates an entry (no link)
+{
+  const subjects = ["feat: add dark mode support"];
+  const got = deriveEntries(subjects, cfg);
+  if (got.Added.length !== 1) fail(`deriveEntries (no PR): expected 1 Added entry, got ${got.Added.length}`);
+  if (got.Added[0].prNumber !== null) fail(`deriveEntries (no PR): expected prNumber=null`);
+  if (got.Added[0].bullet.includes("(#")) fail(`deriveEntries (no PR): bullet should NOT contain PR link`);
+  if (!got.Added[0].bullet.includes("add dark mode support")) {
+    fail(`deriveEntries (no PR): bullet should contain description`);
+  }
+  console.log("PASS: deriveEntries subject with no PR number → entry with no link");
+}
+
+// --- mergeUnreleased (task 4.4) ----------------------------------------------
+
+// Hand-written entry for #229 present → no duplicate auto entry for #229;
+// auto entries for un-listed PRs appended under correct groups;
+// group ordering and empty-group omission.
+{
+  const handWrittenBody = [
+    "### Added",
+    "- Per-connection Context Queries in the sidebar ([#229](https://github.com/gsulloa/argus/pull/229))",
+    "",
+    "### Fixed",
+    "- Postgres interval values now render correctly ([#219](https://github.com/gsulloa/argus/pull/219))",
+  ].join("\n");
+
+  const derivedGroups = {
+    Added: [
+      { prNumber: 229, bullet: "- Context Queries — auto-generated ([#229](https://github.com/gsulloa/argus/pull/229))" },
+      { prNumber: 223, bullet: "- In-app changelog viewer ([#223](https://github.com/gsulloa/argus/pull/223))" },
+    ],
+    Changed: [
+      { prNumber: 233, bullet: "- Streaming query results ([#233](https://github.com/gsulloa/argus/pull/233))" },
+    ],
+    Fixed: [
+      { prNumber: 220, bullet: "- Opening saved query reliably ([#220](https://github.com/gsulloa/argus/pull/220))" },
+    ],
+  };
+
+  const existingPrs = existingPrNumbers(handWrittenBody); // {229, 219}
+
+  const merged = mergeUnreleased(handWrittenBody, derivedGroups, existingPrs);
+
+  // #229 should appear exactly once (hand-written, not duplicated)
+  const count229 = (merged.match(/#229/g) ?? []).length;
+  if (count229 !== 1) fail(`mergeUnreleased: #229 should appear exactly once, got ${count229} occurrences`);
+
+  // #223 should appear (new auto entry)
+  if (!merged.includes("#223")) fail(`mergeUnreleased: #223 should be added as new auto entry`);
+
+  // #233 (Changed) should appear
+  if (!merged.includes("#233")) fail(`mergeUnreleased: #233 (Changed) should appear`);
+
+  // #220 (Fixed auto) should appear
+  if (!merged.includes("#220")) fail(`mergeUnreleased: #220 (Fixed auto) should appear`);
+
+  // Group ordering: Added before Changed before Fixed
+  const addedIdx = merged.indexOf("### Added");
+  const changedIdx = merged.indexOf("### Changed");
+  const fixedIdx = merged.indexOf("### Fixed");
+  if (addedIdx === -1) fail(`mergeUnreleased: missing ### Added`);
+  if (changedIdx === -1) fail(`mergeUnreleased: missing ### Changed`);
+  if (fixedIdx === -1) fail(`mergeUnreleased: missing ### Fixed`);
+  if (addedIdx >= changedIdx) fail(`mergeUnreleased: Added must come before Changed`);
+  if (changedIdx >= fixedIdx) fail(`mergeUnreleased: Changed must come before Fixed`);
+
+  // Removed group should be omitted (no entries)
+  if (merged.includes("### Removed")) fail(`mergeUnreleased: Removed group should be omitted when empty`);
+
+  console.log("PASS: mergeUnreleased deduplicates, appends, orders groups, omits empty groups");
+}
+
+// --- promoteUnreleased end-to-end with subjects (task 4.5) ------------------
+
+// (a) hand-written + auto merge and promote
+{
+  const input = [
+    "# Changelog",
+    "",
+    "## [Unreleased]",
+    "",
+    "### Added",
+    "- Per-connection Context Queries ([#229](https://github.com/gsulloa/argus/pull/229))",
+    "",
+    "## [0.7.5] - 2026-07-01",
+    "",
+    "### Added",
+    "- Old feature",
+  ].join("\n");
+
+  const subjects = [
+    "feat(postgres): stream SQL results incrementally (#233)",
+    "fix(saved-queries): reliably surface tab when opening a saved query (#220)",
+    "chore: back-merge v0.8.0 into dev",                   // skip
+    "Merge pull request #238 from gsulloa/release/v0.8.0", // skip
+    "feat(landing): add /privacy and /terms legal pages (#224)", // skip (denied scope)
+  ];
+
+  const result = promoteUnreleased(input, "0.8.0", "2026-07-03", subjects);
+  const lines = result.split("\n");
+
+  const unrelIdx = lines.findIndex((l) => l === "## [Unreleased]");
+  const promotedIdx = lines.findIndex((l) => l === "## [0.8.0] - 2026-07-03");
+
+  if (unrelIdx === -1) fail("promoteUnreleased (e2e a): missing fresh [Unreleased]");
+  if (promotedIdx === -1) fail("promoteUnreleased (e2e a): missing promoted heading");
+  if (unrelIdx >= promotedIdx) fail("promoteUnreleased (e2e a): [Unreleased] must be before promoted");
+
+  // Hand-written entry preserved
+  if (!result.includes("#229")) fail("promoteUnreleased (e2e a): hand-written #229 should be preserved");
+  // Auto-derived feat(postgres) added
+  if (!result.includes("#233")) fail("promoteUnreleased (e2e a): auto-derived #233 should be added");
+  // Auto-derived fix added
+  if (!result.includes("#220")) fail("promoteUnreleased (e2e a): auto-derived #220 should be added");
+  // Excluded entries must NOT appear
+  if (result.split("## [0.8.0]")[1]?.includes("#224")) {
+    fail("promoteUnreleased (e2e a): landing feat #224 should NOT appear in promoted section");
+  }
+  // No placeholder when bullets exist
+  if (result.includes("_No user-facing changes._")) {
+    fail("promoteUnreleased (e2e a): placeholder must NOT appear when bullets exist");
+  }
+  console.log("PASS: promoteUnreleased(e2e a) hand-written + auto merge and promote");
+}
+
+// (b) only chores/landing → internal-only placeholder, no throw
+{
+  const input = [
+    "# Changelog",
+    "",
+    "## [Unreleased]",
+    "",
+    "## [0.7.5] - 2026-07-01",
+  ].join("\n");
+
+  const subjects = [
+    "chore: back-merge v0.8.0 into dev",
+    "Merge pull request #238 from gsulloa/release/v0.8.0",
+    "feat(landing): add /privacy and /terms legal pages (#224)",
+    "ci(rust): fail-fast rustfmt job (#239)",
+    "just some text",
+  ];
+
+  let threw = false;
+  let result;
+  try {
+    result = promoteUnreleased(input, "0.8.0", "2026-07-03", subjects);
+  } catch (e) {
+    threw = true;
+    fail(`promoteUnreleased (e2e b): must NOT throw, got: ${e.message}`);
+  }
+
+  if (threw) fail("promoteUnreleased (e2e b): expected no throw for internal-only release");
+  if (!result.includes("_No user-facing changes._")) {
+    fail("promoteUnreleased (e2e b): must contain placeholder for internal-only release");
+  }
+  const lines = result.split("\n");
+  const unrelIdx = lines.findIndex((l) => l === "## [Unreleased]");
+  const promotedIdx = lines.findIndex((l) => l === "## [0.8.0] - 2026-07-03");
+  if (unrelIdx === -1 || promotedIdx === -1) fail("promoteUnreleased (e2e b): missing headings");
+  if (unrelIdx >= promotedIdx) fail("promoteUnreleased (e2e b): [Unreleased] must be before promoted");
+  console.log("PASS: promoteUnreleased(e2e b) only chores/landing → internal-only placeholder, no throw");
+}
+
+// (c) hand-written only, no subjects → unchanged behavior (hand-written preserved)
+{
+  const input = [
+    "# Changelog",
+    "",
+    "## [Unreleased]",
+    "",
+    "### Fixed",
+    "- Some hand-written fix (#300)",
+    "",
+    "## [0.7.5] - 2026-07-01",
+  ].join("\n");
+
+  const result = promoteUnreleased(input, "0.8.0", "2026-07-03", []);
+  if (!result.includes("- Some hand-written fix (#300)")) {
+    fail("promoteUnreleased (e2e c): hand-written entry must be preserved with no subjects");
+  }
+  if (result.includes("_No user-facing changes._")) {
+    fail("promoteUnreleased (e2e c): placeholder must NOT appear when hand-written entry exists");
+  }
+  const lines = result.split("\n");
+  const promotedIdx = lines.findIndex((l) => l === "## [0.8.0] - 2026-07-03");
+  if (promotedIdx === -1) fail("promoteUnreleased (e2e c): missing promoted heading");
+  console.log("PASS: promoteUnreleased(e2e c) hand-written only, no subjects → unchanged behavior");
+}
+
+// 4.6: internal-only-fallback replaces the prior fail-on-empty behavior.
+//      Empty [Unreleased] + no subjects → placeholder, NOT a throw.
+{
+  const input = [
+    "# Changelog",
+    "",
+    "## [Unreleased]",
+    "",
+    "## [0.7.5] - 2026-07-01",
+    "",
+    "### Fixed",
+    "- Old fix",
+  ].join("\n");
+
+  let threw = false;
+  let result;
+  try {
+    result = promoteUnreleased(input, "0.7.6", "2026-07-02", []);
+  } catch (e) {
+    threw = true;
+  }
+
+  if (threw) fail("promoteUnreleased (task 4.6 fallback): must NOT throw — fail-on-empty replaced by internal-only fallback");
+  if (!result.includes("_No user-facing changes._")) {
+    fail("promoteUnreleased (task 4.6 fallback): must contain internal-only placeholder");
+  }
+  console.log("PASS: promoteUnreleased(task 4.6) empty+no subjects → internal-only fallback, no throw");
 }
 
 console.log("All bump-version cases passed.");

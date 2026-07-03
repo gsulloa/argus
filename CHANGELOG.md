@@ -5,15 +5,30 @@ All notable changes to Argus are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+**Contributing**: changelog entries are auto-generated from Conventional-Commit PR titles at release time. Hand-write a bullet under `## [Unreleased]` only when you want better prose than the PR title; hand-written entries are preserved verbatim and are never duplicated by the auto-generation.
+
 ## [Unreleased]
 
 ## [0.8.0] - 2026-07-03
 
-_No user-facing changes._
+### Added
+- Dynamic AI model discovery — chat model lists resolve live from the provider APIs (Anthropic/OpenAI) with the curated lists as a fallback, plus a force-refresh ([#227](https://github.com/gsulloa/argus/pull/227))
+- Per-conversation provider and model selector in the AI chat panel — switch provider or model mid-conversation without changing your defaults ([#226](https://github.com/gsulloa/argus/pull/226))
+- Active connection color surfaced as an accent stripe in the workspace header and made more prominent in the connection selector ([#228](https://github.com/gsulloa/argus/pull/228))
+
+### Changed
+- Postgres single-statement `SELECT` results now stream into the grid incrementally instead of waiting for the full fetch; cancelling a streaming query keeps the rows already delivered ([#233](https://github.com/gsulloa/argus/pull/233))
 
 ## [0.7.6] - 2026-07-02
 
-_No user-facing changes._
+### Added
+- Per-connection Context Queries in the sidebar — nested folders with create/rename/delete, drag-and-drop organization, and saving the current query into the connection's linked context folder ([#229](https://github.com/gsulloa/argus/pull/229))
+- In-app changelog viewer ("What's new") reachable from the command palette and shown automatically after an update ([#223](https://github.com/gsulloa/argus/pull/223))
+- Row selection and whole-row copy in the Postgres SQL editor's raw-query results ([#221](https://github.com/gsulloa/argus/pull/221))
+
+### Fixed
+- Postgres `interval`, `oid`, `inet`, and `xid` values now render their actual value instead of `<type>` placeholders, in both the data grid and SQL editor results ([#219](https://github.com/gsulloa/argus/pull/219))
+- Opening a saved query now reliably surfaces its tab instead of silently doing nothing ([#220](https://github.com/gsulloa/argus/pull/220))
 
 ## [0.7.5] - 2026-07-01
 

@@ -4,6 +4,7 @@ import { Palette } from "@/platform/command-palette";
 import { usePalette, useCommandHotkeys } from "@/platform/command-palette";
 import { useShortcuts } from "@/platform/shell/useShortcuts";
 import { VersionIndicator } from "@/platform/shell/VersionIndicator";
+import { ChangelogHost } from "@/platform/changelog";
 import { FeedbackHost, FeedbackAffordance } from "@/platform/feedback";
 import { ConnectionsSection } from "@/platform/shell/Sidebar";
 import { SidebarScrollContext } from "@/platform/shell/sidebarScroll";
@@ -88,6 +89,10 @@ export function ManagerShell() {
       {/* Feedback form host: registers the "Send feedback" palette command,
           listens for the affordance event, and renders the dialog. */}
       <FeedbackHost />
+      {/* Changelog host: registers the "Help: Show changelog" palette command
+          and auto-opens the viewer after an update. Mounted here so the
+          command and auto-open prompt appear in the launch window. */}
+      <ChangelogHost />
     </SidebarScrollContext.Provider>
   );
 }
