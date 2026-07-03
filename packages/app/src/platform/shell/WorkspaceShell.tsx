@@ -27,7 +27,7 @@
  *   ⌘,          → settings tab
  *   Tab / ⇧Tab  → cycle tabs
  */
-import { useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -47,6 +47,10 @@ import { useOpenConnections } from "@/platform/connection-registry/useOpenConnec
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useConnectionGroups } from "@/platform/connection-registry/useConnectionGroups";
 import { ConnectionRail, EngineIcon, deriveEnv, engineLabel } from "./ConnectionRail";
+import {
+  isConnectionColor,
+  connectionColorVar,
+} from "@/platform/connection-registry/colors";
 import { ConnectionSubtree } from "./ConnectionSubtree";
 import { ConnectionHeaderActions } from "./ConnectionHeaderActions";
 import { useFocusedConnection } from "./FocusedConnectionContext";
@@ -304,7 +308,7 @@ function WorkspaceSidebar() {
  * formatted as "<group name> - <connection name>".  If the connection has no
  * group_id (or the group cannot be found), only the connection name is shown.
  */
-function ConnectionIdentityHeader({ connectionId }: { connectionId: string }) {
+export function ConnectionIdentityHeader({ connectionId }: { connectionId: string }) {
   const { items } = useConnections();
   const { items: groups } = useConnectionGroups();
   const { getActive } = useActiveDynamoConnections();
@@ -335,8 +339,21 @@ function ConnectionIdentityHeader({ connectionId }: { connectionId: string }) {
     ? `${groupName} - ${connection.name}`
     : connection.name;
 
+  // Derive color accent — gated on isConnectionColor so null/unknown values
+  // never leak into the inline style. Colored headers get a data-colored attr
+  // and a --header-accent CSS var; uncolored headers are untouched.
+  // The type guard is used inline (not via a `hasColor` boolean) so TypeScript
+  // can narrow connection.color to ConnectionColor inside the ternary.
+  const headerAccentStyle: React.CSSProperties | undefined = isConnectionColor(connection.color)
+    ? ({ "--header-accent": connectionColorVar(connection.color) } as React.CSSProperties)
+    : undefined;
+
   return (
-    <div className={styles.identityHeader}>
+    <div
+      className={styles.identityHeader}
+      data-colored={headerAccentStyle ? "true" : undefined}
+      style={headerAccentStyle}
+    >
       <span className={styles.identityIcon}>
         <EngineIcon kind={connection.kind} />
       </span>

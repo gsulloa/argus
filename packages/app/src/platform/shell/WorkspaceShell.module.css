@@ -44,6 +44,13 @@
   user-select: none;
 }
 
+/* Colored header — 2px top accent stripe rendered via inset box-shadow.
+   Does NOT change the content box: height/padding/alignment are identical
+   to the uncolored state. Only present when data-colored="true". */
+.identityHeader[data-colored] {
+  box-shadow: inset 0 2px 0 0 var(--header-accent);
+}
+
 .identityIcon {
   display: inline-flex;
   align-items: center;
