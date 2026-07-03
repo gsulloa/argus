@@ -93,9 +93,16 @@
   flex-shrink: 0;
 }
 
-/* Explicit palette color — set via inline --dot-color CSS var (Decision 4) */
+/* Explicit palette color — set via inline --dot-color CSS var (Decision 4).
+   Slightly larger than the heuristic fallback (7px vs 5px) and carries a
+   soft color glow so the explicit color reads clearly at a glance. */
 .envDot[data-color] {
   background: var(--dot-color);
+  width: 7px;
+  height: 7px;
+  bottom: 4px;
+  right: 4px;
+  box-shadow: 0 0 0 1px var(--surface), 0 0 3px 0 var(--dot-color);
 }
 
 /* prod heuristic → warning/danger color (fallback when no explicit color) */

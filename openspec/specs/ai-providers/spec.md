@@ -31,7 +31,9 @@ The `Capabilities` struct returned by each provider MUST declare:
 - `supports_streaming: bool` — `true` for all four providers (CLIs stream stdout, APIs support SSE even if v1 doesn't surface it).
 - `requires_api_key: bool` — `false` for CLIs; `true` for APIs.
 - `default_model: &'static str` — non-empty.
-- `available_models: &'static [&'static str]` — non-empty, MUST contain `default_model`.
+- `available_models: &'static [&'static str]` — the curated local fallback list, non-empty, MUST contain `default_model`. This field is the safe fallback and is always populated regardless of dynamic discovery.
+
+The effective, possibly-dynamic model list is NOT carried on `Capabilities`; it is resolved separately (see the `ai-model-discovery` capability and the `ProviderListEntry` model provenance below) so that `Capabilities` can remain a cheap, synchronous, static value.
 
 Consumers (UI, factory) MUST branch on capabilities, not on `ProviderId`, when behaviour differs (e.g. "does this provider need an API key from the keyring").
 
@@ -100,7 +102,7 @@ The struct `GenerateRequest` MUST contain:
 - `prompt: String` — the user's natural-language description.
 - `context_path: Option<PathBuf>` — passed to CLIs as `current_dir`; ignored by APIs.
 - `context_payload: AiPayload` — the existing payload from `modules::context::ai`; embedded by APIs in the system prompt; ignored by CLIs.
-- `model: Option<String>` — `None` means "use provider default"; a `Some(s)` value MUST be present in the provider's `available_models` list or the provider MUST return `AppError::Validation { message: "unsupported model: …" }` before spawning anything.
+- `model: Option<String>` — `None` means "use provider default"; a `Some(s)` value MUST be present in the provider's **effective** model list (dynamic when available, curated fallback otherwise) or the provider MUST return `AppError::Validation { message: "unsupported model: …" }` before spawning anything.
 
 The `GenerateStream` type alias MUST resolve to `Pin<Box<dyn Stream<Item = AppResult<GenerateDelta>> + Send>>`. `GenerateDelta` MUST be an enum with at least `Text(String)` and `Done { finish_reason: Option<String> }` variants. A successful generation MUST emit zero or more `Text` items followed by exactly one `Done`. An error MUST be yielded as `Err(...)` and MUST terminate the stream.
 
@@ -112,7 +114,7 @@ The `GenerateStream` type alias MUST resolve to `Pin<Box<dyn Stream<Item = AppRe
 
 #### Scenario: Unsupported model rejected before spawning
 
-- **WHEN** `generate_sql` is called with `model: Some("gpt-9000")` against `AnthropicApi`
+- **WHEN** `generate_sql` is called with a `model` that is absent from the effective model list against `AnthropicApi`
 - **THEN** the call returns `Err(AppError::Validation { message })` where `message` mentions the unsupported model
 - **AND** no HTTP request is made
 
@@ -386,6 +388,8 @@ API providers MUST NOT emit `ToolCallStarted` or `ToolCallFinished` events in v1
 
 A `ChatSessionRegistry` MUST be stored in app state (`Mutex<HashMap<String, ChatSession>>`, keyed by session id). Each `ChatSession` holds the bound `ProviderId`, the connection id, the context path captured at session-open time, the conversation `turns`, and (if running) a `tokio::task::JoinHandle` for the in-flight turn.
 
+The bound `ProviderId` is session-scoped and MAY change over the session's lifetime when a send supplies an explicit `provider_id` override that differs from the current binding. When the bound provider changes, the registry MUST update the bound `ProviderId` and MUST clear the session's provider-specific `provider_state` (e.g. `resume_id`, `codex_warning_shown`); the conversation `turns` MUST be preserved. An optional session model override MAY be carried per send and MUST NOT be persisted to `ai_settings` or `ai_connection_overrides`.
+
 The registry MUST evict the entry on `ai_chat_close(session_id)`. When `MAX_SESSIONS` (64) is exceeded the registry MUST evict the least-recently-used entry; the evicted session's in-flight task MUST be aborted.
 
 #### Scenario: Registry stores active sessions
@@ -393,6 +397,14 @@ The registry MUST evict the entry on `ai_chat_close(session_id)`. When `MAX_SESS
 - **GIVEN** the frontend opens a chat with session id `"abc-123"`
 - **WHEN** the user sends a turn
 - **THEN** the registry contains an entry under `"abc-123"` with one User turn appended
+
+#### Scenario: Explicit provider override rebinds and keeps history
+
+- **GIVEN** session `"abc-123"` is bound to `claude-cli` with 2 turns and a `resume_id` in `provider_state`
+- **WHEN** `ai_chat_send("abc-123", prompt, conn, Some("anthropic-api"), None, …)` is invoked
+- **THEN** the session's bound provider becomes `anthropic-api`
+- **AND** the 2 existing turns are preserved and re-sent
+- **AND** the previous provider's `resume_id`/`provider_state` is cleared
 
 #### Scenario: ai_chat_close drops the session
 
@@ -411,7 +423,7 @@ The registry MUST evict the entry on `ai_chat_close(session_id)`. When `MAX_SESS
 
 The crate MUST register the following Tauri commands:
 
-- `ai_chat_send(session_id: String, prompt: String, connection_id: Option<String>) -> ()` — appends a User turn to the session's history, resolves the bound provider (or resolves on first call when the session is new), spawns a Tokio task that drives the provider's `chat()` stream and emits `ai-chat-delta:<session_id>` events with `ChatDelta` payloads, returns `Ok(())` as soon as the task is spawned.
+- `ai_chat_send(session_id: String, prompt: String, connection_id: Option<String>, provider_id: Option<String>, model: Option<String>) -> ()` — appends a User turn to the session's history, then resolves the provider with the precedence: (1) the explicit `provider_id` argument when present (binding or rebinding the session per the chat session registry rules); (2) otherwise the session's already-bound provider; (3) otherwise `AiSettings::resolve(...)` for a brand-new session. An explicit `model` argument, when present, MUST be threaded through `ChatRequest.model` so the provider's model resolution prefers it over the configured model, without persisting it to settings. The command spawns a Tokio task that drives the provider's `chat()` stream and emits `ai-chat-delta:<session_id>` events with `ChatDelta` payloads, returning `Ok(())` as soon as the task is spawned. An unknown or invalid `provider_id` MUST surface as a `ChatDelta::Error` carrying the validation message.
 - `ai_chat_cancel(session_id: String) -> ()` — aborts the in-flight task for that session if any; idempotent if nothing is running.
 - `ai_chat_close(session_id: String) -> ()` — aborts in-flight task (if any) and evicts the session from the registry.
 - `ai_chat_history(session_id: String) -> Vec<ChatTurn>` — returns the current persisted turns; used by the frontend on tab remount in the future, no-op in v1.
@@ -420,9 +432,21 @@ The previously registered `ai_generate_sql` command from `add-ai-providers` MAY 
 
 #### Scenario: ai_chat_send spawns a task and emits events
 
-- **WHEN** the frontend calls `ai_chat_send("abc", "hi", None)`
+- **WHEN** the frontend calls `ai_chat_send("abc", "hi", None, None, None)`
 - **THEN** the call returns `Ok(())` promptly
 - **AND** the frontend's listener on `ai-chat-delta:abc` receives one or more `ChatDelta` events followed by `Done`
+
+#### Scenario: Explicit provider override is honored without touching settings
+
+- **WHEN** the frontend calls `ai_chat_send("abc", "hi", Some(conn), Some("anthropic-api"), Some("claude-sonnet-4-6"))`
+- **THEN** the turn is answered by `anthropic-api` using model `claude-sonnet-4-6`
+- **AND** `ai_settings` and `ai_connection_overrides` remain unchanged
+
+#### Scenario: Invalid provider override surfaces an error
+
+- **WHEN** the frontend calls `ai_chat_send("abc", "hi", Some(conn), Some("not-a-provider"), None)`
+- **THEN** a `ChatDelta::Error` is emitted on `ai-chat-delta:abc` describing the invalid provider
+- **AND** the session's existing binding is left unchanged
 
 #### Scenario: ai_chat_cancel kills CLI process
 
@@ -508,4 +532,23 @@ still MUST be rejected with `AppError::Validation`.
 - **GIVEN** `ai_settings.anthropic_api_model = "claude-sonnet-4-6"`
 - **WHEN** the model for `AnthropicApi` is resolved
 - **THEN** the resolved model is `"claude-sonnet-4-6"`
+
+### Requirement: ai_list_providers reports effective models and provenance
+
+The `ai_list_providers` command MUST include, per provider entry, the effective model list and its provenance so the frontend can render an accurate dropdown and a source indicator. `ProviderListEntry` MUST carry a `models` field of shape `ModelListing` (see `ai-model-discovery`) with `models`, `source` (`provider`/`cache`/`fallback`), `refreshed_at`, and `error`. Resolving these lists MUST reuse the `ModelCache` (serving `source: cache` when unexpired) and MUST NOT block the command beyond the per-provider 3-second discovery timeout; a provider whose discovery fails still returns its curated fallback list.
+
+The static `capabilities.available_models` field MUST continue to be present and populated with the curated fallback for backward compatibility.
+
+#### Scenario: Entry carries effective models and source
+
+- **WHEN** `ai_list_providers` is called
+- **THEN** each returned entry includes a `models` object with a non-empty list and a `source` of `provider`, `cache`, or `fallback`
+
+#### Scenario: Failing discovery still returns curated fallback
+
+- **GIVEN** `OpenAiApi` discovery fails (no key or network error)
+- **WHEN** `ai_list_providers` is called
+- **THEN** that entry's `models.source` is `fallback`
+- **AND** `models.models` equals the curated OpenAI array
+- **AND** `capabilities.available_models` is still populated with the curated array
 

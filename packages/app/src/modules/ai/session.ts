@@ -10,7 +10,7 @@
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { aiApi } from "./api";
-import type { AttachedResult, ChatDelta, ChatRole, ChatTurn, ToolUseRecord } from "./types";
+import type { AttachedResult, ChatDelta, ChatRole, ChatTurn, ProviderId, ToolUseRecord } from "./types";
 
 // Suppress TS unused warning — ChatRole is used as a type in the interface.
 void (undefined as unknown as ChatRole);
@@ -23,6 +23,15 @@ export interface ChatSessionSnapshot {
   errorMessage: string | null;
   /** Latest transient status message from the provider, cleared on Done/Error. */
   pendingStatus: string | null;
+  /** Session-scoped provider override chosen by the user via the selector. */
+  providerId: ProviderId | null;
+  /** Session-scoped model override (may be null if provider default is used). */
+  model: string | null;
+  /**
+   * True once the user has explicitly chosen a provider via the in-panel selector.
+   * Suppresses the "settings changed" notice when true.
+   */
+  providerOverridden: boolean;
 }
 
 export class ChatSession {
@@ -32,6 +41,15 @@ export class ChatSession {
   state: ChatSessionState = "idle";
   errorMessage: string | null = null;
   pendingStatus: string | null = null;
+  /** Session-scoped provider chosen by the user (or initialized from resolved provider). */
+  providerId: ProviderId | null = null;
+  /** Session-scoped model (null = use provider default). */
+  model: string | null = null;
+  /**
+   * True once the user has explicitly selected a provider via the in-panel selector.
+   * Suppresses the "settings changed" notice for this session.
+   */
+  providerOverridden: boolean = false;
 
   /** Tool calls currently in flight, keyed by tool_use id. */
   private pendingTools: Map<string, ToolUseRecord> = new Map();
@@ -58,7 +76,33 @@ export class ChatSession {
       state: this.state,
       errorMessage: this.errorMessage,
       pendingStatus: this.pendingStatus,
+      providerId: this.providerId,
+      model: this.model,
+      providerOverridden: this.providerOverridden,
     };
+  }
+
+  /**
+   * Initialize the session provider from the resolved provider (override → global default).
+   * Called once by the owning component on mount when the resolved provider is known.
+   * Does NOT set providerOverridden — this is the initial resolution, not a user choice.
+   */
+  initProvider(providerId: ProviderId, model: string | null): void {
+    if (this.providerOverridden) return; // user already chose — don't clobber
+    this.providerId = providerId;
+    this.model = model;
+    this.notify();
+  }
+
+  /**
+   * Explicitly override the provider for this session (user chose via the selector).
+   * Sets providerOverridden = true so the settings-change notice is suppressed.
+   */
+  setProvider(providerId: ProviderId, model: string | null): void {
+    this.providerId = providerId;
+    this.model = model;
+    this.providerOverridden = true;
+    this.notify();
   }
 
   /**
@@ -81,6 +125,9 @@ export class ChatSession {
       state: this.state,
       errorMessage: this.errorMessage,
       pendingStatus: this.pendingStatus,
+      providerId: this.providerId,
+      model: this.model,
+      providerOverridden: this.providerOverridden,
     };
     for (const fn of this.listeners) fn();
   }
@@ -120,6 +167,8 @@ export class ChatSession {
         prompt,
         connectionId: this.connectionId,
         attachedResults,
+        providerId: this.providerId,
+        model: this.model,
       });
     } catch (e) {
       this.state = "error";

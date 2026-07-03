@@ -208,6 +208,11 @@ a {
 .nav-links a:hover {
   color: var(--text);
 }
+.nav-gh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .version-pill {
   font-family: var(--font-mono);
   font-size: 11px;

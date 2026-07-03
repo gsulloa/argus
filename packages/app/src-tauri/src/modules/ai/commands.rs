@@ -10,13 +10,14 @@ use crate::modules::ai::caps;
 use crate::modules::ai::chat_session::ChatSessionRegistry;
 use crate::modules::ai::factory;
 use crate::modules::ai::keys::{self, ACCOUNT_ANTHROPIC, ACCOUNT_OPENAI};
+use crate::modules::ai::model_cache::ModelCache;
 use crate::modules::ai::settings::{
     AiSettings, AiSettingsInput as RawAiSettingsInput, ConnectionOverrideRow,
 };
 use crate::modules::ai::types::{
     AiConnectionOverrideView, AiSettingsView, AttachedResult, ChatDelta, ChatRequest, ChatStream,
-    ChatTurn, GenerateDelta, InspectDelta, InspectRequest, KeyPresence, ProviderId,
-    ProviderListEntry, ToolUseRecord, ValidationResult,
+    ChatTurn, GenerateDelta, InspectDelta, InspectRequest, KeyPresence, ModelListing, ModelSource,
+    ProviderId, ProviderListEntry, ToolUseRecord, ValidationResult,
 };
 use crate::modules::ai::validation_cache::ValidationCache;
 use crate::modules::context::registry::ContextRegistry;
@@ -33,6 +34,7 @@ const VALIDATE_TIMEOUT: Duration = Duration::from_secs(3);
 pub async fn ai_list_providers(
     db: State<'_, DbState>,
     cache: State<'_, ValidationCache>,
+    models_cache: State<'_, ModelCache>,
 ) -> AppResult<Vec<ProviderListEntry>> {
     // Build all four providers (sync, cheap).
     let providers: Vec<(
@@ -43,10 +45,13 @@ pub async fn ai_list_providers(
         .map(|id| factory::build(&db, *id).map(|p| (*id, p)))
         .collect::<AppResult<Vec<_>>>()?;
 
-    // For each provider: check cache, else probe (with 3 s timeout), else fall back to Misconfigured.
+    // For each provider: check caches, else probe (with 3 s timeout), else fall back.
+    // Validation and model discovery run concurrently per provider.
     let futures = providers.into_iter().map(|(id, provider)| {
         let cache_ref = &cache;
+        let models_cache_ref = &models_cache;
         async move {
+            // ── Validation ───────────────────────────────────────────────────
             let validation = if let Some(cached) = cache_ref.peek(id) {
                 cached
             } else {
@@ -60,10 +65,30 @@ pub async fn ai_list_providers(
                 cache_ref.insert(id, result.clone());
                 result
             };
+
+            // ── Model listing ─────────────────────────────────────────────────
+            let models = if let Some(mut cached) = models_cache_ref.peek(id) {
+                // Serve from cache; rewrite source to Cache while preserving the rest.
+                cached.source = ModelSource::Cache;
+                cached
+            } else {
+                let listing =
+                    match tokio::time::timeout(VALIDATE_TIMEOUT, provider.list_models()).await {
+                        Ok(l) => l,
+                        Err(_) => caps::fallback_listing(
+                            id.as_kebab(),
+                            Some("model discovery timed out".into()),
+                        ),
+                    };
+                models_cache_ref.insert(id, listing.clone());
+                listing
+            };
+
             ProviderListEntry {
                 id,
                 capabilities: provider.capabilities(),
                 validation,
+                models,
             }
         }
     });
@@ -89,6 +114,31 @@ pub async fn ai_validate_provider(
     };
     cache.insert(id, result.clone());
     Ok(result)
+}
+
+// ---- 5.3b: ai_refresh_models ----
+
+/// Force-refresh the model listing for a single provider, bypassing the TTL cache.
+///
+/// Invalidates the cached entry, fetches a fresh list (with the same 3s timeout
+/// and fallback semantics as `ai_list_providers`), stores the result, and returns it.
+#[tauri::command]
+pub async fn ai_refresh_models(
+    provider: ProviderId,
+    db: State<'_, DbState>,
+    models_cache: State<'_, ModelCache>,
+) -> AppResult<ModelListing> {
+    models_cache.invalidate(provider);
+    let p = factory::build(&db, provider)?;
+    let listing = match tokio::time::timeout(VALIDATE_TIMEOUT, p.list_models()).await {
+        Ok(l) => l,
+        Err(_) => caps::fallback_listing(
+            provider.as_kebab(),
+            Some("model discovery timed out".into()),
+        ),
+    };
+    models_cache.insert(provider, listing.clone());
+    Ok(listing)
 }
 
 // ---- 5.3: ai_get_settings ----
@@ -145,13 +195,15 @@ pub struct AiConnectionOverrideViewInput {
 }
 
 #[tauri::command]
-pub fn ai_set_settings(
+pub async fn ai_set_settings(
     input: AiSettingsCommandInput,
     db: State<'_, DbState>,
     cache: State<'_, ValidationCache>,
+    models_cache: State<'_, ModelCache>,
     app: AppHandle,
 ) -> AppResult<()> {
-    fn validate_model(val: &Option<String>, list: &[&str]) -> AppResult<()> {
+    // ── CLI providers: validate against the curated array (fast, synchronous) ──
+    fn validate_curated(val: &Option<String>, list: &[&str]) -> AppResult<()> {
         if let Some(m) = val {
             if !list.iter().any(|x| *x == m) {
                 return Err(AppError::Validation(format!("unsupported model: {m}")));
@@ -159,10 +211,46 @@ pub fn ai_set_settings(
         }
         Ok(())
     }
-    validate_model(&input.claude_cli_model, caps::CLAUDE_CLI_MODELS)?;
-    validate_model(&input.codex_cli_model, caps::CODEX_CLI_MODELS)?;
-    validate_model(&input.anthropic_api_model, caps::ANTHROPIC_API_MODELS)?;
-    validate_model(&input.openai_api_model, caps::OPENAI_API_MODELS)?;
+    validate_curated(&input.claude_cli_model, caps::CLAUDE_CLI_MODELS)?;
+    validate_curated(&input.codex_cli_model, caps::CODEX_CLI_MODELS)?;
+
+    // ── API providers: accept if in the curated list; otherwise consult the
+    //    effective list (dynamic discovery) before rejecting ──────────────────
+    async fn validate_api_model(
+        val: &Option<String>,
+        curated: &[&str],
+        provider_id: ProviderId,
+        db: &State<'_, DbState>,
+    ) -> AppResult<()> {
+        let Some(m) = val else { return Ok(()) };
+        // Fast path: known curated model.
+        if curated.iter().any(|x| *x == m) {
+            return Ok(());
+        }
+        // Might be a newly released model — consult effective list.
+        let provider = factory::build(db, provider_id)?;
+        let listing = provider.list_models().await;
+        if listing.models.iter().any(|x| x == m) {
+            Ok(())
+        } else {
+            Err(AppError::Validation(format!("unsupported model: {m}")))
+        }
+    }
+
+    validate_api_model(
+        &input.anthropic_api_model,
+        caps::ANTHROPIC_API_MODELS,
+        ProviderId::AnthropicApi,
+        &db,
+    )
+    .await?;
+    validate_api_model(
+        &input.openai_api_model,
+        caps::OPENAI_API_MODELS,
+        ProviderId::OpenAiApi,
+        &db,
+    )
+    .await?;
 
     let raw = RawAiSettingsInput {
         default_provider: input.default_provider.map(|p| p.as_kebab().to_string()),
@@ -182,6 +270,7 @@ pub fn ai_set_settings(
     };
     AiSettings::set(&db, &raw)?;
     cache.invalidate_all();
+    models_cache.invalidate_all();
     let _ = app.emit(SETTINGS_CHANGED_EVENT, ());
     Ok(())
 }
@@ -193,6 +282,7 @@ pub fn ai_set_api_key(
     provider: ProviderId,
     key: String,
     cache: State<'_, ValidationCache>,
+    models_cache: State<'_, ModelCache>,
     app: AppHandle,
 ) -> AppResult<()> {
     let account = match provider {
@@ -207,6 +297,7 @@ pub fn ai_set_api_key(
     };
     keys::set(account, &key)?;
     cache.invalidate(provider);
+    models_cache.invalidate(provider);
     let _ = app.emit(SETTINGS_CHANGED_EVENT, ());
     Ok(())
 }
@@ -217,6 +308,7 @@ pub fn ai_set_api_key(
 pub fn ai_delete_api_key(
     provider: ProviderId,
     cache: State<'_, ValidationCache>,
+    models_cache: State<'_, ModelCache>,
     app: AppHandle,
 ) -> AppResult<()> {
     let account = match provider {
@@ -231,6 +323,7 @@ pub fn ai_delete_api_key(
     };
     keys::delete(account)?;
     cache.invalidate(provider);
+    models_cache.invalidate(provider);
     let _ = app.emit(SETTINGS_CHANGED_EVENT, ());
     Ok(())
 }
@@ -416,11 +509,15 @@ pub async fn ai_chat_send(
     session_id: String,
     prompt: String,
     connection_id: Option<String>,
+    provider_id: Option<String>,
+    model: Option<String>,
     attached_results: Vec<AttachedResult>,
     db: State<'_, DbState>,
     registry: State<'_, ChatSessionRegistry>,
     app: AppHandle,
 ) -> AppResult<()> {
+    let channel = format!("ai-chat-delta:{session_id}");
+
     // Parse optional connection id.
     let conn_uuid = match connection_id.as_deref() {
         Some(s) => Some(
@@ -430,14 +527,86 @@ pub async fn ai_chat_send(
         None => None,
     };
 
-    // Resolve provider via AiSettings (honours per-connection overrides).
-    let resolved = AiSettings::resolve(&db, conn_uuid)?;
-    let provider_id = ProviderId::from_kebab(&resolved.provider_id).ok_or_else(|| {
-        AppError::Internal(format!(
-            "unknown provider in settings: {}",
-            resolved.provider_id
-        ))
-    })?;
+    // Parse the explicit provider_id override if provided.
+    // On unknown/invalid value: emit ChatDelta::Error + Done and return without
+    // changing the session binding or appending a user turn.
+    let explicit_provider: Option<ProviderId> = match provider_id.as_deref() {
+        None => None,
+        Some(s) => match ProviderId::from_kebab(s) {
+            Some(pid) => Some(pid),
+            None => {
+                let _ = app.emit(
+                    &channel,
+                    ChatDelta::Error(format!("unknown provider: \"{s}\"")),
+                );
+                let _ = app.emit(
+                    &channel,
+                    ChatDelta::Done {
+                        finish_reason: None,
+                    },
+                );
+                return Ok(());
+            }
+        },
+    };
+
+    // Resolution precedence:
+    // 1. Explicit provider_id from this request → bind/rebind session.
+    // 2. Session's already-bound provider (open_or_get keeps it unchanged for existing sessions).
+    // 3. AiSettings::resolve(...) for brand-new sessions (fallback / initial binding).
+    //
+    // We resolve the settings fallback unconditionally so it is available for new-session
+    // creation. For an explicit override we skip the settings lookup entirely.
+    let resolved_provider_id: ProviderId = if let Some(pid) = explicit_provider {
+        // Step 1: explicit override — check whether the session already exists.
+        let existing_provider = registry.provider_id(&session_id)?;
+        if let Some(existing) = existing_provider {
+            // Session exists — rebind only when the provider actually changed.
+            if existing != pid {
+                registry.rebind(&session_id, pid)?;
+            }
+        }
+        // open_or_get will create the session (no-op if it already exists post-rebind).
+        registry.open_or_get(&session_id, pid, conn_uuid, {
+            // Compute context_path for potential new-session creation (reused below).
+            if let Some(id) = conn_uuid {
+                match crate::modules::context::commands::get_conn_kind_and_path(&db, id) {
+                    Ok((_, path)) => path.map(std::path::PathBuf::from),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        })?;
+        pid
+    } else {
+        // Steps 2 & 3: no explicit override.
+        // open_or_get preserves the bound provider for existing sessions (step 2).
+        // For new sessions we resolve from settings (step 3).
+        let resolved = AiSettings::resolve(&db, conn_uuid)?;
+        let fallback_pid = ProviderId::from_kebab(&resolved.provider_id).ok_or_else(|| {
+            AppError::Internal(format!(
+                "unknown provider in settings: {}",
+                resolved.provider_id
+            ))
+        })?;
+
+        // Fetch context_path for potential new-session creation.
+        let ctx_path_for_new = if let Some(id) = conn_uuid {
+            match crate::modules::context::commands::get_conn_kind_and_path(&db, id) {
+                Ok((_, path)) => path.map(std::path::PathBuf::from),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        // open_or_get: no-op for existing sessions (bound provider unchanged).
+        registry.open_or_get(&session_id, fallback_pid, conn_uuid, ctx_path_for_new)?;
+
+        // For existing sessions, honour the already-bound provider (step 2).
+        registry.provider_id(&session_id)?.unwrap_or(fallback_pid)
+    };
 
     // Fetch context_path and engine kind from the connection row (if linked).
     let (context_path, context_engine) = if let Some(id) = conn_uuid {
@@ -464,9 +633,6 @@ pub async fn ai_chat_send(
             None
         };
 
-    // Open or get session — existing sessions keep their bound provider.
-    registry.open_or_get(&session_id, provider_id, conn_uuid, context_path.clone())?;
-
     // Append the user turn.
     registry.append_user(&session_id, prompt)?;
 
@@ -492,7 +658,10 @@ pub async fn ai_chat_send(
         turns,
         context_path,
         context_payload,
-        model: None,
+        // Thread the session model override through ChatRequest.model so each
+        // provider's resolve_model prefers it over the configured model.
+        // This is never written to ai_settings.
+        model,
         session_id: session_id.clone(),
         provider_state,
         attached_results,
@@ -500,8 +669,8 @@ pub async fn ai_chat_send(
         dynamo_table_match,
     };
 
-    let provider = factory::build(&db, provider_id)?;
-    let channel = format!("ai-chat-delta:{session_id}");
+    let provider = factory::build(&db, resolved_provider_id)?;
+    let channel_clone = channel.clone();
     let session_id_clone = session_id.clone();
     let app_clone = app.clone();
 
@@ -511,12 +680,19 @@ pub async fn ai_chat_send(
         let registry = app_clone.state::<ChatSessionRegistry>();
         match provider.chat(req).await {
             Ok(stream) => {
-                drive_stream(stream, &channel, &session_id_clone, &app_clone, &registry).await;
+                drive_stream(
+                    stream,
+                    &channel_clone,
+                    &session_id_clone,
+                    &app_clone,
+                    &registry,
+                )
+                .await;
             }
             Err(e) => {
-                let _ = app_clone.emit(&channel, ChatDelta::Error(format!("{e:?}")));
+                let _ = app_clone.emit(&channel_clone, ChatDelta::Error(format!("{e:?}")));
                 let _ = app_clone.emit(
-                    &channel,
+                    &channel_clone,
                     ChatDelta::Done {
                         finish_reason: None,
                     },

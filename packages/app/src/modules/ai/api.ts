@@ -6,6 +6,7 @@ import type {
   AiSettingsView,
   AttachedResult,
   ChatTurn,
+  ModelListing,
   ProviderId,
   ProviderListEntry,
   ValidationResult,
@@ -56,16 +57,31 @@ export const aiApi = {
     call<void>("ai_delete_api_key", { provider }),
 
   /**
+   * Force-refresh a provider's model list, bypassing the TTL cache.
+   * Backend: ai_refresh_models(provider: ProviderId, ...)
+   * NOTE: Tauri arg key is `provider` (matches the Rust command param name).
+   */
+  refreshModels: (id: ProviderId) =>
+    call<ModelListing>("ai_refresh_models", { provider: id }),
+
+  /**
    * Send a chat prompt for the given session.
-   * Backend: ai_chat_send(session_id, prompt, connection_id, ...)
-   * Tauri auto-camelCases: session_id → sessionId, connection_id → connectionId.
+   * Backend: ai_chat_send(session_id, prompt, connection_id, provider_id?, model?, ...)
+   * Tauri auto-camelCases: session_id → sessionId, connection_id → connectionId,
+   * provider_id → providerId, model → model.
    * Emits ChatDelta events on channel `ai-chat-delta:<sessionId>`.
+   *
+   * `providerId` and `model` are optional session-scoped overrides. When present,
+   * the backend re-binds the session to the given provider for this turn and all
+   * subsequent turns. Never persists to ai_settings or ai_connection_overrides.
    */
   chatSend: (args: {
     sessionId: string;
     prompt: string;
     connectionId: string | null;
     attachedResults: AttachedResult[];
+    providerId?: string | null;
+    model?: string | null;
   }) => call<void>("ai_chat_send", args),
 
   /**

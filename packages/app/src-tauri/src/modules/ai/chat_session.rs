@@ -84,6 +84,26 @@ impl ChatSessionRegistry {
         Ok(())
     }
 
+    /// Rebind an existing session to a new provider.
+    ///
+    /// Clears `provider_state` (provider-specific scratch: resume_id, codex_warning_shown,
+    /// etc.) because that state is meaningless to the new provider. Preserves `turns` so
+    /// the conversation history is intact for the next send.
+    ///
+    /// No-op (returns `Ok`) if the session does not exist — `open_or_get` will create it.
+    pub fn rebind(&self, id: &str, provider_id: ProviderId) -> AppResult<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| AppError::Internal("chat registry poisoned".into()))?;
+        if let Some(sess) = guard.sessions.get_mut(id) {
+            sess.provider_id = provider_id;
+            sess.provider_state.clear();
+            promote_lru(&mut guard.lru, id);
+        }
+        Ok(())
+    }
+
     pub fn append_user(&self, id: &str, content: String) -> AppResult<()> {
         let mut guard = self
             .inner

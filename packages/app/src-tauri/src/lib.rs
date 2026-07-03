@@ -12,8 +12,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::modules::ai::commands::{
     ai_chat_cancel, ai_chat_close, ai_chat_history, ai_chat_send, ai_delete_api_key,
-    ai_generate_sql, ai_get_settings, ai_inspect_models, ai_list_providers, ai_set_api_key,
-    ai_set_settings, ai_validate_provider,
+    ai_generate_sql, ai_get_settings, ai_inspect_models, ai_list_providers, ai_refresh_models,
+    ai_set_api_key, ai_set_settings, ai_validate_provider,
 };
 use crate::modules::athena::commands::{
     athena_connect, athena_disconnect, athena_disconnect_all, athena_list_active,
@@ -77,8 +77,8 @@ use crate::modules::postgres::{
     postgres_disconnect_all, postgres_get_function_signature, postgres_list_active,
     postgres_list_columns_bulk, postgres_list_relations, postgres_list_schemas,
     postgres_list_structure, postgres_list_table_extras, postgres_parse_url, postgres_query_table,
-    postgres_run_sql, postgres_run_sql_many, postgres_table_primary_key, postgres_table_structure,
-    postgres_test_connection, PgPoolRegistry,
+    postgres_run_sql, postgres_run_sql_many, postgres_run_sql_stream, postgres_table_primary_key,
+    postgres_table_structure, postgres_test_connection, PgPoolRegistry,
 };
 use crate::modules::query_cancel::cancel_running_query;
 use crate::modules::query_history::{
@@ -265,6 +265,9 @@ pub fn run() {
             // AI validation cache.
             app.manage(crate::modules::ai::validation_cache::ValidationCache::new());
 
+            // AI model listing cache (TTL 5 min).
+            app.manage(crate::modules::ai::model_cache::ModelCache::new());
+
             // AI chat session registry.
             app.manage(crate::modules::ai::chat_session::ChatSessionRegistry::new());
 
@@ -311,6 +314,7 @@ pub fn run() {
             postgres_apply_table_edits,
             postgres_run_sql,
             postgres_run_sql_many,
+            postgres_run_sql_stream,
             postgres_list_columns_bulk,
             // MS SQL Server commands
             mssql_test_connection,
@@ -458,6 +462,7 @@ pub fn run() {
             ai_set_settings,
             ai_set_api_key,
             ai_delete_api_key,
+            ai_refresh_models,
             // TODO: deprecate after add-ai-chat-panel UI ships and confirms no remaining callers.
             ai_generate_sql,
             // AI chat commands

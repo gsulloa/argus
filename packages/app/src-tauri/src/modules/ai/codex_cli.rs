@@ -65,6 +65,12 @@ impl AiProvider for CodexCli {
         cli_detect::validate_cli("codex", "ARGUS_CODEX_BIN").await
     }
 
+    async fn list_models(&self) -> crate::modules::ai::types::ModelListing {
+        // CLI providers have no stable non-interactive "list models" command;
+        // return the curated fallback with no error.
+        crate::modules::ai::caps::fallback_listing("codex-cli", None)
+    }
+
     async fn generate_sql(&self, req: GenerateRequest) -> AppResult<GenerateStream> {
         let model = resolve_model(
             &req.model,
