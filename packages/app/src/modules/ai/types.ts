@@ -39,10 +39,28 @@ export type ValidationResult =
   | { kind: "Missing"; hint: string }
   | { kind: "Misconfigured"; reason: string };
 
+/** Source of a dynamically-fetched model list. Mirrors Rust ModelSource (kebab-case). */
+export type ModelSource = "provider" | "cache" | "fallback";
+
+/**
+ * Dynamic model listing returned by the backend alongside each ProviderListEntry.
+ * Mirrors Rust ModelListing (snake_case fields, source kebab-case, refreshed_at unix-millis).
+ */
+export interface ModelListing {
+  models: string[];
+  source: ModelSource;
+  /** Unix milliseconds of the last successful fetch; null if never refreshed. */
+  refreshed_at: number | null;
+  /** Non-null when the backend fell back due to an error. */
+  error: string | null;
+}
+
 export interface ProviderListEntry {
   id: ProviderId;
   capabilities: Capabilities;
   validation: ValidationResult;
+  /** Dynamic model listing; absent in legacy/fixture responses — fall back to capabilities.available_models. */
+  models?: ModelListing;
 }
 
 export interface KeyPresence {

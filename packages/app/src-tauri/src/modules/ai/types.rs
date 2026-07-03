@@ -174,11 +174,35 @@ pub struct KeyPresence {
     pub openai: bool,
 }
 
+/// Provenance of a resolved model list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelSource {
+    Provider,
+    Cache,
+    Fallback,
+}
+
+/// A resolved model list with provenance and optional refresh metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelListing {
+    pub models: Vec<String>,
+    pub source: ModelSource,
+    /// Unix milliseconds when the list was last fetched from the provider.
+    /// `None` when the list is the curated fallback.
+    pub refreshed_at: Option<i64>,
+    /// Human-readable error from the last failed discovery attempt.
+    /// Only present when `source == Fallback` and a fetch was attempted.
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderListEntry {
     pub id: ProviderId,
     pub capabilities: Capabilities,
     pub validation: ValidationResult,
+    /// Effective model list with provenance. Populated by `ai_list_providers`.
+    pub models: ModelListing,
 }
 
 // ── Inspector types ──────────────────────────────────────────────────────────
@@ -976,6 +1000,53 @@ mod tests {
             prompt.contains("MUST NOT") || prompt.contains("must not"),
             "CloudWatch CLI prompt must contain MUST NOT prohibition"
         );
+    }
+
+    #[test]
+    fn model_source_serialises_as_kebab() {
+        assert_eq!(
+            serde_json::to_string(&ModelSource::Provider).unwrap(),
+            "\"provider\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ModelSource::Cache).unwrap(),
+            "\"cache\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ModelSource::Fallback).unwrap(),
+            "\"fallback\""
+        );
+        let back: ModelSource = serde_json::from_str("\"provider\"").unwrap();
+        assert_eq!(back, ModelSource::Provider);
+    }
+
+    #[test]
+    fn model_listing_round_trips() {
+        let listing = ModelListing {
+            models: vec!["claude-opus-4-8".to_string(), "claude-sonnet-4-6".to_string()],
+            source: ModelSource::Fallback,
+            refreshed_at: None,
+            error: Some("no API key stored".into()),
+        };
+        let s = serde_json::to_string(&listing).unwrap();
+        let back: ModelListing = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.models, listing.models);
+        assert_eq!(back.source, ModelSource::Fallback);
+        assert_eq!(back.refreshed_at, None);
+        assert_eq!(back.error.as_deref(), Some("no API key stored"));
+
+        // Provider source with timestamp round-trips
+        let listing2 = ModelListing {
+            models: vec!["gpt-5.1".to_string()],
+            source: ModelSource::Provider,
+            refreshed_at: Some(1_700_000_000_000),
+            error: None,
+        };
+        let s2 = serde_json::to_string(&listing2).unwrap();
+        let back2: ModelListing = serde_json::from_str(&s2).unwrap();
+        assert_eq!(back2.source, ModelSource::Provider);
+        assert_eq!(back2.refreshed_at, Some(1_700_000_000_000));
+        assert!(back2.error.is_none());
     }
 
     #[test]

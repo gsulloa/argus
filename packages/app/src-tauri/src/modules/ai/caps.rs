@@ -1,5 +1,7 @@
 // Default models and curated lists per Decision 8 of design.md.
 
+use crate::modules::ai::types::{ModelListing, ModelSource};
+
 pub const CLAUDE_CLI_DEFAULT_MODEL: &str = "claude-opus-4-8";
 pub const CLAUDE_CLI_MODELS: &[&str] =
     &["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"];
@@ -27,6 +29,24 @@ pub fn context_window(model: &str) -> usize {
         "gpt-4o" => 128_000,
         // Safe conservative default for any unknown model.
         _ => 100_000,
+    }
+}
+
+/// Build a curated fallback `ModelListing` for the given provider.
+///
+/// Returns the static curated model list with `source: Fallback`, `refreshed_at: None`,
+/// and the supplied `error` reason (if any). Used by all failure paths and by CLI
+/// providers that have no discovery mechanism.
+pub fn fallback_listing(provider_kebab: &str, error: Option<String>) -> ModelListing {
+    let models = available_models_for(provider_kebab)
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    ModelListing {
+        models,
+        source: ModelSource::Fallback,
+        refreshed_at: None,
+        error,
     }
 }
 

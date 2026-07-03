@@ -1,18 +1,21 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use futures::stream;
 use reqwest::Client;
 use serde_json::json;
 
 use crate::error::{AppError, AppResult};
-use crate::modules::ai::caps::{context_window, ANTHROPIC_API_DEFAULT_MODEL, ANTHROPIC_API_MODELS};
+use crate::modules::ai::caps::{
+    context_window, fallback_listing, ANTHROPIC_API_DEFAULT_MODEL, ANTHROPIC_API_MODELS,
+};
 use crate::modules::ai::keys::{self, ACCOUNT_ANTHROPIC};
 use crate::modules::ai::provider::AiProvider;
 use crate::modules::ai::types::{
     build_api_system_prompt, evict_attachments_oldest_first, extract_fenced_block, Capabilities,
     ChatDelta, ChatRequest, ChatRole, ChatStream, GenerateDelta, GenerateRequest, GenerateStream,
-    ProviderId, ValidationResult,
+    ModelListing, ModelSource, ProviderId, ValidationResult,
 };
 
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(3);
@@ -46,6 +49,14 @@ impl AnthropicApi {
             .as_deref()
             .unwrap_or("https://api.anthropic.com");
         format!("{base}/v1/messages")
+    }
+
+    fn models_url(&self) -> String {
+        let base = self
+            .base_url
+            .as_deref()
+            .unwrap_or("https://api.anthropic.com");
+        format!("{base}/v1/models")
     }
 }
 
@@ -128,10 +139,119 @@ impl AiProvider for AnthropicApi {
         }
     }
 
+    async fn list_models(&self) -> ModelListing {
+        // 1. Read the API key; fall back to curated list when missing or unreadable.
+        let key = match keys::get(ACCOUNT_ANTHROPIC) {
+            Ok(Some(k)) => k,
+            Ok(None) => {
+                return fallback_listing(
+                    "anthropic-api",
+                    Some("no Anthropic API key stored".into()),
+                )
+            }
+            Err(e) => {
+                return fallback_listing(
+                    "anthropic-api",
+                    Some(format!("keyring read failed: {e}")),
+                )
+            }
+        };
+
+        // 2. Build a client with a 3 s timeout and GET /v1/models.
+        let client = match Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return fallback_listing(
+                    "anthropic-api",
+                    Some(format!("http client init failed: {e}")),
+                )
+            }
+        };
+
+        let resp = match client
+            .get(self.models_url())
+            .header("x-api-key", &key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) if e.is_timeout() => {
+                return fallback_listing(
+                    "anthropic-api",
+                    Some("Anthropic model list request timed out".into()),
+                )
+            }
+            Err(e) => {
+                return fallback_listing(
+                    "anthropic-api",
+                    Some(format!("network unreachable: {e}")),
+                )
+            }
+        };
+
+        // 3. Handle non-2xx.
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return fallback_listing("anthropic-api", Some("API key rejected".into()));
+        }
+        if !status.is_success() {
+            return fallback_listing(
+                "anthropic-api",
+                Some(format!("unexpected status {status}")),
+            );
+        }
+
+        // 4. Parse `{ "data": [ { "id": "..." }, ... ] }`.
+        let json: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                return fallback_listing(
+                    "anthropic-api",
+                    Some(format!("failed to parse model list: {e}")),
+                )
+            }
+        };
+
+        let discovered: Vec<String> = json
+            .get("data")
+            .and_then(|d| d.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // 5. Union-in curated defaults (discovered first, then any curated not yet present).
+        let mut models = discovered;
+        for curated in ANTHROPIC_API_MODELS {
+            if !models.iter().any(|m| m == *curated) {
+                models.push(curated.to_string());
+            }
+        }
+
+        ModelListing {
+            models,
+            source: ModelSource::Provider,
+            refreshed_at: Some(Utc::now().timestamp_millis()),
+            error: None,
+        }
+    }
+
     async fn generate_sql(&self, req: GenerateRequest) -> AppResult<GenerateStream> {
         if let Some(m) = &req.model {
+            // Fast path: known curated model — accept without a network call.
             if !ANTHROPIC_API_MODELS.iter().any(|x| *x == m) {
-                return Err(AppError::Validation(format!("unsupported model: {m}")));
+                // Might be a newly released model — confirm against the effective list.
+                let listing = self.list_models().await;
+                if !listing.models.iter().any(|x| x == m) {
+                    return Err(AppError::Validation(format!("unsupported model: {m}")));
+                }
             }
         }
         let model = req
@@ -206,8 +326,13 @@ impl AiProvider for AnthropicApi {
     async fn chat(&self, req: ChatRequest) -> AppResult<ChatStream> {
         // 1. Validate model before any work.
         if let Some(m) = &req.model {
+            // Fast path: known curated model — accept without a network call.
             if !ANTHROPIC_API_MODELS.iter().any(|x| *x == m) {
-                return Err(AppError::Validation(format!("unsupported model: {m}")));
+                // Might be a newly released model — confirm against the effective list.
+                let listing = self.list_models().await;
+                if !listing.models.iter().any(|x| x == m) {
+                    return Err(AppError::Validation(format!("unsupported model: {m}")));
+                }
             }
         }
         let model = req
@@ -778,6 +903,189 @@ mod tests {
                 .iter()
                 .any(|d| matches!(d, ChatDelta::Status(s) if s.contains("attachment"))),
             "expected an eviction Status delta, got: {deltas:?}"
+        );
+    }
+
+    // ── list_models() tests ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_models_success_returns_provider_source() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    {"id": "claude-new-model-1"},
+                    {"id": "claude-opus-4-8"},
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        keys::set(ACCOUNT_ANTHROPIC, "list-key").unwrap();
+        let provider = AnthropicApi::with_base_url(None, server.uri());
+        let listing = provider.list_models().await;
+
+        assert_eq!(
+            listing.source,
+            crate::modules::ai::types::ModelSource::Provider
+        );
+        assert!(listing.refreshed_at.is_some(), "refreshed_at should be set");
+        assert!(
+            listing.models.contains(&"claude-new-model-1".to_string()),
+            "discovered model should be present"
+        );
+        // Curated defaults always present.
+        assert!(
+            listing
+                .models
+                .contains(&ANTHROPIC_API_DEFAULT_MODEL.to_string()),
+            "curated default must be in list"
+        );
+        assert!(listing.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_models_401_returns_fallback() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        keys::set(ACCOUNT_ANTHROPIC, "bad-list-key").unwrap();
+        let provider = AnthropicApi::with_base_url(None, server.uri());
+        let listing = provider.list_models().await;
+
+        assert_eq!(
+            listing.source,
+            crate::modules::ai::types::ModelSource::Fallback
+        );
+        assert!(
+            listing.error.as_deref().unwrap_or("").contains("rejected"),
+            "error should mention rejected key"
+        );
+        // Models must equal curated fallback.
+        let curated: Vec<String> = ANTHROPIC_API_MODELS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(listing.models, curated);
+    }
+
+    #[tokio::test]
+    async fn list_models_missing_key_returns_fallback_no_request() {
+        // Do NOT set a key — any HTTP call to a mock would succeed and prove the guard failed.
+        let _ = keys::delete(ACCOUNT_ANTHROPIC);
+
+        // Point at an unreachable port so any accidental HTTP call fails distinctly.
+        let provider = AnthropicApi::with_base_url(None, "http://127.0.0.1:1".into());
+        let listing = provider.list_models().await;
+
+        assert_eq!(
+            listing.source,
+            crate::modules::ai::types::ModelSource::Fallback
+        );
+        assert!(
+            listing
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("no Anthropic API key"),
+            "error should mention missing key"
+        );
+        let curated: Vec<String> = ANTHROPIC_API_MODELS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(listing.models, curated);
+    }
+
+    #[tokio::test]
+    async fn list_models_500_returns_fallback() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        keys::set(ACCOUNT_ANTHROPIC, "server-err-key").unwrap();
+        let provider = AnthropicApi::with_base_url(None, server.uri());
+        let listing = provider.list_models().await;
+
+        assert_eq!(
+            listing.source,
+            crate::modules::ai::types::ModelSource::Fallback
+        );
+        assert!(
+            listing
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("unexpected status"),
+            "error should mention unexpected status"
+        );
+    }
+
+    /// A model present in the dynamic list (via mock) should be accepted by `generate_sql`.
+    #[tokio::test]
+    async fn generate_sql_accepts_dynamically_discovered_model() {
+        let server = MockServer::start().await;
+        // /v1/models returns a newly discovered model.
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "claude-newmodel-discovered"}]
+            })))
+            .mount(&server)
+            .await;
+        // /v1/messages returns a successful response for the generation call.
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{"type": "text", "text": "SELECT 1;"}],
+                "stop_reason": "end_turn"
+            })))
+            .mount(&server)
+            .await;
+
+        keys::set(ACCOUNT_ANTHROPIC, "dynamic-model-key").unwrap();
+        let provider = AnthropicApi::with_base_url(None, server.uri());
+        let req = GenerateRequest {
+            prompt: "x".into(),
+            context_path: None,
+            context_payload: empty_payload(),
+            model: Some("claude-newmodel-discovered".into()),
+        };
+        // Should NOT return a Validation error.
+        let result = provider.generate_sql(req).await;
+        assert!(
+            result.is_ok(),
+            "dynamically discovered model should be accepted but got an error"
+        );
+    }
+
+    /// A model absent from both dynamic list and curated must be rejected with Validation.
+    #[tokio::test]
+    async fn generate_sql_rejects_model_absent_from_dynamic_list() {
+        let server = MockServer::start().await;
+        // /v1/models returns only known curated models, not the bogus one.
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "claude-opus-4-8"}]
+            })))
+            .mount(&server)
+            .await;
+
+        keys::set(ACCOUNT_ANTHROPIC, "reject-key").unwrap();
+        let provider = AnthropicApi::with_base_url(None, server.uri());
+        let req = GenerateRequest {
+            prompt: "x".into(),
+            context_path: None,
+            context_payload: empty_payload(),
+            model: Some("totally-unknown-model-xyz".into()),
+        };
+        let result = provider.generate_sql(req).await;
+        assert!(
+            matches!(result, Err(AppError::Validation(_))),
+            "model absent from dynamic list must be rejected"
         );
     }
 
