@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# Pre-push hook: fail fast on Rust formatting before it reaches CI.
+#
+# `cargo fmt --check` only needs rustfmt (no GTK/WebKit deps, no build), so it
+# runs in a second or two and blocks the push if the src-tauri crate is not
+# formatted. Run `pnpm rust:fmt` to fix, then push again.
+#
+# Installed automatically via `git config core.hooksPath .githooks`, wired by the
+# `prepare` script in package.json (runs on `pnpm install`).
+
+set -e
+
+MANIFEST="packages/app/src-tauri/Cargo.toml"
+
+# Nothing to check if the crate isn't present (e.g. sparse checkout).
+if [ ! -f "$MANIFEST" ]; then
+  exit 0
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "pre-push: cargo not found on PATH — skipping Rust format check." >&2
+  exit 0
+fi
+
+echo "pre-push: checking Rust formatting (cargo fmt --check)…"
+if ! cargo fmt --manifest-path "$MANIFEST" --check; then
+  echo >&2
+  echo "pre-push: Rust code is not formatted. Run 'pnpm rust:fmt' and commit the result." >&2
+  exit 1
+fi

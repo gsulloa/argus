@@ -14,6 +14,11 @@ Thanks for your interest in contributing. This guide covers everything you need 
 pnpm install
 ```
 
+`pnpm install` also wires a versioned **pre-push git hook** (via `core.hooksPath .githooks`)
+that runs `cargo fmt --check` on the Rust crate before every push, so formatting
+errors fail in a second locally instead of minutes later in CI. Fix any reported
+formatting with `pnpm rust:fmt`.
+
 ## Development
 
 ```bash
@@ -42,10 +47,13 @@ pnpm test:run    # Vitest (one-shot, for CI)
 ### Rust backend (`src-tauri/`)
 
 ```bash
-cargo fmt
+cargo fmt          # or `pnpm rust:fmt` from the repo root
 cargo clippy -- -D warnings
 cargo test
 ```
+
+The pre-push hook runs `pnpm rust:fmt:check` for you; `cargo fmt --check` runs as
+its own fast CI job so a format-only failure surfaces in seconds.
 
 All four frontend checks and all three Cargo checks must pass before a PR can merge.
 
