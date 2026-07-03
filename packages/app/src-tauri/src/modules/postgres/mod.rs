@@ -25,4 +25,4 @@ pub use schema_commands::{
     postgres_get_function_signature, postgres_list_relations, postgres_list_schemas,
     postgres_list_structure, postgres_list_table_extras, postgres_table_structure,
 };
-pub use sql::{postgres_run_sql, postgres_run_sql_many};
+pub use sql::{postgres_run_sql, postgres_run_sql_many, postgres_run_sql_stream};

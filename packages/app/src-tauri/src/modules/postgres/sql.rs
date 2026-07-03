@@ -1,8 +1,10 @@
-//! Free-form SQL execution. Two commands surface the user's editor:
+//! Free-form SQL execution. Three commands surface the user's editor:
 //!
 //! - `postgres_run_sql(connection_id, sql, origin?)` runs one statement.
 //! - `postgres_run_sql_many(connection_id, statements, origin?)` runs an
 //!   already-split list of statements sequentially on the same client.
+//! - `postgres_run_sql_stream(connection_id, sql, origin?, run_token, on_event)`
+//!   runs one statement and delivers results incrementally over a `Channel`.
 //!
 //! Read-only enforcement happens here via `is_mutating_sql` (a heuristic — see
 //! its docs). The pool's existing read-only hook also rejects mutations at the
@@ -12,6 +14,8 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use futures::TryStreamExt;
 
 use deadpool_postgres::Object as PgObject;
 use serde::Serialize;
@@ -40,6 +44,10 @@ const RUN_SQL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Maximum rows we materialize for a single result set. Past this we mark the
 /// response truncated and stop fetching.
 const RESULT_ROW_CAP: usize = 10_000;
+/// Streaming: flush a `Batch` event when the buffer reaches this many rows …
+const BATCH_ROWS: usize = 500;
+/// … or when this much time has elapsed since the last flush, whichever first.
+const BATCH_INTERVAL: Duration = Duration::from_millis(50);
 /// Inline preview length when a textual cell is too large to ship verbatim.
 const INLINE_TRUNCATE_BYTES: usize = 1_048_576;
 
@@ -188,6 +196,52 @@ pub enum RunManyOutcome {
     Skipped {
         statement_index: usize,
     },
+}
+
+// --------------------------------------------------------------------------
+// Streaming event types (postgres_run_sql_stream)
+// --------------------------------------------------------------------------
+
+/// Events emitted over the `tauri::ipc::Channel` for a streaming run.
+///
+/// The wire shape is `{ "event": "<variant>", …fields }` (serde tag).
+/// Exactly one terminal event ends every stream: `done`, `affected`, or
+/// `error`. The frontend can rely on receiving no further events after a
+/// terminal.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum StreamEvent {
+    /// Column metadata — always the first event for a SELECT-shape statement.
+    Columns { columns: Vec<DataColumn> },
+    /// A batch of converted rows. May arrive multiple times before `done`.
+    Batch { rows: Vec<Vec<JsonValue>> },
+    /// Terminal: SELECT-shape query completed successfully.
+    Done {
+        row_count: u64,
+        truncated: bool,
+        query_ms: u64,
+        truncated_columns: Vec<String>,
+    },
+    /// Terminal: DML/DDL statement completed (no columns/batch events).
+    Affected {
+        command_tag: String,
+        affected_rows: u64,
+        query_ms: u64,
+    },
+    /// Terminal: any failure, including mid-stream errors.
+    Error {
+        message: String,
+        code: Option<String>,
+        position: Option<i32>,
+    },
+}
+
+/// Outcome summary produced by `run_one_stream` and consumed by the command
+/// to build the activity-log metric and history entry.
+struct StreamOutcome {
+    row_count: u64,
+    affected: Option<u64>,
+    command_tag: Option<String>,
 }
 
 // --------------------------------------------------------------------------
@@ -682,6 +736,129 @@ async fn run_one(client: &PgObject, sql: &str, is_read_only: bool) -> AppResult<
     })
 }
 
+/// Map a `tauri::Error` from a channel send into an `AppError` so the `?`
+/// operator works within `AppResult`-returning streaming helpers.
+fn channel_err(e: tauri::Error) -> AppError {
+    AppError::Internal(format!("channel send failed: {e}"))
+}
+
+/// Streaming variant of `run_one`. Sends `StreamEvent`s over `on_event` and
+/// returns a `StreamOutcome` summarising the run for activity-log + history.
+///
+/// Errors propagate as `Err(AppError)` — the caller (command) maps them to a
+/// `StreamEvent::Error` terminal event so the channel always has exactly one
+/// terminal event regardless of failure mode.
+async fn run_one_stream(
+    client: &PgObject,
+    sql: &str,
+    is_read_only: bool,
+    on_event: &tauri::ipc::Channel<StreamEvent>,
+) -> AppResult<StreamOutcome> {
+    if is_read_only && is_mutating_sql(sql) {
+        return Err(AppError::Validation("connection is read-only".into()));
+    }
+
+    let started = Instant::now();
+
+    // `prepare` first so we can inspect the result columns before fetching.
+    let stmt = client.prepare(sql).await?;
+
+    if stmt.columns().is_empty() {
+        // DML / DDL path — no row streaming.
+        let affected = client.execute(&stmt, &[]).await?;
+        let query_ms = started.elapsed().as_millis() as u64;
+        let tag = synthesize_command_tag(sql, affected);
+        on_event
+            .send(StreamEvent::Affected {
+                command_tag: tag.clone(),
+                affected_rows: affected,
+                query_ms,
+            })
+            .map_err(channel_err)?;
+        return Ok(StreamOutcome {
+            row_count: 0,
+            affected: Some(affected),
+            command_tag: Some(tag),
+        });
+    }
+
+    // SELECT-shape path — stream rows via `query_raw`.
+    let columns = columns_from_row_meta(stmt.columns());
+    on_event
+        .send(StreamEvent::Columns {
+            columns: columns.clone(),
+        })
+        .map_err(channel_err)?;
+
+    // An explicitly-typed empty iterator resolves the `BorrowToSql` inference
+    // for the no-parameter case. `&dyn ToSql` implements `BorrowToSql`.
+    let stream = client
+        .query_raw(
+            &stmt,
+            std::iter::empty::<&dyn tokio_postgres::types::ToSql>(),
+        )
+        .await?;
+    futures::pin_mut!(stream);
+
+    let mut buffer: Vec<Vec<JsonValue>> = Vec::with_capacity(BATCH_ROWS);
+    let mut truncated_columns: Vec<String> = Vec::new();
+    let mut row_count: u64 = 0;
+    let mut truncated = false;
+    let mut last_flush = Instant::now();
+
+    while let Some(row) = stream.try_next().await? {
+        // Convert the row using the same helper as `run_one`.
+        let mut cells: Vec<JsonValue> = Vec::with_capacity(columns.len());
+        for (i, col) in columns.iter().enumerate() {
+            cells.push(cell_to_json(&row, i, &col.name, &mut truncated_columns));
+        }
+        buffer.push(cells);
+        row_count += 1;
+
+        // Flush on size or time, whichever comes first.
+        let flush = buffer.len() >= BATCH_ROWS || last_flush.elapsed() >= BATCH_INTERVAL;
+        if flush {
+            on_event
+                .send(StreamEvent::Batch {
+                    rows: std::mem::take(&mut buffer),
+                })
+                .map_err(channel_err)?;
+            last_flush = Instant::now();
+        }
+
+        // Enforce the row cap — stop pulling from the server once reached.
+        if row_count >= RESULT_ROW_CAP as u64 {
+            truncated = true;
+            break;
+        }
+    }
+
+    // Flush any remaining buffered rows before the terminal event.
+    if !buffer.is_empty() {
+        on_event
+            .send(StreamEvent::Batch {
+                rows: std::mem::take(&mut buffer),
+            })
+            .map_err(channel_err)?;
+    }
+
+    let query_ms = started.elapsed().as_millis() as u64;
+    on_event
+        .send(StreamEvent::Done {
+            row_count,
+            truncated,
+            query_ms,
+            truncated_columns: truncated_columns.clone(),
+        })
+        .map_err(channel_err)?;
+
+    Ok(StreamOutcome {
+        row_count,
+        affected: None,
+        command_tag: None,
+    })
+}
+
 fn parse_id(id: &str) -> AppResult<Uuid> {
     Uuid::parse_str(id).map_err(|e| AppError::Validation(format!("bad uuid: {e}")))
 }
@@ -943,6 +1120,219 @@ pub async fn postgres_run_sql(
         }
     }
     inner
+}
+
+/// Build the activity metric directly from a `StreamOutcome` (avoids
+/// materialising a dummy `Vec<Row>` just to call `.len()`).
+fn metric_for_stream_outcome(outcome: &StreamOutcome) -> Metric {
+    if let Some(affected) = outcome.affected {
+        Metric::Affected {
+            value: affected as i64,
+        }
+    } else {
+        Metric::Rows {
+            value: outcome.row_count,
+        }
+    }
+}
+
+/// Build a success history entry from a `StreamOutcome`.
+fn build_history_entry_ok_stream(
+    connection_id: Uuid,
+    connection_name: &str,
+    sql: &str,
+    origin: Origin,
+    started_at_ms: i64,
+    duration_ms: u64,
+    outcome: &StreamOutcome,
+) -> NewEntry {
+    let (row_count, command_tag) = if let Some(ref tag) = outcome.command_tag {
+        (outcome.affected.map(|a| a as i64), Some(tag.clone()))
+    } else {
+        (Some(outcome.row_count as i64), None)
+    };
+    NewEntry {
+        connection_id,
+        connection_name: connection_name.to_string(),
+        sql: sql.to_string(),
+        origin: origin_to_history(origin),
+        status: HistoryStatus::Ok,
+        started_at: started_at_ms,
+        duration_ms: duration_ms as i64,
+        row_count,
+        command_tag,
+        error_code: None,
+        error_message: None,
+    }
+}
+
+/// Streaming single-statement SQL command. Delivers results incrementally
+/// over `on_event` (`Channel<StreamEvent>`) instead of returning a single
+/// `RunSqlResult`. Exactly one terminal event (`done`, `affected`, or `error`)
+/// ends the stream. The `invoke` promise resolves to `()` after the terminal
+/// event has been sent.
+///
+/// Mirrors `postgres_run_sql` for connection acquisition, read-only
+/// enforcement, timeout (60s), cancellation registration, and
+/// activity-log / history recording.
+#[tauri::command]
+pub async fn postgres_run_sql_stream(
+    app: AppHandle,
+    pools: State<'_, PgPoolRegistry>,
+    registry: State<'_, RunningQueryRegistry>,
+    id: String,
+    sql: String,
+    origin: Option<Origin>,
+    run_token: Option<String>,
+    on_event: tauri::ipc::Channel<StreamEvent>,
+) -> AppResult<()> {
+    let started_wall_ms = now_unix_ms();
+    let started = Instant::now();
+    let activity_origin = origin.unwrap_or(Origin::User);
+    let parsed = parse_id(&id)?;
+
+    if sql.trim().is_empty() {
+        // Return an Err here — no channel events expected before streaming
+        // began, so we let the command promise reject normally.
+        return Err(AppError::Validation("empty SQL".into()));
+    }
+
+    let connection_name = fetch_connection_name(&app, parsed);
+
+    // Resolve the pool entry, acquire a client, and register with the cancel
+    // registry — identical scaffolding to `postgres_run_sql`.
+    let summaries = pools.list_active().await;
+    let pool_entry = summaries
+        .into_iter()
+        .find(|s| s.id == parsed)
+        .ok_or_else(|| AppError::NotFound(format!("no active pool for {parsed}")))?;
+    let is_read_only = pool_entry.read_only;
+    let sslmode = pools.sslmode_for(&parsed).await?;
+    let client = pools.acquire(&parsed).await?;
+    let cancel_token = client.cancel_token();
+
+    // Register with the cancel registry if a run_token was supplied.
+    let _guard = if let Some(ref tok_str) = run_token {
+        if let Ok(token) = Uuid::parse_str(tok_str) {
+            let ct = cancel_token.clone();
+            let action: CancelAction = Arc::new(move || {
+                let ct = ct.clone();
+                Box::pin(async move { fire_cancel(ct, sslmode).await })
+            });
+            Some(registry.register(token, action).await)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let run_result = timeout(
+        RUN_SQL_TIMEOUT,
+        run_one_stream(&client, &sql, is_read_only, &on_event),
+    )
+    .await;
+
+    let total_ms = started.elapsed().as_millis() as u64;
+
+    // Check cancel BEFORE mapping errors — a cancel often surfaces as a
+    // stream error, and that must resolve as cancelled (neutral), not error.
+    if _guard.as_ref().map_or(false, |g| g.cancelled()) {
+        // Neutral cancelled state: keep partial rows that already shipped,
+        // do NOT send an Error event. Record as cancelled in activity/history.
+        let cancel_err = AppError::cancelled();
+        let builder = ActivityLogEntryBuilder::new(ActivityKind::RunSql, activity_origin, total_ms)
+            .connection(parsed)
+            .sql(sql.clone());
+        emit_activity(&app, builder.err(&cancel_err));
+        record_history_err(
+            &app,
+            parsed,
+            &connection_name,
+            &sql,
+            activity_origin,
+            started_wall_ms,
+            total_ms,
+            &cancel_err,
+        );
+        return Ok(());
+    }
+
+    let builder = ActivityLogEntryBuilder::new(ActivityKind::RunSql, activity_origin, total_ms)
+        .connection(parsed)
+        .sql(sql.clone());
+
+    match run_result {
+        Ok(Ok(outcome)) => {
+            // Terminal event already sent by `run_one_stream` — record success.
+            emit_activity(&app, builder.ok(Some(metric_for_stream_outcome(&outcome))));
+            let entry = build_history_entry_ok_stream(
+                parsed,
+                &connection_name,
+                &sql,
+                activity_origin,
+                started_wall_ms,
+                total_ms,
+                &outcome,
+            );
+            let db = app.state::<crate::platform::DbState>();
+            let conn = db.0.lock().expect("db poisoned");
+            crate::modules::query_history::insert_entry(&conn, entry);
+        }
+        Ok(Err(app_err)) => {
+            // Application error (prepare fail, read-only, mid-stream row error…)
+            // — send a terminal Error event then record in activity + history.
+            let (message, code, position) = match &app_err {
+                AppError::Postgres(b) => (b.message.clone(), b.code.clone(), b.position),
+                other => (other.to_string(), None, None),
+            };
+            // Best-effort — if the channel is already closed we swallow the error.
+            let _ = on_event.send(StreamEvent::Error {
+                message,
+                code,
+                position,
+            });
+            emit_activity(&app, builder.err(&app_err));
+            record_history_err(
+                &app,
+                parsed,
+                &connection_name,
+                &sql,
+                activity_origin,
+                started_wall_ms,
+                total_ms,
+                &app_err,
+            );
+        }
+        Err(_timeout) => {
+            // Hard 60-second timeout — fire the Postgres cancel request and
+            // send an Error terminal event so the frontend can show a message.
+            fire_cancel(cancel_token, sslmode).await;
+            drop(client);
+            let timeout_err = AppError::postgres_with_code(
+                "57014",
+                format!("run-sql timed out ({}s)", RUN_SQL_TIMEOUT.as_secs()),
+            );
+            let _ = on_event.send(StreamEvent::Error {
+                message: format!("run-sql timed out ({}s)", RUN_SQL_TIMEOUT.as_secs()),
+                code: Some("57014".to_string()),
+                position: None,
+            });
+            emit_activity(&app, builder.err(&timeout_err));
+            record_history_err(
+                &app,
+                parsed,
+                &connection_name,
+                &sql,
+                activity_origin,
+                started_wall_ms,
+                total_ms,
+                &timeout_err,
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1207,6 +1597,56 @@ mod tests {
         assert_eq!(v.get("kind").unwrap(), "affected");
         assert_eq!(v.get("affected_rows").unwrap(), 3);
         assert_eq!(v.get("command_tag").unwrap(), "INSERT 0 3");
+    }
+
+    #[test]
+    fn stream_event_serializes_with_event_tag() {
+        // Guards the wire contract the frontend `StreamEvent` type relies on:
+        // an `event` discriminant plus snake_case fields.
+        let cols = StreamEvent::Columns { columns: vec![] };
+        let v = serde_json::to_value(&cols).unwrap();
+        assert_eq!(v.get("event").unwrap(), "columns");
+
+        let batch = StreamEvent::Batch {
+            rows: vec![vec![JsonValue::from(1)]],
+        };
+        let v = serde_json::to_value(&batch).unwrap();
+        assert_eq!(v.get("event").unwrap(), "batch");
+        assert_eq!(v.get("rows").unwrap()[0][0], JsonValue::from(1));
+
+        let done = StreamEvent::Done {
+            row_count: 10_000,
+            truncated: true,
+            query_ms: 42,
+            truncated_columns: vec!["blob".into()],
+        };
+        let v = serde_json::to_value(&done).unwrap();
+        assert_eq!(v.get("event").unwrap(), "done");
+        assert_eq!(v.get("row_count").unwrap(), 10_000);
+        assert_eq!(v.get("truncated").unwrap(), true);
+        assert_eq!(v.get("query_ms").unwrap(), 42);
+        assert_eq!(v.get("truncated_columns").unwrap()[0], "blob");
+
+        let affected = StreamEvent::Affected {
+            command_tag: "UPDATE 2".into(),
+            affected_rows: 2,
+            query_ms: 3,
+        };
+        let v = serde_json::to_value(&affected).unwrap();
+        assert_eq!(v.get("event").unwrap(), "affected");
+        assert_eq!(v.get("affected_rows").unwrap(), 2);
+        assert_eq!(v.get("command_tag").unwrap(), "UPDATE 2");
+
+        let err = StreamEvent::Error {
+            message: "boom".into(),
+            code: Some("42601".into()),
+            position: Some(7),
+        };
+        let v = serde_json::to_value(&err).unwrap();
+        assert_eq!(v.get("event").unwrap(), "error");
+        assert_eq!(v.get("message").unwrap(), "boom");
+        assert_eq!(v.get("code").unwrap(), "42601");
+        assert_eq!(v.get("position").unwrap(), 7);
     }
 
     #[test]

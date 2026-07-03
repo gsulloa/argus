@@ -692,7 +692,7 @@ function QueryTab({ tabId, payload }: InnerProps) {
             <span className={styles.kbd}>{FORMAT_HINT}</span>
           </button>
           <span className={styles.toolbarDivider} aria-hidden="true" />
-          {runner.state.status === "running" ? (
+          {runner.state.status === "running" || runner.state.status === "streaming" ? (
             <button
               type="button"
               className={styles.toolbarButton}
@@ -771,7 +771,7 @@ function QueryTab({ tabId, payload }: InnerProps) {
             <RunSummary
               staticSummary={runner.summary}
               runStartedAt={runner.runStartedAt}
-              isRunning={runner.state.status === "running"}
+              isRunning={runner.state.status === "running" || runner.state.status === "streaming"}
             />
           </span>
           {runner.state.status === "done" &&
