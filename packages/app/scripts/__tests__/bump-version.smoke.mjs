@@ -648,7 +648,7 @@ const cfg = {
   let result;
   try {
     result = promoteUnreleased(input, "0.7.6", "2026-07-02", []);
-  } catch (e) {
+  } catch {
     threw = true;
   }
 
