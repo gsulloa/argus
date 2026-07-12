@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-07-12
+
+### Added
+- duplicate rows with Cmd/Ctrl+V paste ([#243](https://github.com/gsulloa/argus/pull/243))
+- reorder active filter rows via drag-and-drop ([#248](https://github.com/gsulloa/argus/pull/248))
+
+### Fixed
+- open prefab queries by switching focus to their connection ([#242](https://github.com/gsulloa/argus/pull/242))
+
 ## [0.8.1] - 2026-07-03
 
 ### Added
