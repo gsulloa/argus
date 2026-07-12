@@ -1,4 +1,7 @@
-import { Minus, Plus } from "lucide-react";
+import type { CSSProperties } from "react";
+import { GripVertical, Minus, Plus } from "lucide-react";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { ColumnPicker } from "./ColumnPicker";
 import { OperatorPicker } from "./OperatorPicker";
 import { ValueInput, RawExpressionInput } from "./ValueInput";
@@ -73,11 +76,38 @@ export function ConditionRow({
     onChange({ ...row, op: next, value: nextValue });
   }
 
+  const sortable = useSortable({ id: row.id });
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(sortable.transform),
+    transition: sortable.transition,
+    ...(sortable.isDragging ? { opacity: 0.5, zIndex: 1 } : null),
+  };
+
   return (
     <div
-      className={[styles.conditionRow, !row.enabled ? styles.conditionRowDisabled : ""].filter(Boolean).join(" ")}
+      ref={sortable.setNodeRef}
+      style={style}
+      className={[
+        styles.conditionRow,
+        !row.enabled ? styles.conditionRowDisabled : "",
+        sortable.isDragging ? styles.conditionRowDragging : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       data-filter-row-index={index}
     >
+      {/* Drag handle: reorders rows (pointer + keyboard) */}
+      <button
+        type="button"
+        className={styles.dragHandle}
+        aria-label="Reorder filter row"
+        data-filter-control="drag"
+        {...sortable.attributes}
+        {...sortable.listeners}
+      >
+        <GripVertical size={11} />
+      </button>
+
       {/* Checkbox: gates inclusion in Apply All */}
       <input
         type="checkbox"

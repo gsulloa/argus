@@ -7,6 +7,7 @@ import { EMPTY_FILTER_MODEL, type FilterModel } from "./types";
 const filterNewShape: FilterModel = {
   rows: [
     {
+      id: "fns-a",
       enabled: true,
       column: { kind: "named", name: "country" },
       op: "=",
@@ -20,6 +21,7 @@ const filterNewShape: FilterModel = {
 const filterNewShapeB: FilterModel = {
   rows: [
     {
+      id: "fns-b",
       enabled: false,
       column: { kind: "named", name: "status" },
       op: "ILIKE",
