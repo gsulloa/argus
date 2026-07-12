@@ -10,7 +10,10 @@
  * Used by WorkspaceShell; NOT used by ConnectionRow (which keeps its own
  * inline workspace-mode subtree path unchanged so existing tests pass).
  */
+import { useContext } from "react";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useOpenConnections } from "@/platform/connection-registry/useOpenConnections";
+import { FocusedConnectionCtxRef } from "@/platform/shell/FocusedConnectionContext";
 import {
   POSTGRES_KIND,
   SchemaTree,
@@ -57,6 +60,12 @@ export function ConnectionSubtree({ connectionId }: Props) {
   const { items } = useConnections();
   const tabs = useTabs();
   const toast = useToast();
+  const focusedCtx = useContext(FocusedConnectionCtxRef);
+  const { isOpen } = useOpenConnections();
+  const contextQueryFocus = {
+    setFocused: (id: string) => focusedCtx?.setFocused(id),
+    isOpen,
+  };
 
   const connection = items.find((c) => c.id === connectionId);
   if (!connection) return null;
@@ -72,14 +81,21 @@ export function ConnectionSubtree({ connectionId }: Props) {
     return async (queryName: string, folder?: string) => {
       try {
         const result = await contextApi.saveQuery(connectionId, queryName, "", { folder });
-        await openContextQuery(tabs, connectionId, name, engine, {
-          name: result.name,
-          description: null,
-          params: [],
-          tags: [],
-          path: result.rel_path,
-          folder: result.folder,
-        });
+        await openContextQuery(
+          tabs,
+          connectionId,
+          name,
+          engine,
+          {
+            name: result.name,
+            description: null,
+            params: [],
+            tags: [],
+            path: result.rel_path,
+            folder: result.folder,
+          },
+          contextQueryFocus,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         toast.show(`Failed to create query: ${msg}`, "error");
@@ -105,7 +121,7 @@ export function ConnectionSubtree({ connectionId }: Props) {
             contextPath={context_path}
             engine="postgres"
             onActivate={(q) => {
-              void openContextQuery(tabs, connectionId, name, "postgres", q);
+              void openContextQuery(tabs, connectionId, name, "postgres", q, contextQueryFocus);
             }}
             onNewQuery={makeNewContextQueryHandler("postgres")}
           />
@@ -120,7 +136,7 @@ export function ConnectionSubtree({ connectionId }: Props) {
             contextPath={context_path}
             engine="mysql"
             onActivate={(q) => {
-              void openContextQuery(tabs, connectionId, name, "mysql", q);
+              void openContextQuery(tabs, connectionId, name, "mysql", q, contextQueryFocus);
             }}
             onNewQuery={makeNewContextQueryHandler("mysql")}
           />
@@ -135,7 +151,7 @@ export function ConnectionSubtree({ connectionId }: Props) {
             contextPath={context_path}
             engine="mssql"
             onActivate={(q) => {
-              void openContextQuery(tabs, connectionId, name, "mssql", q);
+              void openContextQuery(tabs, connectionId, name, "mssql", q, contextQueryFocus);
             }}
             onNewQuery={makeNewContextQueryHandler("mssql")}
           />
@@ -150,7 +166,7 @@ export function ConnectionSubtree({ connectionId }: Props) {
             contextPath={context_path}
             engine="dynamo"
             onActivate={(q) => {
-              void openContextQuery(tabs, connectionId, name, "dynamo", q);
+              void openContextQuery(tabs, connectionId, name, "dynamo", q, contextQueryFocus);
             }}
             onNewQuery={makeNewContextQueryHandler("dynamo")}
           />

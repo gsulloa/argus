@@ -239,12 +239,16 @@ vi.mock("@/platform/shell/tabs", () => ({
   }),
 }));
 
-vi.mock("@/platform/shell/FocusedConnectionContext", () => ({
-  useFocusedConnection: () => ({
-    focusedConnectionId: null,
-    setFocused: vi.fn(),
-  }),
-}));
+vi.mock("@/platform/shell/FocusedConnectionContext", async () => {
+  const { createContext } = await import("react");
+  return {
+    useFocusedConnection: () => ({
+      focusedConnectionId: null,
+      setFocused: vi.fn(),
+    }),
+    FocusedConnectionCtxRef: createContext(null),
+  };
+});
 
 vi.mock("@/platform/connection-registry/useOpenConnections", () => ({
   useOpenConnections: () => ({
