@@ -24,6 +24,7 @@ import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import { headerFloorWidthFor } from "@/modules/postgres/data/headerMeasure";
 import { formatCellValue } from "@/platform/grid/cellClipboard";
 import { copyCell, copyRows, copyRowRangeFromKeydown, writeClipboardText } from "@/platform/grid/gridCopy";
+import { pasteRowRangeFromKeydown, readClipboardText, type PasteValue } from "@/platform/grid/gridPaste";
 import { useToast } from "@/platform/toast";
 import { EditableCell } from "./EditableCell";
 import { RowContextMenu } from "@/modules/postgres/data/RowContextMenu";
@@ -65,6 +66,10 @@ export interface DataGridProps {
   onRetryNextPage(): void;
   /** Fired when cell selection changes (for inspector). */
   onCellSelect?(rowIdx: number | null, colIdx: number | null): void;
+  /** Row-range paste (⌘V/Ctrl+V, issue #243) — one parsed row per pasted line. */
+  onPasteRows: (rows: Record<string, PasteValue>[]) => void;
+  /** Called with a user-facing message when a row-range paste fails. */
+  onPasteError?: (message: string) => void;
 }
 
 export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataGrid(
@@ -91,6 +96,8 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     onLoadNextPage,
     onRetryNextPage,
     onCellSelect,
+    onPasteRows,
+    onPasteError,
   } = props;
 
   const toast = useToast();
@@ -215,6 +222,23 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
         },
         write: writeClipboardText,
         onError: onCopyError,
+      });
+      return;
+    }
+
+    // ⌘V / Ctrl+V — row-range paste-to-duplicate (issue #243). Mirrors the
+    // ⌘C row-range copy path above: handled here, not via a native window
+    // "paste" event, which WKWebView does not fire for CSS-only row selections.
+    if ((e.metaKey || e.ctrlKey) && (e.key === "v" || e.key === "V")) {
+      void pasteRowRangeFromKeydown(e, {
+        editing: editingCell !== null,
+        activeCell,
+        selection,
+        columns,
+        pkColumns,
+        read: readClipboardText,
+        onPasteRows,
+        onError: onPasteError,
       });
       return;
     }
