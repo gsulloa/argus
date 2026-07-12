@@ -15,8 +15,10 @@ const cols = (...specs: Array<[string, string]>): DataColumn[] =>
     is_nullable: true,
   }));
 
+let cwId = 0;
 function row(overrides: Partial<FilterRow> = {}): FilterRow {
   return {
+    id: `cw-${cwId++}`,
     enabled: true,
     column: { kind: "named", name: "col" },
     op: "=",

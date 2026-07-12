@@ -5,6 +5,7 @@ import { AppError } from "@/platform/errors/AppError";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import { copyCell, copyRows, copyRowRangeFromKeydown, writeClipboardText } from "@/platform/grid/gridCopy";
+import { pasteRowRangeFromKeydown, readClipboardText, type PasteValue } from "@/platform/grid/gridPaste";
 import { useToast } from "@/platform/toast";
 import { EditableCell, looksLikeBytea } from "./EditableCell";
 import { RowContextMenu } from "./RowContextMenu";
@@ -131,6 +132,11 @@ export interface DataGridProps {
   onSortChange(next: OrderBy[]): void;
   onLoadNextPage(): void;
   onRetryNextPage(): void;
+  /** Called with the parsed row objects when a row-range paste (⌘V) commits
+   *  new insert rows (issue #243, mirrors `onCopyError`'s row-range copy). */
+  onPasteRows: (rows: Record<string, PasteValue>[]) => void;
+  /** Called with a user-facing message when the paste read/parse fails. */
+  onPasteError?: (message: string) => void;
 }
 
 export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataGrid(
@@ -160,6 +166,8 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     onSortChange,
     onLoadNextPage,
     onRetryNextPage,
+    onPasteRows,
+    onPasteError,
   } = props;
 
   const toast = useToast();
@@ -312,6 +320,22 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
             : null,
         write: writeClipboardText,
         onError: onCopyError,
+      });
+      return;
+    }
+
+    // ⌘V / Ctrl+V — row-range paste (issue #243): handled here, not via a
+    // native window "paste" event, for the same WKWebView reason as ⌘C above.
+    if ((e.metaKey || e.ctrlKey) && (e.key === "v" || e.key === "V")) {
+      void pasteRowRangeFromKeydown(e, {
+        editing: editing !== null,
+        activeCell,
+        selection,
+        columns,
+        pkColumns,
+        read: readClipboardText,
+        onPasteRows,
+        onError: onPasteError,
       });
       return;
     }

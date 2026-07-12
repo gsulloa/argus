@@ -76,6 +76,7 @@ describe("ConnectionSubtree", () => {
       "PG",
       "postgres",
       expect.objectContaining({ path: "reports/daily-report", folder: "reports" }),
+      expect.objectContaining({ setFocused: expect.any(Function), isOpen: expect.any(Function) }),
     );
   });
 });

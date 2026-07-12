@@ -31,6 +31,41 @@
   flex: 1 1 0;
 }
 
+/* Row being dragged: lift above siblings */
+.conditionRowDragging {
+  background: var(--surface-2);
+}
+
+/* ── Drag handle ─────────────────────────────────────────────────────────────*/
+
+.dragHandle {
+  background: transparent;
+  border: 0;
+  color: var(--text-subtle);
+  cursor: grab;
+  padding: 2px 2px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  touch-action: none;
+  transition: background var(--duration-instant) ease, color var(--duration-instant) ease;
+}
+
+.dragHandle:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+.dragHandle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
 /* ── Checkbox ────────────────────────────────────────────────────────────────*/
 
 .rowCheckbox {

@@ -22,6 +22,17 @@ interface TabsApi {
 type EngineKind = "postgres" | "mysql" | "mssql" | "dynamo" | "cloudwatch" | "athena";
 
 /**
+ * Focus context needed to surface the opened tab. Tabs are scoped to the
+ * focused connection's set and only the focused set is rendered, so opening a
+ * tab for a non-focused connection would land it in a hidden set (#242).
+ * Switching focus first mirrors the saved-query path (openSavedQuery.ts).
+ */
+export interface OpenContextQueryFocus {
+  setFocused: (id: string) => void;
+  isOpen: (connectionId: string) => boolean;
+}
+
+/**
  * Open a context-folder prefab query in the appropriate engine's editor tab.
  * Dispatches on `engine` to route to Postgres, MySQL, MSSQL, or Dynamo.
  * Fetches the full body via `contextApi.getQuery`.
@@ -32,7 +43,14 @@ export async function openContextQuery(
   connectionName: string,
   engine: EngineKind,
   query: QueryListItem,
+  focus: OpenContextQueryFocus,
 ): Promise<void> {
+  // Surface the tab in the query's own connection. Without this, opening into a
+  // non-focused connection's tab set would show nothing (#242).
+  if (focus.isOpen(connectionId)) {
+    focus.setFocused(connectionId);
+  }
+
   switch (engine) {
     case "postgres": {
       const doc = await contextApi.getQuery(connectionId, query.path);

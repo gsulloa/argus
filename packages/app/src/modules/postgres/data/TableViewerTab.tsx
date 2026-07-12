@@ -8,6 +8,8 @@ import type { Tab } from "@/platform/shell/tabs/types";
 import { AppError } from "@/platform/errors/AppError";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useSaveShortcut } from "@/platform/shell/useSaveShortcut";
+import { useToast } from "@/platform/toast";
+import type { PasteValue } from "@/platform/grid/gridPaste";
 import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import { DocsSubtab } from "@/modules/context/components/DocsSubtab";
 import { useActiveConnections } from "../useActiveConnections";
@@ -195,6 +197,14 @@ export function TableViewer({
 
   const { getActive } = useActiveConnections();
   const isReadOnly = getActive(connectionId)?.read_only ?? false;
+
+  // Toast — used for row-range paste errors (issue #243), the same toast
+  // system DataGrid uses internally for row-range copy errors.
+  const toast = useToast();
+  const onPasteError = useCallback(
+    (message: string) => toast.show(message, "error"),
+    [toast],
+  );
 
   // Seed draft.combinator from the persisted value once the filter is loaded.
   // This ensures the bar opens with the last-used combinator even if the
@@ -628,6 +638,22 @@ export function TableViewer({
     gridRef.current?.scrollToTop();
   }
 
+  // Row-range paste (⌘V, issue #243): each pasted TSV line becomes a new
+  // insert row, mirroring `onAddRow` but for a batch of rows. Pending inserts
+  // render at the top (index 0..n-1), so the selection covers all of them.
+  function onPasteInsertRows(rows: Record<string, PasteValue>[]) {
+    if (isReadOnly) return;
+    if (relationKind !== "table") return; // Views/mat-views: no insert.
+    if (rows.length === 0) return;
+    // PasteValue's `object` arm is broader than EditValue's structural object
+    // shapes; parsed TSV cells are always string | null in practice (see
+    // pasteRowRangeFromKeydown), so this cast is safe.
+    for (const values of rows) buffer.addInsertRow(values as Record<string, EditValue>);
+    setSelection({ anchor: 0, active: rows.length - 1 });
+    setActiveCell(null);
+    gridRef.current?.scrollToTop();
+  }
+
   const onApplyFilters = useCallback(() => {
     // Apply All: only enabled+complete rows.
     const enabledRows = draft.rows.filter((r) => r.enabled && isCompleteRow(r));
@@ -774,6 +800,8 @@ export function TableViewer({
                 onSortChange={setOrderBy}
                 onLoadNextPage={data.loadNextPage}
                 onRetryNextPage={data.retryNextPage}
+                onPasteRows={onPasteInsertRows}
+                onPasteError={onPasteError}
               />
             )}
           </div>

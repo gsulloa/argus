@@ -259,6 +259,7 @@ function RowsResultView({
             onLoadNextPage={() => {}}
             onRetryNextPage={() => {}}
             onCellSelect={() => {}}
+            onPasteRows={() => {}}
           />
         )}
       </div>

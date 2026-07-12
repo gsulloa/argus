@@ -45,6 +45,7 @@ function Harness({ columns }: { columns: DataColumn[] }) {
       onSortChange={() => {}}
       onLoadNextPage={() => {}}
       onRetryNextPage={() => {}}
+      onPasteRows={() => {}}
     />
   );
 }

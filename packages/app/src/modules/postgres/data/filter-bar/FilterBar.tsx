@@ -8,6 +8,20 @@ import {
 } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { ConditionRow } from "./ConditionRow";
 import {
   addRow,
@@ -16,6 +30,7 @@ import {
   setEnabled,
   setCombinator,
   clearAllRows,
+  moveRow,
 } from "./treeMutations";
 import {
   filterModelEquals,
@@ -24,7 +39,7 @@ import {
   type DataColumn,
   type FilterModel,
   type FilterRow,
-  EMPTY_FILTER_ROW,
+  makeEmptyRow,
 } from "../types";
 import {
   FilterBarShell,
@@ -107,8 +122,16 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
       [draft.rows, applied.rows],
     );
 
-    // Ensure at least one row is always rendered.
-    const rows = draft.rows.length > 0 ? draft.rows : [EMPTY_FILTER_ROW];
+    // Stable placeholder row for the empty state — memoized so its `id` (and
+    // thus the sortable key) does not change on every render.
+    const placeholderRow = useMemo(() => makeEmptyRow(), []);
+
+    // Ensure at least one row is always rendered. Memoized so the array
+    // reference is stable across renders (keeps `rowIds` from recomputing).
+    const rows = useMemo(
+      () => (draft.rows.length > 0 ? draft.rows : [placeholderRow]),
+      [draft.rows, placeholderRow],
+    );
 
     // ── Apply All handler with "no filters" feedback ──────────────────────────
 
@@ -159,6 +182,29 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
     const handleUnset = useCallback(() => {
       onDraftChange(clearAllRows(draft));
     }, [draft, onDraftChange]);
+
+    // ── Drag-and-drop reordering ──────────────────────────────────────────────
+
+    // Activation distance keeps clicks on the row's inline controls working —
+    // only a deliberate ≥5px drag initiates a reorder.
+    const sensors = useSensors(
+      useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+      useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    );
+
+    const rowIds = useMemo(() => rows.map((r) => r.id), [rows]);
+
+    const handleDragEnd = useCallback(
+      (event: DragEndEvent) => {
+        const { active, over } = event;
+        if (!over || active.id === over.id) return;
+        const from = rowIds.indexOf(String(active.id));
+        const to = rowIds.indexOf(String(over.id));
+        if (from === -1 || to === -1) return;
+        onDraftChange(moveRow(draft, from, to));
+      },
+      [rowIds, draft, onDraftChange],
+    );
 
     // ── Combinator change (from chevron menu) ─────────────────────────────────
 
@@ -373,22 +419,30 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
       <div ref={rootRef} onKeyDown={onKeyDown} className={styles.root} data-filter-bar-root="true">
         <FilterBarShell>
           <FilterBarBody>
-            {rows.map((row, i) => (
-              <ConditionRow
-                key={i}
-                row={row}
-                index={i}
-                totalRows={rows.length}
-                isApplied={appliedSet.has(i)}
-                columns={columns}
-                isFocusTarget={i === 0}
-                onChange={(next) => handleRowChange(i, next)}
-                onSetEnabled={(en) => handleSetEnabled(i, en)}
-                onApplyOnly={() => onApplyOnlyRow(i)}
-                onInsertBelow={() => handleInsertBelow(i)}
-                onRemove={() => handleRemove(i)}
-              />
-            ))}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext items={rowIds} strategy={verticalListSortingStrategy}>
+                {rows.map((row, i) => (
+                  <ConditionRow
+                    key={row.id}
+                    row={row}
+                    index={i}
+                    totalRows={rows.length}
+                    isApplied={appliedSet.has(i)}
+                    columns={columns}
+                    isFocusTarget={i === 0}
+                    onChange={(next) => handleRowChange(i, next)}
+                    onSetEnabled={(en) => handleSetEnabled(i, en)}
+                    onApplyOnly={() => onApplyOnlyRow(i)}
+                    onInsertBelow={() => handleInsertBelow(i)}
+                    onRemove={() => handleRemove(i)}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
           </FilterBarBody>
 
           {/* Footer */}

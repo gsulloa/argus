@@ -121,6 +121,8 @@ function buildProps(overrides: Partial<DataGridProps> = {}): DataGridProps {
     onSortChange: vi.fn(),
     onLoadNextPage: vi.fn(),
     onRetryNextPage: vi.fn(),
+    onPasteRows: vi.fn(),
+    onPasteError: vi.fn(),
     ...overrides,
   };
 }

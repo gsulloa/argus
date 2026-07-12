@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { filterRowEquals, isCompleteRow, modelToPayload } from "../types";
 import type { FilterRow, FilterModel } from "../types";
 
+let freId = 0;
 function row(overrides: Partial<FilterRow> = {}): FilterRow {
   return {
+    id: `fre-${freId++}`,
     enabled: true,
     column: { kind: "any_column" },
     op: "Contains",
@@ -14,8 +16,14 @@ function row(overrides: Partial<FilterRow> = {}): FilterRow {
 
 describe("filterRowEquals", () => {
   it("two structurally equal rows with different enabled flags → true", () => {
-    const a = row({ enabled: true });
-    const b = row({ enabled: false });
+    const a = row({ id: "raw1", enabled: true });
+    const b = row({ id: "raw2", enabled: false });
+    expect(filterRowEquals(a, b)).toBe(true);
+  });
+
+  it("ignores the client-only id (rows differing only by id → equal)", () => {
+    const a = row({ id: "id-one", value: "CL" });
+    const b = row({ id: "id-two", value: "CL" });
     expect(filterRowEquals(a, b)).toBe(true);
   });
 
@@ -104,27 +112,27 @@ describe("filterRowEquals", () => {
 
 describe("isCompleteRow — RAW rows", () => {
   it("returns false for RAW row with empty string value", () => {
-    const r: FilterRow = { enabled: true, column: { kind: "raw" }, op: "RAW", value: "" };
+    const r: FilterRow = { id: "raw3", enabled: true, column: { kind: "raw" }, op: "RAW", value: "" };
     expect(isCompleteRow(r)).toBe(false);
   });
 
   it("returns false for RAW row with whitespace-only value", () => {
-    const r: FilterRow = { enabled: true, column: { kind: "raw" }, op: "RAW", value: "   " };
+    const r: FilterRow = { id: "raw4", enabled: true, column: { kind: "raw" }, op: "RAW", value: "   " };
     expect(isCompleteRow(r)).toBe(false);
   });
 
   it("returns false for RAW row with undefined value", () => {
-    const r: FilterRow = { enabled: true, column: { kind: "raw" }, op: "RAW", value: undefined };
+    const r: FilterRow = { id: "raw5", enabled: true, column: { kind: "raw" }, op: "RAW", value: undefined };
     expect(isCompleteRow(r)).toBe(false);
   });
 
   it("returns true for RAW row with a non-empty expression", () => {
-    const r: FilterRow = { enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" };
+    const r: FilterRow = { id: "raw6", enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" };
     expect(isCompleteRow(r)).toBe(true);
   });
 
   it("returns true for RAW row with leading/trailing whitespace around a non-empty expression", () => {
-    const r: FilterRow = { enabled: true, column: { kind: "raw" }, op: "RAW", value: "  id > 0  " };
+    const r: FilterRow = { id: "raw7", enabled: true, column: { kind: "raw" }, op: "RAW", value: "  id > 0  " };
     expect(isCompleteRow(r)).toBe(true);
   });
 });
@@ -136,7 +144,7 @@ describe("isCompleteRow — RAW rows", () => {
 describe("modelToPayload — RAW rows", () => {
   it("emits wire shape { kind: condition, column: { kind: raw }, op: RAW, value } for a complete RAW row", () => {
     const model: FilterModel = {
-      rows: [{ enabled: true, column: { kind: "raw" }, op: "RAW", value: "data->>'flag' = 'true'" }],
+      rows: [{ id: "raw8", enabled: true, column: { kind: "raw" }, op: "RAW", value: "data->>'flag' = 'true'" }],
       combinator: "AND",
     };
     const payload = modelToPayload(model);
@@ -153,8 +161,8 @@ describe("modelToPayload — RAW rows", () => {
   it("drops incomplete RAW rows (empty expression)", () => {
     const model: FilterModel = {
       rows: [
-        { enabled: true, column: { kind: "raw" }, op: "RAW", value: "" },
-        { enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "active" },
+        { id: "raw9", enabled: true, column: { kind: "raw" }, op: "RAW", value: "" },
+        { id: "raw10", enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "active" },
       ],
       combinator: "AND",
     };
@@ -165,7 +173,7 @@ describe("modelToPayload — RAW rows", () => {
 
   it("drops incomplete RAW rows (whitespace-only expression)", () => {
     const model: FilterModel = {
-      rows: [{ enabled: true, column: { kind: "raw" }, op: "RAW", value: "   " }],
+      rows: [{ id: "raw11", enabled: true, column: { kind: "raw" }, op: "RAW", value: "   " }],
       combinator: "AND",
     };
     const payload = modelToPayload(model);
@@ -174,7 +182,7 @@ describe("modelToPayload — RAW rows", () => {
 
   it("drops disabled RAW rows", () => {
     const model: FilterModel = {
-      rows: [{ enabled: false, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
+      rows: [{ id: "raw12", enabled: false, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
       combinator: "AND",
     };
     const payload = modelToPayload(model);
