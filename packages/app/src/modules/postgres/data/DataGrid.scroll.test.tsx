@@ -57,6 +57,7 @@ function Harness({ gridRef }: { gridRef: React.Ref<DataGridHandle> }) {
       onSortChange={() => {}}
       onLoadNextPage={() => {}}
       onRetryNextPage={() => {}}
+      onPasteRows={() => {}}
     />
   );
 }
