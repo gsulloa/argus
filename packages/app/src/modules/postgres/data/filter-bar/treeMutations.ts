@@ -4,14 +4,14 @@ import type {
   FilterValue,
   Operator,
 } from "../types";
-import { EMPTY_FILTER_ROW } from "../types";
+import { makeEmptyRow } from "../types";
 
 export function addRow(
   tree: FilterTree,
   atIndex?: number,
   row?: FilterRow,
 ): FilterTree {
-  const newRow = row ?? EMPTY_FILTER_ROW;
+  const newRow = row ?? makeEmptyRow();
   const rows = tree.rows.slice();
   if (atIndex === undefined) {
     rows.push(newRow);
@@ -23,9 +23,26 @@ export function addRow(
 
 export function removeRow(tree: FilterTree, index: number): FilterTree {
   if (tree.rows.length === 1) {
-    return { ...tree, rows: [EMPTY_FILTER_ROW] };
+    return { ...tree, rows: [makeEmptyRow()] };
   }
   const rows = tree.rows.filter((_, i) => i !== index);
+  return { ...tree, rows };
+}
+
+/**
+ * Move the row at `from` to index `to`, leaving `combinator` unchanged.
+ * Returns the input unchanged for no-op / out-of-range indices. Reordering is
+ * result-neutral (the flat root combinator is commutative) — this only changes
+ * the visual/predicate order.
+ */
+export function moveRow(tree: FilterTree, from: number, to: number): FilterTree {
+  if (from === to) return tree;
+  const len = tree.rows.length;
+  if (from < 0 || from >= len || to < 0 || to >= len) return tree;
+  const rows = tree.rows.slice();
+  const [moved] = rows.splice(from, 1);
+  if (!moved) return tree;
+  rows.splice(to, 0, moved);
   return { ...tree, rows };
 }
 
@@ -46,7 +63,7 @@ export function setCombinator(tree: FilterTree, combinator: "AND" | "OR"): Filte
 }
 
 export function clearAllRows(tree: FilterTree): FilterTree {
-  return { ...tree, rows: [EMPTY_FILTER_ROW] };
+  return { ...tree, rows: [makeEmptyRow()] };
 }
 
 /**

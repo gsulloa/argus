@@ -6,17 +6,20 @@ import {
   setEnabled,
   setCombinator,
   clearAllRows,
+  moveRow,
   coerceValueForOperator,
 } from "./treeMutations";
-import { EMPTY_FILTER_ROW } from "../types";
+import { EMPTY_FILTER_ROW_FIELDS, modelToPayload } from "../types";
 import type { FilterRow, FilterTree } from "../types";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+let idCounter = 0;
 function row(overrides: Partial<FilterRow> = {}): FilterRow {
   return {
+    id: `row-${idCounter++}`,
     enabled: true,
     column: { kind: "named", name: "a" },
     op: "=",
@@ -38,7 +41,14 @@ describe("addRow", () => {
     const t = treeOf(row());
     const next = addRow(t);
     expect(next.rows).toHaveLength(2);
-    expect(next.rows[1]).toEqual(EMPTY_FILTER_ROW);
+    expect(next.rows[1]).toMatchObject(EMPTY_FILTER_ROW_FIELDS);
+    expect(typeof next.rows[1]!.id).toBe("string");
+  });
+
+  it("mints a unique id for each appended empty row", () => {
+    const t = treeOf(row());
+    const next = addRow(addRow(t));
+    expect(next.rows[1]!.id).not.toBe(next.rows[2]!.id);
   });
 
   it("inserts at the specified index", () => {
@@ -88,11 +98,12 @@ describe("removeRow", () => {
     expect(next.rows[0]).toEqual(r1);
   });
 
-  it("clears to EMPTY_FILTER_ROW when removing the last row", () => {
+  it("clears to a fresh empty row when removing the last row", () => {
     const t = treeOf(row({ value: "only" }));
     const next = removeRow(t, 0);
     expect(next.rows).toHaveLength(1);
-    expect(next.rows[0]).toEqual(EMPTY_FILTER_ROW);
+    expect(next.rows[0]).toMatchObject(EMPTY_FILTER_ROW_FIELDS);
+    expect(typeof next.rows[0]!.id).toBe("string");
   });
 
   it("preserves combinator after removal", () => {
@@ -171,16 +182,74 @@ describe("setCombinator", () => {
 // ---------------------------------------------------------------------------
 
 describe("clearAllRows", () => {
-  it("resets rows to a single EMPTY_FILTER_ROW", () => {
+  it("resets rows to a single fresh empty row", () => {
     const t = treeOf(row({ value: "a" }), row({ value: "b" }));
     const next = clearAllRows(t);
     expect(next.rows).toHaveLength(1);
-    expect(next.rows[0]).toEqual(EMPTY_FILTER_ROW);
+    expect(next.rows[0]).toMatchObject(EMPTY_FILTER_ROW_FIELDS);
+    expect(typeof next.rows[0]!.id).toBe("string");
   });
 
   it("preserves combinator", () => {
     const t: FilterTree = { rows: [row(), row()], combinator: "OR" };
     expect(clearAllRows(t).combinator).toBe("OR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// moveRow
+// ---------------------------------------------------------------------------
+
+describe("moveRow", () => {
+  it("moves a row toward the end", () => {
+    const [a, b, c] = [row({ value: "a" }), row({ value: "b" }), row({ value: "c" })];
+    const next = moveRow(treeOf(a, b, c), 0, 2);
+    expect(next.rows).toEqual([b, c, a]);
+  });
+
+  it("moves a row toward the start", () => {
+    const [a, b, c] = [row({ value: "a" }), row({ value: "b" }), row({ value: "c" })];
+    const next = moveRow(treeOf(a, b, c), 2, 0);
+    expect(next.rows).toEqual([c, a, b]);
+  });
+
+  it("returns the same tree reference when from === to", () => {
+    const t = treeOf(row(), row());
+    expect(moveRow(t, 1, 1)).toBe(t);
+  });
+
+  it("returns the same tree reference for out-of-range indices", () => {
+    const t = treeOf(row(), row());
+    expect(moveRow(t, -1, 0)).toBe(t);
+    expect(moveRow(t, 0, 5)).toBe(t);
+    expect(moveRow(t, 5, 0)).toBe(t);
+  });
+
+  it("preserves combinator and leaves untouched rows intact", () => {
+    const [a, b, c] = [row({ value: "a" }), row({ value: "b" }), row({ value: "c" })];
+    const t: FilterTree = { rows: [a, b, c], combinator: "OR" };
+    const next = moveRow(t, 1, 2);
+    expect(next.combinator).toBe("OR");
+    expect(next.rows).toEqual([a, c, b]);
+  });
+
+  it("reordering yields an equivalent wire payload (only order differs, no id)", () => {
+    const [a, b] = [
+      row({ column: { kind: "named", name: "x" }, op: "=", value: "1" }),
+      row({ column: { kind: "named", name: "y" }, op: "=", value: "2" }),
+    ];
+    const before = modelToPayload({ rows: [a, b], combinator: "AND" });
+    const after = modelToPayload(moveRow({ rows: [a, b], combinator: "AND" }, 0, 1));
+
+    // Same combinator, same set of predicates, just reordered.
+    expect(after.filter_tree!.combinator).toBe("AND");
+    expect(after.filter_tree!.children).toEqual(
+      [...before.filter_tree!.children].reverse(),
+    );
+    // The client-only `id` is never emitted on the wire.
+    for (const child of after.filter_tree!.children) {
+      expect(child).not.toHaveProperty("id");
+    }
   });
 });
 

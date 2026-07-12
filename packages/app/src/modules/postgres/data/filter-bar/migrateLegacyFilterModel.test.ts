@@ -89,17 +89,63 @@ describe("migrateLegacyFilterModel", () => {
   it("passes through a valid new-shape model with combinator AND", () => {
     const input = {
       rows: [
-        { enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "ok" },
+        { id: "keep-me", enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "ok" },
       ],
       combinator: "AND",
     };
     const result = migrateLegacyFilterModel(input);
     expect(result).toEqual({
       rows: [
-        { enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "ok" },
+        { id: "keep-me", enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "ok" },
       ],
       combinator: "AND",
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Client-only row id backfill
+  // ---------------------------------------------------------------------------
+
+  it("backfills a stable id for a row persisted without one", () => {
+    const input = {
+      rows: [
+        { enabled: true, column: { kind: "named", name: "a" }, op: "=", value: "1" },
+      ],
+      combinator: "AND",
+    };
+    const result = migrateLegacyFilterModel(input);
+    expect(typeof result.rows[0]?.id).toBe("string");
+    expect(result.rows[0]?.id).not.toBe("");
+    // Fields are otherwise untouched.
+    expect(result.rows[0]).toMatchObject({
+      enabled: true,
+      column: { kind: "named", name: "a" },
+      op: "=",
+      value: "1",
+    });
+  });
+
+  it("preserves an existing row id", () => {
+    const input = {
+      rows: [
+        { id: "abc-123", enabled: true, column: { kind: "named", name: "a" }, op: "=", value: "1" },
+      ],
+      combinator: "AND",
+    };
+    const result = migrateLegacyFilterModel(input);
+    expect(result.rows[0]?.id).toBe("abc-123");
+  });
+
+  it("assigns distinct ids to multiple id-less rows", () => {
+    const input = {
+      rows: [
+        { enabled: true, column: { kind: "named", name: "a" }, op: "=", value: "1" },
+        { enabled: true, column: { kind: "named", name: "b" }, op: "=", value: "2" },
+      ],
+      combinator: "AND",
+    };
+    const result = migrateLegacyFilterModel(input);
+    expect(result.rows[0]?.id).not.toBe(result.rows[1]?.id);
   });
 
   it("passes through a valid new-shape model with combinator OR", () => {

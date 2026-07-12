@@ -42,6 +42,7 @@ vi.mock("@/modules/postgres/schema/globalSchemaCache", () => ({
 const APPLIED_FILTER: FilterModel = {
   rows: [
     {
+      id: "af-1",
       enabled: true,
       column: { kind: "named", name: "n" },
       op: "=",

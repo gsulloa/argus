@@ -70,8 +70,14 @@ export interface Condition {
 /**
  * A single row in the flat filter list. `enabled` gates inclusion in Apply All
  * but does NOT affect per-row Apply.
+ *
+ * `id` is a client-only stable identity used to key the drag-and-drop sortable
+ * list. Like `enabled`, it is NEVER emitted on the wire (see `modelToPayload`)
+ * and is ignored by every row/tree equality helper, so it does not affect dirty
+ * detection or the per-row "Applied" badge.
  */
 export interface FilterRow {
+  id: string;
   enabled: boolean;
   column: ColumnRef;
   op: Operator;
@@ -101,12 +107,22 @@ export interface WireCondition {
   value?: FilterValue;
 }
 
-export const EMPTY_FILTER_ROW: FilterRow = {
+/**
+ * Field template for a fresh empty row, WITHOUT an `id`. Use `makeEmptyRow()`
+ * to obtain a usable row — every rendered/persisted row must carry a unique
+ * `id` so the sortable list has stable keys.
+ */
+export const EMPTY_FILTER_ROW_FIELDS: Omit<FilterRow, "id"> = {
   enabled: true,
   column: { kind: "any_column" },
   op: "Contains",
   value: "",
 };
+
+/** Mint a fresh empty filter row with a unique client-only `id`. */
+export function makeEmptyRow(): FilterRow {
+  return { id: crypto.randomUUID(), ...EMPTY_FILTER_ROW_FIELDS };
+}
 
 export const EMPTY_FILTER_TREE: FilterTree = { rows: [], combinator: "AND" };
 
