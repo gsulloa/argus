@@ -142,8 +142,19 @@ export function EditableCell(props: EditableCellProps) {
   }
 
   // ----- Edit path -----
+  // Stop mousedown from bubbling to the row's drag-select handler (DataGrid
+  // row onMouseDown). That handler calls preventDefault() + arms drag-select,
+  // which installs a document mouseup listener that steals focus back to the
+  // grid root — blurring the editor and committing/exiting on any in-editor
+  // click (issue #246). stopPropagation (not preventDefault) keeps the input's
+  // own native caret placement / text selection intact.
   return (
-    <div className={`${styles.cell} ${styles.cellEditing}`} style={style} data-col={colIndex}>
+    <div
+      className={`${styles.cell} ${styles.cellEditing}`}
+      style={style}
+      data-col={colIndex}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
       <CellEditor
         column={column}
         initial={displayValue}
