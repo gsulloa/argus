@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-07-13
+
+### Fixed
+- don't mark a cell dirty when edit mode is entered without a change ([#252](https://github.com/gsulloa/argus/pull/252))
+- keep inline editor open when clicking inside its text ([#251](https://github.com/gsulloa/argus/pull/251))
+
 ## [0.8.2] - 2026-07-12
 
 ### Added
