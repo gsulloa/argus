@@ -5,7 +5,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { FilterBar } from "./FilterBar";
 import {
   EMPTY_FILTER_MODEL,
-  EMPTY_FILTER_ROW,
+  makeEmptyRow,
   type DataColumn,
   type FilterModel,
 } from "../types";
@@ -33,7 +33,7 @@ function makeProps(overrides: Partial<React.ComponentProps<typeof FilterBar>> = 
 
 function modelWithRows(count: number): FilterModel {
   return {
-    rows: Array.from({ length: count }, () => ({ ...EMPTY_FILTER_ROW })),
+    rows: Array.from({ length: count }, () => makeEmptyRow()),
     combinator: "AND",
   };
 }
@@ -64,7 +64,7 @@ describe("FilterBar — checkbox", () => {
   it("toggling calls onDraftChange with updated enabled flag", () => {
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
-      rows: [{ enabled: true, column: { kind: "any_column" }, op: "Contains", value: "x" }],
+      rows: [{ id: "t1", enabled: true, column: { kind: "any_column" }, op: "Contains", value: "x" }],
       combinator: "AND",
     };
     render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
@@ -92,7 +92,7 @@ describe("FilterBar — per-row Apply button", () => {
   });
 
   it("button reads 'Applied' (green) when row is structurally equal to an applied row", () => {
-    const sharedRow = { enabled: true, column: { kind: "named" as const, name: "country" }, op: "=" as const, value: "CL" };
+    const sharedRow = { id: "t2", enabled: true, column: { kind: "named" as const, name: "country" }, op: "=" as const, value: "CL" };
     const draft: FilterModel = { rows: [sharedRow], combinator: "AND" };
     const applied: FilterModel = { rows: [sharedRow], combinator: "AND" };
     render(<FilterBar {...makeProps({ draft, applied })} />);
@@ -100,7 +100,7 @@ describe("FilterBar — per-row Apply button", () => {
   });
 
   it("button label flips back to Apply when an applied row is edited", () => {
-    const sharedRow = { enabled: true, column: { kind: "named" as const, name: "country" }, op: "=" as const, value: "CL" };
+    const sharedRow = { id: "t3", enabled: true, column: { kind: "named" as const, name: "country" }, op: "=" as const, value: "CL" };
     const applied: FilterModel = { rows: [sharedRow], combinator: "AND" };
     // Draft has the same row.
     const { rerender } = render(
@@ -128,7 +128,7 @@ describe("FilterBar — + and − buttons", () => {
   it("+ button calls onDraftChange inserting a new row below", () => {
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
-      rows: [{ enabled: true, column: { kind: "any_column" }, op: "Contains", value: "a" }],
+      rows: [{ id: "t4", enabled: true, column: { kind: "any_column" }, op: "Contains", value: "a" }],
       combinator: "AND",
     };
     render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
@@ -152,7 +152,7 @@ describe("FilterBar — + and − buttons", () => {
   it("− button on last row clears to defaults instead of removing", () => {
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
-      rows: [{ enabled: false, column: { kind: "named", name: "id" }, op: "=", value: "42" }],
+      rows: [{ id: "t5", enabled: false, column: { kind: "named", name: "id" }, op: "=", value: "42" }],
       combinator: "AND",
     };
     render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
@@ -213,8 +213,8 @@ describe("FilterBar — footer buttons", () => {
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
       rows: [
-        { enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
-        { enabled: true, column: { kind: "named", name: "country" }, op: "=", value: "CL" },
+        { id: "t6", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
+        { id: "t7", enabled: true, column: { kind: "named", name: "country" }, op: "=", value: "CL" },
       ],
       combinator: "OR",
     };
@@ -240,7 +240,7 @@ describe("FilterBar — dirty indicator", () => {
 
   it("dirty pip present when draft differs from applied", () => {
     const draft: FilterModel = {
-      rows: [{ enabled: true, column: { kind: "named", name: "country" }, op: "=", value: "CL" }],
+      rows: [{ id: "t8", enabled: true, column: { kind: "named", name: "country" }, op: "=", value: "CL" }],
       combinator: "AND",
     };
     render(<FilterBar {...makeProps({ draft, applied: EMPTY_FILTER_MODEL })} />);
@@ -333,7 +333,7 @@ describe("FilterBar — keyboard shortcuts", () => {
   it("⌘⇧I on single row clears it to defaults", () => {
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
-      rows: [{ enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "99" }],
+      rows: [{ id: "t9", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "99" }],
       combinator: "AND",
     };
     const { container } = render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
@@ -409,7 +409,7 @@ describe("FilterBar — forwardRef focus() handle", () => {
   it("focus() focuses the first row's value input when it exists", () => {
     const ref = createRef<FilterBarHandle>();
     const draft: FilterModel = {
-      rows: [{ enabled: true, column: { kind: "any_column" }, op: "Contains", value: "" }],
+      rows: [{ id: "t10", enabled: true, column: { kind: "any_column" }, op: "Contains", value: "" }],
       combinator: "AND",
     };
     const { container } = render(<FilterBar ref={ref} {...makeProps({ draft })} />);
@@ -437,7 +437,7 @@ describe("FilterBar — RAW filter row", () => {
   it("picking Raw SQL shows the expression input and hides the operator picker", async () => {
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
-      rows: [{ enabled: true, column: { kind: "any_column" }, op: "Contains", value: "" }],
+      rows: [{ id: "t11", enabled: true, column: { kind: "any_column" }, op: "Contains", value: "" }],
       combinator: "AND",
     };
     render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
@@ -459,7 +459,7 @@ describe("FilterBar — RAW filter row", () => {
 
   it("RAW row renders expression input (aria-label 'Raw SQL expression') and hides operator picker", () => {
     const draft: FilterModel = {
-      rows: [{ enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
+      rows: [{ id: "t12", enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
       combinator: "AND",
     };
     render(<FilterBar {...makeProps({ draft })} />);
@@ -474,7 +474,7 @@ describe("FilterBar — RAW filter row", () => {
   it("switching back from Raw SQL to a named column restores the operator picker", async () => {
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
-      rows: [{ enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
+      rows: [{ id: "t13", enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" }],
       combinator: "AND",
     };
     render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
@@ -498,8 +498,8 @@ describe("FilterBar — RAW filter row", () => {
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
       rows: [
-        { enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "active" },
-        { enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" },
+        { id: "t14", enabled: true, column: { kind: "named", name: "status" }, op: "=", value: "active" },
+        { id: "t15", enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" },
       ],
       combinator: "AND",
     };
@@ -524,7 +524,7 @@ describe("FilterBar — RAW filter row", () => {
 describe("FilterBar — Apply All with no enabled rows", () => {
   it("shows 'No filters enabled' transient status when all rows are unchecked", async () => {
     const draft: FilterModel = {
-      rows: [{ enabled: false, column: { kind: "any_column" }, op: "Contains", value: "x" }],
+      rows: [{ id: "t16", enabled: false, column: { kind: "any_column" }, op: "Contains", value: "x" }],
       combinator: "AND",
     };
     render(<FilterBar {...makeProps({ draft })} />);
@@ -567,8 +567,8 @@ describe("FilterBar — plain Enter applies focused row", () => {
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
       rows: [
-        { enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
-        { enabled: false, column: { kind: "named", name: "country" }, op: "Contains", value: "CL" },
+        { id: "t17", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
+        { id: "t18", enabled: false, column: { kind: "named", name: "country" }, op: "Contains", value: "CL" },
       ],
       combinator: "AND",
     };

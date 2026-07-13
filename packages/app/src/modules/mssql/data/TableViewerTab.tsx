@@ -28,6 +28,8 @@ import { Inspector, type InspectorSelectedRow } from "./Inspector";
 import { useEditBuffer, buildRowKey } from "./useEditBuffer";
 import { useTableData } from "./useTableData";
 import { deriveDefaultOrderBy } from "@/modules/shared/orderBy";
+import type { PasteValue } from "@/platform/grid/gridPaste";
+import { useToast } from "@/platform/toast";
 import { type CellValue, type RelationKind } from "./types";
 import type { EditOp, EditValue, PrimaryKeyResult } from "../types";
 import { useTableStructureCache } from "../structure/useTableStructureCache";
@@ -207,6 +209,10 @@ function MssqlTableViewer({
   // Edit buffer
   const buffer = useEditBuffer();
 
+  // Toast — shared by copy (inside DataGrid) and paste (§ issue #243) error surfaces.
+  const toast = useToast();
+  const onPasteError = useCallback((msg: string) => toast.show(msg, "error"), [toast]);
+
   // Apply state
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -383,6 +389,21 @@ function MssqlTableViewer({
     gridRef.current?.scrollToTop();
     setSelection({ anchor: 0, active: 0 });
   }, [buffer, isReadOnly, isView]);
+
+  // Row-range paste-to-duplicate (§ issue #243). Each pasted line becomes a
+  // new insert row (rendered at top, like Add row), pre-populated with the
+  // pasted values.
+  const handlePasteInsertRows = useCallback(
+    (rows: Record<string, PasteValue>[]) => {
+      if (isReadOnly || relationKind !== "table" || rows.length === 0) return;
+      for (const values of rows) {
+        buffer.addInsertRow(values as Record<string, EditValue>);
+      }
+      setSelection({ anchor: 0, active: rows.length - 1 });
+      gridRef.current?.scrollToTop();
+    },
+    [buffer, isReadOnly, relationKind],
+  );
 
   // Keyboard: Backspace = delete selected rows, Cmd+Z = undo, Cmd+S = save
   const handleKeyDown = useCallback(
@@ -826,6 +847,8 @@ function MssqlTableViewer({
                 // Selecting a row auto-reveals the inspector if it was hidden.
                 setInspectorVisible(true);
               }}
+              onPasteRows={handlePasteInsertRows}
+              onPasteError={onPasteError}
             />
           )}
 

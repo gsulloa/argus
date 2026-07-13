@@ -13,6 +13,8 @@ import { APP_DISPLAY_NAME } from "@/platform/app-identity";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { useSaveShortcut } from "@/platform/shell/useSaveShortcut";
+import { useToast } from "@/platform/toast";
+import type { PasteValue } from "@/platform/grid/gridPaste";
 import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import { DocsSubtab } from "@/modules/context/components/DocsSubtab";
 import { useActiveMysqlConnections } from "../useActiveConnections";
@@ -112,6 +114,10 @@ function MysqlTableViewer({
   const { getActive } = useActiveMysqlConnections();
   const isReadOnly = getActive(connectionId)?.read_only ?? false;
   const isView = relationKind === "view";
+
+  // Toast — shared with DataGrid's copy-error surface (issue #243 paste path).
+  const toast = useToast();
+  const onPasteError = useCallback((msg: string) => toast.show(msg, "error"), [toast]);
 
   // Context folder integration
   const { items: connections } = useConnections();
@@ -345,6 +351,22 @@ function MysqlTableViewer({
     // Focus added row in selection.
     setSelection({ anchor: 0, active: 0 });
   }, [buffer, isReadOnly, isView]);
+
+  // Paste rows to duplicate (issue #243) — row-range ⌘V inserts one buffer
+  // row per pasted line, mirroring handleAddRow's post-insert focus behavior.
+  const onPasteInsertRows = useCallback(
+    (rows: Record<string, PasteValue>[]) => {
+      if (isReadOnly || relationKind !== "table" || rows.length === 0) return;
+      for (const values of rows) {
+        // parseTsvRows/pasteRowRangeFromKeydown only ever produce string | null
+        // cell values, a subset of EditValue narrower than PasteValue's `object` arm.
+        buffer.addInsertRow(values as Record<string, EditValue>);
+      }
+      setSelection({ anchor: 0, active: rows.length - 1 });
+      gridRef.current?.scrollToTop();
+    },
+    [buffer, isReadOnly, relationKind],
+  );
 
   // Keyboard: Backspace = delete selected rows (§19.3)
   const handleKeyDown = useCallback(
@@ -731,6 +753,8 @@ function MysqlTableViewer({
               // Selecting a row auto-reveals the inspector if it was hidden.
               setInspectorVisible(true);
             }}
+            onPasteRows={onPasteInsertRows}
+            onPasteError={onPasteError}
           />
         )}
 

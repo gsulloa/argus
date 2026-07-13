@@ -47,7 +47,10 @@ export function migrateLegacyFilterModel(raw: unknown): FilterModel {
 
   const rows: FilterRow[] = rawRows.map((row) => {
     const r = row as Record<string, unknown>;
+    // Backfill a client-only stable id for rows persisted before ids existed.
+    const id = typeof r["id"] === "string" && r["id"] ? (r["id"] as string) : crypto.randomUUID();
     return {
+      id,
       enabled: r["enabled"] !== false,
       column: r["column"] as FilterRow["column"],
       op: r["op"] as FilterRow["op"],

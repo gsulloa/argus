@@ -2,7 +2,7 @@ import type React from "react";
 import { AlertTriangle, GripVertical, Loader2, Power } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { invoke } from "@tauri-apps/api/core";
@@ -86,6 +86,7 @@ import { useTabs } from "@/platform/shell/tabs";
 import { useToast } from "@/platform/toast";
 import { listConnectionTabs } from "@/platform/shell/tabs/connectionTabs";
 import { listDirtySummaries } from "@/platform/shell/tabs/useDirtySummary";
+import { FocusedConnectionCtxRef } from "@/platform/shell/FocusedConnectionContext";
 import { DisconnectConfirmDialog } from "./DisconnectConfirmDialog";
 import styles from "./Sidebar.module.css";
 import dialogStyles from "./Dialog.module.css";
@@ -129,6 +130,11 @@ export function ConnectionRow({
   const cwActive = useActiveCloudwatchConnections();
   // Cross-engine open registry — used in manager mode for the open/closed dot.
   const openRegistry = useOpenConnections();
+  const focusedCtx = useContext(FocusedConnectionCtxRef);
+  const contextQueryFocus = {
+    setFocused: (id: string) => focusedCtx?.setFocused(id),
+    isOpen: openRegistry.isOpen,
+  };
   const { items: allConnections, remove, move, refresh: refreshConnections } = useConnections();
   const toast = useToast();
   const { items: groups } = useConnectionGroups();
@@ -155,14 +161,21 @@ export function ConnectionRow({
       try {
         const result = await contextApi.saveQuery(connection.id, name, "", { folder });
         // Open the newly created query by path (supports nested folders)
-        await openContextQuery(tabs, connection.id, connection.name, engine, {
-          name: result.name,
-          description: null,
-          params: [],
-          tags: [],
-          path: result.rel_path,
-          folder: result.folder,
-        });
+        await openContextQuery(
+          tabs,
+          connection.id,
+          connection.name,
+          engine,
+          {
+            name: result.name,
+            description: null,
+            params: [],
+            tags: [],
+            path: result.rel_path,
+            folder: result.folder,
+          },
+          contextQueryFocus,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         toast.show(`Failed to create query: ${msg}`, "error");
@@ -1021,7 +1034,7 @@ export function ConnectionRow({
             contextPath={connection.context_path}
             engine="postgres"
             onActivate={(q) => {
-              void openContextQuery(tabs, connection.id, connection.name, "postgres", q);
+              void openContextQuery(tabs, connection.id, connection.name, "postgres", q, contextQueryFocus);
             }}
             onNewQuery={makeNewContextQueryHandler("postgres")}
             onFolderLinked={() => void refreshConnections()}
@@ -1037,7 +1050,7 @@ export function ConnectionRow({
             contextPath={connection.context_path}
             engine="mysql"
             onActivate={(q) => {
-              void openContextQuery(tabs, connection.id, connection.name, "mysql", q);
+              void openContextQuery(tabs, connection.id, connection.name, "mysql", q, contextQueryFocus);
             }}
             onNewQuery={makeNewContextQueryHandler("mysql")}
             onFolderLinked={() => void refreshConnections()}
@@ -1053,7 +1066,7 @@ export function ConnectionRow({
             contextPath={connection.context_path}
             engine="mssql"
             onActivate={(q) => {
-              void openContextQuery(tabs, connection.id, connection.name, "mssql", q);
+              void openContextQuery(tabs, connection.id, connection.name, "mssql", q, contextQueryFocus);
             }}
             onNewQuery={makeNewContextQueryHandler("mssql")}
             onFolderLinked={() => void refreshConnections()}
@@ -1069,7 +1082,7 @@ export function ConnectionRow({
             contextPath={connection.context_path}
             engine="dynamo"
             onActivate={(q) => {
-              void openContextQuery(tabs, connection.id, connection.name, "dynamo", q);
+              void openContextQuery(tabs, connection.id, connection.name, "dynamo", q, contextQueryFocus);
             }}
             onNewQuery={makeNewContextQueryHandler("dynamo")}
             onFolderLinked={() => void refreshConnections()}
