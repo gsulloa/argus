@@ -129,6 +129,64 @@ describe("EditableCell - jsonb column", () => {
   });
 });
 
+describe("EditableCell - in-editor mousedown isolation (issue #246)", () => {
+  it("does not propagate mousedown to the row drag-select handler and keeps the editor open", () => {
+    // The parent onMouseDown stands in for the grid row's drag-select handler
+    // (DataGrid row onMouseDown), which preventDefaults + arms drag and would
+    // otherwise steal focus / commit the editor on an in-editor click.
+    const rowMouseDown = vi.fn();
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <div onMouseDown={rowMouseDown}>
+        <EditableCell
+          column={textCol}
+          displayValue="hello world"
+          dirty={false}
+          readOnly={false}
+          editing={true}
+          onStartEdit={vi.fn()}
+          onCommitEdit={onCommit}
+          onCancelEdit={onCancel}
+        />
+      </div>,
+    );
+
+    const input = screen.getByRole("textbox");
+    fireEvent.mouseDown(input);
+
+    // Row-level drag-select handler is never reached (machinery not engaged).
+    expect(rowMouseDown).not.toHaveBeenCalled();
+    // Edit mode is retained and nothing was committed or cancelled.
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("still lets a mousedown on the display cell reach the row handler", () => {
+    // Sanity check: the isolation applies only to the active editor, not the
+    // read/display path where drag-select must still work.
+    const rowMouseDown = vi.fn();
+    render(
+      <div onMouseDown={rowMouseDown}>
+        <EditableCell
+          column={textCol}
+          displayValue="hello world"
+          dirty={false}
+          readOnly={false}
+          editing={false}
+          onStartEdit={vi.fn()}
+          onCommitEdit={vi.fn()}
+          onCancelEdit={vi.fn()}
+        />
+      </div>,
+    );
+
+    fireEvent.mouseDown(screen.getByText("hello world"));
+    expect(rowMouseDown).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("EditableCell - explicit NULL toggle", () => {
   it("commits null when the NULL toggle is activated on a nullable date column", () => {
     const onCommit = vi.fn();
