@@ -142,8 +142,19 @@ export function EditableCell(props: EditableCellProps) {
   }
 
   // ----- Edit path -----
+  // Stop mousedown from bubbling to the row's drag-select handler (DataGrid
+  // row onMouseDown). That handler calls preventDefault() + arms drag-select,
+  // which installs a document mouseup listener that steals focus back to the
+  // grid root — blurring the editor and committing/exiting on any in-editor
+  // click (issue #246). stopPropagation (not preventDefault) keeps the input's
+  // own native caret placement / text selection intact.
   return (
-    <div className={`${styles.cell} ${styles.cellEditing}`} style={style} data-col={colIndex}>
+    <div
+      className={`${styles.cell} ${styles.cellEditing}`}
+      style={style}
+      data-col={colIndex}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
       <CellEditor
         column={column}
         initial={displayValue}
@@ -208,7 +219,8 @@ interface CellEditorProps {
 
 function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEditorProps) {
   const isNull = initial === null || initial === undefined;
-  const [text, setText] = useState<string>(valueToInputString(initial));
+  const initialText = valueToInputString(initial);
+  const [text, setText] = useState<string>(initialText);
   const [nullToggle, setNullToggle] = useState<boolean>(isNull);
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [jsonWarning, setJsonWarning] = useState<boolean>(false);
@@ -223,6 +235,14 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
   }, []);
 
   function commit() {
+    // No-op guard: opening the editor and leaving without changing anything
+    // MUST NOT create a dirty buffer entry (issue #245). Compare the editor's own
+    // input representation, so commit-time type coercion (numeric string → number,
+    // JSON re-canonicalization) can't manufacture a phantom edit.
+    if (nullToggle === isNull && (nullToggle || text === initialText)) {
+      onCancel();
+      return;
+    }
     if (nullToggle) {
       onCommit(null);
       return;

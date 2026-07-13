@@ -129,6 +129,64 @@ describe("EditableCell - jsonb column", () => {
   });
 });
 
+describe("EditableCell - in-editor mousedown isolation (issue #246)", () => {
+  it("does not propagate mousedown to the row drag-select handler and keeps the editor open", () => {
+    // The parent onMouseDown stands in for the grid row's drag-select handler
+    // (DataGrid row onMouseDown), which preventDefaults + arms drag and would
+    // otherwise steal focus / commit the editor on an in-editor click.
+    const rowMouseDown = vi.fn();
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <div onMouseDown={rowMouseDown}>
+        <EditableCell
+          column={textCol}
+          displayValue="hello world"
+          dirty={false}
+          readOnly={false}
+          editing={true}
+          onStartEdit={vi.fn()}
+          onCommitEdit={onCommit}
+          onCancelEdit={onCancel}
+        />
+      </div>,
+    );
+
+    const input = screen.getByRole("textbox");
+    fireEvent.mouseDown(input);
+
+    // Row-level drag-select handler is never reached (machinery not engaged).
+    expect(rowMouseDown).not.toHaveBeenCalled();
+    // Edit mode is retained and nothing was committed or cancelled.
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("still lets a mousedown on the display cell reach the row handler", () => {
+    // Sanity check: the isolation applies only to the active editor, not the
+    // read/display path where drag-select must still work.
+    const rowMouseDown = vi.fn();
+    render(
+      <div onMouseDown={rowMouseDown}>
+        <EditableCell
+          column={textCol}
+          displayValue="hello world"
+          dirty={false}
+          readOnly={false}
+          editing={false}
+          onStartEdit={vi.fn()}
+          onCommitEdit={vi.fn()}
+          onCancelEdit={vi.fn()}
+        />
+      </div>,
+    );
+
+    fireEvent.mouseDown(screen.getByText("hello world"));
+    expect(rowMouseDown).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("EditableCell - explicit NULL toggle", () => {
   it("commits null when the NULL toggle is activated on a nullable date column", () => {
     const onCommit = vi.fn();
@@ -168,5 +226,61 @@ describe("EditableCell - explicit NULL toggle", () => {
     expect(input.value).toBe("hello");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onCommit).toHaveBeenCalledWith("hello");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// No-op edit does not commit (issue #245)
+// ---------------------------------------------------------------------------
+
+const numericCol: DataColumn = {
+  name: "amount",
+  data_type: "numeric",
+  ordinal_position: 5,
+  is_nullable: true,
+};
+
+describe("EditableCell - entering edit mode without a change does not commit", () => {
+  it("does not commit an unchanged numeric cell on blur (calls onCancel)", () => {
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    // Server value for a numeric column is the string "100.00".
+    renderEditing(numericCol, "100.00", onCommit, onCancel);
+    const input = screen.getByRole("textbox");
+    fireEvent.blur(input);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("does not commit an unchanged numeric cell on Enter or Tab", () => {
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    renderEditing(numericCol, "100.00", onCommit, onCancel);
+    const input = screen.getByRole("textbox");
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("does not commit an unchanged jsonb cell on blur", () => {
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    renderEditing(jsonbCol, '{"foo": "bar"}', onCommit, onCancel);
+    const ta = screen.getByRole("textbox");
+    fireEvent.blur(ta);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("still commits when the numeric value is actually changed", () => {
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    renderEditing(numericCol, "100.00", onCommit, onCancel);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "101" } });
+    fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith(101);
+    expect(onCancel).not.toHaveBeenCalled();
   });
 });

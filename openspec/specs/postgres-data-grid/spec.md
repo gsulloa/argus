@@ -286,6 +286,8 @@ The data grid SHALL support multi-row selection via vertical mouse drag inside t
 
 The grid body MUST NOT allow the browser's native text selection to engage during click or drag interactions on the row display path. The rendered row and cell elements (`.row`, `.cell` in the display path) MUST have `user-select: none` (with the `-webkit-user-select: none` prefix for Tauri Webview compatibility) applied via CSS. The row's primary-button `mousedown` handler MUST call `event.preventDefault()` after confirming `event.button === 0`, so the browser does not start a text-selection drag or other default mousedown behavior. The inline cell editor wrapper (`.cellEditing`) and the editor input element (`.cellEditor`, including textarea and select variants) MUST re-enable `user-select: text` so the user can select, copy, and edit text inside the active editor normally.
 
+A `mousedown` originating inside the active inline cell editor MUST NOT reach the row's drag-select `mousedown` handler: the editor wrapper (`.cellEditing`) MUST stop propagation of the `mousedown` event so the row handler stays inert while a cell is being edited. Because the editor wrapper does NOT call `preventDefault()`, the browser's native caret placement and text-selection inside the editor input proceed normally, and because the row handler never runs, the drag-select machinery is never armed and the grid root never steals focus back from the editor. This keeps the editor open — with the caret positioned at the click point — when the user clicks or click-drags inside the editor text.
+
 Mouse interaction MUST follow these rules:
 
 - **Mouse-down on a row** (primary button only) sets `anchor = active = rowIndex` but does NOT yet visually commit a multi-row selection; the drag intent is unresolved until the cursor has moved at least 4 pixels (vertically OR horizontally) from the mouse-down position. The mousedown handler MUST call `event.preventDefault()` to suppress native text-selection and drag-image side effects. `event.preventDefault()` on mousedown MUST NOT prevent the subsequent synthesized `dblclick` event from firing, so the double-click-to-edit affordance on cells remains intact.
@@ -393,6 +395,15 @@ When the user clicks a different row without dragging, the previous selection is
 - **AND** the user click-drags inside the input element to select the substring `"hello"`
 - **THEN** the input's native text selection covers `"hello"` and `window.getSelection()` (or the input's `selectionStart`/`selectionEnd`) reflects that range
 - **AND** the row-level drag-to-select state machine is NOT engaged (the editor's stopPropagation / focus behavior keeps the row mousedown handler inert)
+
+#### Scenario: Click inside the active inline editor repositions the caret without exiting edit mode
+
+- **WHEN** the user double-clicks a `text` cell containing `"hello world"` to enter edit mode (the value is auto-selected)
+- **AND** then single-clicks inside the editor input between the characters of `"world"`
+- **THEN** the inline editor remains open (`editing` state is unchanged and the `<input>` / `<textarea>` is still rendered)
+- **AND** the input keeps focus and the caret is placed at the clicked position (the value is no longer fully selected)
+- **AND** no commit occurs and the cell's buffered value is unchanged
+- **AND** the row-level drag-to-select state machine is NOT engaged (no `data-selected` change results from the in-editor click)
 
 ### Requirement: Virtualized data grid
 
@@ -2040,6 +2051,56 @@ The `<typename>` string envelope (`"<" + type_name + ">"`) MUST remain reachable
 #### Scenario: genuinely unsupported type still shows the placeholder
 - **WHEN** a query returns a column of a type that cannot be decoded as a handled type, a `String`, or any of the newly-handled types (for example `tsvector`)
 - **THEN** the cell value falls back to the `<typename>` string envelope and the row is still returned intact
+
+### Requirement: Entering edit mode without a change does not mark the cell dirty
+
+When the grid is in editable mode, opening a cell's inline editor and leaving it without changing the content MUST NOT create a dirty buffer entry, and the cell MUST NOT render with the dirty-state (`--warning`) background. "Leaving without a
+change" covers every editor-exit path that commits — blur, `Enter`, and `Tab` —
+and every editor variant (text, numeric, JSON/JSONB textarea, boolean select,
+enum select). The dirty highlight MUST be reserved for cells whose value the user
+actually changed, so an edited cell is always visually distinguishable from a cell
+that was only double-clicked.
+
+This behavior MUST hold regardless of the column's data type. Because the inline
+editor coerces its raw input into a typed `EditValue` on commit (e.g. a `numeric`
+column whose server value is the string `"100.00"` is coerced to the number `100`;
+a `jsonb` column's text is re-canonicalized), a naive `JSON.stringify` comparison
+between the server value and the coerced commit value can differ even when the
+user changed nothing. The implementation MUST prevent a spurious dirty entry in
+these cases — either by not committing when the editor content is unchanged from
+the value it opened with, or by making the buffer's drop-if-equals-original
+collapse tolerant of numeric string↔number and canonicalized-JSON round-trips
+(or both).
+
+#### Scenario: Double-click then click away on a text cell stays clean
+
+- **WHEN** the user double-clicks an editable `text` cell (opening the inline editor) and then clicks another cell without typing
+- **THEN** the cell does NOT render with the dirty-state background
+- **AND** the edit buffer contains no entry for that cell
+
+#### Scenario: Double-click then commit an unchanged numeric cell stays clean
+
+- **WHEN** a `numeric` cell's server value is `"100.00"` and the user double-clicks it and presses `Enter` (or `Tab`, or blurs) without editing the text
+- **THEN** the cell does NOT render with the dirty-state background
+- **AND** the edit buffer contains no entry for that cell (the numeric string↔number round-trip is recognized as unchanged)
+
+#### Scenario: Double-click then commit an unchanged JSON cell stays clean
+
+- **WHEN** a `jsonb` cell's server value is `{"a": 1}` and the user double-clicks it and commits without editing
+- **THEN** the cell does NOT render with the dirty-state background
+- **AND** the edit buffer contains no entry for that cell (canonicalized-JSON equality is recognized as unchanged)
+
+#### Scenario: A real edit still marks the cell dirty
+
+- **WHEN** the user double-clicks an editable cell, changes its value, and commits
+- **THEN** the cell renders with the dirty-state background
+- **AND** the edit buffer contains an `update` entry for that cell
+
+#### Scenario: Editing a numeric cell then reverting to the original cleans the buffer
+
+- **WHEN** the user edits a `numeric` cell whose server value is `"100.00"`, commits a different value, then re-opens the editor and commits `100.00` again
+- **THEN** after the final commit the cell no longer renders the dirty-state background
+- **AND** the edit buffer no longer contains an entry for that cell
 
 ### Requirement: Reorderable filter rows
 

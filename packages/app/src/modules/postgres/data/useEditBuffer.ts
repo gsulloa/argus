@@ -471,14 +471,38 @@ function reducer(state: BufferState, action: Action): BufferState {
 function cellEquals(a: CellValue, b: EditValue): boolean {
   if (a === b) return true;
   if (a === null || b === null) return a === b;
-  if (typeof a !== typeof b) {
-    // number/string mismatches handled by JSON-stringify equality below.
-  }
+  // Numeric string ↔ number tolerance: the inline editor coerces numeric columns
+  // (which the backend returns as strings to preserve precision) into JS numbers
+  // on commit, so "100.00" and 100 must be recognized as the same value. Without
+  // this, re-committing an untouched numeric cell would look like a real edit and
+  // paint the cell dirty (issue #245).
+  if (numericEquals(a, b)) return true;
   try {
     return JSON.stringify(a) === JSON.stringify(b);
   } catch {
     return false;
   }
+}
+
+/**
+ * True when exactly one operand is a number and the other is a finite numeric
+ * string with the same numeric value (e.g. `100` vs `"100.00"`). Intentionally
+ * narrow: two strings or two numbers fall through to strict equality so we never
+ * collapse a genuine textual change on a non-numeric column (e.g. a `text`
+ * column whose value happens to look numeric).
+ */
+function numericEquals(a: CellValue, b: EditValue): boolean {
+  const aNum = typeof a === "number";
+  const bNum = typeof b === "number";
+  const aStr = typeof a === "string";
+  const bStr = typeof b === "string";
+  if (!((aNum && bStr) || (aStr && bNum))) return false;
+  const s = (aStr ? a : b) as string;
+  if (s.trim() === "") return false; // "" / "  " would coerce to 0
+  const sn = Number(s);
+  if (!Number.isFinite(sn)) return false;
+  const n = (aNum ? a : b) as number;
+  return sn === n;
 }
 
 // --------------------------------------------------------------------------

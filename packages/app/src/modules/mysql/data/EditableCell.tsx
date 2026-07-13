@@ -279,20 +279,30 @@ interface TextEditorProps {
 }
 
 function TextEditor({ initialValue, nullable, onCommit, onCancel }: TextEditorProps) {
-  const [val, setVal] = useState(
-    initialValue === null ? "" : String(initialValue ?? ""),
-  );
-  const [isNull, setIsNull] = useState(initialValue === null);
+  const initialStr = initialValue === null ? "" : String(initialValue ?? "");
+  const initialIsNull = initialValue === null;
+  const [val, setVal] = useState(initialStr);
+  const [isNull, setIsNull] = useState(initialIsNull);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     inputRef.current?.select();
   }, []);
 
+  // No-op guard (issue #245): leaving the editor without changing anything must
+  // not create a dirty buffer entry.
+  function commit() {
+    if (isNull === initialIsNull && (isNull || val === initialStr)) {
+      onCancel();
+      return;
+    }
+    onCommit(isNull ? null : val);
+  }
+
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" || e.key === "Tab") {
       e.preventDefault();
-      onCommit(isNull ? null : val);
+      commit();
     }
     if (e.key === "Escape") {
       e.preventDefault();
@@ -309,7 +319,7 @@ function TextEditor({ initialValue, nullable, onCommit, onCancel }: TextEditorPr
         disabled={isNull}
         onChange={(e) => setVal(e.target.value)}
         onKeyDown={handleKeyDown}
-        onBlur={() => onCommit(isNull ? null : val)}
+        onBlur={commit}
         style={{
           fontSize: 12,
           padding: "1px 4px",
@@ -360,13 +370,13 @@ interface JsonEditorProps {
 }
 
 function JsonEditor({ initialValue, onCommit, onCancel }: JsonEditorProps) {
-  const [raw, setRaw] = useState(
+  const initialRaw =
     initialValue === null
       ? "null"
       : typeof initialValue === "string"
       ? initialValue
-      : JSON.stringify(initialValue, null, 2),
-  );
+      : JSON.stringify(initialValue, null, 2);
+  const [raw, setRaw] = useState(initialRaw);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -386,6 +396,11 @@ function JsonEditor({ initialValue, onCommit, onCancel }: JsonEditorProps) {
   }
 
   function commit() {
+    // No-op guard (issue #245): unchanged text must not create a dirty entry.
+    if (raw === initialRaw) {
+      onCancel();
+      return;
+    }
     if (!validate(raw)) return;
     try {
       onCommit(JSON.parse(raw));
@@ -468,7 +483,14 @@ function BooleanEditor({ initialValue, onCommit, onCancel }: BooleanEditorProps)
       onKeyDown={(e) => {
         if (e.key === "Escape") onCancel();
       }}
-      onBlur={() => onCommit(val === "null" ? null : val === "true")}
+      onBlur={() => {
+        // No-op guard (issue #245): unchanged selection must not mark dirty.
+        if (val === trinary) {
+          onCancel();
+          return;
+        }
+        onCommit(val === "null" ? null : val === "true");
+      }}
       autoFocus
       style={{
         fontSize: 12,
@@ -501,14 +523,22 @@ interface EnumEditorProps {
 
 function EnumEditor({ members, initialValue, nullable, onCommit, onCancel }: EnumEditorProps) {
   const cur = initialValue === null ? "" : String(initialValue ?? "");
+  // No-op guard (issue #245): committing the unchanged selection must not mark dirty.
+  const commitValue = (raw: string) => {
+    if (raw === cur) {
+      onCancel();
+      return;
+    }
+    onCommit(raw === "" ? null : raw);
+  };
   return (
     <select
       value={cur}
-      onChange={(e) => onCommit(e.target.value === "" ? null : e.target.value)}
+      onChange={(e) => commitValue(e.target.value)}
       onKeyDown={(e) => {
         if (e.key === "Escape") onCancel();
       }}
-      onBlur={(e) => onCommit(e.target.value === "" ? null : e.target.value)}
+      onBlur={(e) => commitValue(e.target.value)}
       autoFocus
       style={{
         fontSize: 12,
@@ -558,8 +588,15 @@ function SetEditor({ members, initialValue, onCommit, onCancel }: SetEditorProps
     });
   }
 
+  const initialCsv = [...new Set(parseSet(initialValue))].join(",");
+
   function commit() {
     const val = [...selected].join(",");
+    // No-op guard (issue #245): unchanged membership must not mark dirty.
+    if (val === initialCsv) {
+      onCancel();
+      return;
+    }
     onCommit(val === "" ? null : val);
   }
 
@@ -634,15 +671,23 @@ interface DateTimeEditorProps {
 }
 
 function DateTimeEditor({ dataType, initialValue, onCommit, onCancel }: DateTimeEditorProps) {
-  const [val, setVal] = useState(
-    initialValue === null ? "" : String(initialValue ?? ""),
-  );
+  const initialStr = initialValue === null ? "" : String(initialValue ?? "");
+  const [val, setVal] = useState(initialStr);
   const inputRef = useRef<HTMLInputElement>(null);
   const placeholder = DATE_PLACEHOLDER[dataType.toLowerCase()] ?? "ISO 8601";
 
   useEffect(() => {
     inputRef.current?.select();
   }, []);
+
+  // No-op guard (issue #245): unchanged value must not create a dirty entry.
+  function commit() {
+    if (val === initialStr) {
+      onCancel();
+      return;
+    }
+    onCommit(val === "" ? null : val);
+  }
 
   return (
     <input
@@ -653,14 +698,14 @@ function DateTimeEditor({ dataType, initialValue, onCommit, onCancel }: DateTime
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === "Tab") {
           e.preventDefault();
-          onCommit(val === "" ? null : val);
+          commit();
         }
         if (e.key === "Escape") {
           e.preventDefault();
           onCancel();
         }
       }}
-      onBlur={() => onCommit(val === "" ? null : val)}
+      onBlur={commit}
       placeholder={placeholder}
       autoFocus
       style={{
