@@ -208,7 +208,8 @@ interface CellEditorProps {
 
 function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEditorProps) {
   const isNull = initial === null || initial === undefined;
-  const [text, setText] = useState<string>(valueToInputString(initial));
+  const initialText = valueToInputString(initial);
+  const [text, setText] = useState<string>(initialText);
   const [nullToggle, setNullToggle] = useState<boolean>(isNull);
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [jsonWarning, setJsonWarning] = useState<boolean>(false);
@@ -223,6 +224,14 @@ function CellEditor({ column, initial, enumValues, onCommit, onCancel }: CellEdi
   }, []);
 
   function commit() {
+    // No-op guard: opening the editor and leaving without changing anything
+    // MUST NOT create a dirty buffer entry (issue #245). Compare the editor's own
+    // input representation, so commit-time type coercion (numeric string → number,
+    // JSON re-canonicalization) can't manufacture a phantom edit.
+    if (nullToggle === isNull && (nullToggle || text === initialText)) {
+      onCancel();
+      return;
+    }
     if (nullToggle) {
       onCommit(null);
       return;

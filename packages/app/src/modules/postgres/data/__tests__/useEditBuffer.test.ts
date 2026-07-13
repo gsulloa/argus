@@ -310,3 +310,69 @@ describe("single-row methods smoke test", () => {
     expect(result.current.dirtyCounts.updates).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Type-tolerant collapse: numeric string ↔ number (issue #245)
+// ---------------------------------------------------------------------------
+
+describe("setCellEdit numeric equality collapse", () => {
+  const NUM_COLUMNS = ["amount", "note"];
+  // Server returns numeric/decimal/bigint as strings to preserve precision.
+  const numRow = (): CellValue[] => ["100.00", "hi"] as CellValue[];
+
+  it("drops the edit when a numeric column's server string equals the committed number", () => {
+    const { result } = renderHook(() => useEditBuffer());
+
+    act(() => {
+      // The inline editor coerces "100.00" to the number 100 on commit.
+      result.current.setCellEdit({
+        rowKey: makeRowKey(1),
+        column: "amount",
+        value: 100 as EditValue,
+        pk: makePk(1),
+        originalRow: numRow(),
+        originalColumns: NUM_COLUMNS,
+      });
+    });
+
+    // No dirty entry: 100 === Number("100.00").
+    expect(result.current.rows.size).toBe(0);
+    expect(result.current.isCellDirty(makeRowKey(1), "amount")).toBe(false);
+  });
+
+  it("keeps the edit when the numeric value genuinely differs", () => {
+    const { result } = renderHook(() => useEditBuffer());
+
+    act(() => {
+      result.current.setCellEdit({
+        rowKey: makeRowKey(1),
+        column: "amount",
+        value: 101 as EditValue,
+        pk: makePk(1),
+        originalRow: numRow(),
+        originalColumns: NUM_COLUMNS,
+      });
+    });
+
+    expect(result.current.isCellDirty(makeRowKey(1), "amount")).toBe(true);
+    expect(result.current.rows.get(makeRowKey(1))?.changes["amount"]).toBe(101);
+  });
+
+  it("does not collapse a genuine text change that merely looks numeric", () => {
+    const { result } = renderHook(() => useEditBuffer());
+
+    act(() => {
+      // Both sides are strings → strict equality only; "100.0" !== "100.00".
+      result.current.setCellEdit({
+        rowKey: makeRowKey(1),
+        column: "amount",
+        value: "100.0" as EditValue,
+        pk: makePk(1),
+        originalRow: numRow(),
+        originalColumns: NUM_COLUMNS,
+      });
+    });
+
+    expect(result.current.isCellDirty(makeRowKey(1), "amount")).toBe(true);
+  });
+});

@@ -170,3 +170,59 @@ describe("EditableCell - explicit NULL toggle", () => {
     expect(onCommit).toHaveBeenCalledWith("hello");
   });
 });
+
+// ---------------------------------------------------------------------------
+// No-op edit does not commit (issue #245)
+// ---------------------------------------------------------------------------
+
+const numericCol: DataColumn = {
+  name: "amount",
+  data_type: "numeric",
+  ordinal_position: 5,
+  is_nullable: true,
+};
+
+describe("EditableCell - entering edit mode without a change does not commit", () => {
+  it("does not commit an unchanged numeric cell on blur (calls onCancel)", () => {
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    // Server value for a numeric column is the string "100.00".
+    renderEditing(numericCol, "100.00", onCommit, onCancel);
+    const input = screen.getByRole("textbox");
+    fireEvent.blur(input);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("does not commit an unchanged numeric cell on Enter or Tab", () => {
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    renderEditing(numericCol, "100.00", onCommit, onCancel);
+    const input = screen.getByRole("textbox");
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("does not commit an unchanged jsonb cell on blur", () => {
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    renderEditing(jsonbCol, '{"foo": "bar"}', onCommit, onCancel);
+    const ta = screen.getByRole("textbox");
+    fireEvent.blur(ta);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("still commits when the numeric value is actually changed", () => {
+    const onCommit = vi.fn();
+    const onCancel = vi.fn();
+    renderEditing(numericCol, "100.00", onCommit, onCancel);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "101" } });
+    fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith(101);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+});
