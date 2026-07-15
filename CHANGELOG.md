@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-07-15
+
+### Fixed
+- support custom enum array edits ([#254](https://github.com/gsulloa/argus/pull/254))
+
 ## [0.8.3] - 2026-07-13
 
 ### Fixed
