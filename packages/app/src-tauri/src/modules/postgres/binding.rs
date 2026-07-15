@@ -9,14 +9,15 @@ use crate::error::{AppError, AppResult};
 /// `$N` (used for native-bind types where tokio-postgres serializes the value
 /// directly). `Cast` renders to `$N::text::<type>` — the inner `::text` cast
 /// forces Postgres to infer `$N` as `text`, which is what tokio-postgres binds
-/// `String` to. Without the inner cast, `$N::<type>` makes Postgres infer `$N`
-/// as the target type directly (for cast-from-self types like `jsonb`, `uuid`,
-/// `numeric`), and tokio-postgres rejects the bind with `error serializing
-/// parameter N`.
+/// `String` to. `ArrayCast` applies the same strategy to a native `text[]`
+/// parameter before Postgres converts each element to the declared array type.
+/// Without the inner cast, Postgres infers the parameter as the target type and
+/// tokio-postgres rejects values it cannot serialize for that target OID.
 #[derive(Debug, Clone)]
 pub(crate) enum PlaceholderTemplate {
     Plain,
     Cast(String),
+    ArrayCast(String),
 }
 
 impl PlaceholderTemplate {
@@ -24,6 +25,7 @@ impl PlaceholderTemplate {
         match self {
             PlaceholderTemplate::Plain => format!("${idx}"),
             PlaceholderTemplate::Cast(t) => format!("${idx}::text::{t}"),
+            PlaceholderTemplate::ArrayCast(t) => format!("${idx}::text[]::{t}"),
         }
     }
 }
@@ -57,8 +59,14 @@ pub(crate) enum BindKind {
     Bytea,
     Json,
     Jsonb,
+    /// One-dimensional array. Values are bound as `text[]` and Postgres casts
+    /// each element to this exact catalog-formatted target.
+    Array {
+        target: String,
+    },
     /// Catch-all for column types we don't have a native mapping for.
-    /// We bind a `String` and let Postgres parse it via `$N::<type>`.
+    /// We bind a `String` and let Postgres parse it via `$N::text::<type>`.
+    /// The stored name is the exact trimmed `pg_catalog.format_type` output.
     Fallback(String),
 }
 
@@ -82,6 +90,7 @@ impl BindKind {
             BindKind::Bytea => "bytea".into(),
             BindKind::Json => "json".into(),
             BindKind::Jsonb => "jsonb".into(),
+            BindKind::Array { target } => target.as_str().into(),
             BindKind::Fallback(s) => s.as_str().into(),
         }
     }
@@ -127,6 +136,13 @@ pub(crate) fn normalize_pg_type(raw: &str) -> String {
 /// `data_type` from `pg_catalog.format_type` (already what `list_columns`
 /// returns).
 pub(crate) fn bind_kind_for_type(data_type: &str) -> BindKind {
+    let exact = data_type.trim();
+    if exact.ends_with("[]") {
+        return BindKind::Array {
+            target: exact.to_owned(),
+        };
+    }
+
     let normalized = normalize_pg_type(data_type);
     match normalized.as_str() {
         "smallint" | "int2" | "smallserial" | "serial2" => BindKind::Int2,
@@ -147,7 +163,7 @@ pub(crate) fn bind_kind_for_type(data_type: &str) -> BindKind {
         "bytea" => BindKind::Bytea,
         "json" => BindKind::Json,
         "jsonb" => BindKind::Jsonb,
-        _ => BindKind::Fallback(normalized),
+        _ => BindKind::Fallback(exact.to_owned()),
     }
 }
 
@@ -366,6 +382,12 @@ fn bind_scalar(v: &JsonValue, column: &str, kind: &BindKind) -> AppResult<BoundP
             value: Box::new(coerce_to_string(v)),
             placeholder: PlaceholderTemplate::Cast(type_name.clone()),
         }),
+        // Edit values take the dedicated native-text-array path below. Keep
+        // scalar/filter callers compatible with the previous fallback path.
+        BindKind::Array { target } => Ok(BoundParam {
+            value: Box::new(coerce_to_string(v)),
+            placeholder: PlaceholderTemplate::Cast(target.clone()),
+        }),
     }
 }
 
@@ -390,17 +412,109 @@ pub(crate) fn bind_filter_value(
     bind_scalar(v, column, kind)
 }
 
+fn normalize_edit_array(
+    v: &JsonValue,
+    column: &str,
+    target: &str,
+) -> AppResult<Vec<Option<String>>> {
+    let normalized_target = normalize_pg_type(target);
+    let unqualified_target = normalized_target
+        .strip_prefix("pg_catalog.")
+        .unwrap_or(&normalized_target);
+    let json_elements = matches!(unqualified_target, "json[]" | "jsonb[]");
+    let precision_sensitive_numbers = matches!(
+        unqualified_target,
+        "bigint[]" | "int8[]" | "bigserial[]" | "serial8[]" | "numeric[]" | "decimal[]" | "money[]"
+    );
+
+    let elements = match v {
+        JsonValue::Array(elements) => elements.clone(),
+        JsonValue::String(raw) => {
+            let parsed = serde_json::from_str::<JsonValue>(raw).map_err(|e| {
+                AppError::Validation(format!(
+                    "invalid array JSON for column '{column}' of type {target}: {e}"
+                ))
+            })?;
+            match parsed {
+                JsonValue::Array(elements) => elements,
+                other => {
+                    return Err(AppError::Validation(format!(
+                        "expected JSON array for column '{column}' of type {target}, got '{}'",
+                        repr_for_error(&other)
+                    )))
+                }
+            }
+        }
+        other => {
+            return Err(AppError::Validation(format!(
+                "expected JSON array for column '{column}' of type {target}, got '{}'",
+                repr_for_error(other)
+            )))
+        }
+    };
+
+    elements
+        .into_iter()
+        .enumerate()
+        .map(|(idx, element)| {
+            if matches!(element, JsonValue::Null) {
+                return Ok(None);
+            }
+            if json_elements {
+                return Ok(Some(element.to_string()));
+            }
+            match element {
+                JsonValue::String(s) => Ok(Some(s)),
+                JsonValue::Number(_) if precision_sensitive_numbers => {
+                    Err(AppError::Validation(format!(
+                        "numeric elements for column '{column}' of type {target} must be JSON strings to preserve precision (index {idx})"
+                    )))
+                }
+                JsonValue::Number(n) => Ok(Some(n.to_string())),
+                JsonValue::Bool(b) => Ok(Some(b.to_string())),
+                JsonValue::Array(_) | JsonValue::Object(_) => {
+                    Err(AppError::Validation(format!(
+                        "nested array/object at index {idx} is not supported for column '{column}' of type {target}"
+                    )))
+                }
+                JsonValue::Null => unreachable!("null elements return before type conversion"),
+            }
+        })
+        .collect()
+}
+
+fn bind_edit_array_value(v: &JsonValue, column: &str, target: &str) -> AppResult<BoundParam> {
+    let placeholder = PlaceholderTemplate::ArrayCast(target.to_owned());
+    if matches!(v, JsonValue::Null) {
+        return Ok(BoundParam {
+            value: Box::new(Option::<Vec<Option<String>>>::None),
+            placeholder,
+        });
+    }
+
+    let elements = normalize_edit_array(v, column, target)?;
+    Ok(BoundParam {
+        value: Box::new(elements),
+        placeholder,
+    })
+}
+
 /// Convert a JSON edit value into a typed `BoundParam`. Unlike
 /// `bind_filter_value`, this accepts:
 /// - `null` → typed `Option::<T>::None` with the placeholder shape for the kind
-/// - `array`/`object` when `kind` is `Json` or `Jsonb` → serialized to a JSON
-///   string and bound with the appropriate cast
-/// - `array`/`object` for any other kind → `AppError::Validation`
+/// - `array`/`object` when `kind` is `Json` or `Jsonb` → native JSON binding
+/// - a direct JSON array or JSON-array string for `Array` → native `text[]`
+///   binding followed by a cast to the exact declared array type
+/// - `array`/`object` for every other kind → `AppError::Validation`
 pub(crate) fn bind_edit_value(
     v: &JsonValue,
     column: &str,
     kind: &BindKind,
 ) -> AppResult<BoundParam> {
+    if let BindKind::Array { target } = kind {
+        return bind_edit_array_value(v, column, target);
+    }
+
     match v {
         JsonValue::Null => {
             let bp = match kind {
@@ -467,6 +581,10 @@ pub(crate) fn bind_edit_value(
                 BindKind::Json | BindKind::Jsonb => BoundParam {
                     value: Box::new(Option::<JsonValue>::None),
                     placeholder: PlaceholderTemplate::Plain,
+                },
+                BindKind::Array { target } => BoundParam {
+                    value: Box::new(Option::<Vec<Option<String>>>::None),
+                    placeholder: PlaceholderTemplate::ArrayCast(target.clone()),
                 },
                 BindKind::Fallback(type_name) => BoundParam {
                     value: Box::new(Option::<String>::None),
@@ -548,14 +666,208 @@ mod tests {
     }
 
     #[test]
+    fn bind_filter_array_string_keeps_scalar_fallback_cast() {
+        let kind = BindKind::Array {
+            target: "\"default$default\".\"FeatureFlags\"[]".into(),
+        };
+        let bp = bind_filter_value(&json!("{beta,dark-mode}"), "flags", &kind).unwrap();
+        assert_eq!(
+            bp.placeholder.render(1),
+            "$1::text::\"default$default\".\"FeatureFlags\"[]"
+        );
+    }
+
+    #[test]
     fn bind_kind_display_names() {
         assert_eq!(BindKind::Int4.display_name().as_ref(), "integer");
         assert_eq!(BindKind::Jsonb.display_name().as_ref(), "jsonb");
         assert_eq!(BindKind::TimestampTz.display_name().as_ref(), "timestamptz");
         assert_eq!(
+            BindKind::Array {
+                target: "public.featureflags[]".into()
+            }
+            .display_name()
+            .as_ref(),
+            "public.featureflags[]"
+        );
+        assert_eq!(
             BindKind::Fallback("inet".into()).display_name().as_ref(),
             "inet"
         );
+    }
+
+    #[test]
+    fn bind_kind_classifies_builtins_case_insensitively() {
+        assert!(matches!(bind_kind_for_type(" INTEGER "), BindKind::Int4));
+        assert!(matches!(bind_kind_for_type("VaRcHaR(255)"), BindKind::Text));
+    }
+
+    #[test]
+    fn bind_kind_preserves_exact_scalar_custom_type() {
+        let kind = bind_kind_for_type("  \"Tenant\".\"ExternalId\"  ");
+        match kind {
+            BindKind::Fallback(target) => assert_eq!(target, "\"Tenant\".\"ExternalId\""),
+            other => panic!("expected exact fallback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bind_kind_preserves_exact_array_targets() {
+        let targets = [
+            "\"default$default\".\"FeatureFlags\"[]",
+            "public.featureflags[]",
+            "\"schema.with.dot\".\"Flag Type\"[]",
+        ];
+        for target in targets {
+            match bind_kind_for_type(&format!("  {target}  ")) {
+                BindKind::Array { target: actual } => assert_eq!(actual, target),
+                other => panic!("expected array for {target}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn array_placeholder_renders_native_text_array_then_exact_cast() {
+        let placeholder =
+            PlaceholderTemplate::ArrayCast("\"default$default\".\"FeatureFlags\"[]".into());
+        assert_eq!(
+            placeholder.render(3),
+            "$3::text[]::\"default$default\".\"FeatureFlags\"[]"
+        );
+    }
+
+    #[test]
+    fn normalize_edit_array_accepts_canonical_string_and_direct_array() {
+        let target = "\"default$default\".\"FeatureFlags\"[]";
+        assert_eq!(
+            normalize_edit_array(&json!(r#"["beta","dark-mode"]"#), "flags", target).unwrap(),
+            vec![Some("beta".into()), Some("dark-mode".into())]
+        );
+        assert_eq!(
+            normalize_edit_array(&json!(["beta", null, "dark-mode"]), "flags", target).unwrap(),
+            vec![Some("beta".into()), None, Some("dark-mode".into())]
+        );
+    }
+
+    #[test]
+    fn normalize_edit_array_converts_scalar_elements_and_escapes() {
+        let target = "public.values[]";
+        assert_eq!(
+            normalize_edit_array(
+                &json!([1, 2.5, true, false, "a,b", "quote\"slash\\"]),
+                "values",
+                target,
+            )
+            .unwrap(),
+            vec![
+                Some("1".into()),
+                Some("2.5".into()),
+                Some("true".into()),
+                Some("false".into()),
+                Some("a,b".into()),
+                Some("quote\"slash\\".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_edit_jsonb_array_serializes_every_non_null_element_as_json() {
+        assert_eq!(
+            normalize_edit_array(
+                &json!([{"a": 1}, [1, 2], "x", 42, true, null]),
+                "items",
+                "jsonb[]",
+            )
+            .unwrap(),
+            vec![
+                Some(r#"{"a":1}"#.into()),
+                Some("[1,2]".into()),
+                Some(r#""x""#.into()),
+                Some("42".into()),
+                Some("true".into()),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_edit_pg_catalog_json_array_uses_json_element_semantics() {
+        assert_eq!(
+            normalize_edit_array(&json!(["x"]), "items", "pg_catalog.json[]").unwrap(),
+            vec![Some(r#""x""#.into())]
+        );
+    }
+
+    #[test]
+    fn normalize_edit_precision_sensitive_arrays_require_json_strings() {
+        for target in [
+            "bigint[]",
+            "pg_catalog.int8[]",
+            "numeric(38,0)[]",
+            "money[]",
+        ] {
+            let err = normalize_edit_array(&json!([9_007_199_254_740_993_u64]), "amounts", target)
+                .unwrap_err();
+            let msg = format!("{err}");
+            assert!(msg.contains("amounts"), "msg: {msg}");
+            assert!(msg.contains(target), "msg: {msg}");
+            assert!(msg.contains("JSON strings"), "msg: {msg}");
+            assert!(msg.contains("index 0"), "msg: {msg}");
+        }
+    }
+
+    #[test]
+    fn normalize_edit_precision_sensitive_arrays_preserve_quoted_lexemes() {
+        assert_eq!(
+            normalize_edit_array(
+                &json!(["9007199254740993", "12345678901234567890.123456789"]),
+                "amounts",
+                "numeric(38,9)[]",
+            )
+            .unwrap(),
+            vec![
+                Some("9007199254740993".into()),
+                Some("12345678901234567890.123456789".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn bind_edit_array_accepts_empty_array_and_whole_null() {
+        let kind = BindKind::Array {
+            target: "public.featureflags[]".into(),
+        };
+        let empty = bind_edit_value(&json!([]), "flags", &kind).unwrap();
+        assert_eq!(
+            empty.placeholder.render(1),
+            "$1::text[]::public.featureflags[]"
+        );
+
+        let null = bind_edit_value(&JsonValue::Null, "flags", &kind).unwrap();
+        assert_eq!(
+            null.placeholder.render(2),
+            "$2::text[]::public.featureflags[]"
+        );
+    }
+
+    #[test]
+    fn normalize_edit_array_rejects_invalid_shapes_with_context() {
+        let target = "\"default$default\".\"FeatureFlags\"[]";
+        let invalid = [
+            json!("["),
+            json!(r#"{"not":"array"}"#),
+            json!("42"),
+            json!({"not": "array"}),
+            json!([["nested"]]),
+            json!([{"nested": true}]),
+        ];
+        for value in invalid {
+            let err = normalize_edit_array(&value, "flags", target).unwrap_err();
+            let msg = format!("{err}");
+            assert!(msg.contains("flags"), "msg: {msg}");
+            assert!(msg.contains(target), "msg: {msg}");
+            assert!(matches!(err, AppError::Validation(_)));
+        }
     }
 
     // -----------------------------------------------------------------------
