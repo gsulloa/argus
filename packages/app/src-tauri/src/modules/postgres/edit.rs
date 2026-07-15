@@ -936,6 +936,52 @@ mod tests {
     }
 
     #[test]
+    fn build_update_mixed_case_enum_array_preserves_exact_cast_target() {
+        let op = EditOp::Update {
+            pk: map_of(&[("id", json!(7))]),
+            changes: map_of(&[("flags", json!(r#"["beta","dark-mode"]"#))]),
+        };
+        let cols = columns_of(&[
+            ("id", "integer"),
+            ("flags", "\"default$default\".\"FeatureFlags\"[]"),
+        ]);
+        let (sql, params) =
+            build_edit_sql("public", "accounts", &op, &cols, &pk_cols(&["id"])).unwrap();
+
+        assert!(
+            sql.contains("SET \"flags\" = $1::text[]::\"default$default\".\"FeatureFlags\"[]"),
+            "sql: {sql}"
+        );
+        assert!(sql.contains("WHERE \"id\" = $2"), "sql: {sql}");
+        assert!(
+            !sql.contains("\"featureflags\""),
+            "custom type must not be lowercased: {sql}"
+        );
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn build_update_mixed_case_scalar_custom_type_preserves_exact_cast_target() {
+        let op = EditOp::Update {
+            pk: map_of(&[("id", json!(1))]),
+            changes: map_of(&[("external_id", json!("customer-42"))]),
+        };
+        let cols = columns_of(&[
+            ("id", "integer"),
+            ("external_id", "\"Tenant\".\"ExternalId\""),
+        ]);
+        let (sql, params) =
+            build_edit_sql("public", "accounts", &op, &cols, &pk_cols(&["id"])).unwrap();
+
+        assert!(
+            sql.contains("SET \"external_id\" = $1::text::\"Tenant\".\"ExternalId\""),
+            "sql: {sql}"
+        );
+        assert!(sql.contains("WHERE \"id\" = $2"), "sql: {sql}");
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
     fn build_update_structured_value_on_text_column_rejected() {
         let op = EditOp::Update {
             pk: map_of(&[("id", json!(1))]),
