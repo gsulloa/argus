@@ -146,6 +146,16 @@ export const CONTEXT_CHANGED_EVENT = "context://changed";
 // Known-folder discovery (context_list_known_folders)
 // ---------------------------------------------------------------------------
 
+/** One connection referencing a known context folder (for disambiguation). */
+export interface KnownFolderConnection {
+  /** Connection id. */
+  id: string;
+  /** Connection display name. */
+  name: string;
+  /** Canonical engine identifier, e.g. "postgres"|"dynamo"; raw kind if unrecognized. */
+  engine: string;
+}
+
 /** One entry from `context_list_known_folders` — mirrors the Rust result type. */
 export interface KnownFolder {
   /** Canonical path of the context folder root. */
@@ -154,6 +164,8 @@ export interface KnownFolder {
   name: string;
   /** IDs of connections already pointing at this root. */
   connection_ids: string[];
+  /** Connections referencing this root, each with display name and engine. */
+  connections: KnownFolderConnection[];
 }
 
 // ---------------------------------------------------------------------------

@@ -93,7 +93,12 @@ const emptyState = makeState();
 const loadedState = makeState(QUERIES);
 
 const defaultLinkHook = {
-  knownFolders: [] as { path: string; name: string; connection_ids: string[] }[],
+  knownFolders: [] as {
+    path: string;
+    name: string;
+    connection_ids: string[];
+    connections: { id: string; name: string; engine: string }[];
+  }[],
   knownFoldersLoading: false,
   busy: false,
   error: null,
@@ -142,7 +147,12 @@ describe("ContextQueriesBranch", () => {
     vi.mocked(useContextFolderLink).mockReturnValue({
       ...defaultLinkHook,
       knownFolders: [
-        { path: "/my/ctx", name: "my-ctx", connection_ids: [] },
+        {
+          path: "/my/ctx",
+          name: "my-ctx",
+          connection_ids: ["conn-2"],
+          connections: [{ id: "conn-2", name: "Prod PG", engine: "postgres" }],
+        },
       ],
     });
     render(

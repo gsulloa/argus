@@ -362,6 +362,20 @@ pub fn context_create_folder(path: String, name: String) -> AppResult<String> {
 
 // ---- context_list_known_folders ----
 
+/// One connection referencing a known context folder, carrying enough to
+/// identify it in the reuse-first selector UI (so folders sharing the same
+/// manifest name stay distinguishable).
+#[derive(Serialize)]
+pub struct KnownFolderConnection {
+    /// Connection id (as string).
+    pub id: String,
+    /// Connection display name.
+    pub name: String,
+    /// Canonical engine identifier (e.g. `postgres`, `dynamo`). Falls back to
+    /// the raw connection `kind` string when the kind is unrecognized.
+    pub engine: String,
+}
+
 /// One entry in the `context_list_known_folders` result.
 #[derive(Serialize)]
 pub struct KnownFolderEntry {
@@ -372,6 +386,9 @@ pub struct KnownFolderEntry {
     /// Ids (as strings) of all connections whose `context_path` resolves to
     /// this canonical root.
     pub connection_ids: Vec<String>,
+    /// The connections referencing this root, in insertion order, each with
+    /// its display name and engine for disambiguation in the UI.
+    pub connections: Vec<KnownFolderConnection>,
 }
 
 /// Core logic for listing known context folders; extracted for testability.
@@ -381,33 +398,43 @@ pub struct KnownFolderEntry {
 pub(crate) fn list_known_folders_inner(
     db_conn: &rusqlite::Connection,
 ) -> AppResult<Vec<KnownFolderEntry>> {
-    // Collect (connection_id, context_path) pairs.
-    let conn_paths: Vec<(Uuid, String)> = connections::list(db_conn)?
+    // Collect (connection_id, name, kind, context_path) tuples.
+    let conn_paths: Vec<(Uuid, String, String, String)> = connections::list(db_conn)?
         .into_iter()
-        .filter_map(|c| c.context_path.map(|p| (c.id, p)))
+        .filter_map(|c| c.context_path.map(|p| (c.id, c.name, c.kind, p)))
         .collect();
 
-    // Canonicalize each path and group connection ids by canonical root.
+    // Canonicalize each path and group connections by canonical root.
     // Vec<String> preserves insertion order for deterministic output.
     let mut order: Vec<String> = Vec::new();
-    let mut groups: std::collections::HashMap<String, Vec<Uuid>> = std::collections::HashMap::new();
+    let mut groups: std::collections::HashMap<String, Vec<KnownFolderConnection>> =
+        std::collections::HashMap::new();
 
-    for (conn_id, raw_path) in conn_paths {
+    for (conn_id, conn_name, kind, raw_path) in conn_paths {
         let canonical = match std::fs::canonicalize(&raw_path) {
             Ok(p) => p.to_string_lossy().into_owned(),
             Err(_) => continue, // path no longer exists — skip
         };
+        // Map kind → canonical engine identifier; fall back to the raw kind
+        // string when unrecognized so an unknown engine still renders.
+        let engine = EngineKind::from_connection_kind(&kind)
+            .map(|e| e.subtree().to_string())
+            .unwrap_or(kind);
         let entry = groups.entry(canonical.clone()).or_insert_with(|| {
             order.push(canonical.clone());
             Vec::new()
         });
-        entry.push(conn_id);
+        entry.push(KnownFolderConnection {
+            id: conn_id.to_string(),
+            name: conn_name,
+            engine,
+        });
     }
 
     // Build result: parse manifest for each surviving root; omit on parse failure.
     let mut result = Vec::new();
     for canonical in order {
-        let ids = match groups.get(&canonical) {
+        let conns = match groups.remove(&canonical) {
             Some(v) => v,
             None => continue,
         };
@@ -418,7 +445,8 @@ pub(crate) fn list_known_folders_inner(
         result.push(KnownFolderEntry {
             path: canonical,
             name: manifest.name,
-            connection_ids: ids.iter().map(|id| id.to_string()).collect(),
+            connection_ids: conns.iter().map(|c| c.id.clone()).collect(),
+            connections: conns,
         });
     }
 
@@ -2285,6 +2313,23 @@ mod tests {
         let mut expected = vec![id_a.to_string(), id_b.to_string()];
         expected.sort();
         assert_eq!(ids, expected);
+
+        // Each connection is enriched with its display name and canonical engine.
+        assert_eq!(result[0].connections.len(), 2);
+        let mut enriched: Vec<(String, String)> = result[0]
+            .connections
+            .iter()
+            .map(|c| (c.name.clone(), c.engine.clone()))
+            .collect();
+        enriched.sort();
+        assert_eq!(
+            enriched,
+            vec![
+                ("dynamo-conn".to_string(), "dynamo".to_string()),
+                ("pg-conn".to_string(), "postgres".to_string()),
+            ],
+            "dynamodb kind should fold to the canonical `dynamo` engine",
+        );
     }
 
     // 2.6 — stale/non-existent path is omitted.
