@@ -87,8 +87,8 @@
 
 .knownFolderItem {
   display: flex;
-  align-items: center;
-  gap: 7px;
+  flex-direction: column;
+  gap: 2px;
   padding: 6px 8px;
   background: var(--elevated);
   border: 1px solid var(--border-strong);
@@ -99,6 +99,13 @@
   min-width: 0;
   transition: background var(--duration-instant, 80ms) ease-out,
               border-color var(--duration-instant, 80ms) ease-out;
+}
+
+.knownFolderMain {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
 }
 
 .knownFolderItem:hover:not(:disabled) {
@@ -127,6 +134,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+.knownFolderUsedBy {
+  font-size: var(--text-sm, 12px);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  padding-left: 19px;
 }
 
 /* Linked state */

@@ -18,6 +18,7 @@ import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { Folder } from "lucide-react";
 import { contextApi } from "@/modules/context/api";
 import type { KnownFolder } from "@/modules/context/types";
+import { knownFolderUsedBy } from "@/modules/context/knownFolderDisplay";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { noAutoCorrectProps } from "../../shared/text-input-hygiene";
 
@@ -228,7 +229,9 @@ export function LinkFolderPrompt({
                 )}
                 {!knownFoldersLoading && knownFolders != null && knownFolders.length > 0 && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                    {knownFolders.map((folder) => (
+                    {knownFolders.map((folder) => {
+                      const usedBy = knownFolderUsedBy(folder.connections);
+                      return (
                       <button
                         key={folder.path}
                         type="button"
@@ -236,8 +239,8 @@ export function LinkFolderPrompt({
                         onClick={() => void handleReuseFolder(folder.path)}
                         style={{
                           display: "flex",
-                          alignItems: "center",
-                          gap: 7,
+                          flexDirection: "column",
+                          gap: 2,
                           padding: "6px 8px",
                           background: "var(--elevated, #15151b)",
                           border: "1px solid var(--border-strong, #2e2f3a)",
@@ -260,15 +263,24 @@ export function LinkFolderPrompt({
                           (e.currentTarget as HTMLButtonElement).style.background = "var(--elevated, #15151b)";
                         }}
                       >
-                        <Folder size={12} style={{ color: "var(--text-muted, #a0a2ad)", flexShrink: 0 }} />
-                        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text, #f2f3f7)", whiteSpace: "nowrap", flexShrink: 0 }}>
-                          {folder.name}
+                        <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0, width: "100%" }}>
+                          <Folder size={12} style={{ color: "var(--text-muted, #a0a2ad)", flexShrink: 0 }} />
+                          <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text, #f2f3f7)", whiteSpace: "nowrap", flexShrink: 0 }}>
+                            {folder.name}
+                          </span>
+                          <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 11, color: "var(--text-subtle, #6b6e7b)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+                            {folder.path}
+                          </span>
                         </span>
-                        <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 11, color: "var(--text-subtle, #6b6e7b)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
-                          {folder.path}
-                        </span>
+                        {usedBy && (
+                          <span style={{ fontSize: 11, color: "var(--text-muted, #a0a2ad)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, paddingLeft: 19 }}>
+                            Used by {usedBy.text}
+                            {usedBy.overflow > 0 && ` +${usedBy.overflow} more`}
+                          </span>
+                        )}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 

@@ -17,6 +17,7 @@ import {
 } from "@dnd-kit/core";
 import { useContextQueries } from "@/modules/context/hooks";
 import { useContextFolderLink } from "@/modules/context/useContextFolderLink";
+import { knownFolderUsedBy } from "@/modules/context/knownFolderDisplay";
 import { NamePromptDialog } from "@/modules/saved-queries/NamePromptDialog";
 import { contextApi } from "@/modules/context/api";
 import { useToast } from "@/platform/toast";
@@ -861,19 +862,31 @@ export function ContextQueriesBranch({
           )}
           {!knownFoldersLoading && knownFolders != null && knownFolders.length > 0 && (
             <div className={styles.ctaKnownList}>
-              {knownFolders.map((folder) => (
-                <button
-                  key={folder.path}
-                  type="button"
-                  className={styles.ctaKnownItem}
-                  disabled={ctaBusy}
-                  onClick={() => void reuse(folder.path)}
-                  title={folder.path}
-                >
-                  <Folder size={11} className={styles.ctaFolderIcon} />
-                  <span className={styles.ctaKnownName}>{folder.name}</span>
-                </button>
-              ))}
+              {knownFolders.map((folder) => {
+                const usedBy = knownFolderUsedBy(folder.connections);
+                return (
+                  <button
+                    key={folder.path}
+                    type="button"
+                    className={styles.ctaKnownItem}
+                    disabled={ctaBusy}
+                    onClick={() => void reuse(folder.path)}
+                    title={folder.path}
+                  >
+                    <span className={styles.ctaKnownMain}>
+                      <Folder size={11} className={styles.ctaFolderIcon} />
+                      <span className={styles.ctaKnownName}>{folder.name}</span>
+                      <span className={styles.ctaKnownPath}>{folder.path}</span>
+                    </span>
+                    {usedBy && (
+                      <span className={styles.ctaKnownUsedBy}>
+                        Used by {usedBy.text}
+                        {usedBy.overflow > 0 && ` +${usedBy.overflow} more`}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
           <div className={styles.ctaBtnGroup}>
