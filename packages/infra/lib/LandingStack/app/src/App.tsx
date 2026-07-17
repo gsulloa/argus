@@ -387,7 +387,7 @@ export default function App() {
 
               <div className="cta-row">
                 {state.status === "ready" ? (
-                  <a className="btn-download" href={primary?.url}>
+                  <a className="btn-download content-enter" href={primary?.url}>
                     <HeroGlyph />
                     <span className="bd-text">
                       Download for {primaryLabel}
@@ -432,7 +432,7 @@ export default function App() {
             </div>
 
             {/* App mockup */}
-            <div className="mockup-wrap">
+            <div className="mockup-wrap mockup-enter">
               <AppMockup />
             </div>
           </div>
@@ -452,9 +452,9 @@ export default function App() {
                 Learn it once.
               </p>
             </div>
-            <div className="sources reveal">
+            <div className="sources">
               {SOURCES.map((s, i) => (
-                <div className="source" key={s.name}>
+                <div className="source reveal" key={s.name}>
                   <span className="source-idx">
                     {String(i + 1).padStart(2, "0")}
                   </span>
@@ -497,8 +497,8 @@ export default function App() {
               <h2>Built for people who live in databases.</h2>
             </div>
 
-            <div className="bento reveal">
-              <div className="feat span-3">
+            <div className="bento">
+              <div className="feat span-3 reveal">
                 <span className="ftag">Data grid</span>
                 <h3>Virtualized grid, inline editing</h3>
                 <p>
@@ -508,7 +508,7 @@ export default function App() {
                 </p>
               </div>
 
-              <div className="feat span-3">
+              <div className="feat span-3 reveal">
                 <span className="ftag">SQL editor</span>
                 <h3>Multi-statement, batch-aware</h3>
                 <p>
@@ -530,7 +530,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="feat span-2">
+              <div className="feat span-2 reveal">
                 <span className="ftag">Command palette</span>
                 <h3>Everything is a keystroke</h3>
                 <div className="feat-palette">
@@ -549,7 +549,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="feat span-2">
+              <div className="feat span-2 reveal">
                 <span className="ftag">Context folders</span>
                 <h3>The folder is the project</h3>
                 <p>
@@ -558,7 +558,7 @@ export default function App() {
                 </p>
               </div>
 
-              <div className="feat span-2">
+              <div className="feat span-2 reveal">
                 <span className="ftag">AI providers</span>
                 <h3>Grounded SQL generation</h3>
                 <p>
@@ -690,7 +690,7 @@ function DownloadCard({
   recommended?: boolean;
 }) {
   return (
-    <div className={`dl-card${recommended ? " recommended" : ""}`}>
+    <div className={`dl-card content-enter${recommended ? " recommended" : ""}`}>
       {recommended && <span className="dl-badge">Recommended for you</span>}
       <div className="arch">
         {glyph ?? <Chip size={18} />}
