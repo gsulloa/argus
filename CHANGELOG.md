@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-07-21
+
+### Added
+- disambiguate known context folders in reuse selector ([#257](https://github.com/gsulloa/argus/pull/257))
+
+### Fixed
+- apply boolean data-grid filter to the query ([#274](https://github.com/gsulloa/argus/pull/274))
+
 ## [0.8.4] - 2026-07-15
 
 ### Fixed
