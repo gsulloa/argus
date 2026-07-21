@@ -71,6 +71,12 @@ export interface FilterBarProps {
 /**
  * Returns a Set of draft row indices whose (column, op, value) triple matches
  * any row in `applied.rows` (ignoring `enabled`).
+ *
+ * An INCOMPLETE draft row is never considered applied — it could not have been
+ * sent to the query (`modelToPayload` drops it), so showing the green "Applied"
+ * badge for it would lie. This gate prevents e.g. a blank/uninitialized row from
+ * reading as applied just because a structurally-equal incomplete row also lives
+ * in `applied.rows`.
  */
 function buildAppliedSet(
   draftRows: FilterRow[],
@@ -79,6 +85,7 @@ function buildAppliedSet(
   const s = new Set<number>();
   for (let i = 0; i < draftRows.length; i++) {
     const dr = draftRows[i]!;
+    if (!isCompleteRow(dr)) continue;
     for (const ar of appliedRows) {
       if (filterRowEquals(dr, ar)) {
         s.add(i);

@@ -7,6 +7,7 @@ import { OperatorPicker } from "./OperatorPicker";
 import { ValueInput, RawExpressionInput } from "./ValueInput";
 import { operatorsForColumn } from "./operatorRules";
 import { coerceValueForOperator } from "./treeMutations";
+import { categorize } from "../typeHelpers";
 import { RowApplyButton } from "../../../shared/filter-bar";
 import type { ColumnRef, DataColumn, FilterRow, Operator } from "../types";
 import styles from "./FilterBar.module.css";
@@ -57,17 +58,31 @@ export function ConditionRow({
   const ops = operatorsForColumn(row.column, meta.dataType, meta.isNullable);
 
   function onColumnChange(next: ColumnRef) {
-    const nextOps = operatorsForColumn(
-      next,
+    const nextType =
       next.kind === "named"
         ? columns.find((c) => c.name === next.name)?.data_type ?? null
-        : null,
+        : null;
+    const nextOps = operatorsForColumn(
+      next,
+      nextType,
       next.kind === "named"
         ? columns.find((c) => c.name === next.name)?.is_nullable ?? true
         : true,
     );
     const nextOp: Operator = nextOps.includes(row.op) ? row.op : nextOps[0]!;
-    const nextValue = coerceValueForOperator(row.value, nextOp);
+    let nextValue = coerceValueForOperator(row.value, nextOp);
+    // Boolean columns render a two-option select (true/false) with no "empty"
+    // state; seed a concrete `true` when switching to one so the row is
+    // complete immediately (the value input also enforces this as a fallback).
+    if (
+      nextType &&
+      categorize(nextType) === "boolean" &&
+      typeof nextValue !== "boolean" &&
+      nextOp !== "IS NULL" &&
+      nextOp !== "IS NOT NULL"
+    ) {
+      nextValue = true;
+    }
     onChange({ ...row, column: next, op: nextOp, value: nextValue });
   }
 

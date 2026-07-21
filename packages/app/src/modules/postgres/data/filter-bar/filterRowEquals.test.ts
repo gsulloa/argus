@@ -138,6 +138,97 @@ describe("isCompleteRow — RAW rows", () => {
 });
 
 // ---------------------------------------------------------------------------
+// isCompleteRow — boolean values
+// ---------------------------------------------------------------------------
+
+describe("isCompleteRow — boolean values", () => {
+  it("returns true for a boolean column row with value true", () => {
+    const r: FilterRow = {
+      id: "bool1",
+      enabled: true,
+      column: { kind: "named", name: "email_verified" },
+      op: "=",
+      value: true,
+    };
+    expect(isCompleteRow(r)).toBe(true);
+  });
+
+  it("returns true for a boolean column row with value false (not treated as empty)", () => {
+    const r: FilterRow = {
+      id: "bool2",
+      enabled: true,
+      column: { kind: "named", name: "email_verified" },
+      op: "=",
+      value: false,
+    };
+    expect(isCompleteRow(r)).toBe(true);
+  });
+
+  it("returns false for a boolean column row still holding the empty placeholder", () => {
+    const r: FilterRow = {
+      id: "bool3",
+      enabled: true,
+      column: { kind: "named", name: "email_verified" },
+      op: "=",
+      value: "",
+    };
+    expect(isCompleteRow(r)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// modelToPayload — boolean rows
+// ---------------------------------------------------------------------------
+
+describe("modelToPayload — boolean rows", () => {
+  it("emits a condition with value true for a boolean = true row", () => {
+    const model: FilterModel = {
+      rows: [
+        {
+          id: "bool4",
+          enabled: true,
+          column: { kind: "named", name: "email_verified" },
+          op: "=",
+          value: true,
+        },
+      ],
+      combinator: "AND",
+    };
+    const payload = modelToPayload(model);
+    expect(payload.filter_tree).toBeDefined();
+    expect(payload.filter_tree!.children).toHaveLength(1);
+    expect(payload.filter_tree!.children[0]).toEqual({
+      kind: "condition",
+      column: { kind: "named", name: "email_verified" },
+      op: "=",
+      value: true,
+    });
+  });
+
+  it("emits a condition with value false for a boolean = false row", () => {
+    const model: FilterModel = {
+      rows: [
+        {
+          id: "bool5",
+          enabled: true,
+          column: { kind: "named", name: "email_verified" },
+          op: "=",
+          value: false,
+        },
+      ],
+      combinator: "AND",
+    };
+    const payload = modelToPayload(model);
+    expect(payload.filter_tree!.children[0]).toEqual({
+      kind: "condition",
+      column: { kind: "named", name: "email_verified" },
+      op: "=",
+      value: false,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // modelToPayload — RAW rows
 // ---------------------------------------------------------------------------
 

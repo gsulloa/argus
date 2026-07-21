@@ -4,6 +4,7 @@ import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { AlertTriangle, Folder } from "lucide-react";
 import { contextApi } from "@/modules/context/api";
 import type { KnownFolder } from "@/modules/context/types";
+import { knownFolderUsedBy } from "@/modules/context/knownFolderDisplay";
 import { useConnections } from "@/platform/connection-registry/useConnections";
 import { SyncReportModal } from "./SyncReportModal";
 import styles from "./ContextFolderRow.module.css";
@@ -336,19 +337,30 @@ export function ContextFolderRow({ connectionId, contextPath, onChanged }: Conte
           )}
           {!knownFoldersLoading && knownFolders != null && knownFolders.length > 0 && (
             <div className={styles.knownFolderList}>
-              {knownFolders.map((folder) => (
-                <button
-                  key={folder.path}
-                  type="button"
-                  className={styles.knownFolderItem}
-                  disabled={busy}
-                  onClick={() => void handleReuseFolder(folder.path)}
-                >
-                  <Folder size={12} className={styles.folderIcon} />
-                  <span className={styles.knownFolderName}>{folder.name}</span>
-                  <span className={styles.knownFolderPath}>{folder.path}</span>
-                </button>
-              ))}
+              {knownFolders.map((folder) => {
+                const usedBy = knownFolderUsedBy(folder.connections);
+                return (
+                  <button
+                    key={folder.path}
+                    type="button"
+                    className={styles.knownFolderItem}
+                    disabled={busy}
+                    onClick={() => void handleReuseFolder(folder.path)}
+                  >
+                    <span className={styles.knownFolderMain}>
+                      <Folder size={12} className={styles.folderIcon} />
+                      <span className={styles.knownFolderName}>{folder.name}</span>
+                      <span className={styles.knownFolderPath}>{folder.path}</span>
+                    </span>
+                    {usedBy && (
+                      <span className={styles.knownFolderUsedBy}>
+                        Used by {usedBy.text}
+                        {usedBy.overflow > 0 && ` +${usedBy.overflow} more`}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
 

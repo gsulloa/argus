@@ -6,6 +6,7 @@ import { FilterBar } from "./FilterBar";
 import {
   EMPTY_FILTER_MODEL,
   makeEmptyRow,
+  modelToPayload,
   type DataColumn,
   type FilterModel,
 } from "../types";
@@ -15,6 +16,7 @@ const cols: DataColumn[] = [
   { name: "id", data_type: "int4", ordinal_position: 1, is_nullable: false },
   { name: "country", data_type: "text", ordinal_position: 2, is_nullable: true },
   { name: "status", data_type: "text", ordinal_position: 3, is_nullable: true },
+  { name: "email_verified", data_type: "boolean", ordinal_position: 4, is_nullable: false },
 ];
 
 function makeProps(overrides: Partial<React.ComponentProps<typeof FilterBar>> = {}) {
@@ -97,6 +99,46 @@ describe("FilterBar — per-row Apply button", () => {
     const applied: FilterModel = { rows: [sharedRow], combinator: "AND" };
     render(<FilterBar {...makeProps({ draft, applied })} />);
     expect(screen.getByRole("button", { name: /Applied/i })).toBeInTheDocument();
+  });
+
+  it("does NOT show the green Applied badge for an incomplete row that matches an applied row", () => {
+    // Both draft and applied hold the SAME structurally-equal but INCOMPLETE
+    // row (blank value). It could never have been sent to the query, so the
+    // badge must stay neutral rather than lying green.
+    const incomplete = {
+      id: "t-inc",
+      enabled: true,
+      column: { kind: "named" as const, name: "country" },
+      op: "=" as const,
+      value: "",
+    };
+    const draft: FilterModel = { rows: [incomplete], combinator: "AND" };
+    const applied: FilterModel = { rows: [incomplete], combinator: "AND" };
+    render(<FilterBar {...makeProps({ draft, applied })} />);
+    expect(screen.queryByRole("button", { name: /Applied — click/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /Apply only this row/i })).toBeInTheDocument();
+  });
+
+  it("a freshly-picked boolean row commits value true and yields a filter_tree carrying the boolean condition", async () => {
+    // Simulates a boolean column just selected: the row still holds the empty
+    // placeholder. The boolean value control must commit a concrete `true`.
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [{ id: "t-bool", enabled: true, column: { kind: "named", name: "email_verified" }, op: "=", value: "" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    await waitFor(() => expect(onDraftChange).toHaveBeenCalled());
+    const next = onDraftChange.mock.calls.at(-1)![0] as FilterModel;
+    expect(next.rows[0]!.value).toBe(true);
+    const payload = modelToPayload(next);
+    expect(payload.filter_tree).toBeDefined();
+    expect(payload.filter_tree!.children[0]).toEqual({
+      kind: "condition",
+      column: { kind: "named", name: "email_verified" },
+      op: "=",
+      value: true,
+    });
   });
 
   it("button label flips back to Apply when an applied row is edited", () => {
