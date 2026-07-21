@@ -299,6 +299,10 @@ export function isCompleteRow(row: FilterRow): boolean {
     );
   }
 
+  // A boolean value (including `false`) is always fully specified — accept it
+  // before the falsy/empty rejection so a `= false` filter is not dropped.
+  if (value === true || value === false) return true;
+
   if (value === "" || value === null || value === undefined) return false;
   return true;
 }
