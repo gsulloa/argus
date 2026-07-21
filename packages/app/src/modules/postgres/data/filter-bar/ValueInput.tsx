@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { categorize } from "../typeHelpers";
 import type {
   ColumnRef,
@@ -142,21 +142,7 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
   }
 
   if (cat === "boolean") {
-    const cur =
-      typeof value === "boolean"
-        ? String(value)
-        : asScalarStringForDisplay(value);
-    return (
-      <select
-        className={styles.opSelect}
-        value={cur}
-        onChange={(e) => onChange(e.target.value === "true")}
-        aria-label="Value"
-      >
-        <option value="true">true</option>
-        <option value="false">false</option>
-      </select>
-    );
+    return <BooleanValueInput value={value} onChange={onChange} />;
   }
 
   const inputType = inputTypeForCategory(cat);
@@ -176,6 +162,43 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
       }
       onChange={(e) => onChange(parseScalar(e.target.value, cat))}
     />
+  );
+}
+
+/**
+ * Boolean value control. The underlying `<select>` only has `true` / `false`
+ * options, so a model value of `""` (the generic empty-row placeholder) would
+ * paint "true" visually WITHOUT committing it — selecting the already-shown
+ * option fires no `change` event, and the row stays incomplete and is silently
+ * dropped from the query. To avoid that, whenever the model value is not already
+ * a boolean we eagerly commit `true` (matching the displayed option) so the row
+ * carries a concrete value. This only mutates the draft; it never triggers a
+ * fetch (fetch is gated on Apply).
+ */
+function BooleanValueInput({
+  value,
+  onChange,
+}: {
+  value: FilterValue | undefined;
+  onChange(next: FilterValue | undefined): void;
+}) {
+  const isBool = typeof value === "boolean";
+  useEffect(() => {
+    if (!isBool) onChange(true);
+  }, [isBool, onChange]);
+  // Display the committed boolean; before the effect commits, show "true"
+  // (the value we are about to commit) so the control never appears blank.
+  const cur = isBool ? String(value) : "true";
+  return (
+    <select
+      className={styles.opSelect}
+      value={cur}
+      onChange={(e) => onChange(e.target.value === "true")}
+      aria-label="Value"
+    >
+      <option value="true">true</option>
+      <option value="false">false</option>
+    </select>
   );
 }
 
