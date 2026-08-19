@@ -193,9 +193,57 @@ describe("migrateLegacyFilterModel", () => {
     expect(migrateLegacyFilterModel(input)).toEqual(EMPTY_FILTER_MODEL);
   });
 
-  it("returns EMPTY_FILTER_MODEL for a row missing op", () => {
+  // ---------------------------------------------------------------------------
+  // Unset operator (op === null) — must NOT reset the record
+  // ---------------------------------------------------------------------------
+
+  it("rehydrates a row with op: null as an unset row, keeping column and value", () => {
     const input = {
-      rows: [{ enabled: true, column: { kind: "named", name: "a" } }],
+      rows: [
+        { id: "m1", enabled: true, column: { kind: "named", name: "status" }, op: null, value: "ok" },
+      ],
+      combinator: "AND",
+    };
+    const result = migrateLegacyFilterModel(input);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toEqual({
+      id: "m1",
+      enabled: true,
+      column: { kind: "named", name: "status" },
+      op: null,
+      value: "ok",
+    });
+  });
+
+  it("rehydrates a row missing op as an unset row rather than resetting the model", () => {
+    const input = {
+      rows: [{ id: "m2", enabled: true, column: { kind: "named", name: "a" }, value: "1" }],
+      combinator: "OR",
+    };
+    const result = migrateLegacyFilterModel(input);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]!.op).toBeNull();
+    expect(result.rows[0]!.value).toBe("1");
+    expect(result.combinator).toBe("OR");
+  });
+
+  it("keeps the other rows when one row is unset", () => {
+    const input = {
+      rows: [
+        { id: "m3", enabled: true, column: { kind: "named", name: "a" }, op: null, value: "1" },
+        { id: "m4", enabled: true, column: { kind: "named", name: "b" }, op: "=", value: "2" },
+      ],
+      combinator: "AND",
+    };
+    const result = migrateLegacyFilterModel(input);
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0]!.op).toBeNull();
+    expect(result.rows[1]!.op).toBe("=");
+  });
+
+  it("still returns EMPTY_FILTER_MODEL for a row missing column, even with an op", () => {
+    const input = {
+      rows: [{ enabled: true, op: "=", value: "1" }],
       combinator: "AND",
     };
     expect(migrateLegacyFilterModel(input)).toEqual(EMPTY_FILTER_MODEL);

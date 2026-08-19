@@ -337,3 +337,27 @@ describe("compilePrefilledSelect", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Unset operator rows
+// ---------------------------------------------------------------------------
+
+describe("compileWhere — unset operator", () => {
+  it("omits a row whose operator is unset", () => {
+    const m = model([
+      row({ column: { kind: "named", name: "status" }, op: null, value: "ok" }),
+      row({ column: { kind: "named", name: "country" }, op: "=", value: "CL" }),
+    ]);
+    expect(compileWhere(m, cols(["status", "text"], ["country", "text"])).body).toBe(
+      `"country" = 'CL'`,
+    );
+  });
+
+  it("returns an empty body when every row is unset", () => {
+    const m = model([
+      row({ column: { kind: "named", name: "status" }, op: null, value: "ok" }),
+      row({ column: { kind: "any_column" }, op: null, value: "x" }),
+    ]);
+    expect(compileWhere(m, cols(["status", "text"])).body).toBe("");
+  });
+});
