@@ -8,6 +8,7 @@ import { MultiStatementTabs } from "./MultiStatementTabs";
 import { ResultErrorBlock } from "./ResultErrorBlock";
 import type { RunState } from "./useQueryRun";
 import { sortResultRows, type SortOrder } from "@/platform/table/sortResultRows";
+import { TruncationBanner, type RowCapSource } from "@/platform/sql/TruncationBanner";
 import styles from "./ResultPanel.module.css";
 
 interface Props {
@@ -110,6 +111,8 @@ function ResultBody({ result }: { result: RunSqlResult }) {
       rows={result.rows}
       truncated={result.truncated}
       truncated_columns={result.truncated_columns}
+      rowCap={result.row_cap}
+      rowCapSource={result.row_cap_source}
     />
   );
 }
@@ -119,6 +122,9 @@ interface RowsResultViewProps {
   rows: CellValue[][];
   truncated: boolean;
   truncated_columns: string[];
+  /** Required when `truncated` may be true — omitted for the streaming-in-flight case. */
+  rowCap?: number;
+  rowCapSource?: RowCapSource;
   /** When set, the grid is still growing (streaming in flight). */
   loading?: { count: number };
 }
@@ -127,6 +133,8 @@ function RowsResultView({
   columns,
   rows,
   truncated,
+  rowCap,
+  rowCapSource,
   loading,
 }: RowsResultViewProps) {
   // Row-range selection state drives the inspector for this query result.
@@ -197,10 +205,8 @@ function RowsResultView({
           Loading… {loading.count.toLocaleString()} rows
         </div>
       ) : null}
-      {truncated ? (
-        <div className={styles.truncationBanner}>
-          Result truncated at 10,000 rows — add a LIMIT clause to refine.
-        </div>
+      {truncated && rowCap !== undefined && rowCapSource ? (
+        <TruncationBanner rowCap={rowCap} rowCapSource={rowCapSource} clause="LIMIT" />
       ) : null}
       <div className={styles.rowsBody}>
         <div className={styles.rowsGrid}>

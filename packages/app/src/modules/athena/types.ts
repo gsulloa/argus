@@ -1,4 +1,5 @@
 import type { AppError } from "@/platform/errors/AppError";
+import type { RowCapSource } from "@/platform/sql/TruncationBanner";
 
 // ---------------------------------------------------------------------------
 // Kind constant
@@ -83,6 +84,8 @@ export type AthenaRunSqlResult =
       query_ms: number;
       truncated: boolean;
       data_scanned_bytes: number;
+      row_cap: number;
+      row_cap_source: RowCapSource;
     }
   | {
       kind: "succeeded";

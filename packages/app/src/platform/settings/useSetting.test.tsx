@@ -34,3 +34,51 @@ describe("useSetting — key changes within the same hook instance", () => {
     expect(result.current[2]).toBe(true);
   });
 });
+
+describe("useSetting — live sync between simultaneously mounted hooks", () => {
+  it("pushes a write to another mounted hook on the same key", () => {
+    const a = renderHook(() => useSetting("sync.demo", 10000));
+    const b = renderHook(() => useSetting("sync.demo", 10000));
+
+    expect(a.result.current[0]).toBe(10000);
+    expect(b.result.current[0]).toBe(10000);
+
+    act(() => a.result.current[1](50000));
+
+    // Without the subscriber registry this stayed at 10000: the memory cache
+    // only helps a *newly* mounting hook, so a row-limit control in one query
+    // tab would keep showing a stale value after another tab wrote a new one.
+    expect(a.result.current[0]).toBe(50000);
+    expect(b.result.current[0]).toBe(50000);
+  });
+
+  it("does not cross-talk between different keys", () => {
+    const a = renderHook(() => useSetting("sync.one", 1));
+    const b = renderHook(() => useSetting("sync.two", 2));
+
+    act(() => a.result.current[1](99));
+
+    expect(a.result.current[0]).toBe(99);
+    expect(b.result.current[0]).toBe(2);
+  });
+
+  it("resolves the functional form against the latest cross-instance value", () => {
+    const a = renderHook(() => useSetting("sync.fn", 0));
+    const b = renderHook(() => useSetting("sync.fn", 0));
+
+    act(() => a.result.current[1](5));
+    act(() => b.result.current[1]((prev) => prev + 1));
+
+    expect(a.result.current[0]).toBe(6);
+    expect(b.result.current[0]).toBe(6);
+  });
+
+  it("stops receiving updates after unmount", () => {
+    const a = renderHook(() => useSetting("sync.unmount", 0));
+    const b = renderHook(() => useSetting("sync.unmount", 0));
+
+    b.unmount();
+    expect(() => act(() => a.result.current[1](7))).not.toThrow();
+    expect(a.result.current[0]).toBe(7);
+  });
+});

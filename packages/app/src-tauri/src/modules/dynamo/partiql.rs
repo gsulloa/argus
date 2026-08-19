@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use aws_sdk_dynamodb::types::ReturnConsumedCapacity;
@@ -17,6 +17,8 @@ use crate::modules::activity_log::{
 };
 use crate::modules::dynamo::client::DynamoClientRegistry;
 use crate::modules::dynamo::items::{sdk_scan_err, AttrValue};
+use crate::platform::row_cap::{self, RowCapSource};
+use crate::platform::DbState;
 
 // ---------------------------------------------------------------------------
 // §1.1  is_mutating_partiql — classify by first significant keyword
@@ -112,6 +114,8 @@ pub enum RunPartiQLResult {
         query_ms: u64,
         truncated: bool,
         consumed_capacity: Option<serde_json::Value>,
+        row_cap: u64,
+        row_cap_source: RowCapSource,
     },
     Succeeded {
         statement_type: String,
@@ -179,23 +183,65 @@ pub struct MultiPartiQLResult {
 // §1.3 + 1.4  Internal: run a single statement with NextToken pagination
 // ---------------------------------------------------------------------------
 
-/// Maximum items accumulated across all ExecuteStatement pages — mirrors Athena.
-const RESULT_ROW_CAP: usize = 10_000;
+/// Resolve the effective row cap from the configured `sql.rowCap` setting.
+///
+/// DynamoDB PartiQL has no `LIMIT` clause — its limit is an `ExecuteStatement`
+/// request parameter, not statement syntax — so there is no per-statement
+/// explicit-limit detection here (contrast `sql_limit::explicit_row_limit`
+/// used by the SQL-dialect engines). The configured setting is the only
+/// input, combined with [`row_cap::HARD_ROW_CAP`] via [`row_cap::effective_cap`].
+///
+/// The `DbState` mutex is locked only long enough to read the setting — the
+/// lock is dropped before returning, well before any `.await` in the caller.
+fn resolve_cap(app: &AppHandle) -> (u64, RowCapSource) {
+    let configured = {
+        let db = app.state::<DbState>();
+        let conn = db.0.lock().expect("db poisoned");
+        row_cap::configured_cap(&conn)
+    };
+    resolve_cap_from(configured)
+}
+
+/// Pure cap-resolution logic factored out of [`resolve_cap`] so it is
+/// testable without an `AppHandle`.
+fn resolve_cap_from(configured: u64) -> (u64, RowCapSource) {
+    row_cap::effective_cap(configured, None, row_cap::HARD_ROW_CAP)
+}
+
+/// Apply the row-cap truncation rule to an already-collected (budget-many)
+/// item list: trims down to `cap` and reports whether trimming was needed.
+/// Extracted from [`run_partiql_statement`]'s post-loop step so it is
+/// testable without an AWS client — pagination accumulates up to
+/// `row_cap::fetch_budget(cap)` items via the loop above, and this function
+/// is what turns that into the "at most `cap`, `truncated = accumulated >
+/// cap`" contract.
+fn truncate_to_cap<T>(items: &mut Vec<T>, cap: u64) -> bool {
+    let truncated = items.len() as u64 > cap;
+    if truncated {
+        items.truncate(cap as usize);
+    }
+    truncated
+}
 
 /// Run a single PartiQL statement via `ExecuteStatement`, paging through
-/// `NextToken` up to `RESULT_ROW_CAP` items.
+/// `NextToken` up to `row_cap::fetch_budget(cap)` items.
 ///
 /// The read-only gate MUST be enforced by the caller before invoking this.
 async fn run_partiql_statement(
     client: &aws_sdk_dynamodb::Client,
     statement: &str,
+    cap: u64,
+    cap_source: RowCapSource,
 ) -> AppResult<RunPartiQLResult> {
     let started = Instant::now();
     let mutating = is_mutating_partiql(statement);
 
     let mut items: Vec<HashMap<String, AttrValue>> = Vec::new();
-    let mut truncated = false;
+    let mut budget_reached = false;
     let mut next_token: Option<String> = None;
+    // One more than the effective cap — the extra item lets us tell "exactly
+    // at the cap" apart from "truncated" without another round trip.
+    let budget = row_cap::fetch_budget(cap);
 
     // Aggregate consumed capacity (sum CapacityUnits across pages).
     let mut total_capacity: Option<f64> = None;
@@ -222,8 +268,8 @@ async fn run_partiql_statement(
 
         // Collect items.
         for raw_item in resp.items() {
-            if items.len() >= RESULT_ROW_CAP {
-                truncated = true;
+            if items.len() as u64 >= budget {
+                budget_reached = true;
                 break;
             }
             let mapped: HashMap<String, AttrValue> = raw_item
@@ -233,7 +279,7 @@ async fn run_partiql_statement(
             items.push(mapped);
         }
 
-        if truncated {
+        if budget_reached {
             break;
         }
 
@@ -257,6 +303,7 @@ async fn run_partiql_statement(
             consumed_capacity,
         })
     } else {
+        let truncated = truncate_to_cap(&mut items, cap);
         let count = items.len();
         Ok(RunPartiQLResult::Rows {
             items,
@@ -264,6 +311,8 @@ async fn run_partiql_statement(
             query_ms,
             truncated,
             consumed_capacity,
+            row_cap: cap,
+            row_cap_source: cap_source,
         })
     }
 }
@@ -330,7 +379,8 @@ pub async fn dynamo_run_partiql(
         }
     };
 
-    let result = run_partiql_statement(&client, &req.statement).await;
+    let (cap, cap_source) = resolve_cap(&app);
+    let result = run_partiql_statement(&client, &req.statement, cap, cap_source).await;
     let duration_ms = started.elapsed().as_millis() as u64;
 
     let builder = ActivityLogEntryBuilder::new(ActivityKind::RunSql, origin, duration_ms)
@@ -431,7 +481,8 @@ pub async fn dynamo_run_partiql_many(
             continue;
         }
 
-        match run_partiql_statement(&client, stmt).await {
+        let (cap, cap_source) = resolve_cap(&app);
+        match run_partiql_statement(&client, stmt, cap, cap_source).await {
             Ok(result) => {
                 outcomes.push(StatementOutcome::Ok {
                     index: idx,
@@ -592,6 +643,8 @@ mod tests {
             query_ms: 42,
             truncated: false,
             consumed_capacity: None,
+            row_cap: 10_000,
+            row_cap_source: RowCapSource::Setting,
         };
         let v = serde_json::to_value(&result).unwrap();
         assert_eq!(v["kind"], "rows");
@@ -599,6 +652,8 @@ mod tests {
         assert_eq!(v["query_ms"], 42);
         assert_eq!(v["truncated"], false);
         assert!(v["consumed_capacity"].is_null());
+        assert_eq!(v["row_cap"], 10_000);
+        assert_eq!(v["row_cap_source"], "setting");
     }
 
     #[test]
@@ -626,6 +681,8 @@ mod tests {
                 query_ms: 5,
                 truncated: false,
                 consumed_capacity: None,
+                row_cap: 10_000,
+                row_cap_source: RowCapSource::Setting,
             },
         };
         let v = serde_json::to_value(&outcome).unwrap();
@@ -659,5 +716,68 @@ mod tests {
         let v = serde_json::to_value(&outcome).unwrap();
         assert_eq!(v["outcome"], "skipped");
         assert_eq!(v["index"], 2);
+    }
+
+    // ---- cap resolution: no statement-limit detection for PartiQL, so the
+    // configured setting is always what's wired through (barring the
+    // hard-ceiling edge case at the max, exercised in `platform::row_cap`). ----
+
+    #[test]
+    fn cap_resolution_returns_setting_and_configured_value() {
+        assert_eq!(resolve_cap_from(50_000), (50_000, RowCapSource::Setting));
+    }
+
+    #[test]
+    fn cap_resolution_default_value() {
+        assert_eq!(resolve_cap_from(10_000), (10_000, RowCapSource::Setting));
+    }
+
+    // ---- accumulation → truncated semantics (accumulate to fetch_budget,
+    // return at most cap, truncated = accumulated > cap) ----
+
+    #[test]
+    fn truncate_to_cap_exactly_at_cap_is_not_truncated() {
+        let mut items: Vec<i32> = (0..10_000).collect();
+        let truncated = truncate_to_cap(&mut items, 10_000);
+        assert!(!truncated, "landing exactly on the cap must not truncate");
+        assert_eq!(items.len(), 10_000);
+    }
+
+    #[test]
+    fn truncate_to_cap_one_over_cap_is_truncated() {
+        let mut items: Vec<i32> = (0..10_001).collect();
+        let truncated = truncate_to_cap(&mut items, 10_000);
+        assert!(truncated);
+        assert_eq!(
+            items.len(),
+            10_000,
+            "returned items must not exceed the cap"
+        );
+    }
+
+    #[test]
+    fn truncate_to_cap_far_over_cap_is_truncated_and_bounded() {
+        let mut items: Vec<i32> = (0..50_000).collect();
+        let truncated = truncate_to_cap(&mut items, 10_000);
+        assert!(truncated);
+        assert_eq!(items.len(), 10_000);
+    }
+
+    // ---- serialization ----
+
+    #[test]
+    fn run_partiql_result_serializes_row_cap_fields() {
+        let result = RunPartiQLResult::Rows {
+            items: vec![],
+            count: 0,
+            query_ms: 5,
+            truncated: false,
+            consumed_capacity: None,
+            row_cap: 50_000,
+            row_cap_source: RowCapSource::Setting,
+        };
+        let v = serde_json::to_value(&result).unwrap();
+        assert_eq!(v["row_cap"], 50_000);
+        assert_eq!(v["row_cap_source"], "setting");
     }
 }

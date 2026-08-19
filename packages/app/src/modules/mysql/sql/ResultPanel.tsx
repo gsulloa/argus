@@ -20,6 +20,7 @@ import { DataGrid } from "../data/DataGrid";
 import { useEditBuffer } from "../data/useEditBuffer";
 import type { CellValue } from "../data/types";
 import { sortResultRows } from "@/platform/table/sortResultRows";
+import { TruncationBanner } from "@/platform/sql/TruncationBanner";
 
 // Export menu (§20.7)
 import { ExportMenu } from "./export/ExportMenu";
@@ -199,18 +200,11 @@ function RowsResultView({
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {result.truncated ? (
-        <div
-          style={{
-            padding: "3px 10px",
-            fontSize: 11,
-            color: "var(--text-muted)",
-            background: "rgba(245,158,11,0.1)",
-            borderBottom: "1px solid var(--border)",
-            flexShrink: 0,
-          }}
-        >
-          Result truncated — add a LIMIT clause to refine.
-        </div>
+        <TruncationBanner
+          rowCap={result.row_cap}
+          rowCapSource={result.row_cap_source}
+          clause="LIMIT"
+        />
       ) : null}
       <div
         style={{

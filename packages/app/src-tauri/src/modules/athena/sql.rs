@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -16,13 +16,13 @@ use crate::modules::activity_log::{
 use crate::modules::athena::errors::sdk_err_to_app;
 use crate::modules::athena::pool::AthenaClientRegistry;
 use crate::modules::mysql::sql::is_mutating_sql;
+use crate::platform::row_cap::{self, RowCapSource};
+use crate::platform::sql_limit::{self, Dialect};
+use crate::platform::DbState;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/// Maximum rows accumulated across all GetQueryResults pages.
-const RESULT_ROW_CAP: usize = 10_000;
 
 /// Total polling timeout per query.
 const QUERY_POLL_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
@@ -57,6 +57,8 @@ pub enum RunSqlResult {
         query_ms: u64,
         truncated: bool,
         data_scanned_bytes: i64,
+        row_cap: u64,
+        row_cap_source: RowCapSource,
     },
     Succeeded {
         statement_type: String,
@@ -109,6 +111,34 @@ pub enum StatementOutcome {
 #[derive(Debug, Serialize)]
 pub struct MultiSqlResult {
     pub outcomes: Vec<StatementOutcome>,
+}
+
+// ---------------------------------------------------------------------------
+// Row cap resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve the effective row cap for a single statement: reads the
+/// configured `sql.rowCap` setting from the app's sqlite-backed `DbState`,
+/// then combines it with whatever explicit limit `sql` carries and
+/// [`row_cap::HARD_ROW_CAP`] via [`row_cap::effective_cap`].
+///
+/// The `DbState` mutex is locked only long enough to read the setting — the
+/// lock is dropped before returning, well before any `.await` in the caller.
+fn resolve_cap(app: &AppHandle, sql: &str) -> (u64, RowCapSource) {
+    let configured = {
+        let db = app.state::<DbState>();
+        let conn = db.0.lock().expect("db poisoned");
+        row_cap::configured_cap(&conn)
+    };
+    resolve_cap_from(configured, sql)
+}
+
+/// Pure cap-resolution logic factored out of [`resolve_cap`] so it is
+/// testable without an `AppHandle`: combines an already-read `configured`
+/// cap with whatever explicit limit `sql` carries under Presto/Athena syntax.
+fn resolve_cap_from(configured: u64, sql: &str) -> (u64, RowCapSource) {
+    let explicit = sql_limit::explicit_row_limit(sql, Dialect::Presto);
+    row_cap::effective_cap(configured, explicit, row_cap::HARD_ROW_CAP)
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +197,9 @@ async fn run_athena_query(
     workgroup: &str,
     output_location: Option<&str>,
     sql: &str,
+    row_cap: (u64, RowCapSource),
 ) -> AppResult<RunSqlResult> {
+    let (cap, cap_source) = row_cap;
     let poll_start = Instant::now();
 
     // --- StartQueryExecution ---
@@ -308,7 +340,10 @@ async fn run_athena_query(
     let col_types: Vec<String> = col_infos.iter().map(|c| c.ty.clone()).collect();
 
     let mut all_rows: Vec<Vec<JsonValue>> = Vec::new();
-    let mut truncated = false;
+    let mut budget_reached = false;
+    // One more than the effective cap — the extra row lets us tell "exactly
+    // at the cap" apart from "truncated" without another round trip.
+    let budget = row_cap::fetch_budget(cap) as usize;
 
     // Process first page rows.
     process_page_rows(
@@ -316,13 +351,14 @@ async fn run_athena_query(
         &col_names,
         &col_types,
         &mut all_rows,
-        &mut truncated,
+        &mut budget_reached,
         true, // first page: may have header row
+        budget,
     );
 
-    // Fetch subsequent pages if needed and not yet at cap.
+    // Fetch subsequent pages if needed and not yet at budget.
     let mut next_token: Option<String> = first_page.next_token().map(str::to_string);
-    while !truncated && next_token.is_some() {
+    while !budget_reached && next_token.is_some() {
         let page = athena
             .get_query_results()
             .query_execution_id(&query_execution_id)
@@ -337,11 +373,17 @@ async fn run_athena_query(
             &col_names,
             &col_types,
             &mut all_rows,
-            &mut truncated,
+            &mut budget_reached,
             false,
+            budget,
         );
 
         next_token = page.next_token().map(str::to_string);
+    }
+
+    let truncated = all_rows.len() as u64 > cap;
+    if truncated {
+        all_rows.truncate(cap as usize);
     }
 
     Ok(RunSqlResult::Rows {
@@ -350,18 +392,25 @@ async fn run_athena_query(
         query_ms,
         truncated,
         data_scanned_bytes,
+        row_cap: cap,
+        row_cap_source: cap_source,
     })
 }
 
 /// Process a page of `Row` values into `all_rows`, detecting and dropping the
-/// header row on the first page.
+/// header row on the first page. Stops accumulating once `budget` rows have
+/// been collected, setting `budget_reached` — the caller derives the real
+/// `truncated` flag (and trims back down to the effective cap) once all
+/// pages have been visited, since `budget` is deliberately one row past the
+/// cap (see [`row_cap::fetch_budget`]).
 fn process_page_rows(
     rows: &[aws_sdk_athena::types::Row],
     col_names: &[String],
     col_types: &[String],
     all_rows: &mut Vec<Vec<JsonValue>>,
-    truncated: &mut bool,
+    budget_reached: &mut bool,
     is_first_page: bool,
+    budget: usize,
 ) {
     let mut skip_first = false;
 
@@ -382,8 +431,8 @@ fn process_page_rows(
         if is_first_page && skip_first && i == 0 {
             continue;
         }
-        if all_rows.len() >= RESULT_ROW_CAP {
-            *truncated = true;
+        if all_rows.len() >= budget {
+            *budget_reached = true;
             return;
         }
         let cells: Vec<JsonValue> = row
@@ -427,6 +476,8 @@ pub async fn athena_run_sql(
         return Err(err);
     }
 
+    let row_cap = resolve_cap(&app, &sql);
+
     let result = run_athena_query(
         &app,
         id,
@@ -434,6 +485,7 @@ pub async fn athena_run_sql(
         &acquired.workgroup,
         acquired.output_location.as_deref(),
         &sql,
+        row_cap,
     )
     .await;
 
@@ -518,6 +570,8 @@ pub async fn athena_run_sql_many(
             continue;
         }
 
+        let row_cap = resolve_cap(&app, stmt);
+
         let stmt_result = run_athena_query(
             &app,
             id,
@@ -525,6 +579,7 @@ pub async fn athena_run_sql_many(
             &acquired.workgroup,
             acquired.output_location.as_deref(),
             stmt,
+            row_cap,
         )
         .await;
 
@@ -705,22 +760,23 @@ mod tests {
         ];
 
         let mut all_rows: Vec<Vec<JsonValue>> = Vec::new();
-        let mut truncated = false;
+        let mut budget_reached = false;
 
         process_page_rows(
             &rows,
             &col_names,
             &col_types,
             &mut all_rows,
-            &mut truncated,
+            &mut budget_reached,
             true,
+            usize::MAX,
         );
 
         assert_eq!(all_rows.len(), 2, "header should be dropped");
         assert_eq!(all_rows[0][0], JsonValue::Number(1.into()));
         assert_eq!(all_rows[0][1], JsonValue::String("Alice".into()));
         assert_eq!(all_rows[1][0], JsonValue::Number(2.into()));
-        assert!(!truncated);
+        assert!(!budget_reached);
     }
 
     #[test]
@@ -732,15 +788,16 @@ mod tests {
         let rows = vec![make_row(&["id"]), make_row(&["3"])];
 
         let mut all_rows: Vec<Vec<JsonValue>> = Vec::new();
-        let mut truncated = false;
+        let mut budget_reached = false;
 
         process_page_rows(
             &rows,
             &col_names,
             &col_types,
             &mut all_rows,
-            &mut truncated,
+            &mut budget_reached,
             false,
+            usize::MAX,
         );
 
         // Both rows should be kept since it's not the first page.
@@ -748,13 +805,13 @@ mod tests {
     }
 
     #[test]
-    fn result_row_cap_sets_truncated_flag() {
+    fn process_page_rows_stops_at_budget() {
+        // Budget already reached before this page is processed.
         let col_names = vec!["x".to_string()];
         let col_types = vec!["integer".to_string()];
 
-        // Simulate already-at-cap.
-        let mut all_rows: Vec<Vec<JsonValue>> = vec![vec![]; RESULT_ROW_CAP];
-        let mut truncated = false;
+        let mut all_rows: Vec<Vec<JsonValue>> = vec![vec![]; 10_001];
+        let mut budget_reached = false;
 
         let rows = vec![make_row(&["1"])];
         process_page_rows(
@@ -762,12 +819,13 @@ mod tests {
             &col_names,
             &col_types,
             &mut all_rows,
-            &mut truncated,
+            &mut budget_reached,
             false,
+            10_001,
         );
 
-        assert!(truncated);
-        assert_eq!(all_rows.len(), RESULT_ROW_CAP);
+        assert!(budget_reached);
+        assert_eq!(all_rows.len(), 10_001, "no extra row past budget accepted");
     }
 
     #[test]
@@ -779,17 +837,134 @@ mod tests {
         let rows = vec![make_row(&["100", "something"]), make_row(&["200", "other"])];
 
         let mut all_rows: Vec<Vec<JsonValue>> = Vec::new();
-        let mut truncated = false;
+        let mut budget_reached = false;
 
         process_page_rows(
             &rows,
             &col_names,
             &col_types,
             &mut all_rows,
-            &mut truncated,
+            &mut budget_reached,
             true,
+            usize::MAX,
         );
 
         assert_eq!(all_rows.len(), 2, "no row should be dropped");
+    }
+
+    // ---- accumulation → truncated semantics (accumulate to fetch_budget,
+    // return at most cap, truncated = accumulated > cap) ----
+
+    /// Simulates the accumulate-then-trim logic in `run_athena_query`
+    /// directly against `process_page_rows`, without any AWS calls: build
+    /// `total` synthetic rows across pages of `page_size`, honouring
+    /// `row_cap::fetch_budget(cap)`, then apply the same post-loop truncation
+    /// rule the real function does.
+    fn simulate_pagination(total: usize, cap: u64, page_size: usize) -> (usize, bool) {
+        let col_names = vec!["x".to_string()];
+        let col_types = vec!["integer".to_string()];
+        let budget = row_cap::fetch_budget(cap) as usize;
+
+        let mut all_rows: Vec<Vec<JsonValue>> = Vec::new();
+        let mut budget_reached = false;
+        let mut remaining = total;
+        let mut is_first_page = true;
+
+        while !budget_reached && remaining > 0 {
+            let this_page = remaining.min(page_size);
+            let rows: Vec<aws_sdk_athena::types::Row> =
+                (0..this_page).map(|_| make_row(&["1"])).collect();
+            process_page_rows(
+                &rows,
+                &col_names,
+                &col_types,
+                &mut all_rows,
+                &mut budget_reached,
+                is_first_page,
+                budget,
+            );
+            is_first_page = false;
+            remaining -= this_page;
+        }
+
+        let truncated = all_rows.len() as u64 > cap;
+        if truncated {
+            all_rows.truncate(cap as usize);
+        }
+        (all_rows.len(), truncated)
+    }
+
+    #[test]
+    fn accumulation_exactly_at_cap_is_not_truncated() {
+        let (len, truncated) = simulate_pagination(10_000, 10_000, 1_000);
+        assert_eq!(len, 10_000);
+        assert!(!truncated, "landing exactly on the cap must not truncate");
+    }
+
+    #[test]
+    fn accumulation_one_over_cap_is_truncated() {
+        let (len, truncated) = simulate_pagination(10_001, 10_000, 1_000);
+        assert_eq!(len, 10_000, "returned rows must not exceed the cap");
+        assert!(truncated);
+    }
+
+    #[test]
+    fn accumulation_far_over_cap_is_truncated_and_bounded() {
+        let (len, truncated) = simulate_pagination(50_000, 10_000, 1_000);
+        assert_eq!(len, 10_000);
+        assert!(truncated);
+    }
+
+    // ---- cap resolution ----
+
+    #[test]
+    fn cap_resolution_unbounded_query_uses_configured() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM big_table"),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_explicit_limit_raises_cap() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM events LIMIT 30000"),
+            (30_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_limit_all_does_not_raise_cap() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM events LIMIT ALL"),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_beyond_hard_ceiling_clamps() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM events LIMIT 5000000"),
+            (row_cap::HARD_ROW_CAP, RowCapSource::HardCeiling)
+        );
+    }
+
+    // ---- serialization ----
+
+    #[test]
+    fn run_sql_result_serializes_row_cap_fields() {
+        let r = RunSqlResult::Rows {
+            columns: vec![],
+            rows: vec![],
+            query_ms: 5,
+            truncated: false,
+            data_scanned_bytes: 0,
+            row_cap: 10_000,
+            row_cap_source: RowCapSource::Setting,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v.get("kind").unwrap(), "rows");
+        assert_eq!(v.get("row_cap").unwrap(), 10_000);
+        assert_eq!(v.get("row_cap_source").unwrap(), "setting");
     }
 }

@@ -79,17 +79,6 @@
   min-height: 0;
 }
 
-.truncationBanner {
-  display: flex;
-  align-items: center;
-  padding: 6px 12px;
-  background: color-mix(in srgb, var(--warning) 10%, transparent);
-  border-bottom: 1px solid var(--border);
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text);
-}
-
 .loadingBanner {
   display: flex;
   align-items: center;

@@ -9,6 +9,7 @@ import type { Tab } from "@/platform/shell/tabs/types";
 import { useTabs } from "@/platform/shell/tabs/TabsContext";
 import { getSetting, setSetting } from "@/platform/settings/api";
 import { useToast } from "@/platform/toast";
+import { RowCapSelector } from "@/platform/sql/RowCapSelector";
 import { useActiveConnections } from "../useActiveConnections";
 import { globalSchemaCache } from "../schema/globalSchemaCache";
 import { QueryEditor, type QueryEditorHandle } from "./QueryEditor";
@@ -692,6 +693,7 @@ function QueryTab({ tabId, payload }: InnerProps) {
             <span className={styles.kbd}>{FORMAT_HINT}</span>
           </button>
           <span className={styles.toolbarDivider} aria-hidden="true" />
+          <RowCapSelector />
           {runner.state.status === "running" || runner.state.status === "streaming" ? (
             <button
               type="button"

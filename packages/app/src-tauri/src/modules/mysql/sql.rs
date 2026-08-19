@@ -27,6 +27,8 @@ use crate::modules::mysql::params::MysqlParams;
 use crate::modules::mysql::pool::{load_connection_input, MysqlPoolRegistry};
 use crate::modules::query_cancel::{CancelAction, RunningQueryRegistry};
 use crate::modules::query_history::{self, HistoryOrigin, HistoryStatus, NewEntry};
+use crate::platform::row_cap::{self, RowCapSource};
+use crate::platform::sql_limit::{self, Dialect};
 use crate::platform::DbState;
 
 // ---------------------------------------------------------------------------
@@ -35,8 +37,6 @@ use crate::platform::DbState;
 
 /// Hard cap on a single `mysql_run_sql` statement (generous — user-driven).
 const RUN_SQL_TIMEOUT: Duration = Duration::from_secs(15);
-/// Maximum rows returned per statement.
-const RESULT_ROW_CAP: usize = 10_000;
 /// Per-cell inline truncation threshold.
 const INLINE_TRUNCATE_BYTES: usize = 1_048_576;
 /// Total wall-clock budget for `mysql_run_sql_many`.
@@ -55,6 +55,8 @@ pub enum RunSqlResult {
         truncated_columns: Vec<String>,
         truncated: bool,
         query_ms: u64,
+        row_cap: u64,
+        row_cap_source: RowCapSource,
     },
     Affected {
         command_tag: String,
@@ -568,6 +570,34 @@ pub fn split_statements(input: &str) -> Result<Vec<String>, AppError> {
 }
 
 // ---------------------------------------------------------------------------
+// Row-cap resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve the effective row cap for a single statement: reads the
+/// configured `sql.rowCap` setting from the app's sqlite-backed `DbState`,
+/// then combines it with whatever explicit limit `sql` carries and
+/// [`row_cap::HARD_ROW_CAP`] via [`row_cap::effective_cap`].
+///
+/// The `DbState` mutex is locked only long enough to read the setting — the
+/// lock is dropped before returning, well before any `.await` in the caller.
+fn resolve_cap(app: &AppHandle, sql: &str) -> (u64, RowCapSource) {
+    let configured = {
+        let db = app.state::<DbState>();
+        let conn = db.0.lock().expect("db poisoned");
+        row_cap::configured_cap(&conn)
+    };
+    resolve_cap_from(configured, sql)
+}
+
+/// Pure cap-resolution logic factored out of [`resolve_cap`] so it is
+/// testable without an `AppHandle`: combines an already-read `configured`
+/// cap with whatever explicit limit `sql` carries under MySQL syntax.
+fn resolve_cap_from(configured: u64, sql: &str) -> (u64, RowCapSource) {
+    let explicit = sql_limit::explicit_row_limit(sql, Dialect::MySql);
+    row_cap::effective_cap(configured, explicit, row_cap::HARD_ROW_CAP)
+}
+
+// ---------------------------------------------------------------------------
 // §11.1 — mysql_run_sql (internal core, used by both commands)
 // ---------------------------------------------------------------------------
 
@@ -650,6 +680,8 @@ async fn run_single_sql(
     sql: &str,
     read_only: bool,
     cancel_ctx: Option<(&RunningQueryRegistry, Uuid, &MysqlCancel)>,
+    cap: u64,
+    cap_source: RowCapSource,
 ) -> AppResult<RunSqlResult> {
     let started = Instant::now();
     let mutating = is_mutating_sql(sql);
@@ -739,22 +771,28 @@ async fn run_single_sql(
             bind_kinds = kinds;
         }
 
-        // Cap rows.
-        let (rows_to_use, truncated) = if rows.len() > RESULT_ROW_CAP {
-            (&rows[..RESULT_ROW_CAP], true)
-        } else {
-            (&rows[..], false)
-        };
+        // Cap rows. `rows` is already fully materialized by `fetch_all`, so
+        // the budget is applied as a slice boundary rather than a fetch
+        // limit: `fetch_budget(cap)` is one more than `cap`, so a result
+        // landing exactly on the cap (`fetched == cap`) is reported complete,
+        // while `cap + 1` or more is reported truncated with exactly `cap`
+        // rows returned.
+        let budget = row_cap::fetch_budget(cap) as usize;
+        let fetched = rows.len().min(budget);
+        let truncated = fetched as u64 > cap;
+        let rows_to_use = &rows[..fetched.min(cap as usize)];
 
-        let (result_rows, truncated_columns, any_truncated) =
+        let (result_rows, truncated_columns, _any_truncated) =
             decode_mysql_rows(rows_to_use, &col_infos, &bind_kinds);
 
         Ok(RunSqlResult::Rows {
             columns: col_infos,
             rows: result_rows,
             truncated_columns,
-            truncated: truncated || any_truncated,
+            truncated,
             query_ms,
+            row_cap: cap,
+            row_cap_source: cap_source,
         })
     } else {
         // Mutating query — execute path.
@@ -927,6 +965,8 @@ pub async fn mysql_run_sql(
             }
         };
 
+    let (cap, cap_source) = resolve_cap(&app, &sql);
+
     let result = match &cancel_info {
         Some((token, cancel)) => {
             run_single_sql(
@@ -934,10 +974,12 @@ pub async fn mysql_run_sql(
                 &sql,
                 read_only,
                 Some((&cancel_registry, *token, cancel)),
+                cap,
+                cap_source,
             )
             .await
         }
-        None => run_single_sql(&pool, &sql, read_only, None).await,
+        None => run_single_sql(&pool, &sql, read_only, None, cap, cap_source).await,
     };
     let duration_ms = started.elapsed().as_millis() as u64;
 
@@ -1089,6 +1131,8 @@ pub async fn mysql_run_sql_many(
         let remaining = MANY_TOTAL_TIMEOUT.saturating_sub(elapsed);
         let per_stmt_timeout = remaining.min(RUN_SQL_TIMEOUT);
 
+        let (cap, cap_source) = resolve_cap(&app, stmt);
+
         let stmt_result = tokio::time::timeout(
             per_stmt_timeout,
             run_single_sql(
@@ -1098,6 +1142,8 @@ pub async fn mysql_run_sql_many(
                 cancel_info
                     .as_ref()
                     .map(|(token, cancel)| (&*cancel_registry, *token, cancel)),
+                cap,
+                cap_source,
             ),
         )
         .await;
@@ -1647,5 +1693,70 @@ mod tests {
             split_statements("CREATE TRIGGER t BEFORE INSERT ON x FOR EACH ROW SET NEW.c = 1");
         // One statement — no rejection.
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Row-cap resolution
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cap_resolution_unbounded_query_uses_configured() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM big_table"),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_explicit_limit_raises_cap() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM big_table LIMIT 30000"),
+            (30_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_two_arg_limit_uses_count() {
+        // `LIMIT offset, count` resolves to `count` (250), not `offset`
+        // (1000) or the whole clause. A configured cap below 250 makes the
+        // extracted count observable as the value that raises the effective
+        // cap.
+        assert_eq!(
+            resolve_cap_from(100, "SELECT * FROM big_table LIMIT 1000, 250"),
+            (250, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_explicit_limit_never_lowers_cap() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM t LIMIT 5"),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_beyond_hard_ceiling_clamps() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM t LIMIT 5000000"),
+            (row_cap::HARD_ROW_CAP, RowCapSource::HardCeiling)
+        );
+    }
+
+    #[test]
+    fn run_sql_result_serializes_row_cap_fields() {
+        let r = RunSqlResult::Rows {
+            columns: vec![],
+            rows: vec![],
+            truncated_columns: vec![],
+            truncated: false,
+            query_ms: 5,
+            row_cap: 10_000,
+            row_cap_source: RowCapSource::Setting,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v.get("kind").unwrap(), "rows");
+        assert_eq!(v.get("row_cap").unwrap(), 10_000);
+        assert_eq!(v.get("row_cap_source").unwrap(), "setting");
     }
 }

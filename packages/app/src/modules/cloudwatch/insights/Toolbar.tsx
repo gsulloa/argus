@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { cloudwatchApi } from "../api";
 import type { AiReadiness } from "@/modules/ai/useAiReadiness";
 import type { LogGroupItem, RelativePreset, TimeRange } from "../types";
+import { RowCapSelector } from "@/platform/sql/RowCapSelector";
 import styles from "@/modules/mysql/sql/QueryTab.module.css";
 
 // ---------------------------------------------------------------------------
@@ -479,6 +480,11 @@ export function InsightsToolbar({
           aria-hidden="true"
         />
       </button>
+
+      {/* Divider */}
+      <span className={styles.toolbarDivider} aria-hidden="true" />
+
+      <RowCapSelector />
 
       {/* Divider */}
       <span className={styles.toolbarDivider} aria-hidden="true" />

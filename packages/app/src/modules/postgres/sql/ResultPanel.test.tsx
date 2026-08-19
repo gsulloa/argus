@@ -54,7 +54,11 @@ Object.defineProperty(globalThis, "navigator", {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRunState(): RunState {
+function makeRunState(overrides?: {
+  truncated?: boolean;
+  row_cap?: number;
+  row_cap_source?: "setting" | "hard_ceiling" | "engine";
+}): RunState {
   return {
     status: "done",
     mode: "single",
@@ -74,8 +78,10 @@ function makeRunState(): RunState {
         [4, "delta"],
       ],
       truncated_columns: [],
-      truncated: false,
+      truncated: overrides?.truncated ?? false,
       query_ms: 10,
+      row_cap: overrides?.row_cap ?? 10000,
+      row_cap_source: overrides?.row_cap_source ?? "setting",
     },
   };
 }
@@ -181,5 +187,56 @@ describe("ResultPanel inspector driven by gutter selection", () => {
     await waitFor(() => {
       expect(inspectorArea!.textContent).not.toContain("alpha");
     });
+  });
+});
+
+describe("ResultPanel truncation banner (configurable-result-row-cap)", () => {
+  it("names the response's row_cap, not a hardcoded 10,000", () => {
+    render(
+      <ResultPanel
+        state={makeRunState({ truncated: true, row_cap: 50000, row_cap_source: "setting" })}
+        onShowInEditor={() => {}}
+      />,
+    );
+
+    const banner = screen.getByRole("status");
+    expect(banner.textContent).toContain("50,000");
+    expect(banner.textContent).not.toContain("10,000");
+  });
+
+  it("renders no banner when truncated is false", () => {
+    render(<ResultPanel state={makeRunState({ truncated: false })} onShowInEditor={() => {}} />);
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("renders the banner for a streaming run that finished truncated", () => {
+    // A streaming run's terminal `done` event lands the runner in the same
+    // `status: "done"` / `mode: "single"` shape as a non-streaming run — the
+    // regression this covers was ResultPanel's streaming branch hardcoding
+    // `truncated={false}`, which this state (post-terminal-event) does not hit.
+    render(
+      <ResultPanel
+        state={makeRunState({ truncated: true, row_cap: 10000, row_cap_source: "setting" })}
+        onShowInEditor={() => {}}
+      />,
+    );
+
+    const banner = screen.getByRole("status");
+    expect(banner.textContent).toContain("10,000");
+    expect(screen.getByRole("button", { name: /raise limit/i })).toBeInTheDocument();
+  });
+
+  it("renders the maximum-result-size copy and no Raise-limit control for hard_ceiling", () => {
+    render(
+      <ResultPanel
+        state={makeRunState({ truncated: true, row_cap: 1000000, row_cap_source: "hard_ceiling" })}
+        onShowInEditor={() => {}}
+      />,
+    );
+
+    const banner = screen.getByRole("status");
+    expect(banner.textContent).toContain("maximum result size");
+    expect(screen.queryByRole("button", { name: /raise limit/i })).not.toBeInTheDocument();
   });
 });
