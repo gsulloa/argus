@@ -2,10 +2,10 @@ import {
   isCompleteRow,
   trimLeadingWhere,
   type ColumnRef,
+  type CompleteFilterRow,
   type Condition,
   type DataColumn,
   type FilterModel,
-  type FilterRow,
   type FilterScalar,
   type FilterValue,
   type Operator,
@@ -31,14 +31,16 @@ export function compileWhere(
   model: FilterModel,
   columns: DataColumn[] = [],
 ): CompileResult {
-  const rows = model.rows.filter((r) => r.enabled && isCompleteRow(r));
+  // Split so the `isCompleteRow` type predicate narrows `op` to `Operator` —
+  // rows with an unset operator are dropped here, as any incomplete row is.
+  const rows = model.rows.filter((r) => r.enabled).filter(isCompleteRow);
   if (rows.length === 0) return { body: "" };
   const parts = rows.map((r) => compileRow(r, columns));
   const sep = model.combinator === "OR" ? " OR " : " AND ";
   return { body: parts.join(sep) };
 }
 
-function compileRow(row: FilterRow, columns: DataColumn[]): string {
+function compileRow(row: CompleteFilterRow, columns: DataColumn[]): string {
   if (row.column.kind === "raw") {
     const expr = typeof row.value === "string" ? row.value.trim() : "";
     return `(${expr})`;

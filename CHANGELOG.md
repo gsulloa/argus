@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Truncated Athena exports now receive the `_truncated` filename suffix, matching every other engine.
 - Postgres single-statement runs stream rows instead of materialising the entire server-side result set before trimming it, so peak memory is bounded by the row limit rather than by the query's true size.
 
+## [0.8.6] - 2026-08-19
+
+### Changed
+- The Postgres filter bar's `Operator: Unset` no longer deletes your filter rows. It now clears only the operator on each row, keeping the columns and values you typed — rows with no operator stop filtering but stay on screen, ready for a new operator. Deleting every row is now its own `Clear all` button in the footer ([#278](https://github.com/gsulloa/argus/issues/278))
+
+### Fixed
+- stop column-resize drag from sorting the column ([#282](https://github.com/gsulloa/argus/pull/282))
+
 ## [0.8.5] - 2026-07-21
 
 ### Added

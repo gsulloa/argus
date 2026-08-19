@@ -280,3 +280,107 @@ describe("modelToPayload — RAW rows", () => {
     expect(payload.filter_tree).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Unset operator (op === null)
+// ---------------------------------------------------------------------------
+
+describe("isCompleteRow — unset operator", () => {
+  it("returns false for a named-column row with a value but no operator", () => {
+    const r: FilterRow = {
+      id: "unset1",
+      enabled: true,
+      column: { kind: "named", name: "status" },
+      op: null,
+      value: "ok",
+    };
+    expect(isCompleteRow(r)).toBe(false);
+  });
+
+  it("returns false for an any_column row with no operator", () => {
+    const r: FilterRow = {
+      id: "unset2",
+      enabled: true,
+      column: { kind: "any_column" },
+      op: null,
+      value: "ok",
+    };
+    expect(isCompleteRow(r)).toBe(false);
+  });
+
+  it("returns false regardless of value shape (array)", () => {
+    const r: FilterRow = {
+      id: "unset3",
+      enabled: true,
+      column: { kind: "named", name: "id" },
+      op: null,
+      value: ["1", "2"],
+    };
+    expect(isCompleteRow(r)).toBe(false);
+  });
+
+  it("returns false regardless of value shape ({min, max})", () => {
+    const r: FilterRow = {
+      id: "unset4",
+      enabled: true,
+      column: { kind: "named", name: "id" },
+      op: null,
+      value: { min: 1, max: 10 },
+    };
+    expect(isCompleteRow(r)).toBe(false);
+  });
+
+  it("returns false for a boolean value with no operator (boolean short-circuit does not apply)", () => {
+    const r: FilterRow = {
+      id: "unset5",
+      enabled: true,
+      column: { kind: "named", name: "email_verified" },
+      op: null,
+      value: false,
+    };
+    expect(isCompleteRow(r)).toBe(false);
+  });
+});
+
+describe("filterRowEquals — unset operator", () => {
+  it("two unset rows with the same column and value → true", () => {
+    const a = row({ op: null, value: "CL" });
+    const b = row({ op: null, value: "CL" });
+    expect(filterRowEquals(a, b)).toBe(true);
+  });
+
+  it("an unset row and a set row with the same column and value → false", () => {
+    const a = row({ op: null, value: "CL" });
+    const b = row({ op: "=", value: "CL" });
+    expect(filterRowEquals(a, b)).toBe(false);
+  });
+});
+
+describe("modelToPayload — unset operator", () => {
+  it("drops rows whose operator is unset", () => {
+    const model: FilterModel = {
+      rows: [
+        { id: "unset6", enabled: true, column: { kind: "named", name: "status" }, op: null, value: "ok" },
+        { id: "unset7", enabled: true, column: { kind: "named", name: "country" }, op: "=", value: "CL" },
+      ],
+      combinator: "AND",
+    };
+    const payload = modelToPayload(model);
+    expect(payload.filter_tree!.children).toHaveLength(1);
+    expect(payload.filter_tree!.children[0]!.column).toEqual({
+      kind: "named",
+      name: "country",
+    });
+  });
+
+  it("emits no filter_tree when every row is unset", () => {
+    const model: FilterModel = {
+      rows: [
+        { id: "unset8", enabled: true, column: { kind: "named", name: "status" }, op: null, value: "ok" },
+        { id: "unset9", enabled: true, column: { kind: "any_column" }, op: null, value: "x" },
+      ],
+      combinator: "AND",
+    };
+    expect(modelToPayload(model).filter_tree).toBeUndefined();
+  });
+});

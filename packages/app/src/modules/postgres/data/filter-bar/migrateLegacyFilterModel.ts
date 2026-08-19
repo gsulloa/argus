@@ -1,4 +1,9 @@
-import { EMPTY_FILTER_MODEL, type FilterModel, type FilterRow } from "../types";
+import {
+  EMPTY_FILTER_MODEL,
+  type FilterModel,
+  type FilterRow,
+  type Operator,
+} from "../types";
 
 /**
  * Validate and normalize a raw unknown value loaded from persistence into a
@@ -33,7 +38,9 @@ export function migrateLegacyFilterModel(raw: unknown): FilterModel {
   for (const row of rawRows) {
     if (!row || typeof row !== "object" || Array.isArray(row)) return EMPTY_FILTER_MODEL;
     const r = row as Record<string, unknown>;
-    if (!r["column"] || !r["op"]) return EMPTY_FILTER_MODEL;
+    // `op` may legitimately be absent/null — that is the "operator unset" state
+    // written by the footer's `Unset` control. Only a missing column is corrupt.
+    if (!r["column"]) return EMPTY_FILTER_MODEL;
     const col = r["column"] as Record<string, unknown>;
     if (col["kind"] === "or_group") {
       console.info("[filter-bar] dropped legacy raw/structured filter model");
@@ -53,7 +60,8 @@ export function migrateLegacyFilterModel(raw: unknown): FilterModel {
       id,
       enabled: r["enabled"] !== false,
       column: r["column"] as FilterRow["column"],
-      op: r["op"] as FilterRow["op"],
+      // Absent / null / non-string → the row rehydrates with its operator unset.
+      op: typeof r["op"] === "string" ? (r["op"] as Operator) : null,
       value: r["value"] as FilterRow["value"],
     };
   });

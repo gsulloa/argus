@@ -75,14 +75,23 @@ export interface Condition {
  * list. Like `enabled`, it is NEVER emitted on the wire (see `modelToPayload`)
  * and is ignored by every row/tree equality helper, so it does not affect dirty
  * detection or the per-row "Applied" badge.
+ *
+ * `op` is `null` when the user has cleared the operator via the footer's
+ * `Operator: Unset` control. That state is CLIENT-ONLY — a null-op row is never
+ * complete, so it never survives `modelToPayload` and `null` never reaches the
+ * closed Rust `Operator` enum on the wire. The row keeps its column and value so
+ * picking an operator again restores a working filter.
  */
 export interface FilterRow {
   id: string;
   enabled: boolean;
   column: ColumnRef;
-  op: Operator;
+  op: Operator | null;
   value?: FilterValue;
 }
+
+/** A `FilterRow` whose operator is known to be set. See `isCompleteRow`. */
+export type CompleteFilterRow = FilterRow & { op: Operator };
 
 /**
  * Flat filter tree — a list of condition rows joined by one root combinator.
@@ -253,7 +262,9 @@ export type ApplyEditsOutcome =
 export function modelToPayload(model: FilterModel): {
   filter_tree?: { children: WireCondition[]; combinator: "AND" | "OR" };
 } {
-  const enabled = model.rows.filter((r) => r.enabled && isCompleteRow(r));
+  // Split rather than `r.enabled && isCompleteRow(r)` so the type predicate
+  // narrows `op` to `Operator` — `WireCondition` never carries a null operator.
+  const enabled = model.rows.filter((r) => r.enabled).filter(isCompleteRow);
   if (enabled.length === 0) return {};
   return {
     filter_tree: {
@@ -270,12 +281,17 @@ export function modelToPayload(model: FilterModel): {
 
 /**
  * A row is "complete" when it has enough data to emit a valid predicate.
- * IS NULL / IS NOT NULL only need a column; In/NotIn need a non-empty array;
- * BETWEEN needs {min, max} both non-empty; everything else needs a non-empty
- * scalar value. Column is always required.
+ * An unset operator (`op === null`) is never complete. IS NULL / IS NOT NULL
+ * only need a column; In/NotIn need a non-empty array; BETWEEN needs {min, max}
+ * both non-empty; everything else needs a non-empty scalar value. Column is
+ * always required.
+ *
+ * Declared as a type predicate so `rows.filter(isCompleteRow)` narrows `op`
+ * back to `Operator` for the payload / WHERE compilers.
  */
-export function isCompleteRow(row: FilterRow): boolean {
+export function isCompleteRow(row: FilterRow): row is CompleteFilterRow {
   const { column, op, value } = row;
+  if (op === null) return false;
   if (!column) return false;
   if (column.kind === "named" && !column.name) return false;
   if (op === "RAW") return typeof value === "string" && value.trim() !== "";

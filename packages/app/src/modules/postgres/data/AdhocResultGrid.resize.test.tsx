@@ -208,3 +208,65 @@ describe("AdhocResultGrid resize", () => {
     expect(setSettingMock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #277 — with `onSortChange` supplied the header becomes click-to-sort,
+// and the ResizeHandle lives inside it. A resize gesture must not sort.
+// ---------------------------------------------------------------------------
+
+describe("AdhocResultGrid resize does not sort", () => {
+  function renderSortable() {
+    const onSortChange = vi.fn();
+    const { container } = render(
+      <AdhocResultGrid
+        columns={INITIAL_COLUMNS}
+        rows={ROWS}
+        orderBy={[]}
+        onSortChange={onSortChange}
+      />,
+    );
+    const headers = container.querySelectorAll("[role='columnheader']");
+    const bHeader = headers[1] as HTMLElement;
+    return { onSortChange, bHeader };
+  }
+
+  it("dragging and releasing a handle does not call onSortChange", () => {
+    const { onSortChange, bHeader } = renderSortable();
+
+    const children = Array.from(bHeader.children);
+    const resizeHandle = children[children.length - 1] as Element;
+
+    pointerDown(resizeHandle, 0);
+    pointerMove(resizeHandle, 80); // +80 → 280
+    pointerUp(resizeHandle, 80);
+    // The click the browser dispatches after pointerup.
+    fireEvent.click(resizeHandle);
+
+    expect(bHeader.style.width).toBe("280px");
+    expect(onSortChange).not.toHaveBeenCalled();
+  });
+
+  it("clicking the handle without dragging does not call onSortChange", () => {
+    const { onSortChange, bHeader } = renderSortable();
+
+    const children = Array.from(bHeader.children);
+    const resizeHandle = children[children.length - 1] as Element;
+
+    fireEvent.click(resizeHandle);
+
+    expect(onSortChange).not.toHaveBeenCalled();
+  });
+
+  it("clicking the column name still sorts", () => {
+    const { onSortChange, bHeader } = renderSortable();
+
+    const colName = bHeader.querySelector("span") as Element;
+    expect(colName.textContent).toBe("b");
+
+    fireEvent.click(colName);
+
+    expect(onSortChange).toHaveBeenCalledWith([
+      { column: "b", direction: "asc" },
+    ]);
+  });
+});

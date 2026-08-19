@@ -6,7 +6,7 @@
  * 2. Dragging the resize handle on the "email" column updates its width.
  */
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { DataGrid } from "../DataGrid";
 import type { DataGridProps } from "../DataGrid";
 import type { UseEditBufferResult } from "../useEditBuffer";
@@ -165,5 +165,90 @@ describe("DataGrid column widths", () => {
     // After the drag, the email header should be 320px wide.
     const updatedEmailHeader = screen.getAllByRole("columnheader")[1]!;
     expect(updatedEmailHeader.style.width).toBe("320px");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #277 — the header cell carries the sort handler and the ResizeHandle
+// is rendered inside it. The browser's synthetic click after `pointerup` must
+// not reach the header, or every resize also re-sorts (and re-queries).
+// ---------------------------------------------------------------------------
+
+describe("DataGrid resize does not sort", () => {
+  // Column widths are cached per `pgColumnWidths:<conn>:<schema>:<relation>`,
+  // and that cache is module-level — reusing "users" here would inherit the
+  // 320px email override left by the drag test above. Distinct relation names
+  // give each test a clean widths record.
+  it("releasing a resize drag does not call onSortChange", () => {
+    const onSortChange = vi.fn();
+    render(
+      <DataGrid {...buildProps({ onSortChange, relation: "users_no_sort" })} />,
+    );
+
+    const emailHeader = screen.getAllByRole("columnheader")[1]!;
+    const handle = emailHeader.querySelector("div")!;
+    expect(handle).toBeTruthy();
+
+    handle.setPointerCapture = vi.fn();
+    handle.releasePointerCapture = vi.fn();
+
+    act(() => {
+      handle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          clientX: 100,
+          pointerId: 1,
+        }),
+      );
+    });
+    act(() => {
+      handle.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: 220,
+          pointerId: 1,
+        }),
+      );
+    });
+    act(() => {
+      handle.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          clientX: 220,
+          pointerId: 1,
+        }),
+      );
+    });
+
+    // The click the browser dispatches after pointerup — the actual bug.
+    act(() => {
+      fireEvent.click(handle);
+    });
+
+    // Resized, but not sorted.
+    expect(screen.getAllByRole("columnheader")[1]!.style.width).toBe("320px");
+    expect(onSortChange).not.toHaveBeenCalled();
+  });
+
+  it("clicking the header outside the handle still sorts", () => {
+    const onSortChange = vi.fn();
+    render(
+      <DataGrid
+        {...buildProps({ onSortChange, relation: "users_sort_control" })}
+      />,
+    );
+
+    const emailHeader = screen.getAllByRole("columnheader")[1]!;
+    // The column-name span — a genuine sort target.
+    const colName = emailHeader.querySelector("span")!;
+    expect(colName.textContent).toBe("email");
+
+    act(() => {
+      fireEvent.click(colName);
+    });
+
+    expect(onSortChange).toHaveBeenCalledWith([
+      { column: "email", direction: "asc" },
+    ]);
   });
 });

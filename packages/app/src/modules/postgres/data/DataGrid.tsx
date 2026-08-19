@@ -100,6 +100,11 @@ export interface UnifiedRow {
 export interface DataGridHandle {
   /** Scroll the grid's vertical viewport back to the top (row index 0). */
   scrollToTop(): void;
+  /**
+   * Focus the grid root so the grid's own key bindings (⌘C / ⌘V / ⌘A /
+   * Backspace / Delete / Escape) and the tab-level shortcuts are live.
+   */
+  focus(): void;
 }
 
 export interface DataGridProps {
@@ -200,6 +205,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -223,6 +229,9 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
         }
         const vp = viewportRef.current;
         if (vp) vp.scrollTop = 0;
+      },
+      focus() {
+        rootRef.current?.focus();
       },
     }),
     [virtualizer],
@@ -441,8 +450,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
       }
 
       // Focus the grid root so Escape / ⌘C work immediately after click.
-      const rootEl = viewportRef.current?.parentElement as HTMLElement | null;
-      rootEl?.focus();
+      rootRef.current?.focus();
 
       dragRef.current = null;
       setDragActive(false);
@@ -490,6 +498,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
 
   return (
     <div
+      ref={rootRef}
       className={`${styles.root} ${bulkEditActive ? styles.bulkActive : ""}`}
       tabIndex={0}
       onKeyDown={onGridKeyDown}
