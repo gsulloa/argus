@@ -25,6 +25,8 @@ use crate::modules::mssql::errors::map_tiberius_error;
 use crate::modules::mssql::pool::MssqlPoolRegistry;
 use crate::modules::query_cancel::{CancelAction, RunningQueryRegistry};
 use crate::modules::query_history::{self, HistoryOrigin, HistoryStatus, NewEntry};
+use crate::platform::row_cap::{self, RowCapSource};
+use crate::platform::sql_limit::{self, Dialect};
 use crate::platform::DbState;
 
 // ---------------------------------------------------------------------------
@@ -35,8 +37,6 @@ use crate::platform::DbState;
 const RUN_SQL_TIMEOUT: Duration = Duration::from_secs(15);
 /// Total budget for `mssql_run_sql_many`.
 const MANY_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
-/// Maximum rows returned per SELECT.
-const RESULT_ROW_CAP: usize = 10_000;
 /// Per-cell truncation threshold (1 MiB).
 const INLINE_TRUNCATE_BYTES: usize = 1_048_576;
 
@@ -231,6 +231,8 @@ pub enum RunSqlResult {
         truncated_columns: Vec<String>,
         truncated: bool,
         query_ms: u64,
+        row_cap: u64,
+        row_cap_source: RowCapSource,
     },
     Affected {
         command_tag: String,
@@ -774,8 +776,39 @@ fn map_column_type_name(type_debug: &str) -> &str {
     "varchar" // safe fallback
 }
 
+// ---------------------------------------------------------------------------
+// Row-cap resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve the effective row cap for a single statement: reads the
+/// configured `sql.rowCap` setting from the app's sqlite-backed `DbState`,
+/// then combines it with whatever explicit limit `sql` carries and
+/// [`row_cap::HARD_ROW_CAP`] via [`row_cap::effective_cap`].
+///
+/// The `DbState` mutex is locked only long enough to read the setting — the
+/// lock is dropped before returning, well before any `.await` in the caller.
+fn resolve_cap(app: &AppHandle, sql: &str) -> (u64, RowCapSource) {
+    let configured = {
+        let db = app.state::<DbState>();
+        let conn = db.0.lock().expect("db poisoned");
+        row_cap::configured_cap(&conn)
+    };
+    resolve_cap_from(configured, sql)
+}
+
+/// Pure cap-resolution logic factored out of [`resolve_cap`] so it is
+/// testable without an `AppHandle`: combines an already-read `configured`
+/// cap with whatever explicit limit `sql` carries under T-SQL syntax.
+fn resolve_cap_from(configured: u64, sql: &str) -> (u64, RowCapSource) {
+    let explicit = sql_limit::explicit_row_limit(sql, Dialect::TSql);
+    row_cap::effective_cap(configured, explicit, row_cap::HARD_ROW_CAP)
+}
+
 /// Core: run a single SQL statement using an already-acquired client.
 /// Returns `RunSqlResult`.
+///
+/// `cap`/`cap_source` are the effective row cap already resolved (per
+/// statement) by [`resolve_cap`].
 ///
 /// NOTE: The `line` in errors from tiberius refers to the line within the
 /// submitted batch, NOT the line in the user's original SQL buffer.
@@ -783,6 +816,8 @@ async fn run_single_sql_inner(
     client: &mut bb8::PooledConnection<'static, bb8_tiberius::ConnectionManager>,
     sql: &str,
     read_only: bool,
+    cap: u64,
+    cap_source: RowCapSource,
 ) -> AppResult<RunSqlResult> {
     let started = Instant::now();
     let mutating = is_mutating_sql_mssql(sql);
@@ -803,22 +838,28 @@ async fn run_single_sql_inner(
 
         let query_ms = started.elapsed().as_millis() as u64;
 
-        // Cap rows.
-        let (rows_to_use, result_truncated) = if rows.len() > RESULT_ROW_CAP {
-            (&rows[..RESULT_ROW_CAP], true)
-        } else {
-            (&rows[..], false)
-        };
+        // Cap rows. `rows` is already fully materialized by
+        // `into_first_result`, so the budget is applied as a slice boundary
+        // rather than a fetch limit: `fetch_budget(cap)` is one more than
+        // `cap`, so a result landing exactly on the cap (`fetched == cap`) is
+        // reported complete, while `cap + 1` or more is reported truncated
+        // with exactly `cap` rows returned.
+        let budget = row_cap::fetch_budget(cap) as usize;
+        let fetched = rows.len().min(budget);
+        let result_truncated = fetched as u64 > cap;
+        let rows_to_use = &rows[..fetched.min(cap as usize)];
 
-        let (col_metas, result_rows, truncated_columns, any_truncated) =
+        let (col_metas, result_rows, truncated_columns, _any_truncated) =
             decode_tiberius_rows(rows_to_use);
 
         Ok(RunSqlResult::Rows {
             columns: col_metas,
             rows: result_rows,
             truncated_columns,
-            truncated: result_truncated || any_truncated,
+            truncated: result_truncated,
             query_ms,
+            row_cap: cap,
+            row_cap_source: cap_source,
         })
     } else {
         // Mutating path: use `execute`.
@@ -986,9 +1027,11 @@ pub async fn mssql_run_sql(
         None
     };
 
+    let (cap, cap_source) = resolve_cap(&app, &sql);
+
     let result = tokio::time::timeout(
         RUN_SQL_TIMEOUT,
-        run_single_sql_inner(&mut client, &sql, read_only),
+        run_single_sql_inner(&mut client, &sql, read_only, cap, cap_source),
     )
     .await
     .map_err(|_| {
@@ -1158,9 +1201,11 @@ pub async fn mssql_run_sql_many(
         let remaining = MANY_TOTAL_TIMEOUT.saturating_sub(elapsed);
         let per_stmt_timeout = remaining.min(RUN_SQL_TIMEOUT);
 
+        let (cap, cap_source) = resolve_cap(&app, stmt);
+
         let stmt_result = tokio::time::timeout(
             per_stmt_timeout,
-            run_single_sql_inner(&mut client, stmt, read_only),
+            run_single_sql_inner(&mut client, stmt, read_only, cap, cap_source),
         )
         .await;
 
@@ -1718,5 +1763,69 @@ mod tests {
     fn go_only_produces_empty_batches() {
         let batches = split_statements("GO").unwrap();
         assert!(batches.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Row-cap resolution
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cap_resolution_unbounded_query_uses_configured() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM dbo.big_table"),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_top_raises_cap() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT TOP (30000) * FROM dbo.big_table"),
+            (30_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_top_percent_does_not_raise_cap() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT TOP 50 PERCENT * FROM dbo.big_table"),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_offset_fetch_next_raises_cap() {
+        assert_eq!(
+            resolve_cap_from(
+                10_000,
+                "SELECT * FROM dbo.t ORDER BY id OFFSET 0 ROWS FETCH NEXT 25000 ROWS ONLY"
+            ),
+            (25_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_beyond_hard_ceiling_clamps() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT TOP (5000000) * FROM dbo.t"),
+            (row_cap::HARD_ROW_CAP, RowCapSource::HardCeiling)
+        );
+    }
+
+    #[test]
+    fn run_sql_result_serializes_row_cap_fields() {
+        let r = RunSqlResult::Rows {
+            columns: vec![],
+            rows: vec![],
+            truncated_columns: vec![],
+            truncated: false,
+            query_ms: 5,
+            row_cap: 10_000,
+            row_cap_source: RowCapSource::Setting,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v.get("kind").unwrap(), "rows");
+        assert_eq!(v.get("row_cap").unwrap(), 10_000);
+        assert_eq!(v.get("row_cap_source").unwrap(), "setting");
     }
 }

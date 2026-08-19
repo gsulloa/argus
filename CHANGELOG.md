@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-19
+
+### Added
+- SQL editors honour an explicit row limit written in the statement. `SELECT … LIMIT 30000` now returns 30,000 rows instead of being silently cut to 10,000 ([#276](https://github.com/gsulloa/argus/issues/276)). Recognised per dialect: `LIMIT n` and `FETCH FIRST/NEXT n ROWS ONLY` (Postgres), `LIMIT off, n` (MySQL), `TOP (n)` and `OFFSET … FETCH NEXT n ROWS ONLY` (SQL Server), `LIMIT n` (Athena). Detection is deliberately conservative — a limit inside a subquery, string, or comment never raises the cap.
+- A configurable result row limit for unbounded queries, in every SQL/query editor toolbar (`1k / 10k / 50k / 100k / Custom…`, default 10,000, persisted as the `sql.rowCap` setting). A non-configurable ceiling of 1,000,000 rows backstops it.
+- honour explicit LIMIT and make the result row cap configurable ([#286](https://github.com/gsulloa/argus/pull/286))
+- focus the table viewer when a table opens ([#280](https://github.com/gsulloa/argus/pull/280))
+
+### Changed
+- The Postgres filter bar's `Unset` now stops applying your filters instead of clearing the operators, and leaves the filter form exactly as you built it — columns, operators, values and checkboxes all stay put, so a single `Apply All` puts the same filter back in force. This replaces the operator-clearing behaviour shipped in 0.8.6, which matched the label but not the request behind it ([#278](https://github.com/gsulloa/argus/issues/278)). The footer control now reads `Filters: Unset`; `Clear all` is still the way to empty the rows.
+- The truncation banner now names the row limit actually applied instead of a hardcoded "10,000", explains which constraint was binding, and offers an inline **Raise limit** action when the setting is the one to change. DynamoDB PartiQL (no `LIMIT` clause) and CloudWatch Logs Insights (capped at 10,000 records by AWS) say so explicitly.
+
+### Fixed
+- A result landing exactly on the row limit is no longer reported as truncated. Previously a query returning exactly 10,000 rows showed the truncation banner despite being complete.
+- MySQL and SQL Server no longer report a result as row-truncated when a single cell exceeded the 1 MiB inline limit — a 3-row result with one large `TEXT` value was showing "Result truncated at 10,000 rows" and exporting with a `_truncated` suffix. Per-cell truncation is reported separately, as it already was on Postgres.
+- Truncated Athena exports now receive the `_truncated` filename suffix, matching every other engine.
+- Postgres single-statement runs stream rows instead of materialising the entire server-side result set before trimming it, so peak memory is bounded by the row limit rather than by the query's true size.
+
 ## [0.8.6] - 2026-08-19
 
 ### Changed

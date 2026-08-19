@@ -30,6 +30,7 @@ import type { AttributeMap, AttributeValue } from "../data-view/types";
 import { ExportMenu } from "./export/ExportMenu";
 import type { RunState, PartiQLStatementOutcome } from "./useQueryRun";
 import type { RunPartiQLResult } from "./api";
+import { TruncationBanner } from "@/platform/sql/TruncationBanner";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -225,18 +226,11 @@ function RowsResultView({
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {result.truncated ? (
-        <div
-          style={{
-            padding: "3px 10px",
-            fontSize: 11,
-            color: "var(--text-muted)",
-            background: "rgba(245,158,11,0.1)",
-            borderBottom: "1px solid var(--border)",
-            flexShrink: 0,
-          }}
-        >
-          Result truncated — add a LIMIT clause to refine.
-        </div>
+        <TruncationBanner
+          rowCap={result.row_cap}
+          rowCapSource={result.row_cap_source}
+          clause={null}
+        />
       ) : null}
       <div
         style={{

@@ -32,7 +32,8 @@ export function compileWhere(
   columns: DataColumn[] = [],
 ): CompileResult {
   // Split so the `isCompleteRow` type predicate narrows `op` to `Operator` —
-  // rows with an unset operator are dropped here, as any incomplete row is.
+  // rows with a legacy unset operator (v0.8.6 records) are dropped here, as any
+  // incomplete row is.
   const rows = model.rows.filter((r) => r.enabled).filter(isCompleteRow);
   if (rows.length === 0) return { body: "" };
   const parts = rows.map((r) => compileRow(r, columns));

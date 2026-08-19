@@ -1,5 +1,6 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { toAppError } from "@/platform/errors/AppError";
+import type { RowCapSource } from "@/platform/sql/TruncationBanner";
 import type { CellValue, DataColumn } from "../data/types";
 
 export type Origin = "auto" | "user";
@@ -13,6 +14,8 @@ export type RunSqlResult =
       truncated_columns: string[];
       truncated: boolean;
       query_ms: number;
+      row_cap: number;
+      row_cap_source: RowCapSource;
     }
   | {
       kind: "affected";
@@ -37,7 +40,15 @@ export type RunManyOutcome =
 export type StreamEvent =
   | { event: "columns"; columns: DataColumn[] }
   | { event: "batch"; rows: CellValue[][] }
-  | { event: "done"; row_count: number; truncated: boolean; query_ms: number; truncated_columns: string[] }
+  | {
+      event: "done";
+      row_count: number;
+      truncated: boolean;
+      query_ms: number;
+      truncated_columns: string[];
+      row_cap: number;
+      row_cap_source: RowCapSource;
+    }
   | { event: "affected"; command_tag: string; affected_rows: number; query_ms: number }
   | { event: "error"; message: string; code: string | null; position: number | null };
 

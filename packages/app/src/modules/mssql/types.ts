@@ -1,4 +1,5 @@
 import type { AppError } from "@/platform/errors/AppError";
+import type { RowCapSource } from "@/platform/sql/TruncationBanner";
 
 // ---------------------------------------------------------------------------
 // Kind constant
@@ -350,6 +351,8 @@ export type RunSqlResult =
       truncated_columns: string[];
       truncated: boolean;
       query_ms: number;
+      row_cap: number;
+      row_cap_source: RowCapSource;
     }
   | {
       kind: "affected";

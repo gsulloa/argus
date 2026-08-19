@@ -2,7 +2,11 @@ import type { Operator } from "../types";
 import styles from "./FilterBar.module.css";
 
 interface Props {
-  /** `null` when the operator has been unset from the footer's `Unset` control. */
+  /**
+   * `null` only for rows rehydrated from a v0.8.6 filter record whose operators
+   * were cleared by that release's `Operator: Unset`. No current UI path
+   * produces it — see `FilterRow` in `../types`.
+   */
   value: Operator | null;
   options: Operator[];
   onChange(next: Operator): void;
@@ -28,8 +32,8 @@ export function OperatorPicker({ value, options, onChange }: Props) {
       aria-label="Operator"
     >
       {/* Placeholder shown only while unset. Disabled, so the picker can never
-          be used to RE-enter the unset state — the footer button is the only
-          way in. */}
+          be used to RE-enter the unset state — and since v0.8.6's operator-
+          clearing Unset is gone, nothing else can either. */}
       {isUnset && (
         <option value={UNSET_VALUE} disabled>
           —

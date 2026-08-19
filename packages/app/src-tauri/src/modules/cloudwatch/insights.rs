@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -18,13 +18,17 @@ use crate::modules::activity_log::{
 };
 use crate::modules::cloudwatch::client::CloudwatchClientRegistry;
 use crate::modules::cloudwatch::errors::sdk_err_to_app;
+use crate::platform::row_cap::{self, RowCapSource};
+use crate::platform::DbState;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Maximum rows accumulated per query (matches frontend expectation).
-const RESULT_ROW_CAP: usize = 10_000;
+/// AWS CloudWatch Logs Insights returns at most this many records per query,
+/// regardless of the configured `sql.rowCap` setting. This is the engine
+/// ceiling passed to [`row_cap::effective_cap`].
+const AWS_INSIGHTS_CEILING: u64 = 10_000;
 
 /// Total polling timeout per query.
 const QUERY_POLL_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
@@ -62,6 +66,8 @@ pub enum InsightsResult {
         records_matched: f64,
         records_scanned: f64,
         bytes_scanned: f64,
+        row_cap: u64,
+        row_cap_source: RowCapSource,
     },
 }
 
@@ -156,6 +162,74 @@ fn has_limit_command(query: &str) -> bool {
     re.is_match(query)
 }
 
+/// Resolve the effective row cap for an Insights query: reads the configured
+/// `sql.rowCap` setting from the app's sqlite-backed `DbState`, then combines
+/// it with [`AWS_INSIGHTS_CEILING`] via [`row_cap::effective_cap`].
+///
+/// Insights query syntax is pipe-delimited, not SQL — it has no
+/// client-observable "explicit limit" analogous to a SQL `LIMIT` clause. Its
+/// `| limit n` is handled separately by [`has_limit_command`], so `explicit`
+/// is always `None` here.
+///
+/// The `DbState` mutex is locked only long enough to read the setting — the
+/// lock is dropped before returning, well before any `.await` in the caller.
+fn resolve_cap(app: &AppHandle) -> (u64, RowCapSource) {
+    let configured = {
+        let db = app.state::<DbState>();
+        let conn = db.0.lock().expect("db poisoned");
+        row_cap::configured_cap(&conn)
+    };
+    row_cap::effective_cap(configured, None, AWS_INSIGHTS_CEILING)
+}
+
+/// Project raw field-map rows onto the column order, capping the result at
+/// `cap` rows.
+///
+/// Accumulates up to [`row_cap::fetch_budget`]`(cap)` rows before stopping —
+/// one past the cap, so we can tell "exactly `cap` rows" from "more than
+/// `cap` rows" — then returns at most `cap` projected rows and
+/// `truncated = accumulated > cap`. A result landing exactly on `cap` reports
+/// `truncated: false`.
+fn project_rows(
+    raw_rows: &[std::collections::HashMap<String, String>],
+    column_order: &[String],
+    cap: u64,
+) -> (Vec<Vec<JsonValue>>, bool) {
+    let budget = row_cap::fetch_budget(cap);
+    let mut rows: Vec<Vec<JsonValue>> = Vec::new();
+    let mut accumulated: u64 = 0;
+
+    for row_map in raw_rows {
+        if accumulated >= budget {
+            break;
+        }
+        accumulated += 1;
+        if accumulated <= cap {
+            rows.push(project_row(row_map, column_order));
+        }
+    }
+
+    let truncated = accumulated > cap;
+    (rows, truncated)
+}
+
+/// Compute the `StartQuery` `limit` parameter for a given query and effective
+/// row cap: `None` when the query string carries its own `| limit n` command
+/// (so the query's own limit governs and no parameter is sent), otherwise the
+/// caller's default limit clamped to `[1, min(fetch_budget(cap),
+/// AWS_INSIGHTS_CEILING)]` — one past the effective cap so the extra probe
+/// record needed to distinguish "exactly the cap" from "more than the cap" is
+/// available, but never past what AWS itself will return.
+fn resolve_effective_limit(query_string: &str, limit: Option<i32>, cap: u64) -> Option<i32> {
+    if has_limit_command(query_string) {
+        None
+    } else {
+        let budget = row_cap::fetch_budget(cap).min(AWS_INSIGHTS_CEILING);
+        let budget = i32::try_from(budget).unwrap_or(i32::MAX);
+        Some(limit.unwrap_or(1000).clamp(1, budget))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_insights_query(
     app: &AppHandle,
@@ -166,6 +240,8 @@ async fn run_insights_query(
     end_time: i64,
     query_string: &str,
     limit: Option<i32>,
+    cap: u64,
+    cap_source: RowCapSource,
 ) -> AppResult<InsightsResult> {
     let poll_start = Instant::now();
 
@@ -272,16 +348,7 @@ async fn run_insights_query(
                     .collect();
 
                 // Project rows, apply row cap.
-                let mut rows: Vec<Vec<JsonValue>> = Vec::new();
-                let mut truncated = false;
-
-                for row_map in &raw_rows {
-                    if rows.len() >= RESULT_ROW_CAP {
-                        truncated = true;
-                        break;
-                    }
-                    rows.push(project_row(row_map, &column_order));
-                }
+                let (rows, truncated) = project_rows(&raw_rows, &column_order, cap);
 
                 return Ok(InsightsResult::Rows {
                     columns,
@@ -291,6 +358,8 @@ async fn run_insights_query(
                     records_matched,
                     records_scanned,
                     bytes_scanned,
+                    row_cap: cap,
+                    row_cap_source: cap_source,
                 });
             }
             "Failed" | "Cancelled" | "Timeout" => {
@@ -357,13 +426,13 @@ pub async fn cloudwatch_run_insights(
         return Err(err);
     }
 
+    let (cap, cap_source) = resolve_cap(&app);
+
     // Honor the query's own `| limit`: when present, send no limit param so the
-    // query governs. Otherwise apply a default, capped by the client row cap.
-    let effective_limit = if has_limit_command(&query_string) {
-        None
-    } else {
-        Some(limit.unwrap_or(1000).clamp(1, RESULT_ROW_CAP as i32))
-    };
+    // query governs. Otherwise apply a default, capped by the effective row
+    // cap plus the one-record probe budget (never past the AWS ceiling), so
+    // we can still tell "exactly the cap" from "more than the cap".
+    let effective_limit = resolve_effective_limit(&query_string, limit, cap);
 
     let client = registry.acquire(&id).await?;
 
@@ -377,6 +446,8 @@ pub async fn cloudwatch_run_insights(
         end_time,
         &query_string,
         effective_limit,
+        cap,
+        cap_source,
     )
     .await;
 
@@ -615,6 +686,8 @@ mod tests {
             records_matched: 10.0,
             records_scanned: 100.0,
             bytes_scanned: 4096.0,
+            row_cap: 10_000,
+            row_cap_source: RowCapSource::Setting,
         };
 
         let json = serde_json::to_value(&result).unwrap();
@@ -626,6 +699,146 @@ mod tests {
         assert_eq!(json["truncated"], false);
         assert_eq!(json["records_matched"], 10.0);
         assert_eq!(json["bytes_scanned"], 4096.0);
+        assert_eq!(json["row_cap"], 10_000);
+        assert_eq!(json["row_cap_source"], "setting");
+    }
+
+    #[test]
+    fn insights_result_rows_serialization_carries_engine_cap_source() {
+        let result = InsightsResult::Rows {
+            columns: vec![],
+            rows: vec![],
+            query_ms: 42,
+            truncated: true,
+            records_matched: 0.0,
+            records_scanned: 0.0,
+            bytes_scanned: 0.0,
+            row_cap: 10_000,
+            row_cap_source: RowCapSource::Engine,
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["row_cap"], 10_000);
+        assert_eq!(json["row_cap_source"], "engine");
+    }
+
+    // ---- effective_cap wiring (AWS_INSIGHTS_CEILING) ----
+
+    #[test]
+    fn effective_cap_configured_above_aws_ceiling_reports_engine() {
+        assert_eq!(
+            row_cap::effective_cap(100_000, None, AWS_INSIGHTS_CEILING),
+            (10_000, RowCapSource::Engine)
+        );
+    }
+
+    #[test]
+    fn effective_cap_configured_below_aws_ceiling_reports_setting() {
+        assert_eq!(
+            row_cap::effective_cap(1_000, None, AWS_INSIGHTS_CEILING),
+            (1_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn effective_cap_configured_equal_to_aws_ceiling() {
+        assert_eq!(
+            row_cap::effective_cap(10_000, None, AWS_INSIGHTS_CEILING),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    // ---- project_rows ----
+
+    fn raw_rows(n: usize) -> Vec<HashMap<String, String>> {
+        (0..n)
+            .map(|i| {
+                let mut m = HashMap::new();
+                m.insert("@message".to_string(), format!("row-{i}"));
+                m
+            })
+            .collect()
+    }
+
+    #[test]
+    fn project_rows_exactly_at_cap_is_not_truncated() {
+        let cols = vec!["@message".to_string()];
+        let (rows, truncated) = project_rows(&raw_rows(3), &cols, 3);
+        assert_eq!(rows.len(), 3);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn project_rows_one_past_cap_is_truncated() {
+        let cols = vec!["@message".to_string()];
+        let (rows, truncated) = project_rows(&raw_rows(4), &cols, 3);
+        assert_eq!(rows.len(), 3);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn project_rows_under_cap_is_not_truncated() {
+        let cols = vec!["@message".to_string()];
+        let (rows, truncated) = project_rows(&raw_rows(2), &cols, 3);
+        assert_eq!(rows.len(), 2);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn project_rows_far_past_budget_still_reports_cap_rows() {
+        // More raw rows than fetch_budget(cap) still only yields `cap` rows.
+        let cols = vec!["@message".to_string()];
+        let (rows, truncated) = project_rows(&raw_rows(50), &cols, 3);
+        assert_eq!(rows.len(), 3);
+        assert!(truncated);
+    }
+
+    // ---- resolve_effective_limit (server-side `limit` parameter) ----
+
+    #[test]
+    fn resolve_effective_limit_query_with_limit_command_sends_none() {
+        assert_eq!(
+            resolve_effective_limit("fields @message | limit 50", None, 1_000),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_effective_limit_cap_below_aws_ceiling_adds_probe_record() {
+        // A caller limit past the budget saturates at fetch_budget(1_000) ==
+        // 1_001 — the probe record beyond the 1_000 cap.
+        assert_eq!(
+            resolve_effective_limit("fields @message", Some(50_000), 1_000),
+            Some(1_001)
+        );
+    }
+
+    #[test]
+    fn resolve_effective_limit_cap_at_aws_ceiling_clamps_to_ceiling() {
+        // cap 10_000 → fetch_budget would be 10_001, but AWS_INSIGHTS_CEILING
+        // clamps it back down to 10_000, not 10_001.
+        assert_eq!(
+            resolve_effective_limit("fields @message", Some(50_000), 10_000),
+            Some(10_000)
+        );
+    }
+
+    #[test]
+    fn resolve_effective_limit_respects_caller_default_under_budget() {
+        assert_eq!(
+            resolve_effective_limit("fields @message", Some(100), 1_000),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn resolve_effective_limit_no_explicit_limit_uses_default_when_under_budget() {
+        // No caller limit → falls back to the 1000 default, which is under
+        // budget (1_001) for cap 1_000, so it passes through unclamped.
+        assert_eq!(
+            resolve_effective_limit("fields @message", None, 1_000),
+            Some(1_000)
+        );
     }
 
     #[test]

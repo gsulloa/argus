@@ -20,6 +20,7 @@ import { useEditBuffer } from "../data/useEditBuffer";
 import type { CellValue } from "../data/types";
 import { ExportMenu } from "./export/ExportMenu";
 import { sortResultRows } from "@/platform/table/sortResultRows";
+import { TruncationBanner } from "@/platform/sql/TruncationBanner";
 
 interface Props {
   state: RunState;
@@ -195,18 +196,11 @@ function RowsResultView({
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {result.truncated ? (
-        <div
-          style={{
-            padding: "3px 10px",
-            fontSize: 11,
-            color: "var(--text-muted)",
-            background: "rgba(245,158,11,0.1)",
-            borderBottom: "1px solid var(--border)",
-            flexShrink: 0,
-          }}
-        >
-          Result truncated — add a TOP clause to refine.
-        </div>
+        <TruncationBanner
+          rowCap={result.row_cap}
+          rowCapSource={result.row_cap_source}
+          clause="TOP / OFFSET … FETCH NEXT"
+        />
       ) : null}
       <div
         style={{

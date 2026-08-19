@@ -30,6 +30,7 @@ import { ChatPanel } from "@/modules/ai/components/ChatPanel";
 import { useAthenaForm } from "../FormController";
 import { athenaApi } from "../api";
 import { NamedQueryModal, type NamedQueryModalResult } from "./NamedQueryModal";
+import { RowCapSelector } from "@/platform/sql/RowCapSelector";
 import styles from "@/modules/mysql/sql/QueryTab.module.css";
 
 export const ATHENA_QUERY_KIND = "athena-query";
@@ -516,6 +517,7 @@ function AthenaQueryTab({ tabId, payload }: InnerProps) {
               </button>
             </>
           )}
+          <RowCapSelector />
           <span className={styles.toolbarDivider} aria-hidden="true" />
           {/* ✨ AI chat panel toggle */}
           <button

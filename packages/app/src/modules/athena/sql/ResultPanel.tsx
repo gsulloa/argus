@@ -16,6 +16,7 @@ import type { AthenaStatementOutcome, AthenaRunSqlResult, AthenaResultColumnInfo
 import { ExportMenu } from "./export/ExportMenu";
 import { copyCellValue } from "@/platform/grid/cellClipboard";
 import { sortResultRows, type SortOrder } from "@/platform/table/sortResultRows";
+import { TruncationBanner } from "@/platform/sql/TruncationBanner";
 
 interface Props {
   state: RunState;
@@ -167,18 +168,11 @@ function RowsResultView({
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {result.truncated ? (
-        <div
-          style={{
-            padding: "3px 10px",
-            fontSize: 11,
-            color: "var(--text-muted)",
-            background: "rgba(245,158,11,0.1)",
-            borderBottom: "1px solid var(--border)",
-            flexShrink: 0,
-          }}
-        >
-          Result truncated — add a LIMIT clause to refine.
-        </div>
+        <TruncationBanner
+          rowCap={result.row_cap}
+          rowCapSource={result.row_cap_source}
+          clause="LIMIT"
+        />
       ) : null}
       <div
         style={{
@@ -209,6 +203,7 @@ function RowsResultView({
             connectionName={connectionName}
             columns={result.columns}
             rows={result.rows}
+            truncated={result.truncated}
           />
         ) : null}
       </div>

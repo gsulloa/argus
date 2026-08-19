@@ -5,6 +5,35 @@ type Updater<T> = T | ((prev: T) => T);
 
 const memoryCache = new Map<string, unknown>();
 
+// Live subscribers per key, so two simultaneously-mounted hooks on the same
+// key stay in step. `memoryCache` alone only helps a *newly* mounting hook:
+// without this, a row-limit control in one query tab would keep showing a
+// stale value after another tab (or a truncation banner's "Raise limit")
+// wrote a new one.
+const subscribers = new Map<string, Set<(value: unknown) => void>>();
+
+function subscribe(key: string, fn: (value: unknown) => void): () => void {
+  let set = subscribers.get(key);
+  if (!set) {
+    set = new Set();
+    subscribers.set(key, set);
+  }
+  set.add(fn);
+  return () => {
+    set.delete(fn);
+    if (set.size === 0) subscribers.delete(key);
+  };
+}
+
+/** Push `value` to every hook on `key` except the one that originated it. */
+function broadcast(key: string, value: unknown, origin: (value: unknown) => void): void {
+  const set = subscribers.get(key);
+  if (!set) return;
+  for (const fn of set) {
+    if (fn !== origin) fn(value);
+  }
+}
+
 function isTauriRuntime(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -86,25 +115,42 @@ export function useSetting<T>(
     };
   }, [key]);
 
+  // Mirror of `value` for `update`'s functional form. Kept because `update`
+  // no longer resolves the previous value inside a `setValue` updater — doing
+  // so would mean calling other components' setters (via `broadcast`) from
+  // inside a state updater, which React may invoke twice under StrictMode.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  // Stable identity per hook instance, used both as the subscriber and as the
+  // `broadcast` origin so a write never echoes back to its own author.
+  const receive = useRef((incoming: unknown) => {
+    setValue(incoming as T);
+  }).current;
+
+  useEffect(() => subscribe(key, receive), [key, receive]);
+
   const update = useCallback(
     (next: Updater<T>) => {
-      setValue((prev) => {
-        const resolved = typeof next === "function" ? (next as (p: T) => T)(prev) : next;
-        memoryCache.set(key, resolved);
-        if (!isTauriRuntime()) return resolved;
-        if (writeTimer.current !== null) {
-          window.clearTimeout(writeTimer.current);
-        }
-        const serialized = JSON.stringify(resolved);
-        writeTimer.current = window.setTimeout(() => {
-          setSetting(key, serialized).catch(() => {
-            // best-effort persistence; swallow to avoid breaking UI
-          });
-        }, 150);
-        return resolved;
-      });
+      // Prefer the shared cache as the base: another instance may have
+      // written since this one last rendered.
+      const prev = (memoryCache.has(key) ? memoryCache.get(key) : valueRef.current) as T;
+      const resolved = typeof next === "function" ? (next as (p: T) => T)(prev) : next;
+      memoryCache.set(key, resolved);
+      setValue(resolved);
+      broadcast(key, resolved, receive);
+      if (!isTauriRuntime()) return;
+      if (writeTimer.current !== null) {
+        window.clearTimeout(writeTimer.current);
+      }
+      const serialized = JSON.stringify(resolved);
+      writeTimer.current = window.setTimeout(() => {
+        setSetting(key, serialized).catch(() => {
+          // best-effort persistence; swallow to avoid breaking UI
+        });
+      }, 150);
     },
-    [key],
+    [key, receive],
   );
 
   return [value, update, loaded];
