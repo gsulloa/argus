@@ -76,11 +76,17 @@ export interface Condition {
  * and is ignored by every row/tree equality helper, so it does not affect dirty
  * detection or the per-row "Applied" badge.
  *
- * `op` is `null` when the user has cleared the operator via the footer's
- * `Operator: Unset` control. That state is CLIENT-ONLY — a null-op row is never
- * complete, so it never survives `modelToPayload` and `null` never reaches the
- * closed Rust `Operator` enum on the wire. The row keeps its column and value so
- * picking an operator again restores a working filter.
+ * `op` may be `null` — the LEGACY "operator unset" state. v0.8.6's footer
+ * `Operator: Unset` control wrote it onto every non-RAW row; the current footer
+ * `Filters: Unset` clears `applied` instead and leaves `draft` alone, so nothing
+ * in the app produces a null operator any more. The state survives only to keep
+ * v0.8.6 records loading: dropping it would make `migrateLegacyFilterModel`
+ * reject those records and discard the user's whole persisted filter.
+ *
+ * The state is CLIENT-ONLY — a null-op row is never complete, so it never
+ * survives `modelToPayload` and `null` never reaches the closed Rust `Operator`
+ * enum on the wire. The row keeps its column and value so picking an operator
+ * again restores a working filter.
  */
 export interface FilterRow {
   id: string;
@@ -281,7 +287,8 @@ export function modelToPayload(model: FilterModel): {
 
 /**
  * A row is "complete" when it has enough data to emit a valid predicate.
- * An unset operator (`op === null`) is never complete. IS NULL / IS NOT NULL
+ * An unset operator (`op === null`, legacy v0.8.6 state — see `FilterRow`) is
+ * never complete. IS NULL / IS NOT NULL
  * only need a column; In/NotIn need a non-empty array; BETWEEN needs {min, max}
  * both non-empty; everything else needs a non-empty scalar value. Column is
  * always required.

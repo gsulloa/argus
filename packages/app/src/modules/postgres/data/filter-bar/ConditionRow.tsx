@@ -69,9 +69,10 @@ export function ConditionRow({
         ? columns.find((c) => c.name === next.name)?.is_nullable ?? true
         : true,
     );
-    // An unset row stays unset across a column change — nothing is auto-selected
-    // and the value is left verbatim (including for boolean columns, whose eager
-    // `true` seeding waits until a real operator is picked).
+    // A legacy unset row (op === null, only reachable from a v0.8.6 record)
+    // stays unset across a column change — nothing is auto-selected and the
+    // value is left verbatim (including for boolean columns, whose eager `true`
+    // seeding waits until a real operator is picked).
     if (row.op === null && next.kind !== "raw") {
       onChange({ ...row, column: next });
       return;

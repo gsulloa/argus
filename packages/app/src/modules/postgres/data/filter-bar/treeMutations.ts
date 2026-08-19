@@ -67,24 +67,6 @@ export function clearAllRows(tree: FilterTree): FilterTree {
 }
 
 /**
- * Clear the operator selection on every row, keeping the rows themselves —
- * their `id`, `enabled`, `column`, `value` and order — plus `combinator`.
- *
- * A row with `op === null` is incomplete, so it stops contributing a predicate
- * without being deleted: the user's columns and values stay on screen, ready to
- * be given a new operator.
- *
- * RAW rows are skipped. Their operator is implied by the column kind and they
- * render no operator picker, so an unset RAW row would be unrecoverable.
- */
-export function unsetAllOperators(tree: FilterTree): FilterTree {
-  const rows = tree.rows.map((row) =>
-    row.column.kind === "raw" ? row : { ...row, op: null },
-  );
-  return { ...tree, rows };
-}
-
-/**
  * When the operator changes, the value shape may need to flip
  * (scalar ↔ array ↔ {min,max} ↔ absent). Coerce the existing value to the
  * new shape: keep what we can, drop what doesn't fit.

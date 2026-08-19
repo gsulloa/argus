@@ -63,6 +63,7 @@ function makeProps(overrides: Partial<React.ComponentProps<typeof FilterBar>> = 
     onDraftChange: vi.fn(),
     onApplyAll: vi.fn(),
     onApplyOnlyRow: vi.fn(),
+    onUnsetFilters: vi.fn(),
     onSqlClick: vi.fn(),
     onClose: vi.fn(),
     ...overrides,

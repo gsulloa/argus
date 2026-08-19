@@ -1,4 +1,4 @@
-import { createRef } from "react";
+import { createRef, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 // waitFor is used in the "No filters enabled" transient status test
@@ -27,6 +27,7 @@ function makeProps(overrides: Partial<React.ComponentProps<typeof FilterBar>> = 
     onDraftChange: vi.fn(),
     onApplyAll: vi.fn(),
     onApplyOnlyRow: vi.fn(),
+    onUnsetFilters: vi.fn(),
     onSqlClick: vi.fn(),
     onClose: vi.fn(),
     ...overrides,
@@ -251,8 +252,9 @@ describe("FilterBar — footer buttons", () => {
     expect(onApplyAll).not.toHaveBeenCalled();
   });
 
-  it("Unset button clears only the operators, keeping every row intact", () => {
+  it("Unset asks the tab to clear applied and never mutates the draft", () => {
     const onDraftChange = vi.fn();
+    const onUnsetFilters = vi.fn();
     const draft: FilterModel = {
       rows: [
         { id: "t6", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
@@ -260,42 +262,36 @@ describe("FilterBar — footer buttons", () => {
       ],
       combinator: "OR",
     };
-    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    render(<FilterBar {...makeProps({ draft, applied: draft, onDraftChange, onUnsetFilters })} />);
     fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
-    expect(onDraftChange).toHaveBeenCalledTimes(1);
-    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
-    expect(next.rows).toHaveLength(2);
-    expect(next.rows[0]).toEqual({
-      id: "t6",
-      enabled: true,
-      column: { kind: "named", name: "id" },
-      op: null,
-      value: "1",
-    });
-    expect(next.rows[1]).toEqual({
-      id: "t7",
-      enabled: false,
-      column: { kind: "named", name: "country" },
-      op: null,
-      value: "CL",
-    });
-    expect(next.combinator).toBe("OR");
+    expect(onUnsetFilters).toHaveBeenCalledTimes(1);
+    expect(onDraftChange).not.toHaveBeenCalled();
   });
 
-  it("Unset leaves RAW rows alone", () => {
-    const onDraftChange = vi.fn();
+  it("Unset keeps every row on screen with its operator still selected", () => {
     const draft: FilterModel = {
       rows: [
         { id: "t8", enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" },
         { id: "t9", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
+        { id: "t9b", enabled: false, column: { kind: "named", name: "country" }, op: "LIKE", value: "CL" },
       ],
       combinator: "AND",
     };
-    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    // Stateful host so a draft mutation would actually re-render the bar —
+    // without it a controlled FilterBar could not show the regression.
+    function Host() {
+      const [d, setD] = useState(draft);
+      return <FilterBar {...makeProps({ draft: d, applied: d, onDraftChange: setD })} />;
+    }
+    render(<Host />);
     fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
-    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
-    expect(next.rows[0]).toEqual(draft.rows[0]);
-    expect(next.rows[1]!.op).toBeNull();
+    // Three rows still rendered (the RAW row renders no operator picker).
+    expect(screen.getAllByRole("checkbox", { name: /Include in Apply All/i })).toHaveLength(3);
+    const opSelects = screen.getAllByRole("combobox", { name: /Operator/i }) as HTMLSelectElement[];
+    expect(opSelects.map((s) => s.value)).toEqual(["=", "LIKE"]);
+    expect(screen.queryByRole("option", { name: "—" })).toBeNull();
+    // The RAW row's expression survives too.
+    expect(screen.getByDisplayValue("id > 0")).toBeTruthy();
   });
 
   it("Clear all button resets rows to a single empty row, combinator preserved", () => {
@@ -316,19 +312,24 @@ describe("FilterBar — footer buttons", () => {
     expect(next.combinator).toBe("OR");
   });
 
-  it("neither Unset nor Clear all touches applied", () => {
+  it("Clear all mutates the draft only — it never unsets the applied filter", () => {
+    const onDraftChange = vi.fn();
+    const onUnsetFilters = vi.fn();
     const onApplyAll = vi.fn();
     const draft: FilterModel = {
       rows: [{ id: "t12", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" }],
       combinator: "AND",
     };
-    render(<FilterBar {...makeProps({ draft, applied: draft, onApplyAll })} />);
-    fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
+    render(
+      <FilterBar {...makeProps({ draft, applied: draft, onDraftChange, onUnsetFilters, onApplyAll })} />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /Clear all/i }));
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    expect(onUnsetFilters).not.toHaveBeenCalled();
     expect(onApplyAll).not.toHaveBeenCalled();
   });
 
-  it("an unset row renders the placeholder in its operator picker", () => {
+  it("a legacy unset row renders the placeholder in its operator picker", () => {
     const draft: FilterModel = {
       rows: [{ id: "t13", enabled: true, column: { kind: "named", name: "id" }, op: null, value: "1" }],
       combinator: "AND",

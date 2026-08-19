@@ -13,7 +13,12 @@ import { noAutoCorrectProps } from "../../../shared/text-input-hygiene";
 interface Props {
   column: ColumnRef;
   columns: DataColumn[];
-  /** `null` when the row's operator has been unset — see `unsetAllOperators`. */
+  /**
+   * `null` only for a row rehydrated from a v0.8.6 record whose operator was
+   * cleared by that release's `Operator: Unset` — see `FilterRow` in `../types`.
+   * The control is then picked from the retained value's shape so the value
+   * stays visible and editable.
+   */
   op: Operator | null;
   value: FilterValue | undefined;
   onChange(next: FilterValue | undefined): void;
