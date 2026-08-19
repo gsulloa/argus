@@ -21,6 +21,7 @@ import { registerTableCache } from "./completionSources";
 import { QueryEditor, type QueryEditorHandle } from "./QueryEditor";
 import { ResultPanel } from "./ResultPanel";
 import { useDynamoQueryRun } from "./useQueryRun";
+import { RowCapSelector } from "@/platform/sql/RowCapSelector";
 import styles from "@/modules/mysql/sql/QueryTab.module.css";
 
 export const DYNAMO_QUERY_KIND = "dynamo-query";
@@ -246,6 +247,7 @@ function DynamoQueryTab({ tabId, payload }: InnerProps) {
             Run All
             <span className={styles.kbd}>{RUN_ALL_HINT}</span>
           </button>
+          <RowCapSelector />
         </div>
 
         <div className={styles.editorRow}>

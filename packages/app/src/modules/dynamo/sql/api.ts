@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { toAppError } from "@/platform/errors/AppError";
 import type { AttributeMap } from "../data-view/types";
+import type { RowCapSource } from "@/platform/sql/TruncationBanner";
 
 // ---------------------------------------------------------------------------
 // Result types (mirrors Rust RunPartiQLResult enum)
@@ -24,6 +25,8 @@ export interface PartiQLRowsResult {
   query_ms: number;
   truncated: boolean;
   consumed_capacity: unknown | null;
+  row_cap: number;
+  row_cap_source: RowCapSource;
 }
 
 export interface PartiQLSucceededResult {

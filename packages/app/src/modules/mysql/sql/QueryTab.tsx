@@ -31,6 +31,7 @@ import { ParamStrip } from "@/modules/context/components/ParamStrip";
 import { substitutePostgresParams } from "@/modules/context/components/substituteParams";
 import type { QueryParam } from "@/modules/context/types";
 import type { CellValue } from "../data/types";
+import { RowCapSelector } from "@/platform/sql/RowCapSelector";
 import styles from "./QueryTab.module.css";
 
 export const MYSQL_QUERY_KIND = "mysql-query";
@@ -456,6 +457,8 @@ function MysqlQueryTab({ tabId, payload }: InnerProps) {
               </button>
             </>
           )}
+          <span className={styles.toolbarDivider} aria-hidden="true" />
+          <RowCapSelector />
           <span className={styles.toolbarDivider} aria-hidden="true" />
           <button
             type="button"

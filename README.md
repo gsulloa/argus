@@ -11,6 +11,28 @@ A desktop tool for inspecting and editing data across multiple sources. Built on
 - **Amazon CloudWatch Logs** — Connection management (region, AWS auth via profile or access keys); log-group → log-stream browser (paginated groups, lazy streams newest-first); raw event tail viewer (`GetLogEvents` with older/newer paging); Logs Insights editor (`.cwlogs` queries, toolbar log-group multi-select + time-range picker, async `StartQuery` → poll → fetch lifecycle, dynamic columns, records/bytes-scanned cost display, and CSV/JSONL/XLSX export); context-folder schema sync of log groups via `CloudwatchIntrospector`. No inline-editing data grid — logs are immutable. AWS credentials stored in the OS keychain like DynamoDB.
 - **Amazon Athena** — Serverless SQL over S3. Connection management (region, workgroup, S3 output location, AWS auth via profile or access keys); Glue-backed schema browser (databases → tables/views → columns); SQL editor running queries through the async Athena lifecycle (`StartQueryExecution` → poll → paginated fetch) with cancellation, multi-statement runs, bytes-scanned (cost) display, and CSV/JSONL/XLSX export; context-folder schema sync via Glue introspection; and context-folder-grounded AI SQL generation. No inline-editing data grid — clicking a table opens a `SELECT … LIMIT 100` preview. Default `AwsDataCatalog` catalog only in v1. AWS credentials stored in the OS keychain like DynamoDB.
 
+## Result row limit
+
+Every SQL/query editor caps how many rows it materialises for one statement. Two things
+control that cap:
+
+- **An explicit limit in the statement wins.** `SELECT … LIMIT 30000` returns 30,000 rows.
+  Recognised per dialect: `LIMIT n` / `FETCH FIRST|NEXT n ROWS ONLY` (Postgres), `LIMIT n` and
+  `LIMIT offset, n` (MySQL), `TOP (n)` and `OFFSET … FETCH NEXT n ROWS ONLY` (SQL Server),
+  `LIMIT n` (Athena). Detection is conservative on purpose — a limit inside a subquery, a
+  string literal, a comment, or written as a placeholder (`LIMIT $1`) never raises the cap, so
+  an unbounded query is never mistaken for a bounded one. DynamoDB PartiQL has no `LIMIT`
+  clause and so has no per-statement override.
+- **The `Limit` control in the editor toolbar** governs everything else — queries with no limit
+  of their own. Presets are 1k / 10k / 50k / 100k plus a custom value; it persists globally as
+  the `sql.rowCap` setting and defaults to 10,000.
+
+A non-configurable ceiling of **1,000,000 rows** backstops both, so a runaway `LIMIT 999999999`
+cannot exhaust memory. Whenever a result is cut short, a banner above the grid names the exact
+limit that applied and says whether raising the setting would help. Two engines have lower
+ceilings of their own: CloudWatch Logs Insights returns at most 10,000 records per query (an AWS
+limit), and the banner says so.
+
 ## Context folders
 
 Each connection can optionally link to a **context folder** on disk — a

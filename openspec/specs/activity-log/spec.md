@@ -95,6 +95,11 @@ Each command kind SHALL populate `metric` on success according to a fixed mappin
 
 On failure (`status: "err"`), `metric` MUST be `null` regardless of kind. Note that `affected` is a metric variant introduced for `run_sql`; it is semantically distinct from `count` (which is reserved for the explicit `SELECT COUNT(*)` issued by `count_table`) and from `rows` (which is reserved for actual returned row sets).
 
+For a truncated `run_sql`, the `rows` value is the number of rows actually returned — i.e. that
+statement's **effective row cap** as resolved by the `sql-result-row-cap` capability, which is no
+longer a fixed 10,000. It follows the configured `sql.rowCap` setting and any statement-level
+limit that raised the cap.
+
 #### Scenario: Connect carries the server version
 
 - **WHEN** `postgres_connect` succeeds against a server reporting `PostgreSQL 16.2`
@@ -123,8 +128,18 @@ On failure (`status: "err"`), `metric` MUST be `null` regardless of kind. Note t
 
 #### Scenario: Run sql truncated SELECT reports the cap as rows
 
-- **WHEN** `postgres_run_sql` returns `kind: "rows"` truncated at 10,000
+- **WHEN** `postgres_run_sql` returns `kind: "rows"` truncated at the default cap of 10,000
 - **THEN** the emitted entry has `metric: { kind: "rows", value: 10000 }`
+
+#### Scenario: Run sql truncated SELECT under a raised cap reports the raised value
+
+- **WHEN** `sql.rowCap` is `50000` and `postgres_run_sql` returns `kind: "rows"` truncated at that cap
+- **THEN** the emitted entry has `metric: { kind: "rows", value: 50000 }`
+
+#### Scenario: Run sql honouring an explicit LIMIT reports the returned rows
+
+- **WHEN** `postgres_run_sql` runs `SELECT * FROM t LIMIT 30000` and returns 30,000 rows with `truncated: false`
+- **THEN** the emitted entry has `metric: { kind: "rows", value: 30000 }`
 
 ### Requirement: Multi-statement run emits one entry per executed statement
 

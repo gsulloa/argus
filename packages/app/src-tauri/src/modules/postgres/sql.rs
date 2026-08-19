@@ -35,15 +35,14 @@ use crate::modules::postgres::data::{fire_cancel, DataColumn};
 use crate::modules::postgres::pool::PgPoolRegistry;
 use crate::modules::query_cancel::{CancelAction, RunningQueryRegistry};
 use crate::modules::query_history::{self, HistoryOrigin, HistoryStatus, NewEntry};
+use crate::platform::row_cap::{self, RowCapSource};
+use crate::platform::sql_limit::{self, Dialect};
 use crate::platform::DbState;
 
 /// Hard cap on a single `postgres_run_sql` statement. Generous (60s) because
 /// the user is intentionally running arbitrary SQL — but bounded so a runaway
 /// query doesn't pin a pool client forever. A real cancel button is follow-up.
 const RUN_SQL_TIMEOUT: Duration = Duration::from_secs(60);
-/// Maximum rows we materialize for a single result set. Past this we mark the
-/// response truncated and stop fetching.
-const RESULT_ROW_CAP: usize = 10_000;
 /// Streaming: flush a `Batch` event when the buffer reaches this many rows …
 const BATCH_ROWS: usize = 500;
 /// … or when this much time has elapsed since the last flush, whichever first.
@@ -113,6 +112,30 @@ pub(crate) fn is_mutating_sql(sql: &str) -> bool {
     ) == false
 }
 
+/// Resolve the effective row cap for a single statement: reads the
+/// configured `sql.rowCap` setting from the app's sqlite-backed `DbState`,
+/// then combines it with whatever explicit limit `sql` carries and
+/// [`row_cap::HARD_ROW_CAP`] via [`row_cap::effective_cap`].
+///
+/// The `DbState` mutex is locked only long enough to read the setting — the
+/// lock is dropped before returning, well before any `.await` in the caller.
+fn resolve_cap(app: &AppHandle, sql: &str) -> (u64, RowCapSource) {
+    let configured = {
+        let db = app.state::<DbState>();
+        let conn = db.0.lock().expect("db poisoned");
+        row_cap::configured_cap(&conn)
+    };
+    resolve_cap_from(configured, sql)
+}
+
+/// Pure cap-resolution logic factored out of [`resolve_cap`] so it is
+/// testable without an `AppHandle`: combines an already-read `configured`
+/// cap with whatever explicit limit `sql` carries under Postgres syntax.
+fn resolve_cap_from(configured: u64, sql: &str) -> (u64, RowCapSource) {
+    let explicit = sql_limit::explicit_row_limit(sql, Dialect::Postgres);
+    row_cap::effective_cap(configured, explicit, row_cap::HARD_ROW_CAP)
+}
+
 fn strip_leading_comments(sql: &str) -> &str {
     let bytes = sql.as_bytes();
     let mut i = 0;
@@ -165,6 +188,8 @@ pub enum RunSqlResult {
         truncated_columns: Vec<String>,
         truncated: bool,
         query_ms: u64,
+        row_cap: u64,
+        row_cap_source: RowCapSource,
     },
     Affected {
         command_tag: String,
@@ -221,6 +246,8 @@ pub enum StreamEvent {
         truncated: bool,
         query_ms: u64,
         truncated_columns: Vec<String>,
+        row_cap: u64,
+        row_cap_source: RowCapSource,
     },
     /// Terminal: DML/DDL statement completed (no columns/batch events).
     Affected {
@@ -689,7 +716,18 @@ fn synthesize_command_tag(sql: &str, affected: u64) -> String {
 /// rows result; everything else as `affected`. The classifier here is only
 /// used to short-circuit read-only enforcement; the actual SELECT-vs-execute
 /// branching uses the existence of result columns.
-async fn run_one(client: &PgObject, sql: &str, is_read_only: bool) -> AppResult<RunSqlResult> {
+///
+/// `cap`/`cap_source` are the effective row cap already resolved (per
+/// statement) by [`resolve_cap`]. Rows are pulled incrementally via
+/// `query_raw` and fetching stops as soon as `cap + 1` rows have been seen —
+/// peak memory is bounded by the cap, not by the query's true cardinality.
+async fn run_one(
+    client: &PgObject,
+    sql: &str,
+    is_read_only: bool,
+    cap: u64,
+    cap_source: RowCapSource,
+) -> AppResult<RunSqlResult> {
     if is_read_only && is_mutating_sql(sql) {
         return Err(AppError::Validation("connection is read-only".into()));
     }
@@ -710,21 +748,36 @@ async fn run_one(client: &PgObject, sql: &str, is_read_only: bool) -> AppResult<
             query_ms,
         });
     }
-    // Rows path. `query` materializes the entire result set; we cap by
-    // truncating after the fact. A streaming cursor approach is a future
-    // improvement — for now this matches the existing `postgres_query_table`
-    // pattern and keeps the cap as a safety net.
-    let rows = client.query(&stmt, &[]).await?;
+    // Rows path. Stream via `query_raw` so we never materialize more than
+    // `cap + 1` rows server-side, regardless of the query's true cardinality.
     let columns = columns_from_row_meta(stmt.columns());
     let mut truncated_columns: Vec<String> = Vec::new();
+
+    // An explicitly-typed empty iterator resolves the `BorrowToSql` inference
+    // for the no-parameter case. `&dyn ToSql` implements `BorrowToSql`.
+    let stream = client
+        .query_raw(
+            &stmt,
+            std::iter::empty::<&dyn tokio_postgres::types::ToSql>(),
+        )
+        .await?;
+    futures::pin_mut!(stream);
+
+    let budget = row_cap::fetch_budget(cap);
     let mut out_rows: Vec<Vec<JsonValue>> = Vec::new();
-    let truncated = rows.len() > RESULT_ROW_CAP;
-    for row in rows.iter().take(RESULT_ROW_CAP) {
+    while (out_rows.len() as u64) < budget {
+        let Some(row) = stream.try_next().await? else {
+            break;
+        };
         let mut cells: Vec<JsonValue> = Vec::with_capacity(columns.len());
         for (i, col) in columns.iter().enumerate() {
-            cells.push(cell_to_json(row, i, &col.name, &mut truncated_columns));
+            cells.push(cell_to_json(&row, i, &col.name, &mut truncated_columns));
         }
         out_rows.push(cells);
+    }
+    let truncated = out_rows.len() as u64 > cap;
+    if truncated {
+        out_rows.truncate(cap as usize);
     }
     let query_ms = started.elapsed().as_millis() as u64;
     Ok(RunSqlResult::Rows {
@@ -733,6 +786,8 @@ async fn run_one(client: &PgObject, sql: &str, is_read_only: bool) -> AppResult<
         truncated_columns,
         truncated,
         query_ms,
+        row_cap: cap,
+        row_cap_source: cap_source,
     })
 }
 
@@ -752,6 +807,8 @@ async fn run_one_stream(
     client: &PgObject,
     sql: &str,
     is_read_only: bool,
+    cap: u64,
+    cap_source: RowCapSource,
     on_event: &tauri::ipc::Channel<StreamEvent>,
 ) -> AppResult<StreamOutcome> {
     if is_read_only && is_mutating_sql(sql) {
@@ -805,8 +862,19 @@ async fn run_one_stream(
     let mut row_count: u64 = 0;
     let mut truncated = false;
     let mut last_flush = Instant::now();
+    let budget = row_cap::fetch_budget(cap);
 
-    while let Some(row) = stream.try_next().await? {
+    while row_count < budget {
+        let Some(row) = stream.try_next().await? else {
+            break;
+        };
+        if row_count == cap {
+            // This is the (cap+1)-th row pulled from the server — it only
+            // ever serves as a truncation signal and MUST NOT be decoded or
+            // sent in a `Batch` event.
+            truncated = true;
+            break;
+        }
         // Convert the row using the same helper as `run_one`.
         let mut cells: Vec<JsonValue> = Vec::with_capacity(columns.len());
         for (i, col) in columns.iter().enumerate() {
@@ -824,12 +892,6 @@ async fn run_one_stream(
                 })
                 .map_err(channel_err)?;
             last_flush = Instant::now();
-        }
-
-        // Enforce the row cap — stop pulling from the server once reached.
-        if row_count >= RESULT_ROW_CAP as u64 {
-            truncated = true;
-            break;
         }
     }
 
@@ -849,6 +911,8 @@ async fn run_one_stream(
             truncated,
             query_ms,
             truncated_columns: truncated_columns.clone(),
+            row_cap: cap,
+            row_cap_source: cap_source,
         })
         .map_err(channel_err)?;
 
@@ -1038,6 +1102,7 @@ pub async fn postgres_run_sql(
     }
 
     let connection_name = fetch_connection_name(&app, parsed);
+    let (cap, cap_source) = resolve_cap(&app, &sql);
 
     let inner: AppResult<RunSqlResult> = async {
         let summaries = pools.list_active().await;
@@ -1066,7 +1131,12 @@ pub async fn postgres_run_sql(
             None
         };
 
-        let result = match timeout(RUN_SQL_TIMEOUT, run_one(&client, &sql, is_read_only)).await {
+        let result = match timeout(
+            RUN_SQL_TIMEOUT,
+            run_one(&client, &sql, is_read_only, cap, cap_source),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(_) => {
                 fire_cancel(cancel_token, sslmode).await;
@@ -1198,6 +1268,7 @@ pub async fn postgres_run_sql_stream(
     }
 
     let connection_name = fetch_connection_name(&app, parsed);
+    let (cap, cap_source) = resolve_cap(&app, &sql);
 
     // Resolve the pool entry, acquire a client, and register with the cancel
     // registry — identical scaffolding to `postgres_run_sql`.
@@ -1229,7 +1300,7 @@ pub async fn postgres_run_sql_stream(
 
     let run_result = timeout(
         RUN_SQL_TIMEOUT,
-        run_one_stream(&client, &sql, is_read_only, &on_event),
+        run_one_stream(&client, &sql, is_read_only, cap, cap_source, &on_event),
     )
     .await;
 
@@ -1398,9 +1469,14 @@ pub async fn postgres_run_sql_many(
             });
             continue;
         }
+        let (cap, cap_source) = resolve_cap(&app, sql);
         let started_wall_ms = now_unix_ms();
         let started = Instant::now();
-        let result = timeout(RUN_SQL_TIMEOUT, run_one(&client, sql, is_read_only)).await;
+        let result = timeout(
+            RUN_SQL_TIMEOUT,
+            run_one(&client, sql, is_read_only, cap, cap_source),
+        )
+        .await;
         let total_ms = started.elapsed().as_millis() as u64;
 
         // If the batch was cancelled during this statement, stop immediately.
@@ -1504,6 +1580,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cap_resolution_unbounded_query_uses_configured() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM big_table"),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_explicit_limit_raises_cap() {
+        // The bug in issue #276: LIMIT 30000 must not be capped at 10,000.
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM some_big_table LIMIT 30000"),
+            (30_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_explicit_limit_never_lowers_cap() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM t LIMIT 5"),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_beyond_hard_ceiling_clamps() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM t LIMIT 5000000"),
+            (row_cap::HARD_ROW_CAP, RowCapSource::HardCeiling)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_ignores_subquery_limit() {
+        assert_eq!(
+            resolve_cap_from(
+                10_000,
+                "SELECT * FROM t WHERE id IN (SELECT id FROM u LIMIT 50000)"
+            ),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_ignores_limit_in_string_or_comment() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT 'limit 30000' AS note FROM t"),
+            (10_000, RowCapSource::Setting)
+        );
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM t -- LIMIT 99999"),
+            (10_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
+    fn cap_resolution_honours_fetch_first() {
+        assert_eq!(
+            resolve_cap_from(10_000, "SELECT * FROM t FETCH FIRST 25000 ROWS ONLY"),
+            (25_000, RowCapSource::Setting)
+        );
+    }
+
+    #[test]
     fn classifier_select_is_not_mutating() {
         assert!(!is_mutating_sql("SELECT 1"));
         assert!(!is_mutating_sql("  select * from t"));
@@ -1583,10 +1723,14 @@ mod tests {
             truncated_columns: vec![],
             truncated: false,
             query_ms: 5,
+            row_cap: 10_000,
+            row_cap_source: RowCapSource::Setting,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v.get("kind").unwrap(), "rows");
         assert_eq!(v.get("query_ms").unwrap(), 5);
+        assert_eq!(v.get("row_cap").unwrap(), 10_000);
+        assert_eq!(v.get("row_cap_source").unwrap(), "setting");
 
         let a = RunSqlResult::Affected {
             command_tag: "INSERT 0 3".into(),
@@ -1619,6 +1763,8 @@ mod tests {
             truncated: true,
             query_ms: 42,
             truncated_columns: vec!["blob".into()],
+            row_cap: 10_000,
+            row_cap_source: RowCapSource::Setting,
         };
         let v = serde_json::to_value(&done).unwrap();
         assert_eq!(v.get("event").unwrap(), "done");
@@ -1626,6 +1772,8 @@ mod tests {
         assert_eq!(v.get("truncated").unwrap(), true);
         assert_eq!(v.get("query_ms").unwrap(), 42);
         assert_eq!(v.get("truncated_columns").unwrap()[0], "blob");
+        assert_eq!(v.get("row_cap").unwrap(), 10_000);
+        assert_eq!(v.get("row_cap_source").unwrap(), "setting");
 
         let affected = StreamEvent::Affected {
             command_tag: "UPDATE 2".into(),
@@ -1667,6 +1815,8 @@ mod tests {
             truncated_columns: vec![],
             truncated: false,
             query_ms: 5,
+            row_cap: row_cap::DEFAULT_ROW_CAP,
+            row_cap_source: RowCapSource::Setting,
         };
         let entry1 =
             build_history_entry_ok(cid, "local-pg", "SELECT 1", Origin::User, 100, 5, &r_rows);

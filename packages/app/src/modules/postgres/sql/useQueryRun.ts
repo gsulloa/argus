@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { AppError } from "@/platform/errors/AppError";
+import { DEFAULT_ROW_CAP } from "@/platform/sql/useRowCap";
 import { sqlApi, type RunManyOutcome, type RunSqlResult, type StreamEvent } from "./api";
 import type { CellValue, DataColumn } from "../data/types";
 import {
@@ -266,6 +267,8 @@ export function useQueryRun(): UseQueryRunResult {
                 truncated_columns: ev.truncated_columns,
                 truncated: ev.truncated,
                 query_ms: ev.query_ms,
+                row_cap: ev.row_cap,
+                row_cap_source: ev.row_cap_source,
               },
               error: null,
             });
@@ -332,6 +335,8 @@ export function useQueryRun(): UseQueryRunResult {
           flushCommit();
           if (columnsRef.current !== null) {
             // We have column metadata — keep partial rows visible as a completed result.
+            // No `done` event arrived (cancelled mid-stream), so there is no real cap
+            // info to report — `truncated: false` means the banner never reads these.
             setState({
               status: "done",
               mode: "single",
@@ -344,6 +349,8 @@ export function useQueryRun(): UseQueryRunResult {
                 truncated_columns: [],
                 truncated: false,
                 query_ms: Date.now() - dispatchedAt,
+                row_cap: DEFAULT_ROW_CAP,
+                row_cap_source: "setting",
               },
               error: null,
             });
@@ -358,7 +365,9 @@ export function useQueryRun(): UseQueryRunResult {
           if (e instanceof AppError && e.kind === "Cancelled") {
             // Cancelled pre-flight.
             if (columnsRef.current !== null) {
-              // Had partial rows — keep them.
+              // Had partial rows — keep them. No `done` event arrived, so there is no
+              // real cap info to report — `truncated: false` means the banner never
+              // reads these.
               flushCommit();
               setState({
                 status: "done",
@@ -372,6 +381,8 @@ export function useQueryRun(): UseQueryRunResult {
                   truncated_columns: [],
                   truncated: false,
                   query_ms: Date.now() - dispatchedAt,
+                  row_cap: DEFAULT_ROW_CAP,
+                  row_cap_source: "setting",
                 },
                 error: null,
               });

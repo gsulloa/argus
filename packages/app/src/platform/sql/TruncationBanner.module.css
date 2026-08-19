@@ -1,0 +1,44 @@
+/*
+ * DESIGN.md: var(--warning) for the rule (the hairline) and the label (the
+ * message text) — never the hardcoded rgba(245,158,11,0.1) the five old
+ * inline banners used. No gradient; compact density matching the sibling
+ * `.truncationBanner` / `.loadingBanner` strips it replaces
+ * (postgres/sql/ResultPanel.module.css).
+ */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--warning);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  color: var(--warning);
+}
+
+.raiseLimit {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 80ms ease, border-color 80ms ease, color 80ms ease;
+}
+
+.raiseLimit:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}

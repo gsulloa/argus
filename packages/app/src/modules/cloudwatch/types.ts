@@ -1,4 +1,5 @@
 import type { AppError } from "@/platform/errors/AppError";
+import type { RowCapSource } from "@/platform/sql/TruncationBanner";
 
 // ---------------------------------------------------------------------------
 // Kind constant
@@ -93,6 +94,8 @@ export interface InsightsResultRows {
   records_matched: number;
   records_scanned: number;
   bytes_scanned: number;
+  row_cap: number;
+  row_cap_source: RowCapSource;
 }
 
 export type InsightsResult = InsightsResultRows;

@@ -30,6 +30,7 @@ import { ResultPanel } from "./ResultPanel";
 import { useQueryRun } from "./useQueryRun";
 import { ExportMenu } from "./export/ExportMenu";
 import type { CellValue } from "../data/types";
+import { RowCapSelector } from "@/platform/sql/RowCapSelector";
 import { useAiReadiness } from "@/modules/ai/useAiReadiness";
 import { ChatPanel } from "@/modules/ai/components/ChatPanel";
 import { useConnections } from "@/platform/connection-registry/useConnections";
@@ -565,6 +566,8 @@ function MssqlQueryTab({ tabId, payload }: InnerProps) {
               </button>
             </>
           )}
+          <span className={styles.toolbarDivider} aria-hidden="true" />
+          <RowCapSelector />
           <span className={styles.toolbarDivider} aria-hidden="true" />
           <button
             type="button"

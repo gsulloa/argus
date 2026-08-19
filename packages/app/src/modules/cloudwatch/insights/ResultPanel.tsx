@@ -13,12 +13,13 @@
 import { Fragment, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronRight, ChevronDown } from "lucide-react";
 import type { InsightsRunState } from "./useQueryRun";
-import type { InsightsColumnInfo } from "../types";
+import type { InsightsColumnInfo, InsightsResultRows } from "../types";
 import { copyCellValue } from "@/platform/grid/cellClipboard";
 import { sortResultRows, type SortOrder } from "@/platform/table/sortResultRows";
 import { formatLogTs, prettyMaybeJson } from "../logFormat";
 import { COPY_FAILED_MESSAGE } from "@/platform/clipboard";
 import { useToast } from "@/platform/toast";
+import { TruncationBanner } from "@/platform/sql/TruncationBanner";
 import styles from "./ResultPanel.module.css";
 
 // Re-use the Athena export infra. The ExportMenu accepts { name, ty }[] columns;
@@ -82,6 +83,8 @@ export function InsightsResultPanel({ state, connectionName = "" }: Props) {
       rows={result.rows}
       queryMs={result.query_ms}
       truncated={result.truncated}
+      rowCap={result.row_cap}
+      rowCapSource={result.row_cap_source}
       recordsMatched={result.records_matched}
       bytesScanned={result.bytes_scanned}
       connectionName={connectionName}
@@ -107,6 +110,8 @@ interface RowsResultViewProps {
   rows: unknown[][];
   queryMs: number;
   truncated: boolean;
+  rowCap: number;
+  rowCapSource: InsightsResultRows["row_cap_source"];
   recordsMatched: number;
   bytesScanned: number;
   connectionName: string;
@@ -118,6 +123,8 @@ function RowsResultView({
   rows,
   queryMs,
   truncated,
+  rowCap,
+  rowCapSource,
   recordsMatched,
   bytesScanned,
   connectionName,
@@ -125,18 +132,12 @@ function RowsResultView({
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {truncated && (
-        <div
-          style={{
-            padding: "3px 10px",
-            fontSize: 11,
-            color: "var(--text-muted)",
-            background: "rgba(245,158,11,0.1)",
-            borderBottom: "1px solid var(--border)",
-            flexShrink: 0,
-          }}
-        >
-          Result truncated to {rows.length.toLocaleString()} rows.
-        </div>
+        <TruncationBanner
+          rowCap={rowCap}
+          rowCapSource={rowCapSource}
+          clause={null}
+          engineReason="CloudWatch Logs Insights returns at most 10,000 records per query"
+        />
       )}
       <div
         style={{
