@@ -4,6 +4,12 @@
   height: 100%;
   min-height: 0;
   background: var(--bg);
+  /* Focusing the grid root programmatically on tab activation would
+     otherwise draw a UA :focus-visible ring around the entire grid when the
+     tab is opened via a keyboard path (⌘P quick switcher) but not via a
+     mouse path — an inconsistency worse than no ring. The grid's real
+     selection feedback is the accent cell ring (.cellActive, below). */
+  outline: none;
 }
 
 .viewport {

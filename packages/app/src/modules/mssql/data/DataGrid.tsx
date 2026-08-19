@@ -43,6 +43,11 @@ export interface UnifiedRow {
 
 export interface DataGridHandle {
   scrollToTop(): void;
+  /**
+   * Focus the grid root so the grid's own key bindings (⌘C / ⌘V / ⌘A /
+   * Backspace / Delete / Escape) and the tab-level shortcuts are live.
+   */
+  focus(): void;
 }
 
 export interface DataGridProps {
@@ -124,6 +129,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
   });
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -137,6 +143,9 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
     () => ({
       scrollToTop() {
         viewportRef.current?.scrollTo({ top: 0 });
+      },
+      focus() {
+        rootRef.current?.focus();
       },
     }),
     [],
@@ -283,7 +292,22 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
 
   return (
     <div
-      style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", flex: 1, minWidth: 0 }}
+      ref={rootRef}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        overflow: "hidden",
+        flex: 1,
+        minWidth: 0,
+        // Focusing the grid root programmatically on tab activation would
+        // otherwise draw a UA :focus-visible ring around the entire grid
+        // when the tab is opened via a keyboard path (⌘P quick switcher)
+        // but not via a mouse path — an inconsistency worse than no ring.
+        // The grid's real selection feedback is the accent cell ring
+        // (isActiveCellHere box-shadow, above).
+        outline: "none",
+      }}
       tabIndex={0}
       onKeyDown={onGridKeyDown}
     >
@@ -532,7 +556,7 @@ export const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataG
                       setActiveCell(null);
                       onSelectionChange({ anchor: rowIdx, active: rowIdx });
                     }
-                    (e.currentTarget.closest("[tabindex]") as HTMLElement | null)?.focus();
+                    rootRef.current?.focus();
                   }}
                   title="Select row"
                 >
