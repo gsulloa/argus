@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- The Postgres filter bar's `Operator: Unset` no longer deletes your filter rows. It now clears only the operator on each row, keeping the columns and values you typed — rows with no operator stop filtering but stay on screen, ready for a new operator. Deleting every row is now its own `Clear all` button in the footer ([#278](https://github.com/gsulloa/argus/issues/278))
+
 ## [0.8.5] - 2026-07-21
 
 ### Added

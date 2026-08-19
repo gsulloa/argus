@@ -246,14 +246,43 @@ describe("TableViewerTab — filter state (jsdom, memory-cache lane)", () => {
     expect(screen.queryByTitle(/Unsaved changes/i)).toBeNull();
   });
 
-  it("Unset resets value input to empty and clears draft rows", () => {
+  it("Unset keeps the typed value and clears only the operator", () => {
     uniqueStateViewer();
     openFilterBar();
     const valueInput = screen.getByRole("textbox", { name: /Value/i });
     fireEvent.change(valueInput, { target: { value: "hello" } });
-    // Click Unset.
     fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
-    // Value should be cleared.
+    // The row survives with its value; only the operator is deselected.
+    expect(screen.getByRole("textbox", { name: /Value/i })).toHaveValue("hello");
+    const opSelect = screen.getByRole("combobox", { name: /Operator/i }) as HTMLSelectElement;
+    expect(opSelect.value).toBe("");
+  });
+
+  it("Unset then Apply All unfilters the grid while keeping the rows", () => {
+    uniqueStateViewer();
+    openFilterBar();
+    const valueInput = screen.getByRole("textbox", { name: /Value/i });
+    fireEvent.change(valueInput, { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
+    const applyAllPrimary = screen
+      .getAllByRole("button")
+      .find((b) => b.textContent?.trim() === "Apply All" || b.textContent?.trim() === "Apply All (OR)")!;
+    queryTableMock.mockClear();
+    fireEvent.click(applyAllPrimary);
+    // No predicate reaches the backend…
+    const lastCall = queryTableMock.mock.calls.at(-1);
+    expect(lastCall?.[3]?.filter_tree).toBeUndefined();
+    // …but the user's row is still on screen with its value.
+    expect(screen.getByRole("textbox", { name: /Value/i })).toHaveValue("hello");
+  });
+
+  it("Clear all resets the draft rows to a single empty row", () => {
+    uniqueStateViewer();
+    openFilterBar();
+    const valueInput = screen.getByRole("textbox", { name: /Value/i });
+    fireEvent.change(valueInput, { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: /Clear all/i }));
+    expect(screen.getAllByRole("checkbox", { name: /Include in Apply All/i })).toHaveLength(1);
     expect(screen.getByRole("textbox", { name: /Value/i })).toHaveValue("");
   });
 

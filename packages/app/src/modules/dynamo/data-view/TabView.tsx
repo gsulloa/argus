@@ -596,18 +596,11 @@ export function TabView({
                             {sortArrow}{multiSort ? ` ${sortIndex + 1}` : ""}
                           </span>
                         )}
-                        {/* Wrap ResizeHandle to stop click propagation so
-                            resize gestures don't toggle the column sort. */}
-                        <span
-                          onClick={(e) => e.stopPropagation()}
-                          onMouseDown={(e) => e.stopPropagation()}
-                        >
-                          <ResizeHandle
-                            currentWidth={w}
-                            onChange={(px) => setWidth(header.id, px)}
-                            onReset={() => resetWidth(header.id)}
-                          />
-                        </span>
+                        <ResizeHandle
+                          currentWidth={w}
+                          onChange={(px) => setWidth(header.id, px)}
+                          onReset={() => resetWidth(header.id)}
+                        />
                       </>
                     )}
                   </div>

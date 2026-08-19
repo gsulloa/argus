@@ -28,6 +28,13 @@ interface DragState {
  * - Drag → live width updates via `onChange(clampWidth(px))`
  * - Double-click → `onReset()`
  * - `disabled` → returns null (no DOM node)
+ *
+ * `click` and `dblclick` never propagate out of the hit area. Header cells in
+ * every SQL grid carry the sort handler on their own `onClick`, and the browser
+ * synthesises a `click` after `pointerup` — without this, releasing a resize
+ * drag would also cycle the column's sort (and re-query, server-side). The stop
+ * is unconditional: a press-and-release on the 6px hit area is aimed at the
+ * resizer, not at the header, whether or not the pointer moved.
  */
 export function ResizeHandle({
   currentWidth,
@@ -112,8 +119,16 @@ export function ResizeHandle({
     restoreBodyStyles();
   };
 
-  const handleDoubleClick = () => {
+  const handleDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
     onReset();
+  };
+
+  // The browser dispatches a `click` after `pointerup`, and two of them before
+  // a `dblclick`. Keep every one of them inside the handle so the surrounding
+  // header cell's sort handler never fires from a resize gesture.
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
   };
 
   return (
@@ -124,6 +139,7 @@ export function ResizeHandle({
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
+      onClick={handleClick}
       onDoubleClick={handleDoubleClick}
     />
   );
