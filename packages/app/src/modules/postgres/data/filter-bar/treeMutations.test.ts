@@ -6,7 +6,6 @@ import {
   setEnabled,
   setCombinator,
   clearAllRows,
-  unsetAllOperators,
   moveRow,
   coerceValueForOperator,
 } from "./treeMutations";
@@ -194,76 +193,6 @@ describe("clearAllRows", () => {
   it("preserves combinator", () => {
     const t: FilterTree = { rows: [row(), row()], combinator: "OR" };
     expect(clearAllRows(t).combinator).toBe("OR");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// unsetAllOperators
-// ---------------------------------------------------------------------------
-
-describe("unsetAllOperators", () => {
-  it("nulls the operator on every structured row", () => {
-    const t = treeOf(row({ op: "=" }), row({ op: "In", value: ["a"] }));
-    const next = unsetAllOperators(t);
-    expect(next.rows.map((r) => r.op)).toEqual([null, null]);
-  });
-
-  it("keeps every row — nothing is deleted", () => {
-    const t = treeOf(row(), row(), row());
-    expect(unsetAllOperators(t).rows).toHaveLength(3);
-  });
-
-  it("preserves id, enabled, column, value and order", () => {
-    const t: FilterTree = {
-      rows: [
-        { id: "u1", enabled: true, column: { kind: "named", name: "country" }, op: "=", value: "CL" },
-        { id: "u2", enabled: false, column: { kind: "any_column" }, op: "In", value: ["a", "b"] },
-      ],
-      combinator: "AND",
-    };
-    const next = unsetAllOperators(t);
-    expect(next.rows[0]).toEqual({
-      id: "u1",
-      enabled: true,
-      column: { kind: "named", name: "country" },
-      op: null,
-      value: "CL",
-    });
-    expect(next.rows[1]).toEqual({
-      id: "u2",
-      enabled: false,
-      column: { kind: "any_column" },
-      op: null,
-      value: ["a", "b"],
-    });
-  });
-
-  it("preserves combinator", () => {
-    const t: FilterTree = { rows: [row()], combinator: "OR" };
-    expect(unsetAllOperators(t).combinator).toBe("OR");
-  });
-
-  it("leaves RAW rows untouched", () => {
-    const t: FilterTree = {
-      rows: [
-        { id: "u3", enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" },
-        { id: "u4", enabled: true, column: { kind: "named", name: "a" }, op: "=", value: "1" },
-      ],
-      combinator: "AND",
-    };
-    const next = unsetAllOperators(t);
-    expect(next.rows[0]).toEqual(t.rows[0]);
-    expect(next.rows[1]!.op).toBeNull();
-  });
-
-  it("is a no-op on an empty row list", () => {
-    const t: FilterTree = { rows: [], combinator: "AND" };
-    expect(unsetAllOperators(t)).toEqual({ rows: [], combinator: "AND" });
-  });
-
-  it("unset rows are dropped from the wire payload", () => {
-    const t = treeOf(row({ op: "=", value: "1" }));
-    expect(modelToPayload(unsetAllOperators(t)).filter_tree).toBeUndefined();
   });
 });
 

@@ -39,7 +39,10 @@ export function migrateLegacyFilterModel(raw: unknown): FilterModel {
     if (!row || typeof row !== "object" || Array.isArray(row)) return EMPTY_FILTER_MODEL;
     const r = row as Record<string, unknown>;
     // `op` may legitimately be absent/null — that is the "operator unset" state
-    // written by the footer's `Unset` control. Only a missing column is corrupt.
+    // v0.8.6's footer `Unset` control wrote. Rejecting it here would discard the
+    // whole persisted filter of every user who clicked it, so the tolerance
+    // stays even though no current UI path produces the state. Only a missing
+    // column is corrupt.
     if (!r["column"]) return EMPTY_FILTER_MODEL;
     const col = r["column"] as Record<string, unknown>;
     if (col["kind"] === "or_group") {
@@ -60,7 +63,8 @@ export function migrateLegacyFilterModel(raw: unknown): FilterModel {
       id,
       enabled: r["enabled"] !== false,
       column: r["column"] as FilterRow["column"],
-      // Absent / null / non-string → the row rehydrates with its operator unset.
+      // Absent / null / non-string → the row rehydrates with its operator unset
+      // (legacy v0.8.6 state; repairable from the row's operator picker).
       op: typeof r["op"] === "string" ? (r["op"] as Operator) : null,
       value: r["value"] as FilterRow["value"],
     };

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A configurable result row limit for unbounded queries, in every SQL/query editor toolbar (`1k / 10k / 50k / 100k / Custom…`, default 10,000, persisted as the `sql.rowCap` setting). A non-configurable ceiling of 1,000,000 rows backstops it.
 
 ### Changed
+- The Postgres filter bar's `Unset` now stops applying your filters instead of clearing the operators, and leaves the filter form exactly as you built it — columns, operators, values and checkboxes all stay put, so a single `Apply All` puts the same filter back in force. This replaces the operator-clearing behaviour shipped in 0.8.6, which matched the label but not the request behind it ([#278](https://github.com/gsulloa/argus/issues/278)). The footer control now reads `Filters: Unset`; `Clear all` is still the way to empty the rows.
 - The truncation banner now names the row limit actually applied instead of a hardcoded "10,000", explains which constraint was binding, and offers an inline **Raise limit** action when the setting is the one to change. DynamoDB PartiQL (no `LIMIT` clause) and CloudWatch Logs Insights (capped at 10,000 records by AWS) say so explicitly.
 
 ### Fixed

@@ -673,6 +673,16 @@ export function TableViewer({
     setApplyToken((t) => t + 1);
   }, [draft, setApplied]);
 
+  // Footer `Filters: Unset` — stops the filtering without touching the form.
+  // `draft` is deliberately left alone (rows, operators, values, checkboxes and
+  // order all survive), so a following Apply All puts the exact same filter back
+  // in force. The token bump is required: Unset commits to `applied`, so it owes
+  // the same unconditional refetch every other commit gesture does.
+  const onUnsetFilters = useCallback(() => {
+    setApplied({ rows: [], combinator: draft.combinator });
+    setApplyToken((t) => t + 1);
+  }, [draft.combinator, setApplied]);
+
   const onResetFilters = useCallback(() => {
     resetFilter();
   }, [resetFilter]);
@@ -765,6 +775,7 @@ export function TableViewer({
             onDraftChange={setDraft}
             onApplyAll={onApplyFilters}
             onApplyOnlyRow={onApplyOnlyRow}
+            onUnsetFilters={onUnsetFilters}
             onSqlClick={onOpenInSqlEditor}
             onClose={() => setFilterBarVisible(false)}
           />

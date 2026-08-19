@@ -842,7 +842,7 @@ The viewer tab SHALL conditionally render a filter bar pinned above the column h
 
 The bar MUST be **hidden by default** when a `postgres-table-data` tab is first opened (no persisted preference). When hidden, the bar MUST NOT reserve vertical space — the column header row MUST sit flush against the upper tab chrome. The user MUST be able to toggle the bar visible via either (a) the `Filter` icon button in the subtab header chrome, or (b) the `⌘F` (macOS) / `Ctrl+F` (other) keyboard shortcut. Visibility MUST be persisted per-table (see "Filter bar visibility persistence"). The previous chevron-collapse control inside the bar's header is REMOVED — there is no "collapse but stay reserving space" intermediate state.
 
-When visible, the bar MUST contain, top to bottom: a vertical stack of filter rows (each row: checkbox, column picker, operator picker, value input, Apply / Applied button, `−`, `+`), and a single-line footer strip (see "Filter bar footer Unset, Clear all, Export, SQL"). When visible with no persisted rows, the bar MUST render exactly one empty row (the default empty state).
+When visible, the bar MUST contain, top to bottom: a vertical stack of filter rows (each row: checkbox, column picker, operator picker, value input, Apply / Applied button, `−`, `+`), and a single-line footer strip (see "Filter bar footer controls"). When visible with no persisted rows, the bar MUST render exactly one empty row (the default empty state).
 
 The `⌘F` shortcut MUST resolve as follows (the handler MUST call `preventDefault()` unless explicitly noted, and MUST be scoped to the active table tab on the `Data` subtab):
 - If the bar is **hidden**: show the bar AND move focus to the first row's value input.
@@ -906,7 +906,7 @@ The handler MUST NOT fire on the `Structure` or `Raw` subtab. The handler MUST N
 
 `TableViewerTab` SHALL maintain two filter values for each tab: `draft` and `applied`, each of shape `FilterTree = { rows: FilterRow[], combinator: "AND" | "OR" }`. Only `applied` MUST be passed (after wire-shape conversion) to `postgres_query_table` and `postgres_count_table`. Edits to the filter bar (text input, operator changes, column changes, checkbox toggles, row insertions/removals, combinator menu picks) MUST update `draft` only. The bar MUST display a dirty indicator (a small `●` adjacent to the `Apply All` button) whenever `draft` differs from `applied`.
 
-The `Apply All` button and the `⇧↵` / `⌘↵` / `⇧⌘↵` shortcuts commit the enabled-complete subset of `draft` to `applied`. Plain `Enter` (no modifier) and the per-row `Apply` button each commit exactly that single focused row to `applied` (see "Per-row Apply and Applied visual state" and "Filter bar keyboard shortcuts"). The `Unset` button clears the operator on every non-RAW `draft` row and the `Clear all` button resets `draft.rows`; neither touches `applied` (see "Filter bar footer Unset, Clear all, Export, SQL").
+The `Apply All` button and the `⇧↵` / `⌘↵` / `⇧⌘↵` shortcuts commit the enabled-complete subset of `draft` to `applied`. Plain `Enter` (no modifier) and the per-row `Apply` button each commit exactly that single focused row to `applied` (see "Per-row Apply and Applied visual state" and "Filter bar keyboard shortcuts"). The footer `Unset` button writes `applied` directly — it sets `applied.rows` to `[]` and MUST NOT modify `draft` in any way. The `Clear all` button resets `draft.rows` and MUST NOT touch `applied`. (Both are covered by "Filter bar footer controls".)
 
 The previous `Reset` button and `Esc` discard-draft shortcut are REMOVED. There is no single-keystroke "revert draft to applied" affordance in the new design.
 
@@ -951,13 +951,15 @@ Mode toggling is REMOVED — the bar has no Structured/Raw mode toggle. The filt
 
 - **WHEN** the user inspects the filter bar's UI
 - **THEN** there is no `Reset` button anywhere in the bar (footer or otherwise)
-- **AND** the closest equivalent is `Clear all` which clears `draft.rows` only (see "Filter bar footer Unset, Clear all, Export, SQL")
+- **AND** the closest equivalent is `Clear all` which clears `draft.rows` only (see "Filter bar footer controls")
 
 #### Scenario: Unset does not delete rows
 
-- **WHEN** the user has three populated draft rows and clicks `Unset`
-- **THEN** all three rows are still rendered with their columns and values
-- **AND** `applied` is unchanged
+- **WHEN** the user has three populated draft rows, all applied, and clicks `Unset`
+- **THEN** all three rows are still rendered with their columns, operators and values
+- **AND** `draft` is unchanged
+- **AND** `applied.rows === []`
+- **AND** the dirty indicator becomes visible
 
 ### Requirement: Raw SQL filter row
 
@@ -968,7 +970,7 @@ A RAW row is entered through the column picker: in addition to the named columns
 - The operator picker MUST be hidden or disabled (the operator is implicitly `RAW`).
 - In place of the structured value input, the row MUST render a single free-form expression input that spans the operator+value region, using the monospace token from `DESIGN.md`, with a placeholder illustrating the intended use (e.g. `data->>'estado' = 'activo'`).
 - The row MUST retain its checkbox, per-row `Apply` / `Applied` affordance, and `−` / `+` buttons, identical to every other row.
-- The footer `Operator: [Unset]` control MUST leave the row untouched — a RAW row has no user-chosen operator to deselect, and no picker with which to restore one.
+- The footer `Filters: [Unset]` control MUST leave the row untouched — as it MUST leave every other draft row untouched, it only clears `applied`.
 
 A RAW row is **complete** (eligible for `Apply All` and per-row `Apply`) iff its expression is a non-empty, non-whitespace string. Incomplete RAW rows MUST be excluded from the wire payload exactly as incomplete structured rows are.
 
@@ -1007,10 +1009,10 @@ The footer `SQL` preview and any copy-WHERE / export-of-WHERE path MUST render a
 
 #### Scenario: Unset does not disturb a RAW row
 
-- **WHEN** the user clicks `Operator: [Unset]` with a RAW row in the draft
+- **WHEN** the user clicks `Filters: [Unset]` with a RAW row in the draft
 - **THEN** the RAW row's operator is still `RAW`
 - **AND** its expression is unchanged
-- **AND** it still compiles into the footer `SQL` preview once applied
+- **AND** it recompiles into the footer `SQL` preview as soon as it is applied again
 
 #### Scenario: Footer SQL preview shows the RAW expression verbatim
 
@@ -1828,7 +1830,7 @@ Closing the tab MUST discard all retained state for that tab. Reopening the same
 
 ### Requirement: Filter Apply always refetches
 
-Every commit from `draft` to `applied` (via **Apply All**, the `⇧↵` / `⌘↵` / `⇧⌘↵` shortcuts, the per-row **Apply** button, or plain `Enter` applying the focused row) MUST cause `postgres.queryTable` to be invoked, even when the resulting `applied` value is structurally equal to the previous `applied` value. The user's Apply gesture SHALL be treated as an explicit refresh signal, not merely as a state-equality trigger.
+Every commit to `applied` (via **Apply All**, the `⇧↵` / `⌘↵` / `⇧⌘↵` shortcuts, the per-row **Apply** button, plain `Enter` applying the focused row, or the footer **Unset** button) MUST cause `postgres.queryTable` to be invoked, even when the resulting `applied` value is structurally equal to the previous `applied` value. The user's Apply or Unset gesture SHALL be treated as an explicit refresh signal, not merely as a state-equality trigger.
 
 The implementation MUST NOT rely solely on structural equality of `applied` to decide whether to refetch. A monotonically-advancing token (or equivalent mechanism) MUST be threaded into the data-fetch dependency key so that pressing Apply with an unchanged filter model still produces a network round-trip and a fresh first page.
 
@@ -1860,6 +1862,12 @@ This requirement explicitly overrides any optimisation that would dedupe a fetch
 - **WHEN** `applied.rows === []` (no filters) and the user presses `Apply All` from a draft with no enabled-complete rows
 - **THEN** `postgres.queryTable` is invoked again with no `filter_tree` and no `raw_where`
 - **AND** the inline `No filters enabled` status appears (existing behaviour preserved)
+
+#### Scenario: Unset with already-empty applied still refetches
+
+- **WHEN** `applied.rows === []` and the user clicks `Unset`
+- **THEN** `postgres.queryTable` is invoked again with no `filter_tree` and no `raw_where`
+- **AND** `draft` is unchanged
 
 #### Scenario: Editing draft without Apply still does not fetch
 
@@ -2213,6 +2221,15 @@ A structured filter row SHALL be able to carry **no operator**. The client filte
 model MUST represent this as `FilterRow.op === null`; the `Operator` union itself
 MUST NOT gain an "unset" member, and `null` MUST NEVER be emitted on the wire.
 
+This state is **legacy-only**: it exists so filter records persisted by v0.8.6 —
+whose footer `Operator: Unset` control wrote `op: null` onto every non-RAW draft
+row — keep loading and stay repairable. No affordance in the filter bar MAY
+produce a `null` operator: `Unset` no longer touches `draft` (see "Filter bar
+footer controls"), the operator picker cannot select the placeholder, and no
+other control clears an operator. The readers of the state MUST nevertheless be
+retained, since removing them would make a v0.8.6 record fail validation and
+discard the user's entire persisted filter for that table.
+
 A row whose `op` is `null` MUST be treated as **incomplete**: it MUST be excluded
 from the `filter_tree` payload sent to `postgres_query_table` /
 `postgres_count_table`, from the compiled WHERE used by the footer `SQL`
@@ -2241,13 +2258,18 @@ The row MUST remain fully editable and fully recoverable:
 A RAW row (`column.kind === "raw"`) MUST NOT be given a `null` operator; its
 operator stays fixed at `RAW`.
 
-The unset state MUST survive persistence: a persisted row with `op: null` (or with
+The state MUST survive persistence: a persisted row with `op: null` (or with
 `op` absent) MUST be rehydrated as an unset row, and MUST NOT cause the loader to
 discard the persisted filter record.
 
+#### Scenario: No filter-bar control produces a null operator
+
+- **WHEN** the user exercises every filter-bar control — `Unset`, `Clear all`, `Apply All`, per-row `Apply`, the column picker, the operator picker, the value inputs, the row checkbox, insert/remove, drag-reorder and the combinator menu
+- **THEN** no `draft` row ever ends up with `op === null`
+
 #### Scenario: Unset row is excluded from the query payload
 
-- **WHEN** `draft.rows` contains an enabled row `{ column: "status", op: null, value: "ok" }` and the user clicks `Apply All`
+- **WHEN** `draft.rows` contains an enabled row `{ column: "status", op: null, value: "ok" }` rehydrated from a v0.8.6 record and the user clicks `Apply All`
 - **THEN** that row is not present in `applied.rows`
 - **AND** no condition for `status` is sent to `postgres_query_table`
 
@@ -2260,7 +2282,7 @@ discard the persisted filter record.
 
 #### Scenario: Retained value stays visible and editable while unset
 
-- **WHEN** a row was `{ column: "status", op: "=", value: "ok" }` and its operator becomes unset
+- **WHEN** a rehydrated row is `{ column: "status", op: null, value: "ok" }`
 - **THEN** the row still shows column `status` and value `ok`
 - **AND** the user can keep typing in the value input
 
@@ -2297,84 +2319,10 @@ discard the persisted filter record.
 
 #### Scenario: Unset operator survives app restart
 
-- **WHEN** the user unsets the operators on a two-row draft and quits Argus
+- **WHEN** the persisted `pgTableFilter:*` record for a table holds two rows with `op: null` and their columns and values
 - **AND** the user re-launches Argus and reopens the same table
-- **THEN** both rows are restored with their columns and values intact and their operators still unset
+- **THEN** both rows are restored with their columns and values intact and their operators still showing the `—` placeholder
 - **AND** the persisted filter record was NOT reset to empty
-
-### Requirement: Filter bar footer Unset, Clear all, Export, SQL
-
-The filter bar SHALL render a footer strip with the following controls, in order from left to right:
-
-- `Export` button — disabled / placeholder. `aria-disabled="true"`. Tooltip: `Export coming soon`. Clicking it MUST be a no-op.
-- `SQL` button — opens a new `postgres-query` tab on the same connection with a prefilled SELECT reflecting the current `applied` filter set (same behavior as the prior `Open in SQL Editor` action). The button MUST use `applied`, NOT `draft`.
-- `Clear all` button — the explicit destructive affordance. Activating it MUST reset all `draft.rows` to a single empty row (`enabled = true`, `column = any_column`, `op = Contains`, `value = ""`). It MUST NOT modify `applied`. It MUST NOT modify `draft.combinator`. To clear the active filtering, the user must subsequently press `Apply All`. It MUST be styled as a neutral footer button (not `--danger`), consistent with `Export` / `SQL`.
-- Shortcut hint strip: `Show: ⌘F`, `Insert: ⌘I`, `Remove: ⌘⇧I`, `Apply row: ↵`, `Apply All: ⇧↵`, `Up: ⌘↑`, `Down: ⌘↓`, `Columns: ⌘←`. Each hint MUST be rendered as a non-interactive label using the existing `FilterKeyHint` component. The `Apply row: ↵` and `Apply All: ⇧↵` hints MUST be present so the per-row-Enter / Apply-All-Shift+Enter shortcuts are discoverable.
-- `Operator: [Unset]` — a button labeled `Unset`. Activating it MUST clear the **operator selection only**: for every row in `draft.rows` whose `column.kind` is not `"raw"`, `op` becomes `null`. It MUST NOT remove, add or reorder rows. It MUST preserve each row's `id`, `enabled`, `column` and `value`. It MUST leave RAW rows untouched (their operator stays `RAW`). It MUST NOT modify `applied`. It MUST NOT modify `draft.combinator`. Because a row with no operator is incomplete, a subsequent `Apply All` clears the active filtering while every row stays on screen.
-- `Apply All ▾` (covered by the "Apply All with persistent root combinator" requirement).
-
-The `Clear all` and `Operator: [Unset]` controls MUST NOT be rendered adjacent to
-one another, so the destructive action cannot be mistaken for the operator-scoped
-one.
-
-The gear icon (`⚙`) visible in some reference designs MUST NOT be rendered.
-
-#### Scenario: Unset clears operators and keeps every row
-
-- **WHEN** `draft.rows` has three populated rows AND `applied` has those same three rows AND the user clicks `Unset`
-- **THEN** `draft.rows.length === 3`
-- **AND** each row's `op` is `null`
-- **AND** each row's `column`, `value`, `enabled` and `id` are unchanged
-- **AND** row order is unchanged
-- **AND** `draft.combinator` is unchanged
-- **AND** `applied` is unchanged (the grid remains filtered)
-- **AND** the dirty indicator now reflects `draft ≠ applied`
-
-#### Scenario: Unset leaves RAW rows alone
-
-- **WHEN** `draft.rows` contains a structured row and a RAW row, and the user clicks `Unset`
-- **THEN** the structured row's `op` is `null`
-- **AND** the RAW row's `op` is still `RAW` and its expression is unchanged
-
-#### Scenario: Unset followed by Apply All clears the active filter without losing the rows
-
-- **WHEN** the user clicks `Unset` then immediately clicks `Apply All`
-- **THEN** `applied.rows === []`
-- **AND** the grid is unfiltered
-- **AND** `draft.rows` still holds every row the user had built, with their columns and values
-
-#### Scenario: Clear all resets draft rows to a single empty row
-
-- **WHEN** `draft.rows` has three populated rows AND `applied` has those same three rows AND the user clicks `Clear all`
-- **THEN** `draft.rows.length === 1`
-- **AND** the single remaining row has the default empty state
-- **AND** `draft.combinator` is unchanged
-- **AND** `applied` is unchanged (the grid remains filtered)
-- **AND** the dirty indicator now reflects `draft ≠ applied`
-
-#### Scenario: Clear all followed by Apply All clears the active filter
-
-- **WHEN** the user clicks `Clear all` then immediately clicks `Apply All`
-- **THEN** `applied.rows === []`
-- **AND** the grid is unfiltered
-
-#### Scenario: SQL button uses applied, not draft
-
-- **WHEN** the user has dirty draft rows (different from `applied`) and clicks `SQL`
-- **THEN** the opened SQL editor tab is prefilled with a SELECT that uses the current `applied` filter set
-- **AND** the unapplied draft does NOT appear in the prefilled SQL
-
-#### Scenario: Footer documents the Enter and Shift+Enter shortcuts
-
-- **WHEN** the user inspects the filter-bar footer hint strip
-- **THEN** a `Apply row: ↵` hint is rendered
-- **AND** a `Apply All: ⇧↵` hint is rendered
-
-#### Scenario: Export button is disabled
-
-- **WHEN** the user inspects the footer `Export` button
-- **THEN** it is disabled with `aria-disabled="true"` and tooltip `Export coming soon`
-- **AND** clicking it performs no action
 
 ### Requirement: Table viewer tab acquires keyboard focus on activation
 
@@ -2476,4 +2424,88 @@ Because focusing the grid root reproduces the focus state a click already produc
 
 - **WHEN** two `postgres-table-data` tabs are open and the user switches from Tab A to Tab B
 - **THEN** only Tab B moves focus, and Tab A does not fight for it
+
+### Requirement: Filter bar footer controls
+
+The filter bar SHALL render a footer strip with the following controls, in order from left to right:
+
+- `Export` button — disabled / placeholder. `aria-disabled="true"`. Tooltip: `Export coming soon`. Clicking it MUST be a no-op.
+- `SQL` button — opens a new `postgres-query` tab on the same connection with a prefilled SELECT reflecting the current `applied` filter set (same behavior as the prior `Open in SQL Editor` action). The button MUST use `applied`, NOT `draft`.
+- `Clear all` button — the explicit destructive affordance. Activating it MUST reset all `draft.rows` to a single empty row (`enabled = true`, `column = any_column`, `op = Contains`, `value = ""`). It MUST NOT modify `applied`. It MUST NOT modify `draft.combinator`. To clear the active filtering, the user must subsequently press `Apply All`. It MUST be styled as a neutral footer button (not `--danger`), consistent with `Export` / `SQL`.
+- Shortcut hint strip: `Show: ⌘F`, `Insert: ⌘I`, `Remove: ⌘⇧I`, `Apply row: ↵`, `Apply All: ⇧↵`, `Up: ⌘↑`, `Down: ⌘↓`, `Columns: ⌘←`. Each hint MUST be rendered as a non-interactive label using the existing `FilterKeyHint` component. The `Apply row: ↵` and `Apply All: ⇧↵` hints MUST be present so the per-row-Enter / Apply-All-Shift+Enter shortcuts are discoverable.
+- `Filters: [Unset]` — a button labeled `Unset`, prefixed by the static label `Filters:`. Its tooltip MUST convey that the filter form is preserved (e.g. `Stop applying the filters — the filter form is kept as is`). Activating it MUST **stop the grid from filtering without altering the filter form**:
+  - `applied.rows` MUST become `[]`, and `applied.combinator` MUST be set from `draft.combinator`.
+  - `draft` MUST be left entirely unchanged — no row is added, removed or reordered, and every row's `id`, `enabled`, `column`, `op` and `value` MUST be preserved verbatim. In particular, operators MUST NOT be cleared. `draft.combinator` MUST be unchanged.
+  - It MUST trigger a refetch (see "Filter Apply always refetches").
+  - It MUST NOT be reachable by any path that mutates `draft`; the filter bar MUST surface it as a callback to the tab (alongside `Apply All` / per-row `Apply`), not as a draft mutation.
+- `Apply All ▾` (covered by the "Apply All with persistent root combinator" requirement).
+
+The `Clear all` and `Filters: [Unset]` controls MUST NOT be rendered adjacent to
+one another, so the destructive action cannot be mistaken for the
+form-preserving one.
+
+The gear icon (`⚙`) visible in some reference designs MUST NOT be rendered.
+
+#### Scenario: Unset stops filtering and leaves the form identical
+
+- **WHEN** `draft.rows` has three populated rows AND `applied` has those same three rows AND the user clicks `Unset`
+- **THEN** `applied.rows === []`
+- **AND** the grid refetches unfiltered
+- **AND** `draft.rows.length === 3`
+- **AND** each row's `column`, `op`, `value`, `enabled` and `id` are unchanged
+- **AND** row order is unchanged
+- **AND** `draft.combinator` is unchanged
+- **AND** the dirty indicator now reflects `draft ≠ applied`
+
+#### Scenario: Unset preserves operator selections
+
+- **WHEN** `draft.rows` contains `{ column: "status", op: "=", value: "ok" }` and the user clicks `Unset`
+- **THEN** that row's operator picker still shows `=`
+- **AND** no row's `op` becomes `null`
+
+#### Scenario: Apply All after Unset restores the same filtering in one gesture
+
+- **WHEN** the user clicks `Unset` and then clicks `Apply All` without editing any row
+- **THEN** `applied.rows` equals the enabled-complete subset of `draft.rows` it held before `Unset`
+- **AND** the grid is filtered exactly as it was before `Unset`
+- **AND** the user did not have to re-select any operator
+
+#### Scenario: Unset clears the bottom-bar filter count
+
+- **WHEN** `applied.rows` has two rows, so the bottom bar shows a `2 filters` chip, and the user clicks `Unset`
+- **THEN** the filter chip is no longer rendered
+- **AND** the filter bar still shows both rows
+
+#### Scenario: Clear all resets draft rows to a single empty row
+
+- **WHEN** `draft.rows` has three populated rows AND `applied` has those same three rows AND the user clicks `Clear all`
+- **THEN** `draft.rows.length === 1`
+- **AND** the single remaining row has the default empty state
+- **AND** `draft.combinator` is unchanged
+- **AND** `applied` is unchanged (the grid remains filtered)
+- **AND** the dirty indicator now reflects `draft ≠ applied`
+
+#### Scenario: Clear all followed by Apply All clears the active filter
+
+- **WHEN** the user clicks `Clear all` then immediately clicks `Apply All`
+- **THEN** `applied.rows === []`
+- **AND** the grid is unfiltered
+
+#### Scenario: SQL button uses applied, not draft
+
+- **WHEN** the user has dirty draft rows (different from `applied`) and clicks `SQL`
+- **THEN** the opened SQL editor tab is prefilled with a SELECT that uses the current `applied` filter set
+- **AND** the unapplied draft does NOT appear in the prefilled SQL
+
+#### Scenario: Footer documents the Enter and Shift+Enter shortcuts
+
+- **WHEN** the user inspects the filter-bar footer hint strip
+- **THEN** a `Apply row: ↵` hint is rendered
+- **AND** a `Apply All: ⇧↵` hint is rendered
+
+#### Scenario: Export button is disabled
+
+- **WHEN** the user inspects the footer `Export` button
+- **THEN** it is disabled with `aria-disabled="true"` and tooltip `Export coming soon`
+- **AND** clicking it performs no action
 

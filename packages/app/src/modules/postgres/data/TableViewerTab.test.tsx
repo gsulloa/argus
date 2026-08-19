@@ -131,6 +131,17 @@ function queryApplyAllPrimary() {
   return btns.find((b) => b.textContent?.trim() === "Apply All") ?? null;
 }
 
+// Helper: the primary Apply All button (never the chevron beside it).
+function clickApplyAll() {
+  return screen
+    .getAllByRole("button")
+    .find(
+      (b) =>
+        b.textContent?.trim() === "Apply All" ||
+        b.textContent?.trim() === "Apply All (OR)",
+    )!;
+}
+
 let toggleCounter = 0;
 function uniqueToggleViewer() {
   toggleCounter++;
@@ -246,33 +257,38 @@ describe("TableViewerTab — filter state (jsdom, memory-cache lane)", () => {
     expect(screen.queryByTitle(/Unsaved changes/i)).toBeNull();
   });
 
-  it("Unset keeps the typed value and clears only the operator", () => {
+  it("Unset leaves the filter form exactly as it was, operators included", () => {
     uniqueStateViewer();
     openFilterBar();
-    const valueInput = screen.getByRole("textbox", { name: /Value/i });
-    fireEvent.change(valueInput, { target: { value: "hello" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /Value/i }), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(clickApplyAll());
+    expect(screen.queryByTitle(/Unsaved changes/i)).toBeNull();
+
     fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
-    // The row survives with its value; only the operator is deselected.
+
+    // The form keeps its value AND its operator — nothing is deselected.
     expect(screen.getByRole("textbox", { name: /Value/i })).toHaveValue("hello");
     const opSelect = screen.getByRole("combobox", { name: /Operator/i }) as HTMLSelectElement;
-    expect(opSelect.value).toBe("");
+    expect(opSelect.value).toBe("Contains");
+    expect(screen.queryByRole("option", { name: "—" })).toBeNull();
+    // …but it is no longer in force, so the bar reads as dirty again.
+    expect(screen.getByTitle(/Unsaved changes/i)).toBeInTheDocument();
   });
 
-  it("Unset then Apply All unfilters the grid while keeping the rows", () => {
+  it("Unset clears the bottom-bar filter chip but keeps the filter rows", () => {
     uniqueStateViewer();
     openFilterBar();
-    const valueInput = screen.getByRole("textbox", { name: /Value/i });
-    fireEvent.change(valueInput, { target: { value: "hello" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /Value/i }), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(clickApplyAll());
+    expect(screen.getByRole("button", { name: /Clear filters/i })).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
-    const applyAllPrimary = screen
-      .getAllByRole("button")
-      .find((b) => b.textContent?.trim() === "Apply All" || b.textContent?.trim() === "Apply All (OR)")!;
-    queryTableMock.mockClear();
-    fireEvent.click(applyAllPrimary);
-    // No predicate reaches the backend…
-    const lastCall = queryTableMock.mock.calls.at(-1);
-    expect(lastCall?.[3]?.filter_tree).toBeUndefined();
-    // …but the user's row is still on screen with its value.
+
+    expect(screen.queryByRole("button", { name: /Clear filters/i })).toBeNull();
     expect(screen.getByRole("textbox", { name: /Value/i })).toHaveValue("hello");
   });
 
@@ -335,6 +351,93 @@ describe("TableViewerTab — filter state (jsdom, memory-cache lane)", () => {
     // Bar resets to hidden on relation change — toggle to confirm empty.
     openFilterBar();
     expect(screen.getByRole("textbox", { name: /Value/i })).toHaveValue("");
+  });
+});
+
+let unsetCounter = 0;
+function uniqueUnsetViewer() {
+  unsetCounter++;
+  return renderViewer({
+    connectionId: `conn-unset-${unsetCounter}`,
+    schema: "public",
+    relation: `table-unset-${unsetCounter}`,
+  });
+}
+
+// `useTableData` only fetches inside the Tauri runtime, so every assertion on
+// the query payload has to live in this lane.
+describe("TableViewerTab — Unset unapplies the filter (Tauri lane)", () => {
+  beforeEach(() => {
+    queryTableMock.mockReset();
+    tablePrimaryKeyMock.mockReset();
+    getSettingMock.mockReset();
+    setSettingMock.mockReset();
+    getSettingMock.mockResolvedValue(null);
+    setSettingMock.mockResolvedValue(undefined);
+    queryTableMock.mockResolvedValue(makeResult(1));
+    tablePrimaryKeyMock.mockResolvedValue({ pk_columns: ["id"], enums: {} });
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  });
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+
+  function lastFilterTree() {
+    return queryTableMock.mock.calls.at(-1)?.[3]?.filter_tree;
+  }
+
+  it("Unset drops the predicate and refetches, without touching the form", async () => {
+    uniqueUnsetViewer();
+    await waitFor(() => expect(queryTableMock).toHaveBeenCalled());
+    openFilterBar();
+    fireEvent.change(screen.getByRole("textbox", { name: /Value/i }), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(clickApplyAll());
+    await waitFor(() => expect(lastFilterTree()).toBeDefined());
+
+    queryTableMock.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
+
+    await waitFor(() => expect(queryTableMock).toHaveBeenCalled());
+    expect(lastFilterTree()).toBeUndefined();
+    expect(screen.getByRole("textbox", { name: /Value/i })).toHaveValue("hello");
+    expect(
+      (screen.getByRole("combobox", { name: /Operator/i }) as HTMLSelectElement).value,
+    ).toBe("Contains");
+  });
+
+  it("Apply All right after Unset restores the identical filter with no re-selection", async () => {
+    uniqueUnsetViewer();
+    await waitFor(() => expect(queryTableMock).toHaveBeenCalled());
+    openFilterBar();
+    fireEvent.change(screen.getByRole("textbox", { name: /Value/i }), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(clickApplyAll());
+    await waitFor(() => expect(lastFilterTree()).toBeDefined());
+    const before = lastFilterTree();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
+    await waitFor(() => expect(lastFilterTree()).toBeUndefined());
+
+    // No edits in between — one Apply All puts the same predicate back.
+    fireEvent.click(clickApplyAll());
+    await waitFor(() => expect(lastFilterTree()).toEqual(before));
+    expect(screen.queryByTitle(/Unsaved changes/i)).toBeNull();
+  });
+
+  it("Unset refetches even when nothing was applied", async () => {
+    uniqueUnsetViewer();
+    await waitFor(() => expect(queryTableMock).toHaveBeenCalled());
+    openFilterBar();
+
+    queryTableMock.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
+
+    await waitFor(() => expect(queryTableMock).toHaveBeenCalled());
+    expect(lastFilterTree()).toBeUndefined();
   });
 });
 

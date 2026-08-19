@@ -30,7 +30,6 @@ import {
   setEnabled,
   setCombinator,
   clearAllRows,
-  unsetAllOperators,
   moveRow,
 } from "./treeMutations";
 import {
@@ -61,6 +60,8 @@ export interface FilterBarProps {
   onApplyAll(): void;
   /** Per-row Apply — replaces applied with [thisRow], preserving combinator. */
   onApplyOnlyRow(index: number): void;
+  /** Unset — clears `applied` (stops filtering) without touching `draft`. */
+  onUnsetFilters(): void;
   /** Opens the SQL editor with the compiled applied WHERE. */
   onSqlClick(): void;
   /** Hide the bar. */
@@ -108,6 +109,7 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
       onDraftChange,
       onApplyAll,
       onApplyOnlyRow,
+      onUnsetFilters,
       onSqlClick,
       onClose,
     },
@@ -187,12 +189,13 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
 
     // ── Unset / Clear all ─────────────────────────────────────────────────────
 
-    // Operator-scoped: keeps every row (column, value, enabled, order) and only
-    // drops the operator selection. The rows survive; they just stop filtering
-    // until an operator is picked again.
+    // Applied-scoped: stops the filtering and leaves the form alone. `draft` is
+    // not read or written here — every row keeps its column, operator, value,
+    // checkbox and position — so a following Apply All restores the exact same
+    // filter in one gesture.
     const handleUnset = useCallback(() => {
-      onDraftChange(unsetAllOperators(draft));
-    }, [draft, onDraftChange]);
+      onUnsetFilters();
+    }, [onUnsetFilters]);
 
     // The destructive path, now its own explicit action rather than a side
     // effect of Unset. `applied` is untouched until the user presses Apply All.
@@ -486,7 +489,7 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
               </button>
 
               {/* Clear all — the explicit destructive action. Deliberately kept
-                  away from `Operator: Unset` at the other end of this group so
+                  away from `Filters: Unset` at the other end of this group so
                   the two can't be misclicked for one another. */}
               <button
                 type="button"
@@ -525,14 +528,14 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
                 </span>
               </span>
 
-              {/* Operator: Unset — clears the operator on every row, keeps the rows */}
+              {/* Filters: Unset — stops the filtering, keeps the form as built */}
               <span className={styles.hintItem}>
-                Operator:{" "}
+                Filters:{" "}
                 <button
                   type="button"
                   className={styles.unsetBtn}
                   onClick={handleUnset}
-                  title="Clear the operator on every row, keeping columns and values"
+                  title="Stop applying the filters — the filter form is kept as is"
                 >
                   Unset
                 </button>

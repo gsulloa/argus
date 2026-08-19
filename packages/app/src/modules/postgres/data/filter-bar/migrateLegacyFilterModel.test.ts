@@ -194,7 +194,8 @@ describe("migrateLegacyFilterModel", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Unset operator (op === null) — must NOT reset the record
+  // Legacy unset operator (op === null, written by v0.8.6's `Operator: Unset`)
+  // — must NOT reset the record
   // ---------------------------------------------------------------------------
 
   it("rehydrates a row with op: null as an unset row, keeping column and value", () => {
