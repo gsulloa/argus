@@ -208,8 +208,7 @@ fn tokenize(sql: &str, dialect: Dialect) -> Vec<Token> {
                         if let Some(start) = capture_start.take() {
                             let inner: String = chars[start..i].iter().collect();
                             let trimmed = inner.trim();
-                            if !trimmed.is_empty()
-                                && trimmed.chars().all(|ch| ch.is_ascii_digit())
+                            if !trimmed.is_empty() && trimmed.chars().all(|ch| ch.is_ascii_digit())
                             {
                                 if let Ok(v) = trimmed.parse::<u64>() {
                                     tokens.push(Token::ParenInt(v));
@@ -518,8 +517,8 @@ pub fn explicit_row_limit(sql: &str, dialect: Dialect) -> Option<u64> {
     let mut tokens = tokenize(sql, dialect);
 
     match tokens.first() {
-        Some(Token::Word(w)) if matches!(w.as_str(), "select" | "with" | "table" | "values" | "show") =>
-            {}
+        Some(Token::Word(w))
+            if matches!(w.as_str(), "select" | "with" | "table" | "values" | "show") => {}
         _ => return None,
     }
 
@@ -670,7 +669,10 @@ mod tests {
 
     #[test]
     fn update_is_none() {
-        assert_eq!(explicit_row_limit("UPDATE t SET a=1", Dialect::Postgres), None);
+        assert_eq!(
+            explicit_row_limit("UPDATE t SET a=1", Dialect::Postgres),
+            None
+        );
     }
 
     #[test]
@@ -740,7 +742,10 @@ mod tests {
     #[test]
     fn postgres_fetch_first_rows_only() {
         assert_eq!(
-            explicit_row_limit("SELECT * FROM t FETCH FIRST 500 ROWS ONLY", Dialect::Postgres),
+            explicit_row_limit(
+                "SELECT * FROM t FETCH FIRST 500 ROWS ONLY",
+                Dialect::Postgres
+            ),
             Some(500)
         );
     }
@@ -815,7 +820,10 @@ mod tests {
     #[test]
     fn postgres_cte_then_limit_on_outer_select() {
         assert_eq!(
-            explicit_row_limit("WITH c AS (SELECT 1) SELECT * FROM c LIMIT 42", Dialect::Postgres),
+            explicit_row_limit(
+                "WITH c AS (SELECT 1) SELECT * FROM c LIMIT 42",
+                Dialect::Postgres
+            ),
             Some(42)
         );
     }

@@ -63,7 +63,11 @@ pub fn configured_cap(conn: &rusqlite::Connection) -> u64 {
 /// Combines the configured cap, an optional explicit (e.g. statement-level)
 /// limit, and an engine ceiling into an effective cap plus the source that
 /// determined it.
-pub fn effective_cap(configured: u64, explicit: Option<u64>, engine_ceiling: u64) -> (u64, RowCapSource) {
+pub fn effective_cap(
+    configured: u64,
+    explicit: Option<u64>,
+    engine_ceiling: u64,
+) -> (u64, RowCapSource) {
     let requested = configured.max(explicit.unwrap_or(0));
     let cap = requested.min(engine_ceiling).max(1);
 

@@ -748,7 +748,11 @@ mod tests {
         let mut items: Vec<i32> = (0..10_001).collect();
         let truncated = truncate_to_cap(&mut items, 10_000);
         assert!(truncated);
-        assert_eq!(items.len(), 10_000, "returned items must not exceed the cap");
+        assert_eq!(
+            items.len(),
+            10_000,
+            "returned items must not exceed the cap"
+        );
     }
 
     #[test]
