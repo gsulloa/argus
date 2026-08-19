@@ -251,22 +251,92 @@ describe("FilterBar — footer buttons", () => {
     expect(onApplyAll).not.toHaveBeenCalled();
   });
 
-  it("Unset button calls onDraftChange with rows cleared to single empty row, combinator preserved", () => {
+  it("Unset button clears only the operators, keeping every row intact", () => {
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
       rows: [
         { id: "t6", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
-        { id: "t7", enabled: true, column: { kind: "named", name: "country" }, op: "=", value: "CL" },
+        { id: "t7", enabled: false, column: { kind: "named", name: "country" }, op: "=", value: "CL" },
       ],
       combinator: "OR",
     };
     render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
-    fireEvent.click(screen.getByRole("button", { name: /Unset/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows).toHaveLength(2);
+    expect(next.rows[0]).toEqual({
+      id: "t6",
+      enabled: true,
+      column: { kind: "named", name: "id" },
+      op: null,
+      value: "1",
+    });
+    expect(next.rows[1]).toEqual({
+      id: "t7",
+      enabled: false,
+      column: { kind: "named", name: "country" },
+      op: null,
+      value: "CL",
+    });
+    expect(next.combinator).toBe("OR");
+  });
+
+  it("Unset leaves RAW rows alone", () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [
+        { id: "t8", enabled: true, column: { kind: "raw" }, op: "RAW", value: "id > 0" },
+        { id: "t9", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
+      ],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
+    const next = onDraftChange.mock.calls[0]![0] as FilterModel;
+    expect(next.rows[0]).toEqual(draft.rows[0]);
+    expect(next.rows[1]!.op).toBeNull();
+  });
+
+  it("Clear all button resets rows to a single empty row, combinator preserved", () => {
+    const onDraftChange = vi.fn();
+    const draft: FilterModel = {
+      rows: [
+        { id: "t10", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" },
+        { id: "t11", enabled: true, column: { kind: "named", name: "country" }, op: "=", value: "CL" },
+      ],
+      combinator: "OR",
+    };
+    render(<FilterBar {...makeProps({ draft, onDraftChange })} />);
+    fireEvent.click(screen.getByRole("button", { name: /Clear all/i }));
     expect(onDraftChange).toHaveBeenCalledTimes(1);
     const next = onDraftChange.mock.calls[0]![0] as FilterModel;
     expect(next.rows).toHaveLength(1);
     expect(next.rows[0]).toMatchObject({ enabled: true, column: { kind: "any_column" } });
     expect(next.combinator).toBe("OR");
+  });
+
+  it("neither Unset nor Clear all touches applied", () => {
+    const onApplyAll = vi.fn();
+    const draft: FilterModel = {
+      rows: [{ id: "t12", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "1" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, applied: draft, onApplyAll })} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Unset$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Clear all/i }));
+    expect(onApplyAll).not.toHaveBeenCalled();
+  });
+
+  it("an unset row renders the placeholder in its operator picker", () => {
+    const draft: FilterModel = {
+      rows: [{ id: "t13", enabled: true, column: { kind: "named", name: "id" }, op: null, value: "1" }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft })} />);
+    const opSelect = screen.getByRole("combobox", { name: /Operator/i }) as HTMLSelectElement;
+    expect(opSelect.value).toBe("");
+    expect(screen.getByRole("option", { name: "—" })).toBeDisabled();
   });
 });
 

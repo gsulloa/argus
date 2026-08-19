@@ -128,6 +128,7 @@ Every grid header cell whose column is resizable SHALL expose a draggable hit ar
 - During an active drag, the document body MUST receive `user-select: none` and `cursor: col-resize` so cross-cell drag does not flicker the cursor; both MUST be cleared on pointer up/cancel.
 - Clamp the resulting width to `[56, 800]` pixels before applying.
 - On `dblclick` over the hit area, remove the column's entry from the record (reset to type-derived base width).
+- **Isolate its events from the enclosing header cell.** The hit area is rendered inside a header cell that may itself be clickable (in every SQL grid, clicking the header cycles the column's sort). Neither the `click` the browser synthesises after `pointerup` nor the `dblclick` used for width reset MUST reach the header cell or any other ancestor. This isolation MUST hold for a click on the hit area whether or not the pointer moved, and MUST be implemented once in the shared resize-handle component rather than per-grid, so every consuming grid (Postgres table viewer, Postgres ad-hoc result grid, MySQL, MSSQL, DynamoDB) inherits it.
 
 Columns flagged as `nonResizable` MUST NOT render a hit area (e.g. DynamoDB's `More…` column).
 
@@ -163,6 +164,28 @@ Columns flagged as `nonResizable` MUST NOT render a hit area (e.g. DynamoDB's `M
 - **WHEN** the DynamoDB Tabla view renders the `More…` column
 - **THEN** no resize hit area is rendered on its right edge
 - **AND** hovering its right edge does not reveal an accent line
+
+#### Scenario: Releasing a resize drag does not sort the column
+
+- **WHEN** the user drags the resize handle of a sortable column header to a new width and releases the pointer button over the handle
+- **THEN** the column is resized
+- **AND** the grid's sort order is unchanged — the header's sort action is not invoked and no re-query is issued
+
+#### Scenario: A click on the handle without dragging does not sort
+
+- **WHEN** the user presses and releases the pointer on the resize hit area without moving it
+- **THEN** the grid's sort order is unchanged
+
+#### Scenario: Double-click reset does not sort
+
+- **WHEN** the user double-clicks the resize handle of a sortable column header to reset its width
+- **THEN** the column's width override is removed
+- **AND** the grid's sort order is unchanged (neither of the two constituent clicks reaches the header)
+
+#### Scenario: Clicking the header outside the handle still sorts
+
+- **WHEN** the user clicks the header cell of a sortable column anywhere outside the 6px resize hit area
+- **THEN** the column's sort cycles as before (including shift-click multi-sort where the grid supports it)
 
 ### Requirement: Grid total width tracks effective column widths
 

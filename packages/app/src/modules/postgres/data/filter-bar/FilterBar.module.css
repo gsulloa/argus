@@ -461,6 +461,12 @@
   border-color: var(--accent);
 }
 
+/* Operator cleared via the footer `Unset` control. Muted, not an error state —
+   an unset row is a valid intermediate the user can complete at any time. */
+.opSelectUnset {
+  color: var(--text-subtle);
+}
+
 /* ── Value inputs ────────────────────────────────────────────────────────────*/
 
 .valueInput {
