@@ -684,12 +684,11 @@ describe("TabView — sort header clicks", () => {
     const qtyHeader = headers.find((h) => h.textContent?.includes("quantity"));
     expect(qtyHeader).toBeTruthy();
 
-    // Find the resize handle wrapper span (the one with stopPropagation)
-    // The ResizeHandle is the last child inside the header - click it via its parent span
-    const resizeSpan = qtyHeader!.querySelector("span:last-child");
-    if (resizeSpan) {
-      fireEvent.click(resizeSpan);
-    }
+    // ResizeHandle renders a single div carrying its CSS-module handle class.
+    // Assert we found it — otherwise this test would pass vacuously.
+    const resizeHandle = qtyHeader!.querySelector("div[class*='handle']");
+    expect(resizeHandle).toBeTruthy();
+    fireEvent.click(resizeHandle!);
 
     // onSortingChange should NOT be called since propagation is stopped
     expect(onSortingChange).not.toHaveBeenCalled();

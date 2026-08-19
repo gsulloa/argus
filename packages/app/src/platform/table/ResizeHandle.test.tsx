@@ -152,3 +152,89 @@ describe("ResizeHandle", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Event isolation from the enclosing header cell (issue #277)
+//
+// Header cells in every SQL grid carry the sort handler on their own onClick,
+// and the browser synthesises a `click` after `pointerup`. The handle must keep
+// that click to itself or a resize gesture also sorts the column.
+// ---------------------------------------------------------------------------
+
+describe("ResizeHandle — click isolation", () => {
+  /** Render the handle inside a clickable "header cell" like the grids do. */
+  function renderInHeader(props: {
+    onChange?: (px: number) => void;
+    onReset?: () => void;
+  } = {}) {
+    const headerClick = vi.fn();
+    const onChange = props.onChange ?? vi.fn();
+    const onReset = props.onReset ?? vi.fn();
+    const { container } = render(
+      <div onClick={headerClick}>
+        <ResizeHandle
+          currentWidth={180}
+          onChange={onChange}
+          onReset={onReset}
+        />
+      </div>,
+    );
+    const header = container.firstChild as Element;
+    const handle = header.firstChild as Element;
+    return { headerClick, onChange, onReset, header, handle };
+  }
+
+  it("a click on the handle does not reach the header", () => {
+    const { headerClick, handle } = renderInHeader();
+
+    fireEvent.click(handle);
+
+    expect(headerClick).not.toHaveBeenCalled();
+  });
+
+  it("a double-click still resets the width but does not reach the header", () => {
+    const onReset = vi.fn();
+    const { headerClick, handle } = renderInHeader({ onReset });
+
+    // A real dblclick is preceded by its two constituent clicks.
+    fireEvent.click(handle);
+    fireEvent.click(handle);
+    fireEvent.dblClick(handle);
+
+    expect(onReset).toHaveBeenCalledOnce();
+    expect(headerClick).not.toHaveBeenCalled();
+  });
+
+  it("a full drag resizes without sorting the header", () => {
+    const onChange = vi.fn();
+    const { headerClick, handle } = renderInHeader({ onChange });
+
+    pointerDown(handle, 100);
+    pointerMove(handle, 140); // +40px → 220
+    pointerUp(handle, 140);
+    // The browser fires this after pointerup — the whole point of #277.
+    fireEvent.click(handle);
+
+    expect(onChange).toHaveBeenCalledWith(220);
+    expect(headerClick).not.toHaveBeenCalled();
+  });
+
+  it("a click elsewhere in the header still reaches the header", () => {
+    const headerClick = vi.fn();
+    const { container } = render(
+      <div onClick={headerClick}>
+        <span>column_name</span>
+        <ResizeHandle
+          currentWidth={180}
+          onChange={vi.fn()}
+          onReset={vi.fn()}
+        />
+      </div>,
+    );
+    const colName = container.querySelector("span") as Element;
+
+    fireEvent.click(colName);
+
+    expect(headerClick).toHaveBeenCalledOnce();
+  });
+});
