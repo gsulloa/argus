@@ -7,6 +7,7 @@ import { useDirtySummary } from "@/platform/shell/tabs/useDirtySummary";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { AppError } from "@/platform/errors/AppError";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useAutoFocusOnActivate } from "@/platform/shell/useAutoFocusOnActivate";
 import { useSaveShortcut } from "@/platform/shell/useSaveShortcut";
 import { useToast } from "@/platform/toast";
 import type { PasteValue } from "@/platform/grid/gridPaste";
@@ -626,6 +627,10 @@ export function TableViewer({
   // ⌘S → save the dirty buffer regardless of focus position within the tab
   // (issue #88). Shared with the MySQL / MSSQL viewers.
   useSaveShortcut({ active, rootRef, onSave });
+
+  // Focus the grid on activation so ⌘F / ⌘R and the grid's own key
+  // bindings work without a priming click (issue #280).
+  useAutoFocusOnActivate({ active, rootRef, targetRef: gridRef });
 
   function onAddRow() {
     if (isReadOnly) return;

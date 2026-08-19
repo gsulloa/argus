@@ -9,6 +9,7 @@ import {
 import { TabsProvider } from "@/platform/shell/tabs/TabsContext";
 import { TableViewer } from "./TableViewerTab";
 import type { QueryTableResult } from "./types";
+import dataGridStyles from "./DataGrid.module.css";
 
 // Mocked Tauri data API — counts queryTable calls and lets each test arrange
 // what they want returned.
@@ -569,5 +570,215 @@ describe("TableViewerTab — PK lookup error state (Tauri lane)", () => {
 
     // Must NOT show the retry/error banner.
     expect(screen.queryByRole("button", { name: /Retry primary key lookup/i })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auto-focus-on-activation tests (issue #280, tasks 4.1-4.4).
+//
+// Renders the *real* DataGrid (this file mocks `./api`, schema-cache, active
+// connections, settings, connections registry, and context hooks — but never
+// DataGrid), so `@tanstack/react-virtual` is mocked here the same way
+// `DataGrid.copy.test.tsx` (~line 29) does, to get real rows in jsdom.
+// ---------------------------------------------------------------------------
+
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({ count, estimateSize }: { count: number; estimateSize: () => number }) => {
+    const size = estimateSize();
+    return {
+      scrollToIndex: vi.fn(),
+      getVirtualItems: () =>
+        Array.from({ length: count }, (_, i) => ({
+          index: i,
+          key: i,
+          start: i * size,
+          size,
+          lane: 0,
+        })),
+      getTotalSize: () => count * size,
+    };
+  },
+}));
+
+const nextFrame = () =>
+  act(async () => {
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+  });
+
+/** The DataGrid root is the only `tabIndex={0}` element in this component tree. */
+function gridRootOf(container: HTMLElement): HTMLElement | null {
+  return container.querySelector('[tabindex="0"]');
+}
+
+async function waitForGridMounted(container: HTMLElement) {
+  await waitFor(() => {
+    expect(gridRootOf(container)).not.toBeNull();
+  });
+}
+
+describe("TableViewerTab — auto-focus on activation (issue #280)", () => {
+  let focusCounter = 0;
+  function uniqueFocusViewer() {
+    focusCounter++;
+    return renderViewer({
+      connectionId: `conn-focus-${focusCounter}`,
+      schema: "public",
+      relation: `table-focus-${focusCounter}`,
+    });
+  }
+
+  // Elements appended directly to document.body (outside RTL's render
+  // container) to stand in for surfaces the auto-focus hook must not steal
+  // from (a bare input, a quick-switcher palette input). Not covered by
+  // RTL's automatic per-test cleanup, so we track and remove them ourselves.
+  const extraNodes: HTMLElement[] = [];
+  function appendStandalone<T extends HTMLElement>(el: T): T {
+    document.body.appendChild(el);
+    extraNodes.push(el);
+    return el;
+  }
+
+  beforeEach(() => {
+    queryTableMock.mockReset();
+    tablePrimaryKeyMock.mockReset();
+    getSettingMock.mockReset();
+    setSettingMock.mockReset();
+    getSettingMock.mockResolvedValue(null);
+    setSettingMock.mockResolvedValue(undefined);
+    queryTableMock.mockResolvedValue(makeResult(3));
+    tablePrimaryKeyMock.mockResolvedValue({ pk_columns: ["id"], enums: {} });
+    // Tauri lane: `useTableData.fetchFirstPage` no-ops entirely (returns
+    // before ever dispatching) when `__TAURI_INTERNALS__` is absent, so the
+    // grid never leaves the first-load spinner in the memory-cache lane used
+    // by the other describe blocks in this file. These tests need the real
+    // DataGrid mounted, so they run in the Tauri lane instead.
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  });
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    for (const el of extraNodes.splice(0)) {
+      el.remove();
+    }
+  });
+
+  it("4.1: focuses the grid root on activation, then ⌘F opens the filter bar and focuses its first value input without a click", async () => {
+    const { container } = uniqueFocusViewer();
+
+    await waitForGridMounted(container);
+    await nextFrame();
+
+    const gridRoot = gridRootOf(container);
+    expect(gridRoot).not.toBeNull();
+    expect(document.activeElement).toBe(gridRoot);
+
+    // The issue's literal repro: no click, just the shortcut.
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "f", metaKey: true, bubbles: true, cancelable: true }),
+      );
+    });
+    // The handler shows the bar and schedules the FilterBar's own focus in a RAF.
+    await nextFrame();
+
+    expect(queryApplyAllPrimary()).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /Value/i })).toBe(document.activeElement);
+  });
+
+  it("4.2: does not steal focus from a real <input> focused before activation", async () => {
+    const outsideInput = appendStandalone(document.createElement("input"));
+    outsideInput.value = "hello world";
+    outsideInput.focus();
+    outsideInput.setSelectionRange(2, 5);
+
+    const { container } = uniqueFocusViewer();
+
+    await waitForGridMounted(container);
+    await nextFrame();
+
+    expect(document.activeElement).toBe(outsideInput);
+    expect(outsideInput.selectionStart).toBe(2);
+    expect(outsideInput.selectionEnd).toBe(5);
+  });
+
+  it("4.3: quick-switcher regression — a focused palette input keeps focus on activation; a later activation lands on the grid root once the palette is gone", async () => {
+    // Stand-in for PaletteShell.tsx's autoFocus input (issue #280 repro path).
+    const paletteInput = appendStandalone(document.createElement("input"));
+    paletteInput.focus();
+
+    focusCounter++;
+    const connectionId = `conn-focus-palette-${focusCounter}`;
+    const relation = `table-focus-palette-${focusCounter}`;
+    const baseProps = {
+      tabId: "tab-palette",
+      connectionId,
+      connectionName: "Test",
+      schema: "public",
+      relation,
+      relationKind: "table" as const,
+    };
+
+    const { container, rerender } = render(
+      <TabsProvider>
+        <TableViewer {...baseProps} active={false} />
+      </TabsProvider>,
+    );
+
+    // First activation while the palette input still holds focus — must not
+    // steal it (no intervening click, exactly the ⌘P dismiss path).
+    rerender(
+      <TabsProvider>
+        <TableViewer {...baseProps} active={true} />
+      </TabsProvider>,
+    );
+    await nextFrame();
+
+    expect(document.activeElement).toBe(paletteInput);
+
+    // Palette dismisses: nothing restores focus (per design.md, that's a
+    // separate concern) — it just goes away.
+    paletteInput.blur();
+    paletteInput.remove();
+    extraNodes.splice(extraNodes.indexOf(paletteInput), 1);
+
+    // Let the grid actually mount before the next activation edge, so this
+    // exercises "lands on the grid" rather than the loading-fallback case.
+    await waitForGridMounted(container);
+
+    // A fresh false -> true activation edge (re-opening the tab).
+    rerender(
+      <TabsProvider>
+        <TableViewer {...baseProps} active={false} />
+      </TabsProvider>,
+    );
+    rerender(
+      <TabsProvider>
+        <TableViewer {...baseProps} active={true} />
+      </TabsProvider>,
+    );
+    await nextFrame();
+
+    const gridRoot = gridRootOf(container);
+    expect(gridRoot).not.toBeNull();
+    expect(document.activeElement).toBe(gridRoot);
+  });
+
+  it("4.4: auto-focus does not set an active cell or a row-range selection", async () => {
+    const { container } = uniqueFocusViewer();
+
+    await waitForGridMounted(container);
+    await nextFrame();
+
+    expect(document.activeElement).toBe(gridRootOf(container));
+
+    // No cell carries the active-cell ring class.
+    expect(container.querySelectorAll(`.${dataGridStyles.cellActive}`)).toHaveLength(0);
+
+    // No row is rendered selected — makeResult(3) guarantees rows exist to check.
+    const rows = container.querySelectorAll("[data-selected]");
+    expect(rows.length).toBeGreaterThan(0);
+    rows.forEach((row) => {
+      expect(row).toHaveAttribute("data-selected", "false");
+    });
   });
 });

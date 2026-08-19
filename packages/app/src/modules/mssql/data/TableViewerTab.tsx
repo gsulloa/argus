@@ -16,6 +16,7 @@ import { useDirtySummary } from "@/platform/shell/tabs/useDirtySummary";
 import type { Tab } from "@/platform/shell/tabs/types";
 import { APP_DISPLAY_NAME } from "@/platform/app-identity";
 import { useConnections } from "@/platform/connection-registry/useConnections";
+import { useAutoFocusOnActivate } from "@/platform/shell/useAutoFocusOnActivate";
 import { useSaveShortcut } from "@/platform/shell/useSaveShortcut";
 import { useContextObjects, useContextObject } from "@/modules/context/hooks";
 import { DocsSubtab } from "@/modules/context/components/DocsSubtab";
@@ -444,6 +445,9 @@ function MssqlTableViewer({
 
   // ⌘S → apply the dirty buffer regardless of focus position (issue #88).
   useSaveShortcut({ active, rootRef, onSave: handleApply });
+
+  // Focus the grid on activation so shortcuts work without a priming click (issue #280).
+  useAutoFocusOnActivate({ active, rootRef, targetRef: gridRef });
 
   // §18.8 — Empty state discrimination
   const tableIsEmpty = tableData.isReady && tableData.rows.length === 0 && !buffer.hasDirty;

@@ -17,13 +17,39 @@
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { forwardRef, useImperativeHandle, useRef } from "react";
 import { TabsProvider } from "@/platform/shell/tabs/TabsContext";
 
 // ---------------------------------------------------------------------------
 // Module-level mocks — vitest hoists these before any static imports
 // ---------------------------------------------------------------------------
 
-vi.mock("@/modules/mysql/data/DataGrid", () => ({ DataGrid: vi.fn(() => null) }));
+// Mocked DataGrid must expose a stable, real focus() handle (issue #280,
+// task 4.5): useImperativeHandle's factory has an empty deps array so the
+// handle object itself never changes identity across renders (see the
+// stable-reference warning above), and focus() moves real DOM focus onto a
+// genuinely mounted tabIndex=0 child rather than an inline object recreated
+// per render — giving the auto-focus hook's document.activeElement checks
+// something real to observe.
+vi.mock("@/modules/mysql/data/DataGrid", () => {
+  const MockDataGrid = forwardRef<{ scrollToTop(): void; focus(): void }, unknown>(
+    function MockDataGrid(_props, ref) {
+      const elRef = useRef<HTMLDivElement | null>(null);
+      useImperativeHandle(
+        ref,
+        () => ({
+          scrollToTop() {},
+          focus() {
+            elRef.current?.focus();
+          },
+        }),
+        [],
+      );
+      return <div ref={elRef} tabIndex={0} data-testid="mock-data-grid" />;
+    },
+  );
+  return { DataGrid: MockDataGrid };
+});
 vi.mock("@/modules/mysql/data/FilterBar", () => ({ FilterBar: vi.fn(() => null) }));
 vi.mock("@/modules/mysql/data/Inspector", () => ({ Inspector: vi.fn(() => null) }));
 vi.mock("@/modules/mysql/structure/StructureSubtab", () => ({ StructureSubtab: vi.fn(() => null) }));
@@ -531,5 +557,98 @@ describe("MysqlTableViewerTab — PK error state and Retry", () => {
 
     expect(screen.queryByText(/Could not determine primary key/i)).toBeNull();
     expect(screen.queryByRole("button", { name: /Retry/i })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auto-focus on activation (issue #280, task 4.5)
+// ---------------------------------------------------------------------------
+
+describe("MysqlTableViewerTab — auto-focus on activation (issue #280)", () => {
+  const useConnectionsMock = vi.mocked(useConnections);
+  const useContextObjectsMock = vi.mocked(useContextObjects);
+  const useContextObjectMock = vi.mocked(useContextObject);
+  const useTableDataMock = vi.mocked(useTableData);
+  const useEditBufferMock = vi.mocked(useEditBuffer);
+
+  // Awaits the requestAnimationFrame the hook schedules its focus call in.
+  const nextFrame = () =>
+    act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    });
+
+  // Access the stable objects created inside the vi.mock factories (see the
+  // "guarded refresh" describe above) so we can inspect/reset spies between
+  // tests without breaking the stable-reference invariant.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stableTableData: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stableBuffer: any;
+
+  beforeEach(() => {
+    useConnectionsMock.mockReturnValue(mockConnections(null));
+    useContextObjectsMock.mockReturnValue({
+      data: [],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+    useContextObjectMock.mockReturnValue({
+      data: null,
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+
+    stableTableData = useTableDataMock.getMockImplementation()?.({} as never);
+    stableBuffer = useEditBufferMock.getMockImplementation()?.();
+
+    vi.mocked(stableTableData.refresh).mockClear();
+    stableBuffer.hasDirty = false;
+    stableBuffer.dirtyCounts = { updates: 0, inserts: 0, deletes: 0 };
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("focuses the mocked grid root when the tab activates, with no priming click", async () => {
+    renderViewer(makeTab());
+    await nextFrame();
+
+    // The mocked DataGrid's forwarded handle focuses its own tabIndex=0
+    // node — the "grid root" resolution branch, since the Data subtab is
+    // showing and the mocked grid is mounted and focusable.
+    expect(document.activeElement).toBe(screen.getByTestId("mock-data-grid"));
+  });
+
+  it("⌘R fired from the focused element bubbles to the root onKeyDown handler", async () => {
+    renderViewer(makeTab());
+    await nextFrame();
+
+    // Dispatch from document.activeElement (the mocked grid node) so the
+    // event bubbles naturally through the DOM, rather than firing directly
+    // on the root — this is the actual crux for MySQL/MSSQL, whose
+    // shortcuts hang off a React onKeyDown on the tab root and therefore
+    // only fire if the keydown genuinely reaches that subtree.
+    const focused = document.activeElement!;
+    expect(focused).toBe(screen.getByTestId("mock-data-grid"));
+    fireEvent.keyDown(focused, { key: "r", metaKey: true });
+
+    // Clean buffer → guarded refresh calls tableData.refresh directly
+    // (reusing the same "guarded refresh" mechanism as the tests above).
+    expect(stableTableData.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not steal focus from a real input focused before activation", async () => {
+    const outsideInput = document.createElement("input");
+    document.body.appendChild(outsideInput);
+    outsideInput.focus();
+    expect(document.activeElement).toBe(outsideInput);
+
+    renderViewer(makeTab());
+    await nextFrame();
+
+    expect(document.activeElement).toBe(outsideInput);
   });
 });
