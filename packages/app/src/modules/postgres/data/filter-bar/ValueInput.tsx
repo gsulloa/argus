@@ -13,7 +13,8 @@ import { noAutoCorrectProps } from "../../../shared/text-input-hygiene";
 interface Props {
   column: ColumnRef;
   columns: DataColumn[];
-  op: Operator;
+  /** `null` when the row's operator has been unset — see `unsetAllOperators`. */
+  op: Operator | null;
   value: FilterValue | undefined;
   onChange(next: FilterValue | undefined): void;
 }
@@ -94,7 +95,27 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
   const named = namedColumn(column, columns);
   const cat = categorize(named?.data_type ?? "text");
 
-  if (op === "BETWEEN") {
+  // With no operator selected there is no operator to derive the control from,
+  // so derive it from the SHAPE of the retained value instead. The point of
+  // unsetting is that the user's value stays visible and editable — never
+  // render nothing here.
+  const isUnset = op === null;
+
+  if (isUnset ? Array.isArray(value) : op === "In" || op === "NotIn") {
+    const arr = Array.isArray(value) ? value : [];
+    return (
+      <ChipInput
+        values={arr}
+        category={cat}
+        onChange={(next) => onChange(next.length ? next : [])}
+      />
+    );
+  }
+
+  if (
+    op === "BETWEEN" ||
+    (isUnset && !!value && typeof value === "object" && !Array.isArray(value))
+  ) {
     const obj =
       value && typeof value === "object" && !Array.isArray(value)
         ? value
@@ -130,19 +151,17 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
     );
   }
 
-  if (op === "In" || op === "NotIn") {
-    const arr = Array.isArray(value) ? value : [];
+  if (cat === "boolean") {
+    // While unset, suppress the eager `true` commit — the row is incomplete by
+    // definition, and writing a value the user never chose would be a surprise.
+    // Picking an operator re-enables it and the row self-heals.
     return (
-      <ChipInput
-        values={arr}
-        category={cat}
-        onChange={(next) => onChange(next.length ? next : [])}
+      <BooleanValueInput
+        value={value}
+        onChange={onChange}
+        commitDefault={!isUnset}
       />
     );
-  }
-
-  if (cat === "boolean") {
-    return <BooleanValueInput value={value} onChange={onChange} />;
   }
 
   const inputType = inputTypeForCategory(cat);
@@ -178,14 +197,17 @@ export function ValueInput({ column, columns, op, value, onChange }: Props) {
 function BooleanValueInput({
   value,
   onChange,
+  commitDefault = true,
 }: {
   value: FilterValue | undefined;
   onChange(next: FilterValue | undefined): void;
+  /** `false` while the row's operator is unset — see `ValueInput`. */
+  commitDefault?: boolean;
 }) {
   const isBool = typeof value === "boolean";
   useEffect(() => {
-    if (!isBool) onChange(true);
-  }, [isBool, onChange]);
+    if (!isBool && commitDefault) onChange(true);
+  }, [isBool, commitDefault, onChange]);
   // Display the committed boolean; before the effect commits, show "true"
   // (the value we are about to commit) so the control never appears blank.
   const cur = isBool ? String(value) : "true";

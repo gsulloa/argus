@@ -30,6 +30,7 @@ import {
   setEnabled,
   setCombinator,
   clearAllRows,
+  unsetAllOperators,
   moveRow,
 } from "./treeMutations";
 import {
@@ -184,9 +185,18 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
       [draft, onDraftChange],
     );
 
-    // ── Unset ─────────────────────────────────────────────────────────────────
+    // ── Unset / Clear all ─────────────────────────────────────────────────────
 
+    // Operator-scoped: keeps every row (column, value, enabled, order) and only
+    // drops the operator selection. The rows survive; they just stop filtering
+    // until an operator is picked again.
     const handleUnset = useCallback(() => {
+      onDraftChange(unsetAllOperators(draft));
+    }, [draft, onDraftChange]);
+
+    // The destructive path, now its own explicit action rather than a side
+    // effect of Unset. `applied` is untouched until the user presses Apply All.
+    const handleClearAll = useCallback(() => {
       onDraftChange(clearAllRows(draft));
     }, [draft, onDraftChange]);
 
@@ -475,6 +485,18 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
                 SQL
               </button>
 
+              {/* Clear all — the explicit destructive action. Deliberately kept
+                  away from `Operator: Unset` at the other end of this group so
+                  the two can't be misclicked for one another. */}
+              <button
+                type="button"
+                className={styles.footerBtn}
+                onClick={handleClearAll}
+                title="Remove all filter rows (Apply All to clear the active filter)"
+              >
+                Clear all
+              </button>
+
               {/* Shortcut hints */}
               <span className={styles.footerHints}>
                 <span className={styles.hintItem}>
@@ -503,13 +525,14 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
                 </span>
               </span>
 
-              {/* Operator: Unset */}
+              {/* Operator: Unset — clears the operator on every row, keeps the rows */}
               <span className={styles.hintItem}>
                 Operator:{" "}
                 <button
                   type="button"
                   className={styles.unsetBtn}
                   onClick={handleUnset}
+                  title="Clear the operator on every row, keeping columns and values"
                 >
                   Unset
                 </button>

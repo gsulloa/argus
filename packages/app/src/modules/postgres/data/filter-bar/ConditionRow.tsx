@@ -69,7 +69,15 @@ export function ConditionRow({
         ? columns.find((c) => c.name === next.name)?.is_nullable ?? true
         : true,
     );
-    const nextOp: Operator = nextOps.includes(row.op) ? row.op : nextOps[0]!;
+    // An unset row stays unset across a column change — nothing is auto-selected
+    // and the value is left verbatim (including for boolean columns, whose eager
+    // `true` seeding waits until a real operator is picked).
+    if (row.op === null && next.kind !== "raw") {
+      onChange({ ...row, column: next });
+      return;
+    }
+    const nextOp: Operator =
+      row.op !== null && nextOps.includes(row.op) ? row.op : nextOps[0]!;
     let nextValue = coerceValueForOperator(row.value, nextOp);
     // Boolean columns render a two-option select (true/false) with no "empty"
     // state; seed a concrete `true` when switching to one so the row is
