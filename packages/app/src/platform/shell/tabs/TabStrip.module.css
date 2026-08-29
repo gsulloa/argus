@@ -33,12 +33,6 @@
 .tab[data-dragging="true"] {
   opacity: 0.4;
 }
-.tab[data-drop-before="true"] {
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-.tab[data-drop-after="true"] {
-  box-shadow: inset -2px 0 0 var(--accent);
-}
 
 .dirtyDot {
   color: var(--text-subtle);
