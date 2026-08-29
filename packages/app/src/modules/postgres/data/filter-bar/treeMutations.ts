@@ -4,7 +4,7 @@ import type {
   FilterValue,
   Operator,
 } from "../types";
-import { makeEmptyRow } from "../types";
+import { isCompleteRow, makeEmptyRow } from "../types";
 
 export function addRow(
   tree: FilterTree,
@@ -64,6 +64,41 @@ export function setCombinator(tree: FilterTree, combinator: "AND" | "OR"): Filte
 
 export function clearAllRows(tree: FilterTree): FilterTree {
   return { ...tree, rows: [makeEmptyRow()] };
+}
+
+/**
+ * Project the per-row Apply gesture (row `Apply` button / plain `Enter`) into
+ * the next `draft` and `applied` models.
+ *
+ * The row is **enabled** as part of the gesture: `modelToPayload` and
+ * `compileWhere` both drop non-`enabled` rows, so committing a disabled row to
+ * `applied` would emit no `filter_tree` at all and silently reload the grid
+ * unfiltered while the bar paints the green "Applied" badge (issue #289).
+ * Enabling keeps the invariant every consumer already assumes: `applied.rows`
+ * only ever holds enabled+complete rows.
+ *
+ * Returns `null` when the row is missing or incomplete — the caller MUST then
+ * leave BOTH models alone rather than commit an `applied` that compiles to an
+ * empty payload. This is the invariant guard; the bar layer also refuses
+ * incomplete rows so the user gets an explanation instead of silence.
+ *
+ * `combinator` is carried over untouched — the per-row path never changes it.
+ */
+export function applyOnlyRowModels(
+  tree: FilterTree,
+  index: number,
+): { draft: FilterTree; applied: FilterTree } | null {
+  const row = tree.rows[index];
+  if (!row) return null;
+  if (!isCompleteRow(row)) return null;
+  // Built locally rather than read back from the returned draft: the caller
+  // writes `draft` through async React state, so `applied` must be derived
+  // from the same value in the same tick.
+  const enabledRow: FilterRow = row.enabled ? row : { ...row, enabled: true };
+  return {
+    draft: setEnabled(tree, index, true),
+    applied: { rows: [enabledRow], combinator: tree.combinator },
+  };
 }
 
 /**
