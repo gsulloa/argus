@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Dragging a tab in the Workspace tab strip reorders it again. The strip was the last surface in the app still built on native HTML5 drag-and-drop, which never starts inside the app's webview — Tauri's OS-level drag-drop handler consumes the gesture first, and WebKit additionally refuses a drag whose `dragstart` sets no `dataTransfer` payload. The strip now uses the same pointer-based `@dnd-kit` stack as the sidebar, filter rows and context queries, so the tabs shift aside live to show where the dragged tab will land ([#290](https://github.com/gsulloa/argus/issues/290)).
+
 ## [0.9.0] - 2026-08-19
 
 ### Added
