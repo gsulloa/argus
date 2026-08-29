@@ -79,6 +79,35 @@
   min-height: 0;
 }
 
+/* Save failure from the result-grid edit buffer. Dismissable; the buffer stays
+   intact behind it so the user can correct the offending value and retry. */
+.saveErrorBanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.saveErrorDismiss {
+  margin-left: auto;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.saveErrorDismiss:hover {
+  color: var(--text);
+}
+
 .loadingBanner {
   display: flex;
   align-items: center;

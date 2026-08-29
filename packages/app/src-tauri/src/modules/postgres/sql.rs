@@ -32,6 +32,7 @@ use crate::modules::activity_log::{
     emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
 };
 use crate::modules::postgres::data::{fire_cancel, DataColumn};
+use crate::modules::postgres::editability::{self, ResultEditability};
 use crate::modules::postgres::pool::PgPoolRegistry;
 use crate::modules::query_cancel::{CancelAction, RunningQueryRegistry};
 use crate::modules::query_history::{self, HistoryOrigin, HistoryStatus, NewEntry};
@@ -190,6 +191,9 @@ pub enum RunSqlResult {
         query_ms: u64,
         row_cap: u64,
         row_cap_source: RowCapSource,
+        /// Whether these rows can be written back, and how. Rows-shaped
+        /// results only — `Affected` carries no such notion.
+        editability: ResultEditability,
     },
     Affected {
         command_tag: String,
@@ -237,7 +241,12 @@ pub enum RunManyOutcome {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum StreamEvent {
     /// Column metadata — always the first event for a SELECT-shape statement.
-    Columns { columns: Vec<DataColumn> },
+    /// Carries `editability` because it is the only event that knows the
+    /// projection's shape; `Batch` and `Done` never repeat it.
+    Columns {
+        columns: Vec<DataColumn>,
+        editability: ResultEditability,
+    },
     /// A batch of converted rows. May arrive multiple times before `done`.
     Batch { rows: Vec<Vec<JsonValue>> },
     /// Terminal: SELECT-shape query completed successfully.
@@ -1422,8 +1431,51 @@ fn size_guard(
     truncated_envelope(preview.chars().take(2048).collect(), len)
 }
 
-fn columns_from_row_meta(row_columns: &[tokio_postgres::Column]) -> Vec<DataColumn> {
-    row_columns
+/// Per-result-column provenance lifted off the wire's `RowDescription`.
+///
+/// Postgres reports, for every field it describes, the OID of the relation the
+/// value came from and that column's `attnum` — or zero for anything that isn't
+/// a plain column reference (a literal, an aggregate, a function call, a
+/// computed expression). `tokio-postgres` already normalises the zeroes to
+/// `None`, so a `Some` here is a hard guarantee of relation provenance.
+///
+/// This is what makes "is this result editable?" an exact question rather than
+/// a parsing exercise — see `modules::postgres::editability`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnProvenance {
+    pub table_oid: Option<u32>,
+    pub attnum: Option<i16>,
+}
+
+impl ColumnProvenance {
+    /// True when the column is a plain reference to a writable relation column.
+    ///
+    /// Enforces the invariant here rather than relying on `provenance_of` alone,
+    /// because the struct is public and can be built directly: a zero OID means
+    /// "no relation", and an `attnum <= 0` is a system column (`ctid`, `xmin`)
+    /// that must never be treated as a writable projection.
+    pub fn is_sourced(&self) -> bool {
+        matches!((self.table_oid, self.attnum), (Some(oid), Some(a)) if oid != 0 && a > 0)
+    }
+}
+
+/// Pure mapper, split out from `columns_from_row_meta` so the normalisation
+/// rule is unit-testable without constructing a `tokio_postgres::Column`
+/// (whose fields are crate-private).
+fn provenance_of(table_oid: Option<u32>, attnum: Option<i16>) -> ColumnProvenance {
+    // Belt and braces: tokio-postgres filters `0` already, but a zero attnum is
+    // a system column (`ctid`, `xmin`, …) which we must never treat as a
+    // writable projection either.
+    ColumnProvenance {
+        table_oid: table_oid.filter(|o| *o != 0),
+        attnum: attnum.filter(|a| *a > 0),
+    }
+}
+
+fn columns_from_row_meta(
+    row_columns: &[tokio_postgres::Column],
+) -> (Vec<DataColumn>, Vec<ColumnProvenance>) {
+    let columns = row_columns
         .iter()
         .enumerate()
         .map(|(i, c)| DataColumn {
@@ -1432,7 +1484,12 @@ fn columns_from_row_meta(row_columns: &[tokio_postgres::Column]) -> Vec<DataColu
             ordinal_position: (i + 1) as i32,
             is_nullable: true,
         })
-        .collect()
+        .collect();
+    let provenance = row_columns
+        .iter()
+        .map(|c| provenance_of(c.table_oid(), c.column_id()))
+        .collect();
+    (columns, provenance)
 }
 
 /// Synthesize a Postgres-style command tag from the SQL's first keyword and
@@ -1507,7 +1564,11 @@ async fn run_one(
     }
     // Rows path. Stream via `query_raw` so we never materialize more than
     // `cap + 1` rows server-side, regardless of the query's true cardinality.
-    let columns = columns_from_row_meta(stmt.columns());
+    let (columns, provenance) = columns_from_row_meta(stmt.columns());
+    // Best-effort and infallible by construction — see `editability`'s docs.
+    // Resolved before fetching so a failure here can never strand a half-read
+    // row stream.
+    let editability = editability::resolve(client, &provenance).await;
     let mut truncated_columns: Vec<String> = Vec::new();
 
     // An explicitly-typed empty iterator resolves the `BorrowToSql` inference
@@ -1545,6 +1606,7 @@ async fn run_one(
         query_ms,
         row_cap: cap,
         row_cap_source: cap_source,
+        editability,
     })
 }
 
@@ -1597,10 +1659,14 @@ async fn run_one_stream(
     }
 
     // SELECT-shape path — stream rows via `query_raw`.
-    let columns = columns_from_row_meta(stmt.columns());
+    let (columns, provenance) = columns_from_row_meta(stmt.columns());
+    // Resolved before the `columns` event so the frontend knows the result's
+    // editability at the same moment it learns the shape. Infallible.
+    let editability = editability::resolve(client, &provenance).await;
     on_event
         .send(StreamEvent::Columns {
             columns: columns.clone(),
+            editability,
         })
         .map_err(channel_err)?;
 
@@ -2335,6 +2401,33 @@ pub async fn postgres_run_sql_many(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::postgres::editability::EditBlockReason;
+
+    #[test]
+    fn provenance_keeps_relation_columns_and_drops_computed_ones() {
+        // A plain column reference: the wire gives us both halves.
+        let sourced = provenance_of(Some(16385), Some(2));
+        assert_eq!(sourced.table_oid, Some(16385));
+        assert_eq!(sourced.attnum, Some(2));
+        assert!(sourced.is_sourced());
+
+        // A computed column (`upper(email)`, `count(*)`, a literal): Postgres
+        // reports zeroes, tokio-postgres normalises them to None.
+        let computed = provenance_of(None, None);
+        assert!(!computed.is_sourced());
+
+        // Defensive normalisation: an explicit zero must be treated as absent
+        // even if it ever reaches us unfiltered.
+        let zeroed = provenance_of(Some(0), Some(0));
+        assert_eq!(zeroed.table_oid, None);
+        assert_eq!(zeroed.attnum, None);
+        assert!(!zeroed.is_sourced());
+
+        // A system column (ctid, xmin) has attnum <= 0 — never writable.
+        let system = provenance_of(Some(16385), Some(-1));
+        assert_eq!(system.attnum, None);
+        assert!(!system.is_sourced());
+    }
 
     #[test]
     fn cap_resolution_unbounded_query_uses_configured() {
@@ -2482,12 +2575,17 @@ mod tests {
             query_ms: 5,
             row_cap: 10_000,
             row_cap_source: RowCapSource::Setting,
+            editability: ResultEditability::not_editable(EditBlockReason::NoBaseTable),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v.get("kind").unwrap(), "rows");
         assert_eq!(v.get("query_ms").unwrap(), 5);
         assert_eq!(v.get("row_cap").unwrap(), 10_000);
         assert_eq!(v.get("row_cap_source").unwrap(), "setting");
+        // Rows results always carry editability, nested under its own tag.
+        let e = v.get("editability").unwrap();
+        assert_eq!(e.get("status").unwrap(), "not_editable");
+        assert_eq!(e.get("reason").unwrap(), "no_base_table");
 
         let a = RunSqlResult::Affected {
             command_tag: "INSERT 0 3".into(),
@@ -2501,12 +2599,36 @@ mod tests {
     }
 
     #[test]
+    fn affected_result_carries_no_editability() {
+        // An `affected` result has no rows, so "can these rows be edited?" is
+        // not a question it can answer. The frontend switches on `kind` before
+        // reading `editability`; a stray key here would be a lie.
+        let a = RunSqlResult::Affected {
+            command_tag: "UPDATE 5".into(),
+            affected_rows: 5,
+            query_ms: 3,
+        };
+        let v = serde_json::to_value(&a).unwrap();
+        assert!(
+            v.get("editability").is_none(),
+            "affected results must not carry an editability key"
+        );
+    }
+
+    #[test]
     fn stream_event_serializes_with_event_tag() {
         // Guards the wire contract the frontend `StreamEvent` type relies on:
         // an `event` discriminant plus snake_case fields.
-        let cols = StreamEvent::Columns { columns: vec![] };
+        let cols = StreamEvent::Columns {
+            columns: vec![],
+            editability: ResultEditability::not_editable(EditBlockReason::NoBaseTable),
+        };
         let v = serde_json::to_value(&cols).unwrap();
         assert_eq!(v.get("event").unwrap(), "columns");
+        assert_eq!(
+            v.get("editability").unwrap().get("status").unwrap(),
+            "not_editable"
+        );
 
         let batch = StreamEvent::Batch {
             rows: vec![vec![JsonValue::from(1)]],
@@ -2574,6 +2696,7 @@ mod tests {
             query_ms: 5,
             row_cap: row_cap::DEFAULT_ROW_CAP,
             row_cap_source: RowCapSource::Setting,
+            editability: ResultEditability::not_editable(EditBlockReason::NoBaseTable),
         };
         let entry1 =
             build_history_entry_ok(cid, "local-pg", "SELECT 1", Origin::User, 100, 5, &r_rows);

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ResultPanel } from "./ResultPanel";
 import type { RunState } from "./useQueryRun";
+import type { ResultEditability } from "../data/types";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -58,6 +59,7 @@ function makeRunState(overrides?: {
   truncated?: boolean;
   row_cap?: number;
   row_cap_source?: "setting" | "hard_ceiling" | "engine";
+  editability?: ResultEditability;
 }): RunState {
   return {
     status: "done",
@@ -82,6 +84,12 @@ function makeRunState(overrides?: {
       query_ms: 10,
       row_cap: overrides?.row_cap ?? 10000,
       row_cap_source: overrides?.row_cap_source ?? "setting",
+      // These existing cases assert read-only behaviour, so the default keeps
+      // the grid non-editable; edit-mode cases live in ResultPanel.edit.test.tsx.
+      editability: overrides?.editability ?? {
+        status: "not_editable",
+        reason: "no_base_table",
+      },
     },
   };
 }

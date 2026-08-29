@@ -4,6 +4,7 @@ pub mod commands;
 pub mod data;
 pub mod ddl;
 pub mod edit;
+pub mod editability;
 pub mod params;
 pub mod pool;
 pub mod schema;

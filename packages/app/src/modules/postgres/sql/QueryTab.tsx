@@ -14,6 +14,12 @@ import { useActiveConnections } from "../useActiveConnections";
 import { globalSchemaCache } from "../schema/globalSchemaCache";
 import { QueryEditor, type QueryEditorHandle } from "./QueryEditor";
 import { ResultPanel } from "./ResultPanel";
+import { DiscardChangesDialog } from "../data/DiscardChangesDialog";
+import { useEditBuffer } from "../data/useEditBuffer";
+import { dataApi } from "../data/api";
+import { isEditableResult } from "../data/types";
+import { AppError } from "@/platform/errors/AppError";
+import { useDirtySummary } from "@/platform/shell/tabs/useDirtySummary";
 import { ExportMenu } from "./export/ExportMenu";
 import { RunSummary } from "./RunSummary";
 import { useQueryBuffer } from "./useQueryBuffer";
@@ -99,7 +105,8 @@ interface InnerProps {
   payload: PostgresQueryPayload;
 }
 
-function QueryTab({ tabId, payload }: InnerProps) {
+/** Exported for tests; the app mounts this through `QueryTabRoot`. */
+export function QueryTab({ tabId, payload }: InnerProps) {
   const { getActive } = useActiveConnections();
   const toast = useToast();
   const { setTabTitle, setTabDirty } = useTabs();
@@ -153,6 +160,50 @@ function QueryTab({ tabId, payload }: InnerProps) {
   }, [tabId, dirty, setTabDirty]);
 
   // ---------------------------------------------------------------------------
+  // Result-grid edit buffer (issue #279).
+  //
+  // Distinct from the *query* buffer above: this one holds pending cell edits
+  // on the rows the last run returned. It lives here rather than in ResultPanel
+  // so the toolbar can render Save/Discard and so the tab's loss guards can see
+  // it. Note ⌘S remains bound to saving the QUERY — a contextual rebinding is
+  // exactly the hidden modality that produces data-loss reports.
+  // ---------------------------------------------------------------------------
+  const resultBuffer = useEditBuffer();
+  const [resultSaving, setResultSaving] = useState(false);
+  const [resultSaveError, setResultSaveError] = useState<string | null>(null);
+  // A user action parked behind the discard-confirmation dialog.
+  const [resultDiscardAction, setResultDiscardAction] = useState<
+    null | { action: "close" | "refresh" | "discard"; run: () => void }
+  >(null);
+
+  // The `editable` payload for the CURRENT result, or null. Only a completed,
+  // single-statement run against a writable connection can qualify.
+  const editableResult = (() => {
+    if (isReadOnly) return null;
+    const s = runner.state;
+    if (s.status !== "done" || s.mode !== "single") return null;
+    if (s.result?.kind !== "rows") return null;
+    return isEditableResult(s.result.editability) ? s.result.editability : null;
+  })();
+
+  const resultDirtyCount =
+    resultBuffer.dirtyCounts.updates +
+    resultBuffer.dirtyCounts.inserts +
+    resultBuffer.dirtyCounts.deletes;
+  const resultDirty = resultBuffer.hasDirty;
+
+  // Name what would be lost in the disconnect-confirmation dialog.
+  useDirtySummary(
+    tabId,
+    resultDirty && editableResult && tabState.currentConnectionId
+      ? {
+          connectionId: tabState.currentConnectionId,
+          label: `${editableResult.schema}.${editableResult.relation} (result)`,
+        }
+      : null,
+  );
+
+  // ---------------------------------------------------------------------------
   // Subscribe to the schema cache and re-bind the editor's autocomplete
   // sources whenever the namespace shape changes. Debounced so a burst of
   // cache writes (e.g., bulk fetch landing) only triggers one reconfigure.
@@ -183,7 +234,7 @@ function QueryTab({ tabId, payload }: InnerProps) {
   // ---------------------------------------------------------------------------
   const persistConnTimer = useRef<number | null>(null);
 
-  const handleConnectionSelect = useCallback(
+  const applyConnectionSelect = useCallback(
     (id: string, name: string) => {
       // 6.3: Update tab state.
       tabActions.setCurrentConnection(id, name);
@@ -212,12 +263,47 @@ function QueryTab({ tabId, payload }: InnerProps) {
     [tabActions, runner, tabState.savedQueryId],
   );
 
+  const handleConnectionSelect = useCallback(
+    (id: string, name: string) => {
+      // Pending result edits reference rows fetched from the OLD connection —
+      // switching would leave them pointing at a table that may not exist here.
+      if (resultBuffer.hasDirty) {
+        setResultDiscardAction({
+          action: "discard",
+          run: () => applyConnectionSelect(id, name),
+        });
+        return;
+      }
+      applyConnectionSelect(id, name);
+    },
+    [applyConnectionSelect, resultBuffer],
+  );
+
   // Cleanup persist timer on unmount.
   useEffect(() => {
     return () => {
       if (persistConnTimer.current !== null) window.clearTimeout(persistConnTimer.current);
     };
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Result-buffer loss guard.
+  //
+  // Any user action that replaces the rows on screen (a new run, a connection
+  // switch, closing the tab) would strand pending cell edits. Rather than
+  // scatter the check, actions route through `guardResultEdits`, which either
+  // runs the action immediately or parks it behind the discard dialog.
+  // ---------------------------------------------------------------------------
+  const guardResultEdits = useCallback(
+    (action: "refresh" | "discard", proceed: () => void) => {
+      if (!resultBuffer.hasDirty) {
+        proceed();
+        return;
+      }
+      setResultDiscardAction({ action, run: proceed });
+    },
+    [resultBuffer],
+  );
 
   // ---------------------------------------------------------------------------
   // Run handlers
@@ -229,17 +315,21 @@ function QueryTab({ tabId, payload }: InnerProps) {
       toast.show("Select a connection first.", "error");
       return;
     }
+    const connectionId = tabState.currentConnectionId;
     const fullSql = ed.getSql();
     const sel = ed.getSelectionRange();
     const cur = ed.getCursor();
-    void runner.run({
-      connectionId: tabState.currentConnectionId,
-      fullSql,
-      selectionFrom: sel.from,
-      selectionTo: sel.to,
-      cursor: cur,
+    guardResultEdits("refresh", () => {
+      setResultSaveError(null);
+      void runner.run({
+        connectionId,
+        fullSql,
+        selectionFrom: sel.from,
+        selectionTo: sel.to,
+        cursor: cur,
+      });
     });
-  }, [runner, tabState.currentConnectionId, toast]);
+  }, [runner, tabState.currentConnectionId, toast, guardResultEdits]);
 
   const onRunAll = useCallback(() => {
     const ed = editorRef.current;
@@ -248,16 +338,67 @@ function QueryTab({ tabId, payload }: InnerProps) {
       toast.show("Select a connection first.", "error");
       return;
     }
+    const connectionId = tabState.currentConnectionId;
     const fullSql = ed.getSql();
-    void runner.run({
-      connectionId: tabState.currentConnectionId,
-      fullSql,
-      selectionFrom: 0,
-      selectionTo: 0,
-      cursor: 0,
-      forceAll: true,
+    guardResultEdits("refresh", () => {
+      setResultSaveError(null);
+      void runner.run({
+        connectionId,
+        fullSql,
+        selectionFrom: 0,
+        selectionTo: 0,
+        cursor: 0,
+        forceAll: true,
+      });
     });
-  }, [runner, tabState.currentConnectionId, toast]);
+  }, [runner, tabState.currentConnectionId, toast, guardResultEdits]);
+
+  // ---------------------------------------------------------------------------
+  // Result-grid save / discard
+  // ---------------------------------------------------------------------------
+  const onSaveResultEdits = useCallback(() => {
+    if (!editableResult || !resultBuffer.hasDirty || resultSaving) return;
+    const connectionId = tabState.currentConnectionId;
+    if (!connectionId) return;
+
+    const edits = resultBuffer.toEditOps();
+    setResultSaving(true);
+    setResultSaveError(null);
+    dataApi
+      .applyTableEdits(
+        connectionId,
+        editableResult.schema,
+        editableResult.relation,
+        edits,
+        "user",
+      )
+      .then((outcome) => {
+        if (outcome.outcome === "ok") {
+          resultBuffer.commitSuccess();
+          // Re-run the same statement so the user sees committed values. This
+          // is not a user-initiated run, so it deliberately bypasses the
+          // discard guard (the buffer is already clean by now anyway).
+          void runner.rerunLast();
+        } else {
+          // Op-level failure: name the 1-based op for the user and keep the
+          // buffer intact so they can correct the offending value and retry.
+          const code = outcome.code ? `[${outcome.code}] ` : "";
+          setResultSaveError(
+            `Op #${outcome.failed_op_index + 1} failed: ${code}${outcome.message}`,
+          );
+        }
+      })
+      .catch((e) => {
+        const err = e instanceof AppError ? e : new AppError("Internal", String(e));
+        setResultSaveError(err.message);
+      })
+      .finally(() => setResultSaving(false));
+  }, [editableResult, resultBuffer, resultSaving, tabState.currentConnectionId, runner]);
+
+  const onDiscardResultEdits = useCallback(() => {
+    resultBuffer.clear();
+    setResultSaveError(null);
+  }, [resultBuffer]);
 
   const onShowInEditor = useCallback((offset: number) => {
     editorRef.current?.setCursor(offset);
@@ -533,10 +674,41 @@ function QueryTab({ tabId, payload }: InnerProps) {
   // ---------------------------------------------------------------------------
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
   const pendingCloseResolveRef = useRef<((ok: boolean) => void) | null>(null);
+  // Set when a tab close is parked behind the RESULT discard dialog; called if
+  // the user cancels, so TabStrip's close is refused rather than left hanging.
+  const pendingResultCloseCancelRef = useRef<(() => void) | null>(null);
+
+  const handleResultDiscardConfirm = useCallback(() => {
+    const pending = resultDiscardAction;
+    setResultDiscardAction(null);
+    pendingResultCloseCancelRef.current = null;
+    resultBuffer.clear();
+    setResultSaveError(null);
+    pending?.run();
+  }, [resultDiscardAction, resultBuffer]);
+
+  const handleResultDiscardCancel = useCallback(() => {
+    setResultDiscardAction(null);
+    pendingResultCloseCancelRef.current?.();
+    pendingResultCloseCancelRef.current = null;
+  }, []);
 
   useCloseConfirm(
     tabId,
     useCallback(() => {
+      // Uncommitted cell edits in the result grid are the more consequential
+      // loss (they never reached the database), so they are confirmed first.
+      // The two dialogs are sequential by construction: this branch returns
+      // before the query-dirty branch can open its own.
+      if (resultBuffer.hasDirty) {
+        return new Promise<boolean>((resolve) => {
+          setResultDiscardAction({
+            action: "close",
+            run: () => resolve(true),
+          });
+          pendingResultCloseCancelRef.current = () => resolve(false);
+        });
+      }
       const currentSql = currentSqlRef.current;
       const tabIsDirty = isDirty(tabState, currentSql);
       if (!tabIsDirty || !tabState.savedQueryId) {
@@ -549,7 +721,7 @@ function QueryTab({ tabId, payload }: InnerProps) {
         pendingCloseResolveRef.current = resolve;
         setShowDiscardDialog(true);
       });
-    }, [tabState, buffer]),
+    }, [tabState, buffer, resultBuffer]),
   );
 
   const handleDiscardConfirm = useCallback(() => {
@@ -787,9 +959,40 @@ function QueryTab({ tabId, payload }: InnerProps) {
               truncated={runner.state.result.truncated}
             />
           ) : null}
+          {/* Result-grid edit controls — present only when the rows are
+              provably writable. No ⌘S binding: that shortcut saves the query. */}
+          {editableResult ? (
+            <>
+              {resultDirty ? (
+                <button
+                  type="button"
+                  className={styles.toolbarButton}
+                  onClick={onDiscardResultEdits}
+                  title="Discard pending cell edits"
+                >
+                  Discard
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={styles.toolbarButton}
+                onClick={onSaveResultEdits}
+                disabled={!resultDirty || resultSaving}
+                title={`Commit pending cell edits to ${editableResult.schema}.${editableResult.relation}`}
+              >
+                {resultDirty ? `Save (${resultDirtyCount})` : "Save"}
+              </button>
+            </>
+          ) : null}
         </div>
         <div className={styles.resultBody}>
-          <ResultPanel state={runner.state} onShowInEditor={onShowInEditor} />
+          <ResultPanel
+            state={runner.state}
+            onShowInEditor={onShowInEditor}
+            edit={{ buffer: resultBuffer, connectionWritable: !isReadOnly }}
+            saveError={resultSaveError}
+            onDismissSaveError={() => setResultSaveError(null)}
+          />
         </div>
       </div>
 
@@ -800,6 +1003,17 @@ function QueryTab({ tabId, payload }: InnerProps) {
         onClose={() => setShowSaveAs(false)}
         onConfirm={(result) => void handleSaveAsConfirm(result)}
       />
+
+      {/* Result-grid discard confirmation (issue #279). Shown before any
+          action that would replace the rows the pending edits refer to. */}
+      {resultDiscardAction ? (
+        <DiscardChangesDialog
+          count={resultDirtyCount}
+          action={resultDiscardAction.action}
+          onCancel={handleResultDiscardCancel}
+          onDiscard={handleResultDiscardConfirm}
+        />
+      ) : null}
 
       {/* Discard confirmation dialog (task 8.4) */}
       <Dialog.Root
