@@ -72,13 +72,29 @@ export interface FilterBarProps {
 
 /**
  * Returns a Set of draft row indices whose (column, op, value) triple matches
- * any row in `applied.rows` (ignoring `enabled`).
+ * any row in `applied.rows`.
  *
- * An INCOMPLETE draft row is never considered applied — it could not have been
- * sent to the query (`modelToPayload` drops it), so showing the green "Applied"
- * badge for it would lie. This gate prevents e.g. a blank/uninitialized row from
- * reading as applied just because a structurally-equal incomplete row also lives
- * in `applied.rows`.
+ * The badge means "this draft row's predicate, as currently configured, reached
+ * the query", so a row only counts as applied when it could actually have been
+ * sent. Both gates below mirror what `modelToPayload` drops:
+ *
+ * - INCOMPLETE rows — a blank/uninitialized row must not read as applied just
+ *   because a structurally-equal incomplete row also lives in `applied.rows`.
+ * - UNCHECKED rows — `modelToPayload` filters on `enabled`, so a disabled row
+ *   contributes nothing to the result set. Before issue #289 this gate was
+ *   missing and the per-row Apply path could commit a disabled row: the query
+ *   went out with no `filter_tree` at all while the row showed a green
+ *   "Applied" badge.
+ *
+ * Deliberate consequence of the `enabled` gate: unchecking an already-applied
+ * row drops its badge immediately, even though the query stays filtered by it
+ * until the next apply. That divergence is what the bar's dirty indicator is
+ * for — the badge describes the draft row, exactly as the completeness gate
+ * already does.
+ *
+ * Matching stays on the (column, op, value) triple via `filterRowEquals` rather
+ * than `filterRowEqualsWithEnabled`: `applied.rows` entries are enabled by
+ * construction, so comparing the flag on both sides would be redundant.
  */
 function buildAppliedSet(
   draftRows: FilterRow[],
@@ -87,6 +103,7 @@ function buildAppliedSet(
   const s = new Set<number>();
   for (let i = 0; i < draftRows.length; i++) {
     const dr = draftRows[i]!;
+    if (!dr.enabled) continue;
     if (!isCompleteRow(dr)) continue;
     for (const ar of appliedRows) {
       if (filterRowEquals(dr, ar)) {
@@ -156,6 +173,29 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
       }
       onApplyAll();
     }, [draft.rows, onApplyAll]);
+
+    // ── Per-row Apply with completeness feedback ──────────────────────────────
+
+    // Shared by the row's Apply button and the plain-Enter shortcut. An
+    // incomplete row cannot produce a predicate, so committing it would wipe
+    // the filter currently in force and reload the grid unfiltered (issue
+    // #289). Refuse it here and say why — silence would read as another broken
+    // gesture. `applyOnlyRowModels` re-checks this as the invariant guard.
+    const handleApplyOnlyRow = useCallback(
+      (i: number) => {
+        const row = draft.rows[i];
+        if (!row || !isCompleteRow(row)) {
+          if (transientTimerRef.current) clearTimeout(transientTimerRef.current);
+          setTransientStatus("Row is incomplete");
+          transientTimerRef.current = setTimeout(() => {
+            setTransientStatus(null);
+          }, 2000);
+          return;
+        }
+        onApplyOnlyRow(i);
+      },
+      [draft.rows, onApplyOnlyRow],
+    );
 
     // ── Draft mutation helpers ─────────────────────────────────────────────────
 
@@ -270,11 +310,12 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
             return;
           }
           // Plain Enter → apply only the focused row (replaces the active filter),
-          // mirroring that row's per-row Apply button. Falls back to Apply All if
-          // focus is not inside a row.
+          // mirroring that row's per-row Apply button — including enabling the
+          // row and refusing incomplete ones. Falls back to Apply All if focus
+          // is not inside a row.
           const rowEl = active?.closest("[data-filter-row-index]") as HTMLElement | null;
           const idx = rowEl ? parseInt(rowEl.dataset.filterRowIndex ?? "-1", 10) : -1;
-          if (idx >= 0) onApplyOnlyRow(idx);
+          if (idx >= 0) handleApplyOnlyRow(idx);
           else handleApplyAll();
           return;
         }
@@ -401,7 +442,7 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
           return;
         }
       },
-      [rootRef, draft, onDraftChange, handleApplyAll, onApplyOnlyRow, onClose],
+      [rootRef, draft, onDraftChange, handleApplyAll, handleApplyOnlyRow, onClose],
     );
 
     // ── Imperative focus handle ───────────────────────────────────────────────
@@ -456,7 +497,7 @@ export const FilterBar = forwardRef<FilterBarHandle, FilterBarProps>(
                     isFocusTarget={i === 0}
                     onChange={(next) => handleRowChange(i, next)}
                     onSetEnabled={(en) => handleSetEnabled(i, en)}
-                    onApplyOnly={() => onApplyOnlyRow(i)}
+                    onApplyOnly={() => handleApplyOnlyRow(i)}
                     onInsertBelow={() => handleInsertBelow(i)}
                     onRemove={() => handleRemove(i)}
                   />

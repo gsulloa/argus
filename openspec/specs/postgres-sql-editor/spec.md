@@ -384,10 +384,10 @@ When neither schemas, relations, nor columns are loaded for the current connecti
 Each `postgres-query` tab SHALL render a result panel below the editor. The panel MUST:
 
 - Render a hint state when no run has occurred yet in this tab. The hint MUST advertise both run and autocomplete shortcuts so the user discovers them on first use; the recommended copy is `Press ⌘↩ to run · Tab to autocomplete`.
-- Render a virtualized read-only data grid (the `<AdhocResultGrid />` provided by `postgres-data-grid`) for `kind: "rows"` results, displaying the `columns` and `rows` from the response. **For a streaming run, the grid MUST render as soon as the `columns` event arrives and MUST append rows progressively as each `batch` event is received — the user sees the first rows without waiting for the run to complete.** The grid MUST support **row-range selection** (via a row-number gutter: plain click, shift-click, and drag) as well as single-cell selection, and the current row selection MUST drive the shell's right inspector (when the inspector is expanded) — a single-row selection shows one row, a multi-row selection shows all selected rows. The grid MUST support ⌘C / Ctrl+C copy (single cell or the selected row range as TSV), ⌘A / Ctrl+A select-all, and a read-only right-click context menu (Copy cell / Copy row(s)), per the `grid-cell-copy`, `grid-row-copy`, `grid-row-selection`, `grid-select-all`, and `grid-context-menu` capabilities. Column widths inside the grid MUST default to the type-derived base widths defined by `column-width-preferences` and MUST be user-resizable; resizing MUST NOT persist to disk across runs or sessions, but MUST persist within the same `<AdhocResultGrid />` instance for as long as the columns prop shape is unchanged.
+- Render a virtualized data grid (the `<AdhocResultGrid />` provided by `postgres-data-grid`) for `kind: "rows"` results, displaying the `columns` and `rows` from the response. **The grid is read-only unless the conditions in "Inline cell editing in the SQL editor result grid" are met, in which case the panel supplies the grid's edit configuration derived from the response's `editability` payload.** **For a streaming run, the grid MUST render as soon as the `columns` event arrives and MUST append rows progressively as each `batch` event is received — the user sees the first rows without waiting for the run to complete; while the run is in flight the grid stays read-only.** The grid MUST support **row-range selection** (via a row-number gutter: plain click, shift-click, and drag) as well as single-cell selection, and the current row selection MUST drive the shell's right inspector (when the inspector is expanded) — a single-row selection shows one row, a multi-row selection shows all selected rows. **The result-panel inspector remains read-only regardless of the grid's edit mode.** The grid MUST support ⌘C / Ctrl+C copy (single cell or the selected row range as TSV), ⌘A / Ctrl+A select-all, and a right-click context menu (Copy cell / Copy row(s), plus **Edit cell when that cell is editable**), per the `grid-cell-copy`, `grid-row-copy`, `grid-row-selection`, `grid-select-all`, and `grid-context-menu` capabilities. **Copy MUST reflect any pending edit for a cell rather than its server value, matching the table viewer.** Column widths inside the grid MUST default to the type-derived base widths defined by `column-width-preferences` and MUST be user-resizable; resizing MUST NOT persist to disk across runs or sessions, but MUST persist within the same `<AdhocResultGrid />` instance for as long as the columns prop shape is unchanged.
 - **While a streaming run is in flight, display a progress indicator above the grid showing the live count of rows received so far (e.g. `Loading… 3,412 rows`). The indicator MUST clear when the run reaches its terminal event.**
 - Render a compact summary line for `kind: "affected"` results: `<command_tag> · <affected_rows> rows affected · <query_ms> ms`. Example: `INSERT 0 3 · 3 rows affected · 12 ms`.
-- Display the shared `<TruncationBanner />` above the grid whenever the result is `truncated`, per the `sql-result-row-cap` capability. The banner MUST name the response's `row_cap` rather than a hardcoded `10,000`. Once the streaming `done` event carries `truncated: true` the run reaches its terminal state and the banner renders exactly as it does for a non-streaming run; while a run is still in flight no banner is shown, since no cap information exists until that terminal event. Its dialect clause is `LIMIT`.
+- Display the shared `<TruncationBanner />` above the grid whenever the result is `truncated`, per the `sql-result-row-cap` capability. The banner MUST name the response's `row_cap` rather than a hardcoded `10,000`. Once the streaming `done` event carries `truncated: true` the run reaches its terminal state and the banner renders exactly as it does for a non-streaming run; while a run is still in flight no banner is shown, since no cap information exists until that terminal event. Its dialect clause is `LIMIT`. **A truncated result MAY still be edited: rows are addressed by primary key, so the rows that were returned are exactly the rows that can be written.**
 
 The panel's height MUST be resizable via a drag handle on its top edge (between editor and panel) within bounds 120–800px; the height MUST persist per tab id under settings key `pgQueryResultHeight:<tabId>` while the tab exists.
 
@@ -410,6 +410,12 @@ The panel's height MUST be resizable via a drag handle on its top edge (between 
 - **AND** a progress indicator reads `Loading… 800 rows`
 - **AND** the run has not yet reached its terminal event
 
+#### Scenario: Grid is read-only while streaming
+
+- **WHEN** a streaming SELECT of an editable projection is still in flight and the user double-clicks a cell
+- **THEN** no editor opens
+- **AND** the cell's hover title reads `Not editable while the query is still loading`
+
 #### Scenario: Progress indicator clears on completion
 
 - **WHEN** a streaming SELECT reaches its `done` event with `row_count: 800`
@@ -421,10 +427,20 @@ The panel's height MUST be resizable via a drag handle on its top edge (between 
 - **WHEN** the user selects a range of rows (e.g. rows 2–4) via the gutter in the result grid
 - **THEN** the shell's right inspector shows the column-value view for all selected rows
 
+#### Scenario: Result inspector stays read-only on an editable result
+
+- **WHEN** the result is editable and the user selects one row
+- **THEN** the inspector shows the row's fields with no editable inputs and no bulk-edit affordance
+
 #### Scenario: Copy selected rows from the result grid
 
 - **WHEN** the user selects rows 2–4 in the result grid and presses ⌘C
 - **THEN** those three rows are copied to the clipboard as TSV
+
+#### Scenario: Copy reflects a pending edit
+
+- **WHEN** the user has a pending edit changing `email` to `ana@example.com` on row 2 and copies that row with ⌘C
+- **THEN** the copied TSV contains `ana@example.com`, not the server value
 
 #### Scenario: Affected result renders the compact summary
 
@@ -442,6 +458,12 @@ The panel's height MUST be resizable via a drag handle on its top edge (between 
 
 - **WHEN** a run comes back with `truncated: true`, `row_cap: 100000`, `row_cap_source: "setting"`
 - **THEN** the banner names `100,000` rows, not `10,000`
+
+#### Scenario: Truncated editable result is still editable
+
+- **WHEN** a run comes back `truncated: true` with `editability.status: "editable"` on a writable connection
+- **THEN** the returned rows can be edited and saved normally
+- **AND** the truncation banner is shown above the grid
 
 #### Scenario: Adhoc grid column widths reset when columns prop changes
 
@@ -1172,4 +1194,544 @@ be bounded by the effective cap, not by the query's true cardinality.
 - **WHEN** `postgres_run_sql` runs `SELECT * FROM one_million_rows` with an effective cap of 10,000
 - **THEN** at most 10,000 rows are ever held in memory for that statement
 - **AND** the response has `rows.length === 10000` and `truncated: true`
+
+### Requirement: Postgres run responses carry result editability
+
+`postgres_run_sql`, each `status: "ok"` outcome of `postgres_run_sql_many`, and the
+`postgres_run_sql_stream` `columns` event SHALL each carry one additional field on
+their rows-shaped payload, per the `sql-result-editability` capability:
+
+- `editability: ResultEditability` — either
+  `{ status: "editable", schema, relation, pk_columns, pk_column_indexes, column_sources, enums }`
+  or `{ status: "not_editable", reason }`.
+
+The field is additive: `columns`, `rows`, `truncated_columns`, `truncated`,
+`query_ms`, `row_cap`, `row_cap_source` and the `RunSqlResult` / `StreamEvent`
+discriminants are otherwise unchanged. `kind: "affected"` results and the
+`affected` / `done` / `error` stream events MUST NOT carry the field.
+
+Provenance MUST be derived from the prepared statement's `RowDescription`
+(`tokio_postgres::Column::table_oid()` / `column_id()`) rather than by parsing the
+SQL text. Because OIDs are absolute, the resolved `schema` MUST be the relation's
+real schema even when the statement referenced it unqualified through
+`search_path`.
+
+The relation is considered editable only when its `pg_class.relkind` is `'r'`
+(ordinary table) or `'p'` (partitioned table).
+
+#### Scenario: Single run of a keyed table reports editable
+
+- **WHEN** `postgres_run_sql(id, "SELECT id, email FROM users", "user")` runs against `public.users` with PK `(id)`
+- **THEN** the response includes `editability: { status: "editable", schema: "public", relation: "users", pk_columns: ["id"], pk_column_indexes: [0], column_sources: ["id", "email"], enums: {} }`
+
+#### Scenario: Streaming columns event carries editability
+
+- **WHEN** a `postgres_run_sql_stream` run of `SELECT id, email FROM users` emits its `columns` event
+- **THEN** that event includes the `editability` field
+- **AND** neither the `batch` nor the `done` event repeats it
+
+#### Scenario: Each multi-statement outcome carries its own editability
+
+- **WHEN** `postgres_run_sql_many(id, ["SELECT id FROM users", "SELECT count(*) FROM users"], "user")` runs
+- **THEN** the first `status: "ok"` outcome carries `editability.status: "not_editable"` with `reason: "pk_not_selected"` or `"editable"` per the projection
+- **AND** the second carries `editability: { status: "not_editable", reason: "no_base_table" }`
+
+#### Scenario: Unqualified table name resolves to its real schema
+
+- **WHEN** the connection's `search_path` is `app, public` and the user runs `SELECT id FROM users`, resolving to `app.users`
+- **THEN** `editability.schema` is `"app"`
+
+#### Scenario: Affected result carries no editability field
+
+- **WHEN** `postgres_run_sql(id, "UPDATE users SET active = false", "user")` runs against a writable connection
+- **THEN** the response is `{ kind: "affected", … }` with no `editability` key
+
+#### Scenario: Editability resolution does not change run timing semantics
+
+- **WHEN** the editability resolver's catalog query fails or times out during a `SELECT * FROM users` run
+- **THEN** the run still returns `kind: "rows"` with its rows and `query_ms`
+- **AND** `editability` is `{ status: "not_editable", reason: "no_base_table" }`
+
+### Requirement: Inline cell editing in the SQL editor result grid
+
+The result panel SHALL offer inline cell editing on a rows result when **all** of
+the following hold:
+
+1. the run is a single-statement run (not a `Run all` / multi-statement run),
+2. the run has reached its terminal state (not streaming in flight),
+3. the response's `editability.status` is `"editable"`, and
+4. the tab's current connection is not `read_only`.
+
+When those conditions hold, the panel MUST render `<AdhocResultGrid />` with its
+edit configuration supplied, so that double-clicking a cell opens the same inline
+editor the table viewer uses (per `postgres-data-edit`, "Editable mode in the data
+viewer"): typed input coercion, explicit NULL toggle for nullable columns, enum
+`<select>` for enum columns, JSON/JSONB validation on commit, `Enter`/`Tab` to
+commit, `Escape` to cancel, and a dirty-cell highlight.
+
+The following cells MUST stay read-only even on an editable result:
+
+- any cell whose `column_sources` entry is `null` (computed / aliased expression),
+- any cell whose base column is one of `pk_columns` (the row's identity),
+- `bytea` columns and any cell whose value arrived as a `{ kind: "binary" | "truncated" }` envelope.
+
+Row insertion and row deletion MUST NOT be offered in this grid: there is no `+`
+gutter affordance, no "Add row" control, and `Backspace` / `Delete` MUST NOT mark
+rows for deletion. Cell UPDATE is the only supported operation.
+
+#### Scenario: Double-click opens the editor on an editable result
+
+- **WHEN** the user runs `SELECT id, email FROM users` on a writable connection and double-clicks an `email` cell
+- **THEN** an inline text editor opens with the current value selected
+
+#### Scenario: Commit marks the cell dirty
+
+- **WHEN** the user edits that `email` cell to `ana@example.com` and presses `Enter`
+- **THEN** the editor closes, the cell shows `ana@example.com` with the dirty highlight
+- **AND** the panel's pending-edit count reads `1`
+
+#### Scenario: Escape cancels without dirtying
+
+- **WHEN** the user opens the editor on a cell, types a new value, and presses `Escape`
+- **THEN** the cell reverts to its server value with no dirty highlight
+- **AND** the pending-edit count is unchanged
+
+#### Scenario: Opening and closing the editor unchanged does not dirty the cell
+
+- **WHEN** the user double-clicks a cell and presses `Enter` without changing anything
+- **THEN** no pending edit is recorded
+
+#### Scenario: Primary-key cells are not editable
+
+- **WHEN** the user double-clicks the `id` cell of a result from `SELECT id, email FROM users`
+- **THEN** no editor opens
+- **AND** the cell's hover title reads `Primary key — not editable`
+
+#### Scenario: Computed columns are not editable
+
+- **WHEN** the result came from `SELECT id, email, upper(email) AS shout FROM users` and the user double-clicks a `shout` cell
+- **THEN** no editor opens
+- **AND** the cell's hover title reads `Computed column — not editable`
+
+#### Scenario: Enum column offers a select
+
+- **WHEN** the user double-clicks a cell of an enum-typed base column
+- **THEN** the editor is a `<select>` listing that enum's labels in declared order
+
+#### Scenario: Insert and delete are not offered
+
+- **WHEN** an editable result is displayed and the user selects a row and presses `Backspace`
+- **THEN** no row is marked for deletion
+- **AND** no "Add row" control is rendered anywhere in the result panel
+
+### Requirement: Non-editable result cells explain themselves on hover
+
+When a rows result is displayed but inline editing is not available, every data
+cell SHALL carry a `title` tooltip naming the reason, so a double-click that does
+nothing is explained rather than silent. The copy MUST be derived from the response's
+`editability.reason` (or from local state for the two client-side cases):
+
+| Condition | Hover copy |
+| --- | --- |
+| `no_base_table` | `Not editable — this result isn't a plain table projection` |
+| `multiple_tables` | `Not editable — the result mixes columns from more than one table` |
+| `not_a_table` | `Not editable — views and materialized views can't be edited here` |
+| `no_primary_key` | `Not editable — <schema>.<relation> has no primary key` |
+| `pk_not_selected` | `Not editable — add the primary key to the SELECT list to edit these rows` |
+| `duplicate_projection` | `Not editable — the same column is selected more than once` |
+| connection is `read_only` | `Read-only connection — edits disabled` |
+| multi-statement run | `Not editable — results from a multi-statement run are read-only` |
+| streaming still in flight | `Not editable while the query is still loading` |
+
+Double-clicking a non-editable cell MUST NOT open an editor, MUST NOT emit a toast,
+and MUST NOT change the selection state beyond what a single click already does.
+
+#### Scenario: Missing primary key names the fix
+
+- **WHEN** the user runs `SELECT email FROM users` (PK `id` not selected) and hovers a cell
+- **THEN** the tooltip reads `Not editable — add the primary key to the SELECT list to edit these rows`
+
+#### Scenario: Join result explains the mix
+
+- **WHEN** the user runs `SELECT u.id, o.total FROM users u JOIN orders o ON o.user_id = u.id` and hovers a cell
+- **THEN** the tooltip reads `Not editable — the result mixes columns from more than one table`
+
+#### Scenario: Read-only connection takes precedence over the wire reason
+
+- **WHEN** the connection is `read_only` and the result's `editability.status` is `"editable"`
+- **THEN** every cell's tooltip reads `Read-only connection — edits disabled`
+- **AND** no editor opens on double-click
+
+#### Scenario: Double-click on a non-editable cell is inert
+
+- **WHEN** the user double-clicks a cell of a non-editable result
+- **THEN** no editor opens, no toast appears, and no error is logged
+
+### Requirement: Save and discard pending result-grid edits
+
+While the result grid holds pending edits, the result panel header SHALL render a
+`Discard` control and a `Save (<n>)` control beside the existing export menu, where
+`<n>` is the number of dirty rows. `Save` MUST render disabled (labelled `Save`)
+when the buffer is clean, and MUST NOT render at all when the result is not
+editable. **No keyboard shortcut is bound to this action** — `⌘S` in a query tab
+continues to save the *query*, unchanged.
+
+`Save` MUST commit through the existing `postgres_apply_table_edits(connection_id,
+schema, relation, edits, "user")` command from `postgres-data-edit`, using the
+`schema` and `relation` from the response's `editability` payload and one
+`{ kind: "update", pk, changes }` op per dirty row. `changes` MUST be keyed by base
+column name.
+
+On `outcome: "ok"` the panel MUST clear the buffer and re-run the same statement —
+with its original SQL text and editor start offset preserved — so the user sees
+committed values. On `outcome: "op_failed"` the panel MUST show a dismissable banner
+above the grid reading `Op #<1-based index> failed: [<code>] <message>` and MUST
+leave the buffer intact so the user can correct and retry. A thrown `AppError` MUST
+surface on the same banner using its message.
+
+`Discard` MUST clear the buffer without confirmation when it is invoked directly by
+the user from this control.
+
+#### Scenario: Save commits and refreshes
+
+- **WHEN** the user has two dirty rows in an editable result and clicks `Save (2)`
+- **THEN** `postgres_apply_table_edits` is invoked once with two `update` ops and `origin: "user"`
+- **AND** on success the pending-edit count returns to zero and the same statement is re-run
+
+#### Scenario: Re-run after save preserves the statement offset
+
+- **WHEN** a save succeeds for a result produced by the second statement in the editor document
+- **THEN** the re-run executes that same statement text
+- **AND** a subsequent syntax error's "Show in editor" still jumps to that statement's original offset
+
+#### Scenario: Op failure keeps the buffer
+
+- **WHEN** the apply returns `{ outcome: "op_failed", failed_op_index: 0, code: "23505", message: "duplicate key value violates unique constraint" }`
+- **THEN** a banner above the grid reads `Op #1 failed: [23505] duplicate key value violates unique constraint`
+- **AND** the two dirty cells remain dirty and editable
+
+#### Scenario: Save is absent on a non-editable result
+
+- **WHEN** the result's `editability.status` is `"not_editable"`
+- **THEN** neither `Save` nor `Discard` is rendered in the result header
+
+#### Scenario: Cmd-S still saves the query
+
+- **WHEN** the result grid holds pending edits and the user presses `⌘S`
+- **THEN** the query-save flow runs as before
+- **AND** the result-grid buffer is untouched
+
+#### Scenario: Discard clears the buffer
+
+- **WHEN** the user clicks `Discard` with three dirty rows
+- **THEN** all cells revert to their server values and the count returns to zero
+
+### Requirement: Pending result-grid edits are guarded against loss
+
+A dirty result-grid buffer SHALL be treated with the same care as a dirty
+table-viewer buffer. While the buffer holds pending edits, the query tab MUST:
+
+- publish a dirty-summary entry for the tab (label `<schema>.<relation> (result)`)
+  so the disconnect-confirmation dialog can name what would be lost,
+- intercept tab close and show the shared discard-confirmation dialog rather than
+  closing directly,
+- intercept a new run (`⌘↩`, `Run all`, or the post-save re-run's user-initiated
+  equivalent) and show the same dialog, and
+- intercept a connection switch in the tab's connection selector and show the same
+  dialog.
+
+Confirming the dialog discards the buffer and proceeds with the requested action.
+Cancelling leaves both the buffer and the current result untouched. The re-run that
+the panel performs itself immediately after a successful save is NOT a user-initiated
+run and MUST NOT prompt.
+
+#### Scenario: Closing the tab with pending edits prompts
+
+- **WHEN** the user closes a query tab whose result grid has one dirty row
+- **THEN** the discard-confirmation dialog appears and the tab stays open
+- **AND** confirming discards the edits and closes the tab
+
+#### Scenario: Re-running with pending edits prompts
+
+- **WHEN** the user presses `⌘↩` with two dirty rows in the result grid
+- **THEN** the discard-confirmation dialog appears and the query is not dispatched
+- **AND** cancelling leaves the two dirty rows intact
+
+#### Scenario: Switching connection with pending edits prompts
+
+- **WHEN** the user picks a different connection in the toolbar selector with pending result edits
+- **THEN** the discard-confirmation dialog appears before the connection changes
+
+#### Scenario: Post-save re-run does not prompt
+
+- **WHEN** a save succeeds and the panel re-runs the statement
+- **THEN** no discard dialog appears
+
+#### Scenario: Dirty result buffer is named in the disconnect dialog
+
+- **WHEN** the result grid of a query tab against `public.users` has pending edits and the user disconnects that connection
+- **THEN** the confirmation dialog names `public.users (result)`
+### Requirement: Exact NUMERIC cell decoding
+
+For `kind: "rows"` results, every cell of a `numeric` / `decimal` column (Postgres
+OID `NUMERIC`) SHALL be returned as a JSON **string** holding the value's exact
+decimal text, byte-for-byte equivalent to what Postgres' own `numeric_out` would
+produce for that value and `dscale`. The decoder MUST operate on the binary wire
+format (`tokio-postgres` requests binary result format for every column) and MUST
+NOT route the value through `f64`, `f32`, or any fixed-width decimal type, so
+arbitrary precision and trailing scale are preserved exactly.
+
+The decoder MUST honour the declared scale (`dscale`): the fractional part is
+rendered to exactly `dscale` digits, zero-padded or truncated as needed, and no
+decimal point is emitted when `dscale` is `0`. The special sign encodings MUST
+render as `"NaN"`, `"Infinity"` and `"-Infinity"`.
+
+A malformed or short `NUMERIC` payload MUST NOT panic; the decoder MUST fail
+cleanly and let the cell fall through to the undecodable-cell fallback.
+
+This requirement also applies to `numeric` reached through a domain, an array
+element, or a range bound.
+
+#### Scenario: numeric column renders its value, not a placeholder
+
+- **WHEN** the user runs `SELECT 1234.56::numeric` in the Postgres SQL editor
+- **THEN** the cell value is the string `"1234.56"`
+- **AND** no cell in the result equals `"<numeric>"`
+
+#### Scenario: declared scale is preserved
+
+- **WHEN** the user runs `SELECT 1234.56::numeric(10,4)`
+- **THEN** the cell value is the string `"1234.5600"`
+
+#### Scenario: zero scale renders without a decimal point
+
+- **WHEN** the user runs `SELECT 42::numeric(10,0)`
+- **THEN** the cell value is the string `"42"`
+
+#### Scenario: arbitrary precision survives without f64 rounding
+
+- **WHEN** the user runs `SELECT '-12345678901234567890.123456789'::numeric`
+- **THEN** the cell value is the string `"-12345678901234567890.123456789"`
+
+#### Scenario: small magnitudes with leading zero groups
+
+- **WHEN** the user runs `SELECT 0.00001::numeric`
+- **THEN** the cell value is the string `"0.00001"`
+
+#### Scenario: NaN and infinities render as Postgres spells them
+
+- **WHEN** the user runs `SELECT 'NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric`
+- **THEN** the cell values are the strings `"NaN"`, `"Infinity"` and `"-Infinity"`
+
+#### Scenario: zero with scale
+
+- **WHEN** the user runs `SELECT 0::numeric(10,2)`
+- **THEN** the cell value is the string `"0.00"`
+
+#### Scenario: malformed numeric payload does not panic
+
+- **WHEN** the `NUMERIC` decoder is given a payload shorter than its declared digit count
+- **THEN** it returns an error rather than panicking
+- **AND** the cell falls through to the undecodable-cell fallback
+
+### Requirement: Decoding of previously unsupported scalar types
+
+For `kind: "rows"` results, the following Postgres types SHALL be decoded to their
+value rather than a type placeholder:
+
+- `money` → decimal string with two fractional digits, no currency symbol and no
+  thousands separators (e.g. `"-12345.67"`). The two-digit scale is an assumption
+  about the server's `lc_monetary` `frac_digits`, which is not carried on the wire.
+- `timetz` → `HH:MM:SS[.ffffff]±HH:MM`, where the offset is the UTC offset (the
+  wire field is seconds *west* of UTC and MUST be negated for display).
+- `bit` / `varbit` → a string of `'0'`/`'1'` characters whose length equals the
+  value's declared bit length.
+- `point` → `(x,y)`; `lseg` → `[(x1,y1),(x2,y2)]`; `box` → `(x1,y1),(x2,y2)`;
+  `line` → `{A,B,C}`; `path` → `((x1,y1),…)` when closed and `[(x1,y1),…]` when
+  open; `polygon` → `((x1,y1),…)`; `circle` → `<(x,y),r>`.
+
+Each decoder MUST validate payload length before reading and MUST fail cleanly
+(never panic) on a short or malformed buffer.
+
+#### Scenario: money renders its amount
+
+- **WHEN** the user runs `SELECT (-12345.67)::money`
+- **THEN** the cell value is the string `"-12345.67"`
+- **AND** it is not `"<money>"`
+
+#### Scenario: timetz renders time and UTC offset
+
+- **WHEN** the user runs `SELECT '12:34:56.789+02'::timetz`
+- **THEN** the cell value is the string `"12:34:56.789000+02:00"`
+
+#### Scenario: varbit renders its bits
+
+- **WHEN** the user runs `SELECT B'1011'::varbit`
+- **THEN** the cell value is the string `"1011"`
+
+#### Scenario: point renders in Postgres text form
+
+- **WHEN** the user runs `SELECT '(1,2)'::point`
+- **THEN** the cell value is the string `"(1,2)"`
+
+#### Scenario: malformed geometric payload does not panic
+
+- **WHEN** a geometric decoder is given a buffer shorter than its fixed width
+- **THEN** it returns an error rather than panicking
+
+### Requirement: Recursive decoding of arrays, ranges, and domains
+
+For `kind: "rows"` results, container-kind Postgres types SHALL be decoded by
+recursing into their element or base type, so any type covered elsewhere in this
+capability is also covered inside a container:
+
+- **Arrays** (`Kind::Array`) MUST decode to a JSON array. A SQL `NULL` element
+  MUST become JSON `null`. An empty array MUST become `[]`. A multi-dimensional
+  array MUST be nested according to its dimension lengths. An element whose own
+  decode fails MUST become `null` rather than failing the whole cell.
+- **Ranges** (`Kind::Range`) MUST decode to Postgres' text form: `"empty"` for the
+  empty range, otherwise `[lo,hi)`-style with the bracket/parenthesis reflecting
+  inclusivity and an infinite bound written as the empty string. Each finite bound
+  MUST be rendered by decoding it as the range's base type.
+- **Multiranges** (`Kind::Multirange`) MUST decode to `{[a,b),[c,d)}` over their
+  constituent ranges, and `{}` when empty.
+- **Domains** (`Kind::Domain`) MUST decode as their underlying base type, since a
+  domain shares its base type's wire format.
+
+Recursion depth MUST be bounded; a value nested beyond the bound MUST fall through
+to the undecodable-cell fallback rather than exhausting the stack.
+
+#### Scenario: integer array decodes to a JSON array
+
+- **WHEN** the user runs `SELECT ARRAY[1,2,NULL]::int4[]`
+- **THEN** the cell value is the JSON array `[1, 2, null]`
+- **AND** it is not `"<_int4>"`
+
+#### Scenario: text array decodes to a JSON array of strings
+
+- **WHEN** the user runs `SELECT ARRAY['a','b']::text[]`
+- **THEN** the cell value is the JSON array `["a", "b"]`
+
+#### Scenario: numeric array preserves exact values
+
+- **WHEN** the user runs `SELECT ARRAY[1.10, 2.20]::numeric(10,2)[]`
+- **THEN** the cell value is the JSON array `["1.10", "2.20"]`
+
+#### Scenario: empty array decodes to an empty JSON array
+
+- **WHEN** the user runs `SELECT ARRAY[]::int4[]`
+- **THEN** the cell value is the JSON array `[]`
+
+#### Scenario: multi-dimensional array nests
+
+- **WHEN** the user runs `SELECT ARRAY[[1,2],[3,4]]::int4[][]`
+- **THEN** the cell value is the JSON array `[[1, 2], [3, 4]]`
+
+#### Scenario: range decodes to its text form
+
+- **WHEN** the user runs `SELECT '[1,5)'::int4range`
+- **THEN** the cell value is the string `"[1,5)"`
+
+#### Scenario: empty range decodes to empty
+
+- **WHEN** the user runs `SELECT 'empty'::int4range`
+- **THEN** the cell value is the string `"empty"`
+
+#### Scenario: unbounded range renders an empty bound
+
+- **WHEN** the user runs `SELECT '[1,)'::int4range`
+- **THEN** the cell value is the string `"[1,)"`
+
+#### Scenario: domain decodes as its base type
+
+- **WHEN** the user runs a `SELECT` returning a column of a domain declared over
+  `numeric(10,2)` whose value is `1.50`
+- **THEN** the cell value is the string `"1.50"`
+
+#### Scenario: domain over text decodes as text
+
+- **WHEN** the user runs a `SELECT` returning a column of a domain declared over
+  `text` whose value is `abc`
+- **THEN** the cell value is the string `"abc"`
+
+### Requirement: Undecodable cell fallback
+
+The Postgres SQL editor SHALL NOT return a `<typename>` placeholder for any cell.
+When a cell's Postgres type has no decoder, the backend MUST fall back, in order,
+to:
+
+1. The raw payload interpreted as UTF-8, returned as a JSON string, when the bytes
+   are valid UTF-8 **and** contain no control characters other than tab, newline
+   and carriage return — correct for types whose binary representation is their
+   text representation (`xml`, `ltree`, `pg_lsn`, unrecognised extension text
+   types). The control-character guard is what keeps a structured binary payload
+   that merely happens to be valid UTF-8 (`tsvector` is length-prefixed) from
+   rendering as a run of escapes; Postgres `text` cannot contain a NUL byte, so
+   the guard never rejects a real text value.
+2. The existing binary envelope `{ kind: "binary", preview: <hex>, byte_length: <n> }`
+   — the same shape already returned for `bytea` — with the column name recorded
+   in the response's `truncated_columns`.
+
+A SQL `NULL` MUST still return JSON `null` and MUST NOT enter this fallback chain.
+
+Size limits are applied after decoding, matching the existing behaviour: a decoded
+string longer than the inline-truncate limit MUST be returned as the existing
+`{ kind: "truncated", preview, byte_length }` envelope with its column recorded in
+`truncated_columns`, and a decoded container value whose JSON serialisation
+exceeds the same limit MUST be returned as that truncated envelope over the
+serialised preview.
+
+The types already decoded before this change — `bool`, `int2`/`int4`/`int8`,
+`float4`/`float8`, `json`/`jsonb`, `bytea`, `date`, `time`, `timestamp`,
+`timestamptz`, `uuid`, `oid`, `xid`, `xid8`, `interval`, `inet`/`cidr`,
+`macaddr`/`macaddr8`, and the text family — MUST keep their current JSON shapes,
+including their truncation and binary envelopes.
+
+#### Scenario: no placeholder is ever emitted
+
+- **WHEN** any `SELECT` completes in the Postgres SQL editor
+- **THEN** no cell value matches the pattern `<typename>` produced by the former
+  last-resort branch
+
+#### Scenario: unknown text-shaped type falls back to UTF-8
+
+- **WHEN** the user runs `SELECT '<a/>'::xml`
+- **THEN** the cell value is the string `"<a/>"`
+
+#### Scenario: unknown binary-shaped type falls back to the binary envelope
+
+- **WHEN** the user runs a `SELECT` returning a column of a type with no decoder
+  whose payload is not valid printable UTF-8 — e.g. `'tsv'::tsvector`, whose
+  length-prefixed payload is valid UTF-8 but riddled with NUL bytes
+- **THEN** the cell value is `{ kind: "binary", preview: <hex prefix>, byte_length: <n> }`
+- **AND** the column name appears in the response's `truncated_columns`
+
+#### Scenario: NULL stays null
+
+- **WHEN** the user runs `SELECT NULL::numeric, NULL::int4[], NULL::money`
+- **THEN** every cell value is JSON `null`
+
+#### Scenario: previously working types are unchanged
+
+- **WHEN** the user runs `SELECT true, 1::int4, 1.5::float8, '{"a":1}'::jsonb, now(), gen_random_uuid()`
+- **THEN** the cells are, respectively, JSON `true`, JSON `1`, JSON `1.5`, the JSON
+  object `{"a":1}`, an RFC 3339 string, and a UUID string — the same shapes as
+  before this change
+
+### Requirement: Decoding applies to every rows-returning Postgres run path
+
+The decoding rules in this capability SHALL apply identically to
+`postgres_run_sql`, to each rows-returning statement of `postgres_run_sql_many`,
+and to the `batch` events of `postgres_run_sql_stream`, since all three build cells
+through the same conversion.
+
+#### Scenario: multi-statement run decodes numeric in every statement
+
+- **WHEN** the user invokes `postgres.runSqlMany(id, ["SELECT 1.50::numeric", "SELECT 2.50::numeric"], "user")`
+- **THEN** entry 0's first cell is `"1.50"` and entry 1's first cell is `"2.50"`
+
+#### Scenario: streaming run decodes numeric in batch events
+
+- **WHEN** the user runs a streaming `SELECT` over a `numeric` column
+- **THEN** every `batch` event's cells hold the exact decimal strings, not `"<numeric>"`
 

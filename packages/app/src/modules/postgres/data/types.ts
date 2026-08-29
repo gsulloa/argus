@@ -237,6 +237,81 @@ export interface RefreshedRow {
   row: CellValue[] | null;
 }
 
+// --------------------------------------------------------------------------
+// Ad-hoc result editability (sql-result-editability capability)
+// --------------------------------------------------------------------------
+
+/**
+ * Why an ad-hoc SQL result can't be written back. Closed set mirroring the Rust
+ * `EditBlockReason` enum; user-facing copy lives in the frontend (see
+ * `blockReasonCopy`), never on the wire.
+ */
+export type EditBlockReason =
+  | "no_base_table"
+  | "multiple_tables"
+  | "not_a_table"
+  | "no_primary_key"
+  | "pk_not_selected"
+  | "duplicate_projection";
+
+/**
+ * Whether a rows-shaped SQL result can be edited, and everything needed to do
+ * it. Derived backend-side from the wire's `RowDescription` provenance — see
+ * `modules/postgres/editability.rs`.
+ */
+export type ResultEditability =
+  | {
+      status: "editable";
+      schema: string;
+      relation: string;
+      /** PK column names, declared order. */
+      pk_columns: string[];
+      /** Index into `columns` carrying each PK column, aligned to `pk_columns`. */
+      pk_column_indexes: number[];
+      /**
+       * Per result column: the BASE column it projects, or null when the column
+       * is computed. Same length as the result's `columns`. This is what makes
+       * `SELECT id AS pk` writable — the grid displays `pk` but writes `id`.
+       */
+      column_sources: (string | null)[];
+      /** Enum labels keyed by BASE column name (not by displayed name). */
+      enums: Record<string, string[]>;
+    }
+  | { status: "not_editable"; reason: EditBlockReason };
+
+export type EditableResult = Extract<ResultEditability, { status: "editable" }>;
+
+export function isEditableResult(e: ResultEditability | undefined): e is EditableResult {
+  return e?.status === "editable";
+}
+
+/**
+ * User-facing hover copy per block reason. Each states the fact and, where one
+ * exists, names the fix — a double-click that does nothing should explain
+ * itself rather than feel broken.
+ */
+export function blockReasonCopy(
+  reason: EditBlockReason,
+  relationLabel?: string,
+): string {
+  switch (reason) {
+    case "no_base_table":
+      return "Not editable — this result isn't a plain table projection";
+    case "multiple_tables":
+      return "Not editable — the result mixes columns from more than one table";
+    case "not_a_table":
+      return "Not editable — views and materialized views can't be edited here";
+    case "no_primary_key":
+      return relationLabel
+        ? `Not editable — ${relationLabel} has no primary key`
+        : "Not editable — this table has no primary key";
+    case "pk_not_selected":
+      return "Not editable — add the primary key to the SELECT list to edit these rows";
+    case "duplicate_projection":
+      return "Not editable — the same column is selected more than once";
+  }
+}
+
 /**
  * Discriminated outcome of a `postgres_apply_table_edits` call. Distinct from
  * thrown errors (read-only / shape) which surface as `AppError`.

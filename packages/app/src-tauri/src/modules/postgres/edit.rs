@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use deadpool_postgres::Object as PgObject;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use tauri::{AppHandle, State};
@@ -276,6 +277,45 @@ WHERE n.nspname = $1
   AND t.typcategory = 'E'
 ORDER BY a.attnum, e.enumsortorder";
 
+/// Look up a relation's primary-key columns in declared order.
+///
+/// Returns `None` when the relation genuinely has no primary key — that is not
+/// an error condition. Extracted from `postgres_table_primary_key` so the
+/// editability resolver can reuse the exact same catalog query rather than
+/// growing a second, subtly-different one.
+pub(crate) async fn lookup_pk_columns(
+    client: &PgObject,
+    schema: &str,
+    relation: &str,
+) -> AppResult<Option<Vec<String>>> {
+    let rows = client.query(SQL_PK_LOOKUP, &[&schema, &relation]).await?;
+    Ok(if rows.is_empty() {
+        None
+    } else {
+        Some(rows.iter().map(|r| r.get::<_, String>(0)).collect())
+    })
+}
+
+/// Look up enum labels per column for a relation, keyed by column name.
+///
+/// Callers treat a failure here as non-fatal — enum metadata only drives the
+/// editor's dropdowns, so an error degrades to "plain text input", never to a
+/// failed lookup.
+pub(crate) async fn lookup_enums(
+    client: &PgObject,
+    schema: &str,
+    relation: &str,
+) -> AppResult<BTreeMap<String, Vec<String>>> {
+    let rows = client.query(SQL_ENUM_LOOKUP, &[&schema, &relation]).await?;
+    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for row in rows {
+        let col: String = row.get(0);
+        let label: String = row.get(1);
+        map.entry(col).or_default().push(label);
+    }
+    Ok(map)
+}
+
 #[tauri::command]
 pub async fn postgres_table_primary_key(
     app: AppHandle,
@@ -296,14 +336,14 @@ pub async fn postgres_table_primary_key(
         let cancel_token = client.cancel_token();
 
         // PK lookup.
-        let pk_rows = match timeout(
+        let pk_columns: Option<Vec<String>> = match timeout(
             QUERY_TIMEOUT,
-            client.query(SQL_PK_LOOKUP, &[&schema, &relation]),
+            lookup_pk_columns(&client, &schema, &relation),
         )
         .await
         {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(AppError::from(e)),
+            Ok(Ok(pk)) => pk,
+            Ok(Err(e)) => return Err(e),
             Err(_) => {
                 fire_cancel(cancel_token, sslmode).await;
                 drop(client);
@@ -313,34 +353,13 @@ pub async fn postgres_table_primary_key(
                 ));
             }
         };
-        let pk_columns: Option<Vec<String>> = if pk_rows.is_empty() {
-            None
-        } else {
-            Some(pk_rows.iter().map(|r| r.get::<_, String>(0)).collect())
-        };
 
         // Enum lookup — non-fatal: a failure here must not discard an
         // already-resolved PK.  On any error we fall back to an empty map so
         // the caller still gets the PK and edit affordances remain available.
-        let enums: BTreeMap<String, Vec<String>> =
-            match client.query(SQL_ENUM_LOOKUP, &[&schema, &relation]).await {
-                Ok(enum_rows) => {
-                    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
-                    for row in enum_rows {
-                        let col: String = row.get(0);
-                        let label: String = row.get(1);
-                        map.entry(col).or_default().push(label);
-                    }
-                    map
-                }
-                Err(_) => {
-                    // Enum metadata is cosmetic (column dropdowns in the editor);
-                    // swallow the error and return empty so PK detection succeeds.
-                    BTreeMap::new()
-                }
-            };
+        let enum_result = lookup_enums(&client, &schema, &relation).await;
 
-        Ok(TableEditMetadata { pk_columns, enums })
+        Ok(combine_pk_and_enums(pk_columns, enum_result))
     }
     .await;
 

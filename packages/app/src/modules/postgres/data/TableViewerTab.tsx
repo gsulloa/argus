@@ -21,6 +21,7 @@ import { DataGrid, type DataGridHandle } from "./DataGrid";
 import { DiscardChangesDialog } from "./DiscardChangesDialog";
 import { FilterBar } from "./filter-bar/FilterBar";
 import { compilePrefilledSelect } from "./filter-bar/compileWhere";
+import { applyOnlyRowModels } from "./filter-bar/treeMutations";
 import { Inspector } from "./Inspector";
 import { useEditBuffer, buildRowKey } from "./useEditBuffer";
 import { useInspectorWidth } from "./useInspectorWidth";
@@ -666,12 +667,20 @@ export function TableViewer({
     setApplyToken((t) => t + 1);
   }, [draft, setApplied]);
 
+  // Per-row Apply: commits exactly the target row, and enables it on the way
+  // through. `modelToPayload` drops non-`enabled` rows, so applying a disabled
+  // row used to emit no `filter_tree` at all — the grid reloaded unfiltered
+  // while the bar showed "Applied" (issue #289). Enabling keeps the invariant
+  // every consumer assumes: `applied.rows` holds only enabled+complete rows.
+  // An incomplete row is a no-op on both models rather than a silent wipe of
+  // the filter currently in force; the bar explains why (see `FilterBar`).
   const onApplyOnlyRow = useCallback((index: number) => {
-    const row = draft.rows[index];
-    if (!row) return;
-    setApplied({ rows: [row], combinator: draft.combinator });
+    const next = applyOnlyRowModels(draft, index);
+    if (!next) return;
+    setDraft(next.draft);
+    setApplied(next.applied);
     setApplyToken((t) => t + 1);
-  }, [draft, setApplied]);
+  }, [draft, setDraft, setApplied]);
 
   // Footer `Filters: Unset` — stops the filtering without touching the form.
   // `draft` is deliberately left alone (rows, operators, values, checkboxes and

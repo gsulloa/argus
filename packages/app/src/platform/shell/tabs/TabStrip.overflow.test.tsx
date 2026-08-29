@@ -393,25 +393,20 @@ describe("TabStrip overflow — existing behaviour still works", () => {
     expect(mockActivate).toHaveBeenCalledWith("t2");
   });
 
-  it("drag-to-reorder still calls move with the same indices", () => {
+  // Reordering is pointer-based (`@dnd-kit`), which jsdom cannot drive end to
+  // end; the id→index mapping is covered by `TabStrip.dnd.test.tsx`. What this
+  // asserts is that the overflow wiring leaves the sortable wiring attached to
+  // every tab, and that no tab fell back to native HTML5 DnD.
+  it("keeps every tab sortable under overflow", () => {
     setup(makeTabs(8));
     layout({ tabWidth: 100, clientWidth: 350 });
 
     const tabEls = screen.getAllByRole("tab");
-    const from = tabEls[0]!;
-    const to = tabEls[2]!;
-    to.getBoundingClientRect = () =>
-      ({ left: 200, width: 100, right: 300, top: 0, bottom: 32, height: 32, x: 200, y: 0, toJSON: () => ({}) }) as DOMRect;
-
-    // jsdom does not implement DataTransfer; the handlers only write to it.
-    const dataTransfer = { effectAllowed: "", dropEffect: "" };
-
-    fireEvent.dragStart(from, { dataTransfer });
-    // Drop on the right half of index 2 → insert after → target 3, adjusted to 2.
-    fireEvent.dragOver(to, { clientX: 260, dataTransfer });
-    fireEvent.drop(to, { dataTransfer });
-
-    expect(mockMove).toHaveBeenCalledWith(0, 2);
+    expect(tabEls).toHaveLength(8);
+    for (const el of tabEls) {
+      expect(el).toHaveAttribute("aria-roledescription", "sortable");
+      expect(el).not.toHaveAttribute("draggable");
+    }
   });
 
   it("renders the full title as a tooltip so truncated labels stay readable", () => {

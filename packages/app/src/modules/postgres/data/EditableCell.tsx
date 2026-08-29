@@ -14,6 +14,14 @@ export interface EditableCellProps {
   dirty: boolean;
   /** True when this cell cannot be edited (PK of existing row, bytea, envelope, read-only conn, no-PK relation). */
   readOnly: boolean;
+  /**
+   * Hover copy explaining why this cell is read-only. When omitted, the
+   * component falls back to its own bytea / oversized-envelope detection, which
+   * is what the table viewer has always relied on. The SQL editor's result grid
+   * passes an explicit reason because its blockers (computed column, unproven
+   * base table, read-only connection) aren't inferable from the cell alone.
+   */
+  readOnlyReason?: string;
   /** Enum labels for this column, if it's a Postgres enum type. */
   enumValues?: string[];
   /** Inline-edit mode is on when this cell is the active editor. */
@@ -97,6 +105,7 @@ export function EditableCell(props: EditableCellProps) {
     displayValue,
     dirty,
     readOnly,
+    readOnlyReason,
     enumValues,
     editing,
     colIndex,
@@ -126,11 +135,12 @@ export function EditableCell(props: EditableCellProps) {
         }}
         title={
           readOnly
-            ? looksLikeBytea(column.data_type)
-              ? "binary, not editable inline"
-              : isCellEnvelope(displayValue)
-                ? "value too large to edit inline"
-                : undefined
+            ? (readOnlyReason ??
+              (looksLikeBytea(column.data_type)
+                ? "binary, not editable inline"
+                : isCellEnvelope(displayValue)
+                  ? "value too large to edit inline"
+                  : undefined))
             : undefined
         }
       >

@@ -24,7 +24,7 @@ use tauri::{AppHandle, Manager, State};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime, PrimitiveDateTime, Time};
 use tokio::time::timeout;
-use tokio_postgres::types::{FromSql, Type as PgType};
+use tokio_postgres::types::{FromSql, Kind as PgKind, Type as PgType};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -32,6 +32,7 @@ use crate::modules::activity_log::{
     emit_activity, ActivityKind, ActivityLogEntryBuilder, Metric, Origin,
 };
 use crate::modules::postgres::data::{fire_cancel, DataColumn};
+use crate::modules::postgres::editability::{self, ResultEditability};
 use crate::modules::postgres::pool::PgPoolRegistry;
 use crate::modules::query_cancel::{CancelAction, RunningQueryRegistry};
 use crate::modules::query_history::{self, HistoryOrigin, HistoryStatus, NewEntry};
@@ -190,6 +191,9 @@ pub enum RunSqlResult {
         query_ms: u64,
         row_cap: u64,
         row_cap_source: RowCapSource,
+        /// Whether these rows can be written back, and how. Rows-shaped
+        /// results only — `Affected` carries no such notion.
+        editability: ResultEditability,
     },
     Affected {
         command_tag: String,
@@ -237,7 +241,12 @@ pub enum RunManyOutcome {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum StreamEvent {
     /// Column metadata — always the first event for a SELECT-shape statement.
-    Columns { columns: Vec<DataColumn> },
+    /// Carries `editability` because it is the only event that knows the
+    /// projection's shape; `Batch` and `Done` never repeat it.
+    Columns {
+        columns: Vec<DataColumn>,
+        editability: ResultEditability,
+    },
     /// A batch of converted rows. May arrive multiple times before `done`.
     Batch { rows: Vec<Vec<JsonValue>> },
     /// Terminal: SELECT-shape query completed successfully.
@@ -502,6 +511,696 @@ impl<'a> FromSql<'a> for PgMacAddr {
     }
 }
 
+/// Sign words in the NUMERIC wire format. Anything else is malformed.
+const NUMERIC_POS: u16 = 0x0000;
+const NUMERIC_NEG: u16 = 0x4000;
+const NUMERIC_NAN: u16 = 0xC000;
+const NUMERIC_PINF: u16 = 0xD000;
+const NUMERIC_NINF: u16 = 0xF000;
+
+/// Postgres NUMERIC wire format (`numeric_send`), all big-endian:
+///   int16  ndigits   number of base-10000 digit groups that follow
+///   int16  weight    base-10000 exponent of digits[0]
+///   uint16 sign      0x0000 pos · 0x4000 neg · 0xC000 NaN · 0xD000 +Inf · 0xF000 -Inf
+///   int16  dscale    digits after the decimal point
+///   int16 × ndigits  the digit groups, each 0..=9999
+///
+/// Rendered as exact decimal text, never through `f64`: `numeric` is
+/// arbitrary-precision by definition, so a float round-trip would silently
+/// corrupt monetary and high-precision values — and `serde_json::Number`
+/// (i64/u64/f64) cannot hold the range either. A String is the only lossless
+/// option, and it matches what the table browser already returns for the same
+/// column (it casts `::text` server-side, see `data.rs` `text_castable`).
+struct PgNumeric(String);
+
+impl<'a> FromSql<'a> for PgNumeric {
+    fn from_sql(
+        _ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() < 8 {
+            return Err(format!("numeric: expected at least 8 bytes, got {}", raw.len()).into());
+        }
+        let ndigits = i16::from_be_bytes(raw[0..2].try_into().unwrap());
+        let weight = i32::from(i16::from_be_bytes(raw[2..4].try_into().unwrap()));
+        let sign = u16::from_be_bytes(raw[4..6].try_into().unwrap());
+        let dscale = i16::from_be_bytes(raw[6..8].try_into().unwrap());
+
+        // The non-finite signs carry no digits; short-circuit on Postgres' own
+        // text spellings.
+        match sign {
+            NUMERIC_NAN => return Ok(PgNumeric("NaN".to_string())),
+            NUMERIC_PINF => return Ok(PgNumeric("Infinity".to_string())),
+            NUMERIC_NINF => return Ok(PgNumeric("-Infinity".to_string())),
+            NUMERIC_POS | NUMERIC_NEG => {}
+            other => return Err(format!("numeric: unknown sign 0x{:04x}", other).into()),
+        }
+        if ndigits < 0 || dscale < 0 {
+            return Err(format!(
+                "numeric: negative ndigits ({}) or dscale ({})",
+                ndigits, dscale
+            )
+            .into());
+        }
+        let ndigits = ndigits as usize;
+        let dscale = dscale as usize;
+        if raw.len() != 8 + 2 * ndigits {
+            return Err(format!(
+                "numeric: expected {} bytes for {} digit groups, got {}",
+                8 + 2 * ndigits,
+                ndigits,
+                raw.len()
+            )
+            .into());
+        }
+        let digits: Vec<u16> = (0..ndigits)
+            .map(|i| u16::from_be_bytes(raw[8 + 2 * i..10 + 2 * i].try_into().unwrap()))
+            .collect();
+        if digits.iter().any(|d| *d > 9999) {
+            return Err("numeric: digit group out of base-10000 range".into());
+        }
+
+        // Digit group `i` carries base-10000 exponent `weight - i`; equivalently
+        // exponent `e` lives at index `weight - e`, and any index outside
+        // `0..ndigits` is an implicit zero. That single rule is what makes
+        // leading-zero groups (`weight < -1`) and trailing-zero groups (`dscale`
+        // reaching past `ndigits`) fall out without special cases.
+        let group_at = |e: i32| -> u16 {
+            let idx = weight - e;
+            if idx < 0 {
+                return 0;
+            }
+            digits.get(idx as usize).copied().unwrap_or(0)
+        };
+
+        let mut out = String::new();
+        if sign == NUMERIC_NEG {
+            out.push('-');
+        }
+        // Integer part: exponents `weight` down to 0, leading group unpadded.
+        if weight < 0 {
+            out.push('0');
+        } else {
+            out.push_str(&group_at(weight).to_string());
+            for e in (0..weight).rev() {
+                out.push_str(&format!("{:04}", group_at(e)));
+            }
+        }
+        // Fractional part: exponents -1, -2, … zero-padded to 4 and concatenated,
+        // then padded or truncated to exactly `dscale` characters.
+        if dscale > 0 {
+            let mut frac = String::with_capacity(dscale + 4);
+            let mut e = -1i32;
+            while frac.len() < dscale {
+                frac.push_str(&format!("{:04}", group_at(e)));
+                e -= 1;
+            }
+            frac.truncate(dscale);
+            out.push('.');
+            out.push_str(&frac);
+        }
+        Ok(PgNumeric(out))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::NUMERIC
+    }
+}
+
+/// Postgres MONEY wire format: 8-byte big-endian i64 in the smallest currency
+/// unit. The scale comes from the server's `lc_monetary` `frac_digits` and is
+/// NOT carried on the wire; we assume 2, which is right for the `C` locale and
+/// effectively every locale Argus meets. Rendered bare — no currency symbol, no
+/// thousands separators — so the cell stays machine-parseable for copy/export
+/// and still sorts numerically in the grid.
+struct PgMoney(String);
+
+impl<'a> FromSql<'a> for PgMoney {
+    fn from_sql(
+        _ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() != 8 {
+            return Err(format!("money: expected 8 bytes, got {}", raw.len()).into());
+        }
+        let units = i64::from_be_bytes(raw[0..8].try_into().unwrap());
+        let sign = if units < 0 { "-" } else { "" };
+        let abs = units.unsigned_abs();
+        Ok(PgMoney(format!("{}{}.{:02}", sign, abs / 100, abs % 100)))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::MONEY
+    }
+}
+
+/// Postgres TIMETZ wire format: 12 bytes big-endian
+///   bytes 0..8  → i64 microseconds since midnight
+///   bytes 8..12 → i32 zone offset in seconds **west** of UTC
+///
+/// Rendered `HH:MM:SS[.ffffff]±HH:MM`, negating the wire field so the offset
+/// reads the way users write it (`+02:00`, not `-7200`). Sub-second digits are
+/// not trimmed, matching the sibling TIME/TIMESTAMP arms which render through
+/// `time`'s Display. A sub-minute offset (only historical zones have one) gets
+/// a `:SS` tail rather than being silently rounded away.
+struct PgTimeTz(String);
+
+impl<'a> FromSql<'a> for PgTimeTz {
+    fn from_sql(
+        _ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() != 12 {
+            return Err(format!("timetz: expected 12 bytes, got {}", raw.len()).into());
+        }
+        let micros = i64::from_be_bytes(raw[0..8].try_into().unwrap());
+        let zone = i32::from_be_bytes(raw[8..12].try_into().unwrap());
+        if micros < 0 {
+            return Err(format!("timetz: negative time-of-day {}", micros).into());
+        }
+
+        let us_rem = micros % 1_000_000;
+        let total_secs = micros / 1_000_000;
+        let secs = total_secs % 60;
+        let total_mins = total_secs / 60;
+        let mins = total_mins % 60;
+        let hours = total_mins / 60;
+
+        let mut s = format!("{:02}:{:02}:{:02}", hours, mins, secs);
+        if us_rem != 0 {
+            s.push_str(&format!(".{:06}", us_rem));
+        }
+
+        // Wire field is seconds WEST of UTC; the displayed offset is its negation.
+        let offset = -zone;
+        let osign = if offset < 0 { '-' } else { '+' };
+        let oabs = offset.unsigned_abs();
+        s.push(osign);
+        s.push_str(&format!("{:02}:{:02}", oabs / 3600, (oabs % 3600) / 60));
+        if oabs % 60 != 0 {
+            s.push_str(&format!(":{:02}", oabs % 60));
+        }
+        Ok(PgTimeTz(s))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::TIMETZ
+    }
+}
+
+/// Postgres BIT / VARBIT wire format:
+///   bytes 0..4 → i32 bit length
+///   bytes 4..  → ceil(len / 8) bytes, most-significant bit first
+///
+/// Rendered as exactly `len` '0'/'1' characters, so trailing pad bits in the
+/// final byte are dropped rather than shown.
+struct PgBits(String);
+
+impl<'a> FromSql<'a> for PgBits {
+    fn from_sql(
+        _ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() < 4 {
+            return Err(format!("varbit: expected at least 4 bytes, got {}", raw.len()).into());
+        }
+        let bit_len = i32::from_be_bytes(raw[0..4].try_into().unwrap());
+        if bit_len < 0 {
+            return Err(format!("varbit: negative bit length {}", bit_len).into());
+        }
+        let bit_len = bit_len as usize;
+        let nbytes = bit_len.div_ceil(8);
+        if raw.len() != 4 + nbytes {
+            return Err(format!(
+                "varbit: expected {} bytes for {} bits, got {}",
+                4 + nbytes,
+                bit_len,
+                raw.len()
+            )
+            .into());
+        }
+        let bits = &raw[4..];
+        let s = (0..bit_len)
+            .map(|i| {
+                if bits[i / 8] >> (7 - i % 8) & 1 == 1 {
+                    '1'
+                } else {
+                    '0'
+                }
+            })
+            .collect();
+        Ok(PgBits(s))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::BIT || *ty == PgType::VARBIT
+    }
+}
+
+/// The geometric family, all big-endian `float8` payloads, rendered in the same
+/// text form `geometry_out` produces:
+///   POINT   (x,y)                      16 bytes
+///   LSEG    [(x1,y1),(x2,y2)]          32 bytes
+///   BOX     (x1,y1),(x2,y2)            32 bytes (high corner first)
+///   LINE    {A,B,C}                    24 bytes
+///   CIRCLE  <(x,y),r>                  24 bytes
+///   PATH    ((…)) closed / [(…)] open  1-byte closed flag + i32 npts + points
+///   POLYGON ((…))                      i32 npts + points
+struct PgGeometry(String);
+
+impl PgGeometry {
+    /// Read `n` big-endian f64s starting at `off`, or `None` if the buffer is short.
+    fn floats(raw: &[u8], off: usize, n: usize) -> Option<Vec<f64>> {
+        if raw.len() < off + n * 8 {
+            return None;
+        }
+        Some(
+            (0..n)
+                .map(|i| f64::from_be_bytes(raw[off + i * 8..off + i * 8 + 8].try_into().unwrap()))
+                .collect(),
+        )
+    }
+
+    /// `(x1,y1),(x2,y2),…` over a flat coordinate list.
+    fn points(coords: &[f64]) -> String {
+        coords
+            .chunks(2)
+            .map(|p| format!("({},{})", p[0], p[1]))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+impl<'a> FromSql<'a> for PgGeometry {
+    fn from_sql(
+        ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let short = || -> Box<dyn std::error::Error + Sync + Send> {
+            format!("{}: malformed {}-byte payload", ty.name(), raw.len()).into()
+        };
+        let s = match *ty {
+            PgType::POINT => {
+                let c = Self::floats(raw, 0, 2).ok_or_else(short)?;
+                format!("({},{})", c[0], c[1])
+            }
+            PgType::LSEG => {
+                let c = Self::floats(raw, 0, 4).ok_or_else(short)?;
+                format!("[{}]", Self::points(&c))
+            }
+            PgType::BOX => {
+                let c = Self::floats(raw, 0, 4).ok_or_else(short)?;
+                Self::points(&c)
+            }
+            PgType::LINE => {
+                let c = Self::floats(raw, 0, 3).ok_or_else(short)?;
+                format!("{{{},{},{}}}", c[0], c[1], c[2])
+            }
+            PgType::CIRCLE => {
+                let c = Self::floats(raw, 0, 3).ok_or_else(short)?;
+                format!("<({},{}),{}>", c[0], c[1], c[2])
+            }
+            PgType::PATH | PgType::POLYGON => {
+                // PATH carries a leading closed flag; POLYGON is always closed.
+                let (closed, off) = if *ty == PgType::PATH {
+                    (*raw.first().ok_or_else(short)? != 0, 1)
+                } else {
+                    (true, 0)
+                };
+                if raw.len() < off + 4 {
+                    return Err(short());
+                }
+                let npts = i32::from_be_bytes(raw[off..off + 4].try_into().unwrap());
+                if npts < 0 {
+                    return Err(short());
+                }
+                let c = Self::floats(raw, off + 4, npts as usize * 2).ok_or_else(short)?;
+                if closed {
+                    format!("({})", Self::points(&c))
+                } else {
+                    format!("[{}]", Self::points(&c))
+                }
+            }
+            ref other => return Err(format!("geometry: unsupported type {}", other.name()).into()),
+        };
+        Ok(PgGeometry(s))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        matches!(
+            *ty,
+            PgType::POINT
+                | PgType::LSEG
+                | PgType::BOX
+                | PgType::LINE
+                | PgType::CIRCLE
+                | PgType::PATH
+                | PgType::POLYGON
+        )
+    }
+}
+
+/// Escape hatch onto the raw wire bytes of ANY column. `Row` exposes no public
+/// raw accessor, but `try_get` is generic over `FromSql<'a>` and borrows from
+/// the row — so a newtype whose `accepts` is total hands us the bytes for types
+/// `tokio-postgres` has no `FromSql` for at all (arrays, ranges, domains,
+/// geometry). This is what lets `decode_raw` be recursive.
+struct PgRaw<'a>(&'a [u8]);
+
+impl<'a> FromSql<'a> for PgRaw<'a> {
+    fn from_sql(
+        _ty: &PgType,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(PgRaw(raw))
+    }
+
+    fn accepts(_ty: &PgType) -> bool {
+        true
+    }
+}
+
+/// Minimal big-endian cursor over a Postgres binary payload. Every read is
+/// bounds-checked and yields `None` past the end, so a malformed container
+/// degrades to the undecodable-cell fallback instead of panicking.
+struct Reader<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(buf: &'a [u8]) -> Self {
+        Reader { buf, pos: 0 }
+    }
+
+    fn u8(&mut self) -> Option<u8> {
+        let b = *self.buf.get(self.pos)?;
+        self.pos += 1;
+        Some(b)
+    }
+
+    fn i32(&mut self) -> Option<i32> {
+        let bytes = self.buf.get(self.pos..self.pos + 4)?;
+        self.pos += 4;
+        Some(i32::from_be_bytes(bytes.try_into().unwrap()))
+    }
+
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let bytes = self.buf.get(self.pos..self.pos + n)?;
+        self.pos += n;
+        Some(bytes)
+    }
+}
+
+/// Cap on `decode_raw` recursion (domain → range → array → …). Postgres type
+/// graphs are acyclic and shallow, so this only ever fires on a hostile or
+/// pathological catalog — where returning `None` beats blowing the stack.
+const MAX_DECODE_DEPTH: usize = 8;
+/// Postgres' own `MAXDIM`: arrays never carry more dimensions than this.
+const MAX_ARRAY_DIMS: usize = 6;
+
+/// Decode one cell straight from its wire bytes. Pure and DB-free (hence
+/// directly unit-testable), and the single place a newly supported type gets
+/// added. Returns `None` when nothing here knows the type, which is what
+/// triggers `cell_to_json`'s UTF-8 → binary-envelope fallback.
+///
+/// The container kinds recurse, so every scalar below is automatically
+/// available inside an array, a range bound, or behind a domain.
+fn decode_raw(ty: &PgType, raw: &[u8], depth: usize) -> Option<JsonValue> {
+    if depth > MAX_DECODE_DEPTH {
+        return None;
+    }
+    match *ty {
+        PgType::BOOL => <bool as FromSql>::from_sql(ty, raw)
+            .ok()
+            .map(JsonValue::Bool),
+        PgType::INT2 => <i16 as FromSql>::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::Number(i64::from(v).into())),
+        PgType::INT4 => <i32 as FromSql>::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::Number(i64::from(v).into())),
+        PgType::INT8 => <i64 as FromSql>::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::Number(v.into())),
+        PgType::OID => <u32 as FromSql>::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::Number(u64::from(v).into())),
+        PgType::FLOAT4 => <f32 as FromSql>::from_sql(ty, raw)
+            .ok()
+            .and_then(|v| serde_json::Number::from_f64(f64::from(v)))
+            .map(JsonValue::Number),
+        PgType::FLOAT8 => <f64 as FromSql>::from_sql(ty, raw)
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(JsonValue::Number),
+        PgType::NUMERIC => PgNumeric::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.0)),
+        PgType::MONEY => PgMoney::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.0)),
+        PgType::JSON | PgType::JSONB => <JsonValue as FromSql>::from_sql(ty, raw).ok(),
+        PgType::UUID => <Uuid as FromSql>::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.to_string())),
+        PgType::TIMESTAMPTZ => <OffsetDateTime as FromSql>::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.format(&Rfc3339).unwrap_or_else(|_| v.to_string()))),
+        PgType::TIMESTAMP => <PrimitiveDateTime as FromSql>::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.to_string())),
+        PgType::DATE => <Date as FromSql>::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.to_string())),
+        PgType::TIME => <Time as FromSql>::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.to_string())),
+        PgType::TIMETZ => PgTimeTz::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.0)),
+        PgType::INTERVAL => PgInterval::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.0)),
+        PgType::BIT | PgType::VARBIT => PgBits::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.0)),
+        PgType::INET | PgType::CIDR => PgInet::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.0)),
+        PgType::MACADDR | PgType::MACADDR8 => PgMacAddr::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.0)),
+        PgType::XID => PgXid::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::Number(u64::from(v.0).into())),
+        PgType::XID8 => PgXid8::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::Number(v.0.into())),
+        PgType::POINT
+        | PgType::LSEG
+        | PgType::BOX
+        | PgType::LINE
+        | PgType::CIRCLE
+        | PgType::PATH
+        | PgType::POLYGON => PgGeometry::from_sql(ty, raw)
+            .ok()
+            .map(|v| JsonValue::String(v.0)),
+        // Only reachable nested (a bare BYTEA column is handled by the envelope
+        // arm in `cell_to_json`); `\x…` is Postgres' own text form for it.
+        PgType::BYTEA => Some(JsonValue::String(format!("\\x{}", hex(raw, raw.len())))),
+        PgType::TEXT | PgType::VARCHAR | PgType::BPCHAR | PgType::NAME | PgType::UNKNOWN => {
+            utf8_json(raw)
+        }
+        _ => match ty.kind() {
+            // A domain shares its base type's wire format exactly, so this is a
+            // pure delegation — and it is why a domain over `text` (which
+            // `FromSql for String` rejects) starts working too.
+            PgKind::Domain(inner) => decode_raw(inner, raw, depth + 1),
+            PgKind::Array(elem) => decode_array(elem, raw, depth + 1),
+            PgKind::Range(base) => decode_range(base, raw, depth + 1).map(JsonValue::String),
+            PgKind::Multirange(base) => decode_multirange(base, raw, depth + 1),
+            PgKind::Enum(_) => utf8_json(raw),
+            _ => None,
+        },
+    }
+}
+
+/// `Some(JsonValue::String)` when the bytes are valid UTF-8. Used for types we
+/// already know are text-shaped (`text`, `varchar`, enum labels).
+fn utf8_json(raw: &[u8]) -> Option<JsonValue> {
+    std::str::from_utf8(raw)
+        .ok()
+        .map(|s| JsonValue::String(s.to_string()))
+}
+
+/// Last-resort text read for a type nothing else claimed: valid UTF-8 AND free
+/// of control characters beyond tab/newline/CR. The control-character guard is
+/// what separates a genuinely text-shaped payload (`xml`, `ltree`, `pg_lsn`,
+/// unrecognised extension text types) from a structured binary one that merely
+/// happens to be valid UTF-8 — `tsvector` is length-prefixed, so without this
+/// it would render as a run of ` ` escapes instead of falling through to
+/// the honest hex envelope. Postgres `text` cannot contain a NUL byte, so this
+/// never rejects a real text value.
+fn printable_utf8_json(raw: &[u8]) -> Option<JsonValue> {
+    let s = std::str::from_utf8(raw).ok()?;
+    if s.chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+    {
+        return None;
+    }
+    Some(JsonValue::String(s.to_string()))
+}
+
+/// Postgres `array_send`: i32 ndim, i32 has_null, i32 element oid, then
+/// ndim × (i32 dim_len, i32 lower_bound), then per element an i32 byte length
+/// (-1 for SQL NULL) followed by that many bytes.
+///
+/// An element whose own decode fails becomes `null` rather than failing the
+/// whole cell — one bad value should not hide the other 999.
+fn decode_array(elem: &PgType, raw: &[u8], depth: usize) -> Option<JsonValue> {
+    let mut r = Reader::new(raw);
+    let ndim = r.i32()?;
+    let _has_null = r.i32()?;
+    let _elem_oid = r.i32()?;
+    if ndim < 0 || ndim as usize > MAX_ARRAY_DIMS {
+        return None;
+    }
+    if ndim == 0 {
+        return Some(JsonValue::Array(Vec::new()));
+    }
+    let mut dims = Vec::with_capacity(ndim as usize);
+    for _ in 0..ndim {
+        let len = r.i32()?;
+        let _lower_bound = r.i32()?;
+        if len < 0 {
+            return None;
+        }
+        dims.push(len as usize);
+    }
+    let total: usize = dims.iter().try_fold(1usize, |a, d| a.checked_mul(*d))?;
+
+    // Grown by pushing rather than pre-allocated: `total` comes off the wire,
+    // so a malformed header must not get to request an arbitrary allocation.
+    let mut flat: Vec<JsonValue> = Vec::new();
+    for _ in 0..total {
+        let len = r.i32()?;
+        if len < 0 {
+            flat.push(JsonValue::Null);
+            continue;
+        }
+        let bytes = r.take(len as usize)?;
+        flat.push(decode_raw(elem, bytes, depth).unwrap_or(JsonValue::Null));
+    }
+    Some(fold_dims(&flat, &dims))
+}
+
+/// Fold a flat element list back into nested arrays per the dimension lengths,
+/// so `int4[][]` reads as `[[1,2],[3,4]]` rather than `[1,2,3,4]`.
+fn fold_dims(values: &[JsonValue], dims: &[usize]) -> JsonValue {
+    if dims.len() <= 1 {
+        return JsonValue::Array(values.to_vec());
+    }
+    let inner: usize = dims[1..].iter().product();
+    if inner == 0 {
+        return JsonValue::Array(Vec::new());
+    }
+    JsonValue::Array(
+        values
+            .chunks(inner)
+            .map(|c| fold_dims(c, &dims[1..]))
+            .collect(),
+    )
+}
+
+// Flag bits from Postgres' `rangetypes.h`. Note the ordering: inclusivity comes
+// before infinity, NOT the other way round.
+const RANGE_EMPTY: u8 = 0x01;
+const RANGE_LB_INC: u8 = 0x02;
+const RANGE_UB_INC: u8 = 0x04;
+const RANGE_LB_INF: u8 = 0x08;
+const RANGE_UB_INF: u8 = 0x10;
+
+/// Postgres `range_send`: a u8 flags byte, then each finite bound as an i32
+/// byte length followed by that many bytes. Rendered in Postgres' own text form
+/// (`empty`, `[1,5)`, `[1,)`), with each bound decoded as the base type.
+fn decode_range(base: &PgType, raw: &[u8], depth: usize) -> Option<String> {
+    let mut r = Reader::new(raw);
+    let flags = r.u8()?;
+    if flags & RANGE_EMPTY != 0 {
+        return Some("empty".to_string());
+    }
+    let bound = |r: &mut Reader<'_>| -> Option<String> {
+        let len = r.i32()?;
+        if len < 0 {
+            return None;
+        }
+        let bytes = r.take(len as usize)?;
+        Some(render_bound(base, bytes, depth))
+    };
+    let lower = if flags & RANGE_LB_INF != 0 {
+        String::new()
+    } else {
+        bound(&mut r)?
+    };
+    let upper = if flags & RANGE_UB_INF != 0 {
+        String::new()
+    } else {
+        bound(&mut r)?
+    };
+    let open = if flags & RANGE_LB_INC != 0 { '[' } else { '(' };
+    let close = if flags & RANGE_UB_INC != 0 { ']' } else { ')' };
+    Some(format!("{}{},{}{}", open, lower, upper, close))
+}
+
+/// Postgres `multirange_send`: i32 range count, then each range as an i32 byte
+/// length followed by a `range_send` payload. Rendered `{[a,b),[c,d)}`.
+fn decode_multirange(base: &PgType, raw: &[u8], depth: usize) -> Option<JsonValue> {
+    let mut r = Reader::new(raw);
+    let count = r.i32()?;
+    if count < 0 {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for _ in 0..count {
+        let len = r.i32()?;
+        if len < 0 {
+            return None;
+        }
+        let bytes = r.take(len as usize)?;
+        parts.push(decode_range(base, bytes, depth)?);
+    }
+    Some(JsonValue::String(format!("{{{}}}", parts.join(","))))
+}
+
+/// A range bound as bare text: strings unquoted, numbers/bools via their JSON
+/// form, and an undecodable bound as the empty string (Postgres' own rendering
+/// for a bound it cannot print).
+fn render_bound(base: &PgType, raw: &[u8], depth: usize) -> String {
+    match decode_raw(base, raw, depth) {
+        Some(JsonValue::String(s)) => s,
+        Some(v) => v.to_string(),
+        None => String::new(),
+    }
+}
+
+/// Lowercase hex of the first `max` bytes.
+fn hex(bytes: &[u8], max: usize) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(bytes.len().min(max) * 2);
+    for b in bytes.iter().take(max) {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
+/// Record `column_name` once in the response's `truncated_columns` list.
+fn mark_truncated(column_name: &str, truncated_columns: &mut Vec<String>) {
+    if !truncated_columns.iter().any(|n| n == column_name) {
+        truncated_columns.push(column_name.to_string());
+    }
+}
+
 /// Convert a `tokio_postgres::Row` value at `idx` into a `JsonValue`. We try
 /// the most likely Rust types first and fall back to a String of the Postgres
 /// representation when nothing matches. Large strings and binary collapse to
@@ -552,6 +1251,17 @@ fn cell_to_json(
             Ok(None) => return JsonValue::Null,
             Err(_) => {}
         },
+        // Exact decimal text, never an f64 round-trip — see `PgNumeric`.
+        PgType::NUMERIC => match row.try_get::<_, Option<PgNumeric>>(idx) {
+            Ok(Some(v)) => return JsonValue::String(v.0),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
+        PgType::MONEY => match row.try_get::<_, Option<PgMoney>>(idx) {
+            Ok(Some(v)) => return JsonValue::String(v.0),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
         PgType::JSON | PgType::JSONB => match row.try_get::<_, Option<JsonValue>>(idx) {
             Ok(Some(v)) => return v,
             Ok(None) => return JsonValue::Null,
@@ -559,15 +1269,8 @@ fn cell_to_json(
         },
         PgType::BYTEA => match row.try_get::<_, Option<Vec<u8>>>(idx) {
             Ok(Some(bytes)) => {
-                let mut hex = String::with_capacity(bytes.len() * 2);
-                for b in bytes.iter().take(64) {
-                    use std::fmt::Write;
-                    let _ = write!(&mut hex, "{:02x}", b);
-                }
-                if !truncated_columns.iter().any(|n| n == column_name) {
-                    truncated_columns.push(column_name.to_string());
-                }
-                return binary_envelope(hex, bytes.len());
+                mark_truncated(column_name, truncated_columns);
+                return binary_envelope(hex(&bytes, 64), bytes.len());
             }
             Ok(None) => return JsonValue::Null,
             Err(_) => {}
@@ -640,6 +1343,27 @@ fn cell_to_json(
             Ok(None) => return JsonValue::Null,
             Err(_) => {}
         },
+        PgType::TIMETZ => match row.try_get::<_, Option<PgTimeTz>>(idx) {
+            Ok(Some(v)) => return JsonValue::String(v.0),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
+        PgType::BIT | PgType::VARBIT => match row.try_get::<_, Option<PgBits>>(idx) {
+            Ok(Some(v)) => return JsonValue::String(v.0),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
+        PgType::POINT
+        | PgType::LSEG
+        | PgType::BOX
+        | PgType::LINE
+        | PgType::CIRCLE
+        | PgType::PATH
+        | PgType::POLYGON => match row.try_get::<_, Option<PgGeometry>>(idx) {
+            Ok(Some(v)) => return JsonValue::String(v.0),
+            Ok(None) => return JsonValue::Null,
+            Err(_) => {}
+        },
         _ => {}
     }
     // Try string. Covers TEXT, VARCHAR, NAME, UUID, dates, etc. — they all
@@ -649,9 +1373,7 @@ fn cell_to_json(
             Some(s) => {
                 if s.len() > INLINE_TRUNCATE_BYTES {
                     let preview: String = s.chars().take(2048).collect();
-                    if !truncated_columns.iter().any(|n| n == column_name) {
-                        truncated_columns.push(column_name.to_string());
-                    }
+                    mark_truncated(column_name, truncated_columns);
                     truncated_envelope(preview, s.len())
                 } else {
                     JsonValue::String(s)
@@ -660,13 +1382,100 @@ fn cell_to_json(
             None => JsonValue::Null,
         };
     }
-    // Last resort: render as a typed envelope describing the unsupported type.
-    // The user sees what's happening rather than a blank cell.
-    JsonValue::String(format!("<{}>", pg_type.name()))
+    // Last resort: pull the raw wire bytes and run them through the recursive
+    // decoder. `PgRaw::accepts` is total, so this reaches the types
+    // `tokio-postgres` has no `FromSql` for at all — arrays, ranges, domains,
+    // geometry — and recurses into their element/base type.
+    let raw = match row.try_get::<_, Option<PgRaw>>(idx) {
+        Ok(Some(PgRaw(raw))) => raw,
+        // NULL, or — unreachable, since `accepts` is total — a decode failure.
+        Ok(None) | Err(_) => return JsonValue::Null,
+    };
+    let decoded = decode_raw(pg_type, raw, 0).unwrap_or_else(|| {
+        // Nothing knows this type. Prefer Postgres' own text when the binary
+        // representation happens to BE the text one (`xml`, `ltree`, `pg_lsn`,
+        // unrecognised extension text types); otherwise hand back the bytes in
+        // the same envelope the grid already renders for `bytea`. A
+        // `<typename>` placeholder only repeats the column header while hiding
+        // the value, so it is never a useful cell.
+        printable_utf8_json(raw).unwrap_or_else(|| {
+            mark_truncated(column_name, truncated_columns);
+            binary_envelope(hex(raw, 64), raw.len())
+        })
+    });
+    size_guard(decoded, column_name, truncated_columns)
 }
 
-fn columns_from_row_meta(row_columns: &[tokio_postgres::Column]) -> Vec<DataColumn> {
-    row_columns
+/// Apply the inline size limit to a value produced by the raw path, mirroring
+/// what the `String` path does. Containers are measured by their serialized
+/// length, which bounds a pathological `text[]` without making `decode_raw`
+/// impure or truncating every element individually.
+fn size_guard(
+    value: JsonValue,
+    column_name: &str,
+    truncated_columns: &mut Vec<String>,
+) -> JsonValue {
+    let (preview, len) = match &value {
+        JsonValue::String(s) if s.len() > INLINE_TRUNCATE_BYTES => (s.clone(), s.len()),
+        JsonValue::Array(_) | JsonValue::Object(_) => {
+            let serialized = serde_json::to_string(&value).unwrap_or_default();
+            if serialized.len() <= INLINE_TRUNCATE_BYTES {
+                return value;
+            }
+            let len = serialized.len();
+            (serialized, len)
+        }
+        _ => return value,
+    };
+    mark_truncated(column_name, truncated_columns);
+    truncated_envelope(preview.chars().take(2048).collect(), len)
+}
+
+/// Per-result-column provenance lifted off the wire's `RowDescription`.
+///
+/// Postgres reports, for every field it describes, the OID of the relation the
+/// value came from and that column's `attnum` — or zero for anything that isn't
+/// a plain column reference (a literal, an aggregate, a function call, a
+/// computed expression). `tokio-postgres` already normalises the zeroes to
+/// `None`, so a `Some` here is a hard guarantee of relation provenance.
+///
+/// This is what makes "is this result editable?" an exact question rather than
+/// a parsing exercise — see `modules::postgres::editability`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnProvenance {
+    pub table_oid: Option<u32>,
+    pub attnum: Option<i16>,
+}
+
+impl ColumnProvenance {
+    /// True when the column is a plain reference to a writable relation column.
+    ///
+    /// Enforces the invariant here rather than relying on `provenance_of` alone,
+    /// because the struct is public and can be built directly: a zero OID means
+    /// "no relation", and an `attnum <= 0` is a system column (`ctid`, `xmin`)
+    /// that must never be treated as a writable projection.
+    pub fn is_sourced(&self) -> bool {
+        matches!((self.table_oid, self.attnum), (Some(oid), Some(a)) if oid != 0 && a > 0)
+    }
+}
+
+/// Pure mapper, split out from `columns_from_row_meta` so the normalisation
+/// rule is unit-testable without constructing a `tokio_postgres::Column`
+/// (whose fields are crate-private).
+fn provenance_of(table_oid: Option<u32>, attnum: Option<i16>) -> ColumnProvenance {
+    // Belt and braces: tokio-postgres filters `0` already, but a zero attnum is
+    // a system column (`ctid`, `xmin`, …) which we must never treat as a
+    // writable projection either.
+    ColumnProvenance {
+        table_oid: table_oid.filter(|o| *o != 0),
+        attnum: attnum.filter(|a| *a > 0),
+    }
+}
+
+fn columns_from_row_meta(
+    row_columns: &[tokio_postgres::Column],
+) -> (Vec<DataColumn>, Vec<ColumnProvenance>) {
+    let columns = row_columns
         .iter()
         .enumerate()
         .map(|(i, c)| DataColumn {
@@ -675,7 +1484,12 @@ fn columns_from_row_meta(row_columns: &[tokio_postgres::Column]) -> Vec<DataColu
             ordinal_position: (i + 1) as i32,
             is_nullable: true,
         })
-        .collect()
+        .collect();
+    let provenance = row_columns
+        .iter()
+        .map(|c| provenance_of(c.table_oid(), c.column_id()))
+        .collect();
+    (columns, provenance)
 }
 
 /// Synthesize a Postgres-style command tag from the SQL's first keyword and
@@ -750,7 +1564,11 @@ async fn run_one(
     }
     // Rows path. Stream via `query_raw` so we never materialize more than
     // `cap + 1` rows server-side, regardless of the query's true cardinality.
-    let columns = columns_from_row_meta(stmt.columns());
+    let (columns, provenance) = columns_from_row_meta(stmt.columns());
+    // Best-effort and infallible by construction — see `editability`'s docs.
+    // Resolved before fetching so a failure here can never strand a half-read
+    // row stream.
+    let editability = editability::resolve(client, &provenance).await;
     let mut truncated_columns: Vec<String> = Vec::new();
 
     // An explicitly-typed empty iterator resolves the `BorrowToSql` inference
@@ -788,6 +1606,7 @@ async fn run_one(
         query_ms,
         row_cap: cap,
         row_cap_source: cap_source,
+        editability,
     })
 }
 
@@ -840,10 +1659,14 @@ async fn run_one_stream(
     }
 
     // SELECT-shape path — stream rows via `query_raw`.
-    let columns = columns_from_row_meta(stmt.columns());
+    let (columns, provenance) = columns_from_row_meta(stmt.columns());
+    // Resolved before the `columns` event so the frontend knows the result's
+    // editability at the same moment it learns the shape. Infallible.
+    let editability = editability::resolve(client, &provenance).await;
     on_event
         .send(StreamEvent::Columns {
             columns: columns.clone(),
+            editability,
         })
         .map_err(channel_err)?;
 
@@ -1578,6 +2401,33 @@ pub async fn postgres_run_sql_many(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::postgres::editability::EditBlockReason;
+
+    #[test]
+    fn provenance_keeps_relation_columns_and_drops_computed_ones() {
+        // A plain column reference: the wire gives us both halves.
+        let sourced = provenance_of(Some(16385), Some(2));
+        assert_eq!(sourced.table_oid, Some(16385));
+        assert_eq!(sourced.attnum, Some(2));
+        assert!(sourced.is_sourced());
+
+        // A computed column (`upper(email)`, `count(*)`, a literal): Postgres
+        // reports zeroes, tokio-postgres normalises them to None.
+        let computed = provenance_of(None, None);
+        assert!(!computed.is_sourced());
+
+        // Defensive normalisation: an explicit zero must be treated as absent
+        // even if it ever reaches us unfiltered.
+        let zeroed = provenance_of(Some(0), Some(0));
+        assert_eq!(zeroed.table_oid, None);
+        assert_eq!(zeroed.attnum, None);
+        assert!(!zeroed.is_sourced());
+
+        // A system column (ctid, xmin) has attnum <= 0 — never writable.
+        let system = provenance_of(Some(16385), Some(-1));
+        assert_eq!(system.attnum, None);
+        assert!(!system.is_sourced());
+    }
 
     #[test]
     fn cap_resolution_unbounded_query_uses_configured() {
@@ -1725,12 +2575,17 @@ mod tests {
             query_ms: 5,
             row_cap: 10_000,
             row_cap_source: RowCapSource::Setting,
+            editability: ResultEditability::not_editable(EditBlockReason::NoBaseTable),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v.get("kind").unwrap(), "rows");
         assert_eq!(v.get("query_ms").unwrap(), 5);
         assert_eq!(v.get("row_cap").unwrap(), 10_000);
         assert_eq!(v.get("row_cap_source").unwrap(), "setting");
+        // Rows results always carry editability, nested under its own tag.
+        let e = v.get("editability").unwrap();
+        assert_eq!(e.get("status").unwrap(), "not_editable");
+        assert_eq!(e.get("reason").unwrap(), "no_base_table");
 
         let a = RunSqlResult::Affected {
             command_tag: "INSERT 0 3".into(),
@@ -1744,12 +2599,36 @@ mod tests {
     }
 
     #[test]
+    fn affected_result_carries_no_editability() {
+        // An `affected` result has no rows, so "can these rows be edited?" is
+        // not a question it can answer. The frontend switches on `kind` before
+        // reading `editability`; a stray key here would be a lie.
+        let a = RunSqlResult::Affected {
+            command_tag: "UPDATE 5".into(),
+            affected_rows: 5,
+            query_ms: 3,
+        };
+        let v = serde_json::to_value(&a).unwrap();
+        assert!(
+            v.get("editability").is_none(),
+            "affected results must not carry an editability key"
+        );
+    }
+
+    #[test]
     fn stream_event_serializes_with_event_tag() {
         // Guards the wire contract the frontend `StreamEvent` type relies on:
         // an `event` discriminant plus snake_case fields.
-        let cols = StreamEvent::Columns { columns: vec![] };
+        let cols = StreamEvent::Columns {
+            columns: vec![],
+            editability: ResultEditability::not_editable(EditBlockReason::NoBaseTable),
+        };
         let v = serde_json::to_value(&cols).unwrap();
         assert_eq!(v.get("event").unwrap(), "columns");
+        assert_eq!(
+            v.get("editability").unwrap().get("status").unwrap(),
+            "not_editable"
+        );
 
         let batch = StreamEvent::Batch {
             rows: vec![vec![JsonValue::from(1)]],
@@ -1817,6 +2696,7 @@ mod tests {
             query_ms: 5,
             row_cap: row_cap::DEFAULT_ROW_CAP,
             row_cap_source: RowCapSource::Setting,
+            editability: ResultEditability::not_editable(EditBlockReason::NoBaseTable),
         };
         let entry1 =
             build_history_entry_ok(cid, "local-pg", "SELECT 1", Origin::User, 100, 5, &r_rows);
@@ -2089,5 +2969,413 @@ mod tests {
         // 7 bytes — invalid
         let raw = vec![0u8; 7];
         assert!(PgMacAddr::from_sql(&PgType::MACADDR, &raw).is_err());
+    }
+
+    // ---- NUMERIC ---------------------------------------------------------
+
+    fn numeric_bytes(weight: i16, sign: u16, dscale: i16, digits: &[u16]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&(digits.len() as i16).to_be_bytes());
+        b.extend_from_slice(&weight.to_be_bytes());
+        b.extend_from_slice(&sign.to_be_bytes());
+        b.extend_from_slice(&dscale.to_be_bytes());
+        for d in digits {
+            b.extend_from_slice(&d.to_be_bytes());
+        }
+        b
+    }
+
+    fn numeric(weight: i16, sign: u16, dscale: i16, digits: &[u16]) -> String {
+        let raw = numeric_bytes(weight, sign, dscale, digits);
+        PgNumeric::from_sql(&PgType::NUMERIC, &raw).unwrap().0
+    }
+
+    #[test]
+    fn numeric_basic() {
+        // 1234.56 → digits [1234, 5600], weight 0, dscale 2
+        assert_eq!(numeric(0, NUMERIC_POS, 2, &[1234, 5600]), "1234.56");
+    }
+
+    #[test]
+    fn numeric_declared_scale_is_padded() {
+        // numeric(10,4) keeps the trailing zeros the column declares.
+        assert_eq!(numeric(0, NUMERIC_POS, 4, &[1234, 5600]), "1234.5600");
+    }
+
+    #[test]
+    fn numeric_zero_scale_has_no_decimal_point() {
+        assert_eq!(numeric(0, NUMERIC_POS, 0, &[42]), "42");
+    }
+
+    #[test]
+    fn numeric_zero_with_scale() {
+        // Postgres sends ndigits = 0 for a zero value; dscale still applies.
+        assert_eq!(numeric(0, NUMERIC_POS, 2, &[]), "0.00");
+    }
+
+    #[test]
+    fn numeric_leading_zero_groups() {
+        // 0.00001 = 1000 × 10000^-2 → weight -2, one digit group, dscale 5.
+        // Exercises the `weight < -1` path where the first fractional group
+        // sits at a negative index and must read as an implicit zero.
+        assert_eq!(numeric(-2, NUMERIC_POS, 5, &[1000]), "0.00001");
+    }
+
+    #[test]
+    fn numeric_trailing_group_beyond_ndigits() {
+        // 1.10 → digits [1, 1000]; the scale asks for 2 of the group's 4 digits.
+        assert_eq!(numeric(0, NUMERIC_POS, 2, &[1, 1000]), "1.10");
+    }
+
+    #[test]
+    fn numeric_arbitrary_precision_survives() {
+        // -12345678901234567890.123456789 — far beyond f64 and beyond i64.
+        let s = numeric(
+            4,
+            NUMERIC_NEG,
+            9,
+            &[1234, 5678, 9012, 3456, 7890, 1234, 5678, 9000],
+        );
+        assert_eq!(s, "-12345678901234567890.123456789");
+    }
+
+    #[test]
+    fn numeric_non_finite_signs() {
+        assert_eq!(numeric(0, NUMERIC_NAN, 0, &[]), "NaN");
+        assert_eq!(numeric(0, NUMERIC_PINF, 0, &[]), "Infinity");
+        assert_eq!(numeric(0, NUMERIC_NINF, 0, &[]), "-Infinity");
+    }
+
+    #[test]
+    fn numeric_bad_length_is_err() {
+        // Header alone is too short.
+        assert!(PgNumeric::from_sql(&PgType::NUMERIC, &[0u8; 4]).is_err());
+        // Header claims 3 digit groups but carries none.
+        let mut raw = numeric_bytes(0, NUMERIC_POS, 0, &[]);
+        raw[0..2].copy_from_slice(&3i16.to_be_bytes());
+        assert!(PgNumeric::from_sql(&PgType::NUMERIC, &raw).is_err());
+    }
+
+    // ---- MONEY / TIMETZ / VARBIT ----------------------------------------
+
+    #[test]
+    fn money_negative_and_positive() {
+        let raw = (-1_234_567i64).to_be_bytes();
+        assert_eq!(
+            PgMoney::from_sql(&PgType::MONEY, &raw).unwrap().0,
+            "-12345.67"
+        );
+        let raw = 1_234_567i64.to_be_bytes();
+        assert_eq!(
+            PgMoney::from_sql(&PgType::MONEY, &raw).unwrap().0,
+            "12345.67"
+        );
+        // Sub-unit amounts keep the leading zero.
+        let raw = 5i64.to_be_bytes();
+        assert_eq!(PgMoney::from_sql(&PgType::MONEY, &raw).unwrap().0, "0.05");
+    }
+
+    #[test]
+    fn money_bad_length_is_err() {
+        assert!(PgMoney::from_sql(&PgType::MONEY, &[0u8; 4]).is_err());
+    }
+
+    fn timetz_bytes(micros: i64, zone: i32) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&micros.to_be_bytes());
+        b.extend_from_slice(&zone.to_be_bytes());
+        b
+    }
+
+    #[test]
+    fn timetz_positive_offset() {
+        // 12:34:56.789+02 — the wire zone is seconds WEST, so +02:00 is -7200.
+        let micros = (12 * 3600 + 34 * 60 + 56) * 1_000_000 + 789_000;
+        let raw = timetz_bytes(micros, -7200);
+        let s = PgTimeTz::from_sql(&PgType::TIMETZ, &raw).unwrap().0;
+        assert_eq!(s, "12:34:56.789000+02:00");
+    }
+
+    #[test]
+    fn timetz_negative_offset_and_no_fraction() {
+        let raw = timetz_bytes(0, 18_000);
+        let s = PgTimeTz::from_sql(&PgType::TIMETZ, &raw).unwrap().0;
+        assert_eq!(s, "00:00:00-05:00");
+    }
+
+    #[test]
+    fn timetz_bad_length_is_err() {
+        assert!(PgTimeTz::from_sql(&PgType::TIMETZ, &[0u8; 8]).is_err());
+    }
+
+    fn varbit_bytes(bit_len: i32, bytes: &[u8]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&bit_len.to_be_bytes());
+        b.extend_from_slice(bytes);
+        b
+    }
+
+    #[test]
+    fn varbit_drops_pad_bits() {
+        // B'1011' → 4 bits in one byte; the low nibble is padding.
+        let raw = varbit_bytes(4, &[0b1011_0000]);
+        assert_eq!(PgBits::from_sql(&PgType::VARBIT, &raw).unwrap().0, "1011");
+    }
+
+    #[test]
+    fn varbit_spans_bytes() {
+        let raw = varbit_bytes(9, &[0b1010_1010, 0b1000_0000]);
+        assert_eq!(
+            PgBits::from_sql(&PgType::VARBIT, &raw).unwrap().0,
+            "101010101"
+        );
+    }
+
+    #[test]
+    fn varbit_bad_length_is_err() {
+        // Claims 16 bits but carries one byte.
+        let raw = varbit_bytes(16, &[0xFF]);
+        assert!(PgBits::from_sql(&PgType::VARBIT, &raw).is_err());
+        assert!(PgBits::from_sql(&PgType::VARBIT, &[0u8; 2]).is_err());
+    }
+
+    // ---- Geometry --------------------------------------------------------
+
+    fn f8s(vals: &[f64]) -> Vec<u8> {
+        vals.iter().flat_map(|v| v.to_be_bytes()).collect()
+    }
+
+    #[test]
+    fn geometry_point_and_circle() {
+        let raw = f8s(&[1.0, 2.0]);
+        assert_eq!(
+            PgGeometry::from_sql(&PgType::POINT, &raw).unwrap().0,
+            "(1,2)"
+        );
+        let raw = f8s(&[1.0, 2.0, 3.5]);
+        assert_eq!(
+            PgGeometry::from_sql(&PgType::CIRCLE, &raw).unwrap().0,
+            "<(1,2),3.5>"
+        );
+    }
+
+    #[test]
+    fn geometry_path_open_vs_closed() {
+        let mut closed = vec![1u8];
+        closed.extend_from_slice(&2i32.to_be_bytes());
+        closed.extend_from_slice(&f8s(&[1.0, 2.0, 3.0, 4.0]));
+        assert_eq!(
+            PgGeometry::from_sql(&PgType::PATH, &closed).unwrap().0,
+            "((1,2),(3,4))"
+        );
+
+        let mut open = vec![0u8];
+        open.extend_from_slice(&2i32.to_be_bytes());
+        open.extend_from_slice(&f8s(&[1.0, 2.0, 3.0, 4.0]));
+        assert_eq!(
+            PgGeometry::from_sql(&PgType::PATH, &open).unwrap().0,
+            "[(1,2),(3,4)]"
+        );
+    }
+
+    #[test]
+    fn geometry_bad_length_is_err() {
+        assert!(PgGeometry::from_sql(&PgType::POINT, &f8s(&[1.0])).is_err());
+        // Path header claims 4 points but carries one.
+        let mut raw = vec![1u8];
+        raw.extend_from_slice(&4i32.to_be_bytes());
+        raw.extend_from_slice(&f8s(&[1.0, 2.0]));
+        assert!(PgGeometry::from_sql(&PgType::PATH, &raw).is_err());
+    }
+
+    // ---- decode_raw: arrays, ranges, domains -----------------------------
+
+    fn array_bytes(elem_oid: i32, dims: &[i32], elems: &[Option<Vec<u8>>]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&(dims.len() as i32).to_be_bytes());
+        b.extend_from_slice(&0i32.to_be_bytes()); // has_null (advisory only)
+        b.extend_from_slice(&elem_oid.to_be_bytes());
+        for d in dims {
+            b.extend_from_slice(&d.to_be_bytes());
+            b.extend_from_slice(&1i32.to_be_bytes()); // lower bound
+        }
+        for e in elems {
+            match e {
+                None => b.extend_from_slice(&(-1i32).to_be_bytes()),
+                Some(bytes) => {
+                    b.extend_from_slice(&(bytes.len() as i32).to_be_bytes());
+                    b.extend_from_slice(bytes);
+                }
+            }
+        }
+        b
+    }
+
+    fn i4(v: i32) -> Option<Vec<u8>> {
+        Some(v.to_be_bytes().to_vec())
+    }
+
+    #[test]
+    fn array_of_int4_with_null_element() {
+        let raw = array_bytes(23, &[3], &[i4(1), i4(2), None]);
+        let v = decode_raw(&PgType::INT4_ARRAY, &raw, 0).unwrap();
+        assert_eq!(v, serde_json::json!([1, 2, null]));
+    }
+
+    #[test]
+    fn array_of_text() {
+        let raw = array_bytes(25, &[2], &[Some(b"a".to_vec()), Some(b"b".to_vec())]);
+        let v = decode_raw(&PgType::TEXT_ARRAY, &raw, 0).unwrap();
+        assert_eq!(v, serde_json::json!(["a", "b"]));
+    }
+
+    #[test]
+    fn array_of_numeric_reuses_the_scalar_decoder() {
+        let raw = array_bytes(
+            1700,
+            &[2],
+            &[
+                Some(numeric_bytes(0, NUMERIC_POS, 2, &[1, 1000])),
+                Some(numeric_bytes(0, NUMERIC_POS, 2, &[2, 2000])),
+            ],
+        );
+        let v = decode_raw(&PgType::NUMERIC_ARRAY, &raw, 0).unwrap();
+        assert_eq!(v, serde_json::json!(["1.10", "2.20"]));
+    }
+
+    #[test]
+    fn array_empty() {
+        let raw = array_bytes(23, &[], &[]);
+        let v = decode_raw(&PgType::INT4_ARRAY, &raw, 0).unwrap();
+        assert_eq!(v, serde_json::json!([]));
+    }
+
+    #[test]
+    fn array_two_dimensional_nests() {
+        let raw = array_bytes(23, &[2, 2], &[i4(1), i4(2), i4(3), i4(4)]);
+        let v = decode_raw(&PgType::INT4_ARRAY, &raw, 0).unwrap();
+        assert_eq!(v, serde_json::json!([[1, 2], [3, 4]]));
+    }
+
+    #[test]
+    fn array_truncated_payload_is_none() {
+        // Header promises 3 elements, only 2 follow.
+        let raw = array_bytes(23, &[3], &[i4(1), i4(2)]);
+        assert!(decode_raw(&PgType::INT4_ARRAY, &raw, 0).is_none());
+    }
+
+    fn range_bytes(flags: u8, bounds: &[Vec<u8>]) -> Vec<u8> {
+        let mut b = vec![flags];
+        for bound in bounds {
+            b.extend_from_slice(&(bound.len() as i32).to_be_bytes());
+            b.extend_from_slice(bound);
+        }
+        b
+    }
+
+    // The flag bytes below are written as literals on purpose. Naming them via
+    // the module's own constants would make these tests tautological — exactly
+    // how an earlier LB_INC/LB_INF mix-up passed the unit suite while producing
+    // "(,1)" for `[1,5)` against a real server.
+    const WIRE_LB_INC: u8 = 0x02;
+    const WIRE_UB_INF: u8 = 0x10;
+
+    #[test]
+    fn range_lower_inclusive_upper_exclusive() {
+        let raw = range_bytes(
+            WIRE_LB_INC,
+            &[1i32.to_be_bytes().to_vec(), 5i32.to_be_bytes().to_vec()],
+        );
+        let v = decode_raw(&PgType::INT4_RANGE, &raw, 0).unwrap();
+        assert_eq!(v, JsonValue::String("[1,5)".to_string()));
+    }
+
+    #[test]
+    fn range_empty() {
+        let raw = range_bytes(0x01, &[]);
+        let v = decode_raw(&PgType::INT4_RANGE, &raw, 0).unwrap();
+        assert_eq!(v, JsonValue::String("empty".to_string()));
+    }
+
+    #[test]
+    fn range_unbounded_upper_renders_empty_bound() {
+        let raw = range_bytes(WIRE_LB_INC | WIRE_UB_INF, &[1i32.to_be_bytes().to_vec()]);
+        let v = decode_raw(&PgType::INT4_RANGE, &raw, 0).unwrap();
+        assert_eq!(v, JsonValue::String("[1,)".to_string()));
+    }
+
+    #[test]
+    fn multirange_wraps_its_ranges() {
+        let r1 = range_bytes(
+            WIRE_LB_INC,
+            &[1i32.to_be_bytes().to_vec(), 5i32.to_be_bytes().to_vec()],
+        );
+        let r2 = range_bytes(
+            WIRE_LB_INC,
+            &[8i32.to_be_bytes().to_vec(), 9i32.to_be_bytes().to_vec()],
+        );
+        let mut raw = 2i32.to_be_bytes().to_vec();
+        for r in [r1, r2] {
+            raw.extend_from_slice(&(r.len() as i32).to_be_bytes());
+            raw.extend_from_slice(&r);
+        }
+        let v = decode_raw(&PgType::INT4MULTI_RANGE, &raw, 0).unwrap();
+        assert_eq!(v, JsonValue::String("{[1,5),[8,9)}".to_string()));
+    }
+
+    fn domain_over(base: PgType, oid: u32) -> PgType {
+        PgType::new(
+            format!("dom_{}", oid),
+            oid,
+            PgKind::Domain(base),
+            "public".to_string(),
+        )
+    }
+
+    #[test]
+    fn domain_decodes_as_its_base_type() {
+        let ty = domain_over(PgType::NUMERIC, 90_001);
+        let raw = numeric_bytes(0, NUMERIC_POS, 2, &[1, 5000]);
+        let v = decode_raw(&ty, &raw, 0).unwrap();
+        assert_eq!(v, JsonValue::String("1.50".to_string()));
+    }
+
+    #[test]
+    fn domain_over_text_decodes_as_text() {
+        // `FromSql for String` rejects domains, which is why this needed the
+        // raw path at all.
+        let ty = domain_over(PgType::TEXT, 90_002);
+        let v = decode_raw(&ty, b"abc", 0).unwrap();
+        assert_eq!(v, JsonValue::String("abc".to_string()));
+    }
+
+    #[test]
+    fn nested_domains_within_depth_cap_still_decode() {
+        let mut ty = PgType::INT4;
+        for i in 0..3u32 {
+            ty = domain_over(ty, 90_100 + i);
+        }
+        let v = decode_raw(&ty, &7i32.to_be_bytes(), 0).unwrap();
+        assert_eq!(v, serde_json::json!(7));
+    }
+
+    #[test]
+    fn recursion_past_the_depth_cap_is_none() {
+        let mut ty = PgType::INT4;
+        for i in 0..(MAX_DECODE_DEPTH as u32 + 2) {
+            ty = domain_over(ty, 90_200 + i);
+        }
+        assert!(decode_raw(&ty, &7i32.to_be_bytes(), 0).is_none());
+    }
+
+    #[test]
+    fn unknown_type_yields_none_so_the_fallback_chain_runs() {
+        let ty = PgType::new(
+            "weird".to_string(),
+            90_300,
+            PgKind::Simple,
+            "public".to_string(),
+        );
+        assert!(decode_raw(&ty, &[0x00, 0x01], 0).is_none());
     }
 }

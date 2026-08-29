@@ -736,17 +736,44 @@ Mutation affordances and the read-only banner are scoped to the **Data** subtab.
 
 ### Requirement: Adhoc result grid sub-component
 
-The `postgres-data-grid` capability SHALL expose a reusable read-only sub-component `<AdhocResultGrid columns rows onSelectRow />` consumable by other capabilities (notably `postgres-sql-editor`). The component MUST:
+The `postgres-data-grid` capability SHALL expose a reusable sub-component `<AdhocResultGrid columns rows onSelectRow edit? />` consumable by other capabilities (notably `postgres-sql-editor`). The component MUST:
 
 - Accept `columns: ColumnInfo[]` and `rows: Array<Array<Value>>` matching the same shape as `postgres_query_table`'s response (`ColumnInfo` has `name`, `data_type`, `ordinal_position`, `is_nullable`; `Value` MAY be a typed envelope `{ kind: "binary"|"truncated", … }`).
 - Render the rows in a virtualized grid with the same DOM-row count behavior, styling tokens (`Geist Mono`, tabular numerals, hairline dividers, compact `5px 12px` cell padding), and active-row `--accent-soft` highlight as the table viewer's grid.
 - Support row selection via click or keyboard arrow keys; the selected row index is reported through the `onSelectRow(rowIndex: number)` callback.
 - Truncate long values with an ellipsis at the cell boundary; full content is shown via the consumer-provided inspector (the consumer reads the selected row and renders fields elsewhere).
-- NOT include sort/filter controls, scroll-to-load pagination, edit affordances, or a bottom bar. It is purely a presentational virtualized grid.
+- NOT include sort/filter controls, scroll-to-load pagination, row insert/delete affordances, or a bottom bar.
 - Render no rows and a configurable empty-state when `rows.length === 0`; the consumer passes the empty-state element via a `emptyState` prop.
 - Render each column at its effective width using the `column-width-preferences` capability with `storageKey: null` (in-memory only). Widths MUST reset whenever the `columns` prop's signature (`columns.map(c => c.name).join("|")`) changes. Every column header MUST expose the resize hit area; double-click MUST reset to the type-derived base width.
 
-The internal implementation MAY share a virtualization primitive with the existing editable table viewer grid; the public contract of `<AdhocResultGrid />` MUST be free of edit-related props.
+The component SHALL accept one **optional** `edit` prop carrying the configuration needed for inline cell editing:
+
+```ts
+interface AdhocGridEdit {
+  buffer: UseEditBufferResult;          // the shared edit buffer
+  columnSources: (string | null)[];     // aligned to `columns`; null = not editable
+  pkColumns: string[];                  // PK column names, declared order
+  pkColumnIndexes: number[];            // result-column index per PK column
+  enumValuesByColumn: Record<string, string[]>; // keyed by BASE column name
+  blockedReason: string;                // non-empty ⇒ every cell is read-only with this hover title
+}
+```
+
+When `edit` is **absent**, the grid MUST behave exactly as the read-only grid did before this change: no editor opens on double-click, and the right-click menu is copy-only.
+
+When `edit` is **present** and `blockedReason` is empty, the grid MUST:
+
+- Render each cell through the shared inline-cell component so double-click opens the editor described by `postgres-data-edit`, "Editable mode in the data viewer".
+- Treat a cell as read-only when `columnSources[colIndex] === null`, when the base column is in `pkColumns`, when the column's `data_type` is `bytea`, or when the cell value is a `{ kind: "binary" | "truncated" }` envelope. Read-only cells MUST carry a `title` naming the specific reason.
+- Derive each row's buffer key from that row's values at `pkColumnIndexes` (never from the row index), and address every edit by the **base** column name from `columnSources` (never by the displayed column name).
+- Paint cells with a pending edit using the same dirty highlight as the table viewer, and resolve `⌘C` copy and context-menu copy from the pending value rather than the server value.
+- Enable the context menu's **Edit cell** entry for editable cells, and disable it with a reason for the rest.
+
+When `edit` is present and `blockedReason` is non-empty, every cell MUST be read-only and MUST carry `blockedReason` as its `title`.
+
+The component MUST NOT expose insert or delete affordances in any mode: no `+` gutter marker, no "Add row" control, and no `Backspace` / `Delete` delete-toggle binding.
+
+The internal implementation MAY share a virtualization primitive and the inline-cell component with the existing editable table viewer grid.
 
 #### Scenario: Adhoc grid renders rows with shared styling
 
@@ -762,9 +789,49 @@ The internal implementation MAY share a virtualization primitive with the existi
 
 #### Scenario: Adhoc grid does not render edit affordances
 
-- **WHEN** the consumer renders the adhoc grid against any data
+- **WHEN** the consumer renders the adhoc grid **without an `edit` prop** against any data
 - **THEN** there are no edit inputs, no `+` button, no Save button, no sort/filter chrome rendered by the component
 - **AND** double-clicking a cell does not enter an edit mode
+- **AND** the right-click menu offers only Copy cell / Copy row(s)
+
+#### Scenario: Grid with the edit prop opens an editor on double-click
+
+- **WHEN** the consumer renders the grid with `edit` supplied, `blockedReason: ""`, `columnSources: ["id", "email"]`, `pkColumns: ["id"]`, `pkColumnIndexes: [0]`, and the user double-clicks an `email` cell
+- **THEN** an inline editor opens with the current value selected
+
+#### Scenario: Edits are keyed by primary key, not row index
+
+- **WHEN** the user commits an edit on the row whose `id` is `7`, and the consumer then re-renders with the same rows in a different order
+- **THEN** the dirty highlight follows the row with `id = 7`
+- **AND** `buffer.toEditOps()` emits `{ kind: "update", pk: { id: 7 }, changes: { email: … } }`
+
+#### Scenario: Edits are keyed by base column, not displayed name
+
+- **WHEN** `columns` is `[{name: "pk"}, {name: "mail"}]`, `columnSources` is `["id", "email"]`, and the user edits a `mail` cell
+- **THEN** the emitted op has `changes: { "email": … }` and `pk: { "id": … }`
+
+#### Scenario: Unsourced and key columns are read-only
+
+- **WHEN** `columnSources` is `["id", "email", null]` and `pkColumns` is `["id"]`
+- **THEN** double-clicking the first column's cell or the third column's cell opens no editor
+- **AND** each carries a `title` naming its reason
+- **AND** double-clicking a second-column cell opens the editor
+
+#### Scenario: blockedReason makes every cell read-only
+
+- **WHEN** the consumer supplies `edit` with `blockedReason: "Read-only connection — edits disabled"`
+- **THEN** no cell opens an editor on double-click
+- **AND** every data cell's `title` is `Read-only connection — edits disabled`
+
+#### Scenario: Copy reflects the pending edit
+
+- **WHEN** a cell has a pending edit and the user copies it with ⌘C or the context menu
+- **THEN** the clipboard holds the pending value, not the server value
+
+#### Scenario: Insert and delete are never offered
+
+- **WHEN** the grid is rendered with `edit` supplied and the user selects a row and presses `Backspace`
+- **THEN** no row is marked for deletion and the buffer is unchanged
 
 #### Scenario: Empty state is rendered when rows is empty
 
@@ -776,6 +843,7 @@ The internal implementation MAY share a virtualization primitive with the existi
 
 - **WHEN** a cell value is `{ kind: "truncated", preview: "…", byte_length: 5300 }`
 - **THEN** the cell shows the preview truncated to fit and the column appears in the consumer's truncated-columns awareness if applicable
+- **AND** the cell is read-only even when `edit` is supplied
 
 #### Scenario: Adhoc widths are in-memory and reset on column-shape change
 
@@ -1055,7 +1123,7 @@ The toggle MUST be reachable via:
 
 ### Requirement: Filter row inclusion checkbox
 
-The Structured filter row SHALL render a checkbox at its left edge whose checked state controls whether that row participates in `Apply All`. New rows MUST be created with `enabled = true`. The checkbox state MUST be part of the row's data model (a `enabled: boolean` field on each row) and MUST be persisted in the same model as `column` / `op` / `value`. Toggling the checkbox MUST update `draft` only (no auto-fetch). The checkbox state MUST NOT affect per-row Apply — the per-row Apply button MAY be activated on an unchecked row and MUST behave the same as on a checked row.
+The Structured filter row SHALL render a checkbox at its left edge whose checked state controls whether that row participates in `Apply All`. New rows MUST be created with `enabled = true`. The checkbox state MUST be part of the row's data model (a `enabled: boolean` field on each row) and MUST be persisted in the same model as `column` / `op` / `value`. Toggling the checkbox MUST update `draft` only (no auto-fetch). Per-row Apply (the row's `Apply` button and plain `Enter` inside the row) MUST set the target row's `enabled` to `true` in `draft` as part of the gesture, so that the row it commits to `applied` is always an enabled row — the checkbox state MUST NOT be able to turn a per-row Apply into a query that omits that row.
 
 The unchecked state MUST be visually distinct (greyed input, no "Applied" green) but the row MUST remain fully editable.
 
@@ -1069,11 +1137,16 @@ The unchecked state MUST be visually distinct (greyed input, no "Applied" green)
 - **WHEN** `draft` contains three rows (R1 checked, R2 unchecked, R3 checked) and the user presses `Apply All`
 - **THEN** `applied.rows` contains only R1 and R3
 - **AND** R2's value is unchanged in `draft`
+- **AND** R2's checkbox stays unchecked
 
 #### Scenario: Per-row Apply ignores checkbox state
 
-- **WHEN** the user clicks the per-row Apply button on an unchecked row R2
-- **THEN** `applied.rows` becomes `[R2]` regardless of R2's `enabled` flag
+- **WHEN** the user clicks the per-row Apply button on an unchecked, complete row R2
+- **THEN** the gesture proceeds regardless of R2's checkbox — the checkbox never gates per-row Apply
+- **AND** R2's checkbox becomes checked in `draft` (`enabled = true`), so the committed row can reach the query
+- **AND** `applied.rows` becomes `[R2]` with `enabled = true`
+- **AND** the wire payload carries a `filter_tree` containing R2's condition
+- **AND** no other row in `draft` is modified
 
 #### Scenario: Toggling checkbox marks draft dirty but doesn't re-fetch
 
@@ -1084,16 +1157,18 @@ The unchecked state MUST be visually distinct (greyed input, no "Applied" green)
 
 ### Requirement: Per-row Apply and Applied visual state
 
-Every Structured filter row SHALL render a `Apply` / `Applied` button at its right edge (before the `+` / `−` controls). The button MUST show the label `Apply` (neutral / muted color) when the row is NOT part of `applied`, and `Applied` (green, using the `--success` token) when the row IS part of `applied`. A row is "part of `applied`" iff (a) the row is **complete** (it would survive the `draft` → payload conversion), AND (b) there exists a row in `applied.rows` whose `(column, op, value)` triple is structurally equal to the draft row's triple, regardless of either row's `enabled` flag. An **incomplete** row MUST always render the neutral `Apply` state even if its triple matches a row in `applied` — the green "Applied" state MUST never be shown for a row that was not actually sent to the query.
+Every Structured filter row SHALL render a `Apply` / `Applied` button at its right edge (before the `+` / `−` controls). The button MUST show the label `Apply` (neutral / muted color) when the row is NOT part of `applied`, and `Applied` (green, using the `--success` token) when the row IS part of `applied`. A row is "part of `applied`" iff (a) the row is **complete** (it would survive the `draft` → payload conversion), AND (b) the row is `enabled`, AND (c) there exists a row in `applied.rows` whose `(column, op, value)` triple is structurally equal to the draft row's triple. An **incomplete** row or an **unchecked** row MUST always render the neutral `Apply` state even if its triple matches a row in `applied` — the green "Applied" state MUST never be shown for a row whose predicate did not reach the query.
 
 When a row is in the Applied state:
 - The button label MUST read `Applied`.
 - The row's value input MUST render with the `--success-soft` background tint and a `--success` border.
 - The button MUST remain clickable; clicking it MUST re-apply only that row (idempotent).
 
-Activating the per-row Apply button MUST set `applied` to `{ rows: [thisRow], combinator: draft.combinator }`. The button MUST NOT modify `draft`. After a per-row Apply with more than one draft row, the dirty indicator MUST reflect that `draft.rows.length !== applied.rows.length`.
+Activating the per-row Apply button on a **complete** row MUST set that row's `enabled` to `true` in `draft` and set `applied` to `{ rows: [thisRowWithEnabledTrue], combinator: draft.combinator }`. Apart from the target row's `enabled` flag, the button MUST NOT modify `draft` — it MUST NOT change `draft.combinator`, any other row, or the target row's `column` / `op` / `value`. After a per-row Apply with more than one draft row, the dirty indicator MUST reflect that `draft.rows.length !== applied.rows.length`.
 
-Editing any of `column`, `op`, `value`, or `enabled` on an Applied row MUST cause structural equality with `applied` to break for that row, and the row's Applied state MUST drop to the neutral `Apply` state on the next render.
+Activating the per-row Apply button on an **incomplete** row MUST be a no-op with respect to both `draft` and `applied`: `applied` MUST retain whatever it held before the gesture, no fetch MUST be triggered, and the bar MUST surface a transient inline status explaining that the row is incomplete. The gesture MUST NOT commit an `applied` model that produces an empty wire payload.
+
+Editing any of `column`, `op`, `value`, or `enabled` on an Applied row MUST cause the "part of `applied`" test to fail for that row, and the row's Applied state MUST drop to the neutral `Apply` state on the next render.
 
 #### Scenario: Applied state is per-row and based on structural equality
 
@@ -1109,6 +1184,13 @@ Editing any of `column`, `op`, `value`, or `enabled` on an Applied row MUST caus
 - **THEN** the draft row renders with the neutral `Apply` label, NOT the green `Applied` badge
 - **AND** the row's value input does NOT render with the `--success` tint
 
+#### Scenario: Unchecked row never shows the Applied badge
+
+- **WHEN** `applied.rows = [{ column: "status", op: "=", value: "ok", enabled: true }]` and the user unchecks the structurally-equal `draft.rows[0]`
+- **THEN** `draft.rows[0]` renders with the neutral `Apply` label, NOT the green `Applied` badge
+- **AND** the row's value input does NOT render with the `--success` tint
+- **AND** the dirty indicator is shown (draft ≠ applied)
+
 #### Scenario: Editing an applied row drops the Applied badge
 
 - **WHEN** a row is in the Applied state and the user changes its `value` from `"ok"` to `"okay"`
@@ -1117,17 +1199,35 @@ Editing any of `column`, `op`, `value`, or `enabled` on an Applied row MUST caus
 
 #### Scenario: Per-row Apply replaces the active filter with that single row
 
-- **WHEN** `draft` contains three rows and the user clicks the per-row Apply button on the second row (`{ column: "status", op: "=", value: "ok" }`)
-- **THEN** `applied.rows === [{ column: "status", op: "=", value: "ok", enabled: ... }]`
+- **WHEN** `draft` contains three enabled rows and the user clicks the per-row Apply button on the second row (`{ column: "status", op: "=", value: "ok" }`)
+- **THEN** `applied.rows === [{ column: "status", op: "=", value: "ok", enabled: true }]`
 - **AND** `applied.combinator === draft.combinator`
-- **AND** `draft` is unchanged
+- **AND** `draft` is unchanged (the row was already enabled)
 - **AND** the dirty indicator shows that `draft ≠ applied`
 - **AND** `postgres.queryTable` is invoked with the single-row `filter_tree`
+
+#### Scenario: Per-row Apply on an unchecked row enables it and filters the query
+
+- **WHEN** `draft.rows = [R0 (checked, applied), R1 (unchecked, complete)]` and the user clicks R1's per-row Apply button
+- **THEN** R1's checkbox becomes checked in `draft`
+- **AND** `applied` becomes `{ rows: [R1 with enabled = true], combinator: draft.combinator }`
+- **AND** `postgres.queryTable` is invoked with a `filter_tree` containing R1's condition (NOT with an absent `filter_tree`)
+- **AND** R1 renders with the green `Applied` badge
+
+#### Scenario: Per-row Apply on an incomplete row leaves the applied filter in force
+
+- **WHEN** `applied.rows = [R0]` and the user clicks the per-row Apply button on an incomplete row R1 (e.g. empty value)
+- **THEN** `applied.rows` still equals `[R0]`
+- **AND** `draft` is unchanged (R1's checkbox is NOT toggled)
+- **AND** no fetch is triggered
+- **AND** the bar shows a transient inline status stating the row is incomplete
+- **AND** R1 continues to render the neutral `Apply` label
 
 #### Scenario: Per-row Apply on an Applied row is idempotent
 
 - **WHEN** a row is already in the Applied state and the user clicks its `Applied` button
 - **THEN** `applied.rows` still equals `[thatRow]`
+- **AND** the row stays checked
 - **AND** no observable state changes (the fetch is debounced / deduped by the data hook)
 
 ### Requirement: Apply All with persistent root combinator
@@ -1228,8 +1328,8 @@ While the filter bar is visible AND focus is somewhere inside the bar AND focus 
 | `⌘↑` / `Ctrl+↑` | Move focus to the same logical control (column / op / value) of the row above the focused row. No wrap at top. |
 | `⌘↓` / `Ctrl+↓` | Move focus to the same logical control of the row below the focused row. No wrap at bottom. |
 | `⌘←` / `Ctrl+←` | Open the column picker dropdown on the focused row. No-op if focus is not on a row. |
-| `Enter` | Apply ONLY the focused row — commit exactly that single row to `applied` (`{ rows: [focusedRow], combinator: draft.combinator }`), identical to that row's per-row `Apply` button and INDEPENDENT of the row's `enabled` checkbox. The focused row is resolved from the active element's enclosing `[data-filter-row-index]`. If no enclosing row can be resolved, the handler falls back to Apply All using the current combinator. Suppressed when focus is in a `ChipInput` (`In` / `NotIn`) and the chip draft is non-empty (Enter commits the chip instead). |
-| `⇧Enter` / `Shift+Enter` | Apply All using the current `draft.combinator` (does NOT force AND or OR) — commit the enabled-complete subset of `draft.rows`. Suppressed when focus is in a `ChipInput` and the chip draft is non-empty. |
+| `Enter` | Apply ONLY the focused row — identical to that row's per-row `Apply` button (see "Per-row Apply and Applied visual state"): set the focused row's `enabled` to `true` in `draft`, then commit `{ rows: [focusedRow with enabled = true], combinator: draft.combinator }` to `applied`. If the focused row is **incomplete**, the gesture is a no-op on both models and the bar surfaces a transient inline status instead. The focused row is resolved from the active element's enclosing `[data-filter-row-index]`. If no enclosing row can be resolved, the handler falls back to Apply All using the current combinator. Suppressed when focus is in a `ChipInput` (`In` / `NotIn`) and the chip draft is non-empty (Enter commits the chip instead). |
+| `⇧Enter` / `Shift+Enter` | Apply All using the current `draft.combinator` (does NOT force AND or OR) — commit the enabled-complete subset of `draft.rows`. Never changes any row's `enabled` flag. Suppressed when focus is in a `ChipInput` and the chip draft is non-empty. |
 | `⌘↵` / `Ctrl+Enter` | Apply All with AND – Default (see "Apply All with persistent root combinator") |
 | `⇧⌘↵` / `Ctrl+Shift+Enter` | Apply All with OR |
 
@@ -1282,15 +1382,27 @@ While the filter bar is visible AND focus is somewhere inside the bar AND focus 
 
 #### Scenario: Plain Enter applies the focused row even when its checkbox is unchecked
 
-- **WHEN** `draft.rows` has R0 (enabled, already applied) and R1 (unchecked, newly typed), focus is in R1's value input, and the user presses `Enter` with no modifier
-- **THEN** `applied` becomes `{ rows: [R1], combinator: draft.combinator }`
-- **AND** R1's `enabled` flag is NOT changed by the Enter gesture
+- **WHEN** `draft.rows` has R0 (checked, already applied) and R1 (unchecked, complete, newly typed), focus is in R1's value input, and the user presses `Enter` with no modifier
+- **THEN** R1's `enabled` flag becomes `true` in `draft` and its checkbox renders as checked
+- **AND** `applied` becomes `{ rows: [R1 with enabled = true], combinator: draft.combinator }`
+- **AND** `postgres.queryTable` is invoked with a `filter_tree` containing R1's condition — the query MUST NOT go out with an absent `filter_tree`
+- **AND** R1 renders the green `Applied` badge
+- **AND** R0's `enabled` flag and value are unchanged in `draft`
+
+#### Scenario: Plain Enter on an incomplete row does not wipe the applied filter
+
+- **WHEN** `applied.rows = [R0]`, focus is in an incomplete row R1's value input, and the user presses `Enter` with no modifier
+- **THEN** `applied.rows` still equals `[R0]`
+- **AND** `draft` is unchanged
+- **AND** no fetch is triggered
+- **AND** the bar shows a transient inline status stating the row is incomplete
 
 #### Scenario: Shift+Enter applies all enabled rows
 
 - **WHEN** `draft.rows` has R0 (checked) and R1 (unchecked), focus is in R1's value input, and the user presses `Shift+Enter`
 - **THEN** `applied` becomes the enabled-complete subset of `draft.rows` joined by `draft.combinator` (so `applied.rows` contains R0 but not R1)
 - **AND** `draft.combinator` is NOT changed
+- **AND** R1's `enabled` flag stays `false`
 
 #### Scenario: Enter in a ChipInput commits the chip instead of applying
 
