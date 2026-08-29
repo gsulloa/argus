@@ -41,6 +41,25 @@ function modelWithRows(count: number): FilterModel {
   };
 }
 
+/**
+ * Like `modelWithRows`, but every row is COMPLETE. `makeEmptyRow()` produces a
+ * row with an empty value, which the per-row Apply path now refuses (issue
+ * #289) — tests that exercise routing rather than the completeness gate need
+ * rows that can actually be applied.
+ */
+function modelWithCompleteRows(count: number, enabled = true): FilterModel {
+  return {
+    rows: Array.from({ length: count }, (_, i) => ({
+      ...makeEmptyRow(),
+      enabled,
+      column: { kind: "named" as const, name: "country" },
+      op: "Contains" as const,
+      value: `CL-${i}`,
+    })),
+    combinator: "AND",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -86,7 +105,7 @@ describe("FilterBar — checkbox", () => {
 describe("FilterBar — per-row Apply button", () => {
   it("clicking calls onApplyOnlyRow with the row index", () => {
     const onApplyOnlyRow = vi.fn();
-    const draft = modelWithRows(2);
+    const draft = modelWithCompleteRows(2);
     render(<FilterBar {...makeProps({ draft, onApplyOnlyRow })} />);
     const applyBtns = screen.getAllByRole("button", { name: /Apply only this row|Applied — click to re-apply/i });
     expect(applyBtns).toHaveLength(2);
@@ -118,6 +137,61 @@ describe("FilterBar — per-row Apply button", () => {
     render(<FilterBar {...makeProps({ draft, applied })} />);
     expect(screen.queryByRole("button", { name: /Applied — click/i })).toBeNull();
     expect(screen.getByRole("button", { name: /Apply only this row/i })).toBeInTheDocument();
+  });
+
+  // 6.3 (issue #289): the badge must track what actually reached the query.
+  // `modelToPayload` drops non-`enabled` rows, so an unchecked row contributes
+  // nothing and must never read as Applied.
+  it("does NOT show the green Applied badge for an unchecked row that matches an applied row", () => {
+    const fields = {
+      column: { kind: "named" as const, name: "country" },
+      op: "=" as const,
+      value: "CL",
+    };
+    const draft: FilterModel = {
+      rows: [{ id: "t-off", enabled: false, ...fields }],
+      combinator: "AND",
+    };
+    const applied: FilterModel = {
+      rows: [{ id: "t-on", enabled: true, ...fields }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, applied })} />);
+    expect(screen.queryByRole("button", { name: /Applied — click/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /Apply only this row/i })).toBeInTheDocument();
+  });
+
+  it("shows the Applied badge for the same row once it is checked", () => {
+    // Control for the test above: identical triple, only `enabled` differs.
+    const fields = {
+      column: { kind: "named" as const, name: "country" },
+      op: "=" as const,
+      value: "CL",
+    };
+    const draft: FilterModel = {
+      rows: [{ id: "t-on-d", enabled: true, ...fields }],
+      combinator: "AND",
+    };
+    const applied: FilterModel = {
+      rows: [{ id: "t-on-a", enabled: true, ...fields }],
+      combinator: "AND",
+    };
+    render(<FilterBar {...makeProps({ draft, applied })} />);
+    expect(screen.getByRole("button", { name: /Applied — click/i })).toBeInTheDocument();
+  });
+
+  // 6.2 (issue #289): an incomplete row can produce no predicate, so applying it
+  // would wipe the filter in force and reload the grid unfiltered. Refuse it and
+  // explain why instead.
+  it("per-row Apply on an incomplete row does not call onApplyOnlyRow and shows a status", async () => {
+    const onApplyOnlyRow = vi.fn();
+    const draft = modelWithRows(1); // makeEmptyRow() → blank value → incomplete
+    render(<FilterBar {...makeProps({ draft, onApplyOnlyRow })} />);
+    fireEvent.click(screen.getByRole("button", { name: /Apply only this row/i }));
+    expect(onApplyOnlyRow).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByText(/Row is incomplete/i)).toBeInTheDocument(),
+    );
   });
 
   it("a freshly-picked boolean row commits value true and yields a filter_tree carrying the boolean condition", async () => {
@@ -659,7 +733,7 @@ describe("FilterBar — plain Enter applies focused row", () => {
   it("plain Enter with focus inside row 1 calls onApplyOnlyRow(1) and not onApplyAll", () => {
     const onApplyOnlyRow = vi.fn();
     const onApplyAll = vi.fn();
-    const draft = modelWithRows(2);
+    const draft = modelWithCompleteRows(2);
     const { container } = render(
       <FilterBar {...makeProps({ draft, onApplyOnlyRow, onApplyAll })} />,
     );
@@ -674,8 +748,11 @@ describe("FilterBar — plain Enter applies focused row", () => {
     expect(onApplyAll).not.toHaveBeenCalled();
   });
 
-  // 3.2: Plain Enter applies focused row even when that row's enabled checkbox is unchecked.
-  it("plain Enter applies the focused row even when its enabled checkbox is unchecked", () => {
+  // 3.2: Plain Enter on an unchecked row still routes to onApplyOnlyRow. The bar
+  // delegates the whole gesture — including checking the row's box — to that
+  // callback (see `applyOnlyRowModels` / issue #289); it never mutates `draft`
+  // itself, which is what `onDraftChange` asserts below.
+  it("plain Enter on an unchecked row delegates to onApplyOnlyRow without mutating draft itself", () => {
     const onApplyOnlyRow = vi.fn();
     const onDraftChange = vi.fn();
     const draft: FilterModel = {
@@ -696,8 +773,58 @@ describe("FilterBar — plain Enter applies focused row", () => {
     const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
     fireEvent.keyDown(barRoot, { key: "Enter" });
     expect(onApplyOnlyRow).toHaveBeenCalledWith(1);
-    // enabled flag must NOT have been changed by the Enter gesture.
+    // The bar itself must not write `draft` — enabling the row is the callback's
+    // job, so it lands in the same tick as the `applied` write.
     expect(onDraftChange).not.toHaveBeenCalled();
+  });
+
+  // 6.1 (issue #289): the reproduction from the report — a complete row whose
+  // checkbox is off. Enter must route it to the per-row Apply path; the tab
+  // layer then enables it (covered in treeMutations.test.ts) so the query goes
+  // out WITH a filter_tree instead of unfiltered.
+  it("plain Enter on a complete but unchecked row routes to onApplyOnlyRow", () => {
+    const onApplyOnlyRow = vi.fn();
+    const onApplyAll = vi.fn();
+    const draft: FilterModel = {
+      rows: [
+        { id: "t-289a", enabled: true, column: { kind: "named", name: "id" }, op: "=", value: "255" },
+        { id: "t-289b", enabled: false, column: { kind: "named", name: "email" }, op: "Contains", value: "e2e+" },
+      ],
+      combinator: "AND",
+    };
+    const { container } = render(
+      <FilterBar {...makeProps({ draft, onApplyOnlyRow, onApplyAll })} />,
+    );
+    const checkbox1 = container.querySelector(
+      "[data-filter-row-index='1'] input[type='checkbox']",
+    ) as HTMLElement;
+    checkbox1?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter" });
+    expect(onApplyOnlyRow).toHaveBeenCalledWith(1);
+    expect(onApplyAll).not.toHaveBeenCalled();
+  });
+
+  // 6.2 (issue #289), keyboard half: Enter on an incomplete row must leave the
+  // applied filter in force rather than committing an empty payload.
+  it("plain Enter on an incomplete row does not call onApplyOnlyRow and shows a status", async () => {
+    const onApplyOnlyRow = vi.fn();
+    const onApplyAll = vi.fn();
+    const draft = modelWithRows(2); // makeEmptyRow() → blank values → incomplete
+    const { container } = render(
+      <FilterBar {...makeProps({ draft, onApplyOnlyRow, onApplyAll })} />,
+    );
+    const checkbox1 = container.querySelector(
+      "[data-filter-row-index='1'] input[type='checkbox']",
+    ) as HTMLElement;
+    checkbox1?.focus();
+    const barRoot = container.querySelector("[data-filter-bar-root]") as HTMLElement;
+    fireEvent.keyDown(barRoot, { key: "Enter" });
+    expect(onApplyOnlyRow).not.toHaveBeenCalled();
+    expect(onApplyAll).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByText(/Row is incomplete/i)).toBeInTheDocument(),
+    );
   });
 
   // 3.3: Shift+Enter (no meta) calls onApplyAll, not onApplyOnlyRow.

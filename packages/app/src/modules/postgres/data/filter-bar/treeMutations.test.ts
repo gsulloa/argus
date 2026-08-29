@@ -8,6 +8,7 @@ import {
   clearAllRows,
   moveRow,
   coerceValueForOperator,
+  applyOnlyRowModels,
 } from "./treeMutations";
 import { EMPTY_FILTER_ROW_FIELDS, modelToPayload } from "../types";
 import type { FilterRow, FilterTree } from "../types";
@@ -250,6 +251,103 @@ describe("moveRow", () => {
     for (const child of after.filter_tree!.children) {
       expect(child).not.toHaveProperty("id");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyOnlyRowModels (issue #289)
+// ---------------------------------------------------------------------------
+
+describe("applyOnlyRowModels", () => {
+  it("enables an unchecked complete row and applies only that row", () => {
+    const r0 = row({ value: "keep" });
+    const r1 = row({ enabled: false, column: { kind: "named", name: "b" }, value: "2" });
+    const next = applyOnlyRowModels(treeOf(r0, r1), 1)!;
+
+    expect(next).not.toBeNull();
+    expect(next.draft.rows[1]!.enabled).toBe(true);
+    expect(next.applied.rows).toHaveLength(1);
+    expect(next.applied.rows[0]).toEqual({ ...r1, enabled: true });
+  });
+
+  it("leaves every other draft row untouched when enabling one", () => {
+    const r0 = row({ enabled: false, value: "untouched" });
+    const r1 = row({ enabled: false, column: { kind: "named", name: "b" }, value: "2" });
+    const next = applyOnlyRowModels(treeOf(r0, r1), 1)!;
+
+    expect(next.draft.rows[0]).toEqual(r0);
+    expect(next.draft.rows[0]!.enabled).toBe(false);
+    expect(next.draft.rows).toHaveLength(2);
+  });
+
+  it("applies an already-enabled complete row without changing draft content", () => {
+    const r0 = row({ value: "a" });
+    const r1 = row({ column: { kind: "named", name: "b" }, value: "2" });
+    const t = treeOf(r0, r1);
+    const next = applyOnlyRowModels(t, 1)!;
+
+    expect(next.applied.rows).toEqual([r1]);
+    expect(next.draft.rows).toEqual(t.rows);
+  });
+
+  it("returns null for an incomplete row (empty value)", () => {
+    const t = treeOf(row(), row({ value: "" }));
+    expect(applyOnlyRowModels(t, 1)).toBeNull();
+  });
+
+  it("returns null for an incomplete row (unset operator)", () => {
+    const t = treeOf(row({ op: null }));
+    expect(applyOnlyRowModels(t, 0)).toBeNull();
+  });
+
+  it("returns null for an out-of-range index", () => {
+    const t = treeOf(row());
+    expect(applyOnlyRowModels(t, 99)).toBeNull();
+    expect(applyOnlyRowModels(t, -1)).toBeNull();
+  });
+
+  it("carries the combinator over and never changes it", () => {
+    const t: FilterTree = {
+      rows: [row(), row({ enabled: false, column: { kind: "named", name: "b" } })],
+      combinator: "OR",
+    };
+    const next = applyOnlyRowModels(t, 1)!;
+    expect(next.applied.combinator).toBe("OR");
+    expect(next.draft.combinator).toBe("OR");
+  });
+
+  // The direct regression assertion for issue #289: before the fix, applying an
+  // unchecked row produced `applied = [disabledRow]`, which `modelToPayload`
+  // reduced to `{}` — no `filter_tree`, so the grid reloaded unfiltered.
+  it("produces an applied model that survives modelToPayload for an unchecked row", () => {
+    const t = treeOf(
+      row({ column: { kind: "named", name: "id" }, op: "=", value: "255" }),
+      row({
+        enabled: false,
+        column: { kind: "named", name: "email" },
+        op: "Contains",
+        value: "e2e+",
+      }),
+    );
+    const next = applyOnlyRowModels(t, 1)!;
+    const payload = modelToPayload(next.applied);
+
+    expect(payload.filter_tree).toBeDefined();
+    expect(payload.filter_tree!.children).toHaveLength(1);
+    expect(payload.filter_tree!.children[0]).toMatchObject({
+      kind: "condition",
+      column: { kind: "named", name: "email" },
+      op: "Contains",
+      value: "e2e+",
+    });
+  });
+
+  it("emits no payload-bearing model when the gesture is refused", () => {
+    // Guard: a refused gesture must not be turned into an empty applied model
+    // by the caller — the helper hands back null so `applied` stays as-is.
+    const t = treeOf(row({ value: "" }));
+    expect(applyOnlyRowModels(t, 0)).toBeNull();
+    expect(modelToPayload({ rows: [t.rows[0]!], combinator: "AND" })).toEqual({});
   });
 });
 
