@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Postgres SQL editor cells no longer render as a `<typename>` placeholder. `numeric` / `decimal` columns — which showed `<numeric>` in every row — now show their exact value at full arbitrary precision, decoded straight from the binary wire format with no `f64` round-trip, so monetary and high-precision amounts stay exact ([#291](https://github.com/gsulloa/argus/issues/291)). The same dead end also hid `money`, every array type (`<_int4>`, `<_text>`), `timetz`, `bit`/`varbit` and the geometric types; all of them now decode, as do ranges, multiranges and domains, which recurse into their element or base type. Anything still unknown falls back to Postgres' own text or a copyable hex envelope rather than a placeholder. Browsing the same table through the schema tree was never affected — it casts to text server-side — so the grid and the SQL editor now agree.
+
 ## [0.9.0] - 2026-08-19
 
 ### Added
