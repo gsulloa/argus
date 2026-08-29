@@ -1,3 +1,5 @@
+/* Outer strip: never scrolls. Holds the scrolling tab row plus the pinned
+   overflow control, so the control stays anchored at the right end. */
 .root {
   display: flex;
   align-items: stretch;
@@ -5,6 +7,16 @@
   height: 32px;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* The scrollport. `min-width: 0` lets it yield width to the overflow control
+   instead of pushing it out of the strip. */
+.scroller {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 0 8px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -19,12 +31,16 @@
   border-right: 1px solid var(--border);
   cursor: pointer;
   user-select: none;
-  white-space: nowrap;
   font-size: 12.5px;
   color: var(--text-muted);
   border-radius: 0;
   background: transparent;
   height: 100%;
+  /* Shrink under pressure, but never below a legible floor and never wider
+     than the cap — the strip stops growing, then overflows. */
+  flex: 0 1 auto;
+  min-width: 96px;
+  max-width: 180px;
 }
 .tab[data-active="true"] {
   background: var(--bg);
@@ -38,6 +54,14 @@
 }
 .tab[data-drop-after="true"] {
   box-shadow: inset -2px 0 0 var(--accent);
+}
+
+/* Only the title shrinks; the dot and close button hold their size. */
+.title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dirtyDot {
@@ -57,8 +81,68 @@
   border-radius: 3px;
   color: var(--text-subtle);
   padding: 0;
+  flex-shrink: 0;
 }
 .close:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+/* ── Overflow control ──────────────────────────────────────────────────── */
+
+/* Fixed width so the strip's layout does not shift when the count goes from
+   one digit to two — a varying width would feed back into the measurement. */
+.overflowButton {
+  flex: 0 0 auto;
+  width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: var(--radius-sm, 3px);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background var(--duration-instant, 80ms) ease-out,
+    color var(--duration-instant, 80ms) ease-out;
+}
+.overflowButton:hover,
+.overflowButton[data-state="open"] {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Menu chrome mirrors the sidebar's group menu (Sidebar.module.css:392-411)
+   so the two read identically. */
+.contextMenu {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  min-width: 180px;
+  max-width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  z-index: 60;
+}
+.contextItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  outline: none;
+}
+.contextItem:hover,
+.contextItem[data-highlighted] {
+  background: var(--bg-hover);
 }

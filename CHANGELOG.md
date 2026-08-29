@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The workspace tab strip now handles a crowded window instead of growing off-screen ([#281](https://github.com/gsulloa/argus/issues/281)). Tabs shrink and their labels ellipsise (the full title stays available on hover); once they no longer fit, a chevron button at the right end of the strip shows how many tabs are hidden and lists them in tab order, and picking one activates it and scrolls it into view. The active tab is now always brought into view however you reach it — ⌃Tab, the command palette, the quick-switcher, or the new menu — which previously could leave you on a tab you couldn't see. Drag-to-reorder, the close button and the unsaved-changes guards are unchanged.
+
 ## [0.9.0] - 2026-08-19
 
 ### Added
