@@ -1,7 +1,7 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { toAppError } from "@/platform/errors/AppError";
 import type { RowCapSource } from "@/platform/sql/TruncationBanner";
-import type { CellValue, DataColumn } from "../data/types";
+import type { CellValue, DataColumn, ResultEditability } from "../data/types";
 
 export type Origin = "auto" | "user";
 
@@ -16,6 +16,11 @@ export type RunSqlResult =
       query_ms: number;
       row_cap: number;
       row_cap_source: RowCapSource;
+      /**
+       * Whether these rows can be written back. Rows-shaped results only —
+       * `kind: "affected"` carries no such notion, so switch on `kind` first.
+       */
+      editability: ResultEditability;
     }
   | {
       kind: "affected";
@@ -38,7 +43,7 @@ export type RunManyOutcome =
 
 /** Discriminated event emitted by the `postgres_run_sql_stream` channel. */
 export type StreamEvent =
-  | { event: "columns"; columns: DataColumn[] }
+  | { event: "columns"; columns: DataColumn[]; editability: ResultEditability }
   | { event: "batch"; rows: CellValue[][] }
   | {
       event: "done";

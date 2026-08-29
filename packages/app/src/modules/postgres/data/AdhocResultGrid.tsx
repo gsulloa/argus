@@ -1,17 +1,19 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { categorize, isMonoCategory } from "./typeHelpers";
+import { categorize } from "./typeHelpers";
 import {
   isCellEnvelope,
-  type CellEnvelope,
   type CellValue,
   type DataColumn,
+  type EditValue,
 } from "./types";
 import { useColumnWidths } from "@/platform/table/columnWidths";
 import { ResizeHandle } from "@/platform/table/ResizeHandle";
 import { copyCell, copyRows, copyRowRangeFromKeydown, writeClipboardText } from "@/platform/grid/gridCopy";
 import { useToast } from "@/platform/toast";
+import { EditableCell, looksLikeBytea } from "./EditableCell";
 import { RowContextMenu } from "./RowContextMenu";
+import { buildRowKey, type UseEditBufferResult } from "./useEditBuffer";
 import { pixelYToRowIndex } from "./dragRowIndex";
 import type { SortOrder } from "@/platform/table/sortResultRows";
 import styles from "./DataGrid.module.css";
@@ -20,9 +22,46 @@ const ROW_HEIGHT = 26;
 const HEADER_HEIGHT = 28;
 const GUTTER_WIDTH = 32;
 
+/** Hover copy for the two blockers the grid can determine per-cell. */
+const PK_CELL_REASON = "Primary key — not editable";
+const COMPUTED_CELL_REASON = "Computed column — not editable";
+
+/**
+ * Everything the grid needs to allow inline cell editing on an ad-hoc result.
+ * Supplied by the SQL editor's result panel from the run's `editability`
+ * payload; omitted entirely by any consumer that wants the read-only grid.
+ */
+export interface AdhocGridEdit {
+  /** Shared edit buffer — the same one the table viewer uses. */
+  buffer: UseEditBufferResult;
+  /**
+   * Aligned to `columns`: the BASE column each result column projects, or null
+   * when it's a computed expression. Writes target these names, so an aliased
+   * `SELECT id AS pk` edits `id`.
+   */
+  columnSources: (string | null)[];
+  /** PK column names, declared order. */
+  pkColumns: string[];
+  /** Result-column index carrying each PK column, aligned to `pkColumns`. */
+  pkColumnIndexes: number[];
+  /** Enum labels keyed by BASE column name. */
+  enumValuesByColumn: Record<string, string[]>;
+  /**
+   * When non-empty, editing is off for the whole grid and this string is the
+   * hover title on every cell. Lets a non-editable result still explain itself
+   * rather than swallowing the double-click silently.
+   */
+  blockedReason: string;
+}
+
 export interface AdhocResultGridProps {
   columns: DataColumn[];
   rows: CellValue[][];
+  /**
+   * Optional inline-edit configuration. Absent → the grid behaves exactly as
+   * the read-only grid always has.
+   */
+  edit?: AdhocGridEdit;
   /** Called when the row-range selection changes. */
   onSelectionChange?(sel: { anchor: number | null; active: number | null }): void;
   /**
@@ -40,11 +79,18 @@ export interface AdhocResultGridProps {
 }
 
 /**
- * Read-only virtualized result grid. Used by the SQL editor for ad-hoc query
- * results and shares the same DOM and styling as the editable table viewer's
- * grid (no separate virtualization implementation). It has no edit/filter
- * affordances; client-side sort (header click → asc/desc/unsorted) is opt-in
- * via the `orderBy`/`onSortChange` props.
+ * Virtualized result grid. Used by the SQL editor for ad-hoc query results and
+ * shares the same DOM, styling and inline-cell component as the editable table
+ * viewer's grid (no separate virtualization implementation).
+ *
+ * Read-only by default. Pass `edit` to enable double-click inline editing on a
+ * result whose rows are provably traceable to one base table — see the
+ * `sql-result-editability` capability. Even then the grid never offers row
+ * insert or delete: cell UPDATE is the only write it supports.
+ *
+ * Client-side sort (header click → asc/desc/unsorted) is opt-in via the
+ * `orderBy`/`onSortChange` props. Because pending edits are keyed by primary
+ * key rather than row index, sorting can never mis-target a write.
  *
  * Column widths are in-memory only (storageKey: null) and reset automatically
  * when the columns shape changes (via the `key` on the inner component).
@@ -52,6 +98,7 @@ export interface AdhocResultGridProps {
 export function AdhocResultGrid({
   columns,
   rows,
+  edit,
   onSelectionChange,
   orderBy,
   onSortChange,
@@ -71,6 +118,7 @@ export function AdhocResultGrid({
       key={columnsSignature}
       columns={columns}
       rows={rows}
+      edit={edit}
       onSelectionChange={onSelectionChange}
       orderBy={orderBy}
       onSortChange={onSortChange}
@@ -89,6 +137,7 @@ export function AdhocResultGrid({
 function AdhocResultGridInner({
   columns,
   rows,
+  edit,
   onSelectionChange,
   orderBy,
   onSortChange,
@@ -101,6 +150,63 @@ function AdhocResultGridInner({
 
   const toast = useToast();
   const onCopyError = (msg: string) => toast.show(msg, "error");
+
+  // -----------------------------------------------------------------------
+  // Edit mode
+  // -----------------------------------------------------------------------
+  // Editing is live only when a config was supplied AND nothing blocks the
+  // whole grid. A supplied-but-blocked config still flows through so every
+  // cell can carry the explanation on hover.
+  const editingEnabled = !!edit && edit.blockedReason === "";
+  const [editing, setEditing] = useState<{ rowIndex: number; col: string } | null>(null);
+
+  // Reset the open editor whenever the dataset changes underneath it.
+  useEffect(() => {
+    setEditing(null);
+  }, [columns, rows]);
+
+  /**
+   * Stable, PK-derived identity for a row. Keying the buffer this way (rather
+   * than by row index) is what makes client-side sorting safe: reordering the
+   * displayed rows cannot re-point a pending edit at a different row.
+   * Returns null when the row can't be identified, which makes it read-only.
+   */
+  const rowKeyFor = useCallback(
+    (row: CellValue[] | undefined): string | null => {
+      if (!edit || !row) return null;
+      const pk: Record<string, EditValue> = {};
+      for (let i = 0; i < edit.pkColumns.length; i++) {
+        const name = edit.pkColumns[i];
+        const colIdx = edit.pkColumnIndexes[i];
+        if (name === undefined || colIdx === undefined) return null;
+        pk[name] = (row[colIdx] ?? null) as EditValue;
+      }
+      return buildRowKey(pk);
+    },
+    [edit],
+  );
+
+  /**
+   * Buffer-aware value lookup: the pending edit when there is one, else the
+   * server value. Used for display AND for every copy path, so what the user
+   * copies is what they see.
+   */
+  const displayValueAt = useCallback(
+    (rowIndex: number, colIndex: number): CellValue | EditValue => {
+      const row = rows[rowIndex];
+      const serverValue = row ? (row[colIndex] ?? null) : null;
+      if (!edit || !row) return serverValue;
+      const base = edit.columnSources[colIndex];
+      if (!base) return serverValue;
+      const rowKey = rowKeyFor(row);
+      if (!rowKey) return serverValue;
+      const entry = edit.buffer.getRowEdits(rowKey);
+      return entry && base in entry.changes
+        ? (entry.changes[base] as EditValue)
+        : serverValue;
+    },
+    [edit, rows, rowKeyFor],
+  );
 
   // Single-cell active selection — mutually exclusive with row range selection.
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
@@ -128,6 +234,93 @@ function AdhocResultGridInner({
     setActiveCell(null);
     setSelection({ anchor: null, active: null });
   }, [columns, rows]);
+
+  /**
+   * Everything `EditableCell` needs for one cell. Centralised so the display
+   * path and the context menu agree on what "editable" means.
+   *
+   * A cell is read-only when: no edit config; the grid is blocked wholesale;
+   * the column is computed (no base column to write to); the base column is
+   * part of the primary key (that's the row's identity); the column is binary;
+   * the value arrived as an oversized/binary envelope; or the row has no
+   * resolvable PK.
+   */
+  function cellEditState(
+    rowIndex: number,
+    colIndex: number,
+    col: DataColumn,
+    serverValue: CellValue,
+  ) {
+    const displayValue = displayValueAt(rowIndex, colIndex);
+    if (!edit) {
+      return {
+        displayValue,
+        dirty: false,
+        readOnly: true,
+        readOnlyReason: undefined as string | undefined,
+        enumValues: undefined as string[] | undefined,
+        editing: false,
+      };
+    }
+
+    const base = edit.columnSources[colIndex] ?? null;
+    const rowKey = rowKeyFor(rows[rowIndex]);
+    const dirty = !!base && !!rowKey && edit.buffer.isCellDirty(rowKey, base);
+
+    let readOnlyReason: string | undefined;
+    if (edit.blockedReason !== "") readOnlyReason = edit.blockedReason;
+    else if (!base) readOnlyReason = COMPUTED_CELL_REASON;
+    else if (edit.pkColumns.includes(base)) readOnlyReason = PK_CELL_REASON;
+    else if (looksLikeBytea(col.data_type)) readOnlyReason = "binary, not editable inline";
+    else if (isCellEnvelope(serverValue)) readOnlyReason = "value too large to edit inline";
+    else if (!rowKey) readOnlyReason = "Row has no resolvable primary key";
+
+    return {
+      displayValue,
+      dirty,
+      readOnly: !editingEnabled || readOnlyReason !== undefined,
+      readOnlyReason,
+      enumValues: base ? edit.enumValuesByColumn[base] : undefined,
+      editing:
+        editing !== null && editing.rowIndex === rowIndex && editing.col === col.name,
+    };
+  }
+
+  function startEdit(rowIndex: number, colIndex: number) {
+    const col = columns[colIndex];
+    if (!col) return;
+    setEditing({ rowIndex, col: col.name });
+  }
+
+  function commitEdit(rowIndex: number, colIndex: number, value: EditValue) {
+    setEditing(null);
+    if (!edit) return;
+    const base = edit.columnSources[colIndex];
+    if (!base) return;
+    const row = rows[rowIndex];
+    const rowKey = rowKeyFor(row);
+    if (!row || !rowKey) return;
+
+    const pk: Record<string, EditValue> = {};
+    for (let i = 0; i < edit.pkColumns.length; i++) {
+      const name = edit.pkColumns[i];
+      const idx = edit.pkColumnIndexes[i];
+      if (name === undefined || idx === undefined) return;
+      pk[name] = (row[idx] ?? null) as EditValue;
+    }
+
+    // `originalColumns` must be in BASE-column terms so the buffer's
+    // "reverted to the server value" check compares like with like. Computed
+    // columns get an empty name, which simply never matches a base column.
+    edit.buffer.setCellEdit({
+      rowKey,
+      column: base,
+      value,
+      pk,
+      originalRow: row,
+      originalColumns: edit.columnSources.map((s) => s ?? ""),
+    });
+  }
 
   const sortable = !!onSortChange;
   const sortDirFor = (name: string): "asc" | "desc" | null =>
@@ -323,20 +516,22 @@ function AdhocResultGridInner({
       if (activeCell !== null && !isEditing) {
         const row = rows[activeCell.row];
         if (row) {
-          const value = row[activeCell.col] ?? null;
+          // Copy what the user sees — a pending edit, not the stale server value.
+          const value = displayValueAt(activeCell.row, activeCell.col);
           e.preventDefault();
-          void copyCell(value, onCopyError);
+          void copyCell(value as CellValue, onCopyError);
         }
         return;
       }
 
       // Row-range copy path (mirroring DataGrid).
       void copyRowRangeFromKeydown(e, {
-        editing: false,
+        editing: editing !== null,
         activeCell,
         selection,
         columnNames: columns.map((c) => c.name),
-        resolveRow: (i) => (rows[i] ? [...rows[i]] : null),
+        resolveRow: (i) =>
+          rows[i] ? columns.map((_, ci) => displayValueAt(i, ci) as CellValue) : null,
         write: writeClipboardText,
         onError: onCopyError,
       });
@@ -478,19 +673,37 @@ function AdhocResultGridInner({
             function handleCtxCopyCell() {
               const tgt = ctxTargetRef.current;
               if (!tgt) return;
-              const r = rows[tgt.rowIndex];
-              const value = r ? (r[tgt.colIndex] ?? null) : null;
-              void copyCell(value, onCopyError);
+              if (!rows[tgt.rowIndex]) return;
+              void copyCell(
+                displayValueAt(tgt.rowIndex, tgt.colIndex) as CellValue,
+                onCopyError,
+              );
             }
 
             function handleCtxCopyRows() {
               const targetRows: unknown[][] = [];
               for (let i = ctxRangeStart; i <= ctxRangeEnd; i++) {
-                const r = rows[i];
-                if (!r) continue;
-                targetRows.push([...r]);
+                if (!rows[i]) continue;
+                targetRows.push(columns.map((_, ci) => displayValueAt(i, ci)));
               }
               void copyRows(targetRows, columns.map((c) => c.name), onCopyError);
+            }
+
+            // Edit cell — enabled only for a cell the grid would actually let
+            // the user edit, using the same computation as the display path.
+            const ctxCol = columns[ctxColIndex];
+            const ctxCellState = ctxCol
+              ? cellEditState(vi.index, ctxColIndex, ctxCol, row[ctxColIndex] ?? null)
+              : null;
+            const canEditCell = !!ctxCellState && !ctxCellState.readOnly;
+            const editCellDisabledReason =
+              ctxCellState?.readOnlyReason ?? "This cell can’t be edited";
+
+            function handleCtxEditCell() {
+              const tgt = ctxTargetRef.current;
+              if (!tgt) return;
+              if (!canEditCell) return;
+              startEdit(tgt.rowIndex, tgt.colIndex);
             }
 
             const rowEl = (
@@ -569,22 +782,31 @@ function AdhocResultGridInner({
 
                 {/* Data cells */}
                 {columns.map((col, ci) => {
-                  const value = row[ci] ?? null;
+                  const serverValue = row[ci] ?? null;
                   const isActiveCellHere =
                     activeCell !== null &&
                     activeCell.row === vi.index &&
                     activeCell.col === ci;
+
+                  const cell = cellEditState(vi.index, ci, col, serverValue);
+
                   return (
-                    <div
+                    <EditableCell
                       key={col.name}
-                      data-col={ci}
-                      className={[styles.cell, isActiveCellHere ? styles.cellActive : ""].filter(Boolean).join(" ")}
-                      style={{ width: widthFor(col.name), cursor: "pointer" }}
-                    >
-                      <span className={styles.cellValue}>
-                        <CellContent value={value} column={col} />
-                      </span>
-                    </div>
+                      column={col}
+                      displayValue={cell.displayValue}
+                      dirty={cell.dirty}
+                      readOnly={cell.readOnly}
+                      readOnlyReason={cell.readOnlyReason}
+                      enumValues={cell.enumValues}
+                      editing={cell.editing}
+                      colIndex={ci}
+                      isActiveCell={isActiveCellHere}
+                      onStartEdit={() => startEdit(vi.index, ci)}
+                      onCommitEdit={(value) => commitEdit(vi.index, ci, value)}
+                      onCancelEdit={() => setEditing(null)}
+                      style={{ width: widthFor(col.name) }}
+                    />
                   );
                 })}
               </div>
@@ -593,17 +815,21 @@ function AdhocResultGridInner({
             return (
               <RowContextMenu
                 key={vi.key}
-                copyOnly
+                // Copy-only unless editing is live. `hideDelete` keeps the
+                // Edit-cell entry while omitting Delete entirely — this grid
+                // supports cell UPDATE and nothing else.
+                copyOnly={!editingEnabled}
+                hideDelete
                 target={{ rowIndex: vi.index, colIndex: ctxColIndex }}
                 isMulti={isMulti}
-                canEditCell={false}
-                editCellDisabledReason=""
+                canEditCell={canEditCell}
+                editCellDisabledReason={editCellDisabledReason}
                 canDeleteRows={false}
                 deleteDisabledReason=""
                 deleteIsRestore={false}
                 onCopyCell={handleCtxCopyCell}
                 onCopyRows={handleCtxCopyRows}
-                onEditCell={() => {}}
+                onEditCell={handleCtxEditCell}
                 onToggleDelete={() => {}}
               >
                 {rowEl}
@@ -613,53 +839,5 @@ function AdhocResultGridInner({
         </div>
       </div>
     </div>
-  );
-}
-
-function formatEnvelope(env: CellEnvelope): string {
-  const bytes = env.byte_length;
-  const human =
-    bytes < 1024
-      ? `${bytes} B`
-      : bytes < 1024 * 1024
-        ? `${(bytes / 1024).toFixed(1)} KB`
-        : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return env.kind === "binary" ? `binary ~${human}` : `truncated ~${human}`;
-}
-
-function CellContent({ value, column }: { value: CellValue; column: DataColumn }) {
-  if (value === null || value === undefined) {
-    return <span className={styles.cellNull}>NULL</span>;
-  }
-  if (isCellEnvelope(value)) {
-    return <span className={styles.envelopeChip}>{formatEnvelope(value)}</span>;
-  }
-  if (typeof value === "boolean") {
-    return <span className={styles.cellMono}>{value ? "true" : "false"}</span>;
-  }
-  if (typeof value === "number") {
-    return <span className={styles.cellMono}>{String(value)}</span>;
-  }
-  if (typeof value === "string") {
-    const cat = categorize(column.data_type);
-    return (
-      <span
-        className={isMonoCategory(cat) ? styles.cellMono : undefined}
-        title={value.length > 80 ? value : undefined}
-      >
-        {value}
-      </span>
-    );
-  }
-  let text: string;
-  try {
-    text = JSON.stringify(value);
-  } catch {
-    text = String(value);
-  }
-  return (
-    <span className={styles.cellMono} title={text.length > 80 ? text : undefined}>
-      {text}
-    </span>
   );
 }

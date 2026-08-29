@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Double-click a cell in the Postgres SQL editor's result grid to edit it inline, the same way you already can in the table viewer ([#279](https://github.com/gsulloa/argus/issues/279)). Editing commits through the same edit buffer and write path; `Save (n)` / `Discard` sit in the result panel header. `⌘S` is unchanged — it still saves the query, not the rows.
+- Editing is offered only when the result is provably writable: Argus reads the base-table and column provenance Postgres reports on the wire for every result column, so a single-table projection that includes the primary key is editable, and a join, view, aggregate, or a `SELECT` that omits the primary key is not. Aliases are resolved to their real column, so `SELECT id AS pk, email AS mail FROM users` writes `id` and `email`. Cells that can't be edited now say why on hover — e.g. `Not editable — add the primary key to the SELECT list to edit these rows` — instead of silently ignoring the double-click.
+- Pending result-grid edits are guarded like table-viewer edits: closing the tab, re-running, or switching connection asks before discarding them, and the disconnect dialog names the table they belong to.
+
 ## [0.9.0] - 2026-08-19
 
 ### Added

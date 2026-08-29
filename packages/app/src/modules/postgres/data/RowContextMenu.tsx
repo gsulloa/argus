@@ -14,6 +14,13 @@ export interface RowContextMenuProps {
    * grids (e.g. AdhocResultGrid). Existing editable-grid callers are unaffected.
    */
   copyOnly?: boolean;
+  /**
+   * When true, omit "Delete/Restore row(s)" while keeping "Edit cell". Used by
+   * the SQL editor's result grid, which supports cell UPDATE but deliberately
+   * offers no row insert/delete — rendering the item merely disabled would
+   * advertise a capability that doesn't exist there.
+   */
+  hideDelete?: boolean;
   /** Whether "Edit cell" can be invoked on the target cell. */
   canEditCell: boolean;
   /** Reason Edit cell is disabled (shown as tooltip / title). Empty string when enabled. */
@@ -45,6 +52,7 @@ export function RowContextMenu({
   children,
   isMulti,
   copyOnly,
+  hideDelete,
   canEditCell,
   editCellDisabledReason,
   canDeleteRows,
@@ -96,15 +104,17 @@ export function RowContextMenu({
               </ContextMenu.Item>
 
               {/* Delete / Restore row(s) — disabled when read-only or no-PK */}
-              <ContextMenu.Item
-                className={`${styles.item} ${canDeleteRows ? styles.itemDanger : ""}`}
-                disabled={!canDeleteRows}
-                onSelect={onToggleDelete}
-              >
-                <span title={!canDeleteRows ? deleteDisabledReason : undefined}>
-                  {deleteLabel}
-                </span>
-              </ContextMenu.Item>
+              {!hideDelete && (
+                <ContextMenu.Item
+                  className={`${styles.item} ${canDeleteRows ? styles.itemDanger : ""}`}
+                  disabled={!canDeleteRows}
+                  onSelect={onToggleDelete}
+                >
+                  <span title={!canDeleteRows ? deleteDisabledReason : undefined}>
+                    {deleteLabel}
+                  </span>
+                </ContextMenu.Item>
+              )}
             </>
           )}
         </ContextMenu.Content>
