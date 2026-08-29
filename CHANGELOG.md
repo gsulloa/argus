@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Dragging a tab in the Workspace tab strip reorders it again. The strip was the last surface in the app still built on native HTML5 drag-and-drop, which never starts inside the app's webview — Tauri's OS-level drag-drop handler consumes the gesture first, and WebKit additionally refuses a drag whose `dragstart` sets no `dataTransfer` payload. The strip now uses the same pointer-based `@dnd-kit` stack as the sidebar, filter rows and context queries, so the tabs shift aside live to show where the dragged tab will land ([#290](https://github.com/gsulloa/argus/issues/290)).
+- Pressing `Enter` on a Postgres filter row whose checkbox is off now applies that row for real: it checks the box and sends the predicate to the query. Previously the row lit up green as `Applied` while the grid reloaded with **no filter at all** — the row was dropped for being unchecked, and the filters already in force went with it ([#289](https://github.com/gsulloa/argus/issues/289)). The row's `Apply` button behaved the same way and is fixed alongside it. `Apply All` and `⇧↵` are unchanged: they still respect the checkboxes.
+- Per-row `Apply` on an incomplete filter row (no value, empty `In` list, half-filled `BETWEEN`, blank raw SQL) no longer wipes the filter currently in force. The row now says `Row is incomplete` and the grid keeps its results.
+- The green `Applied` badge no longer appears on an unchecked filter row, which contributes nothing to the query.
 
 ## [0.9.0] - 2026-08-19
 
