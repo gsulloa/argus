@@ -1055,7 +1055,7 @@ The toggle MUST be reachable via:
 
 ### Requirement: Filter row inclusion checkbox
 
-The Structured filter row SHALL render a checkbox at its left edge whose checked state controls whether that row participates in `Apply All`. New rows MUST be created with `enabled = true`. The checkbox state MUST be part of the row's data model (a `enabled: boolean` field on each row) and MUST be persisted in the same model as `column` / `op` / `value`. Toggling the checkbox MUST update `draft` only (no auto-fetch). The checkbox state MUST NOT affect per-row Apply — the per-row Apply button MAY be activated on an unchecked row and MUST behave the same as on a checked row.
+The Structured filter row SHALL render a checkbox at its left edge whose checked state controls whether that row participates in `Apply All`. New rows MUST be created with `enabled = true`. The checkbox state MUST be part of the row's data model (a `enabled: boolean` field on each row) and MUST be persisted in the same model as `column` / `op` / `value`. Toggling the checkbox MUST update `draft` only (no auto-fetch). Per-row Apply (the row's `Apply` button and plain `Enter` inside the row) MUST set the target row's `enabled` to `true` in `draft` as part of the gesture, so that the row it commits to `applied` is always an enabled row — the checkbox state MUST NOT be able to turn a per-row Apply into a query that omits that row.
 
 The unchecked state MUST be visually distinct (greyed input, no "Applied" green) but the row MUST remain fully editable.
 
@@ -1069,11 +1069,16 @@ The unchecked state MUST be visually distinct (greyed input, no "Applied" green)
 - **WHEN** `draft` contains three rows (R1 checked, R2 unchecked, R3 checked) and the user presses `Apply All`
 - **THEN** `applied.rows` contains only R1 and R3
 - **AND** R2's value is unchanged in `draft`
+- **AND** R2's checkbox stays unchecked
 
 #### Scenario: Per-row Apply ignores checkbox state
 
-- **WHEN** the user clicks the per-row Apply button on an unchecked row R2
-- **THEN** `applied.rows` becomes `[R2]` regardless of R2's `enabled` flag
+- **WHEN** the user clicks the per-row Apply button on an unchecked, complete row R2
+- **THEN** the gesture proceeds regardless of R2's checkbox — the checkbox never gates per-row Apply
+- **AND** R2's checkbox becomes checked in `draft` (`enabled = true`), so the committed row can reach the query
+- **AND** `applied.rows` becomes `[R2]` with `enabled = true`
+- **AND** the wire payload carries a `filter_tree` containing R2's condition
+- **AND** no other row in `draft` is modified
 
 #### Scenario: Toggling checkbox marks draft dirty but doesn't re-fetch
 
@@ -1084,16 +1089,18 @@ The unchecked state MUST be visually distinct (greyed input, no "Applied" green)
 
 ### Requirement: Per-row Apply and Applied visual state
 
-Every Structured filter row SHALL render a `Apply` / `Applied` button at its right edge (before the `+` / `−` controls). The button MUST show the label `Apply` (neutral / muted color) when the row is NOT part of `applied`, and `Applied` (green, using the `--success` token) when the row IS part of `applied`. A row is "part of `applied`" iff (a) the row is **complete** (it would survive the `draft` → payload conversion), AND (b) there exists a row in `applied.rows` whose `(column, op, value)` triple is structurally equal to the draft row's triple, regardless of either row's `enabled` flag. An **incomplete** row MUST always render the neutral `Apply` state even if its triple matches a row in `applied` — the green "Applied" state MUST never be shown for a row that was not actually sent to the query.
+Every Structured filter row SHALL render a `Apply` / `Applied` button at its right edge (before the `+` / `−` controls). The button MUST show the label `Apply` (neutral / muted color) when the row is NOT part of `applied`, and `Applied` (green, using the `--success` token) when the row IS part of `applied`. A row is "part of `applied`" iff (a) the row is **complete** (it would survive the `draft` → payload conversion), AND (b) the row is `enabled`, AND (c) there exists a row in `applied.rows` whose `(column, op, value)` triple is structurally equal to the draft row's triple. An **incomplete** row or an **unchecked** row MUST always render the neutral `Apply` state even if its triple matches a row in `applied` — the green "Applied" state MUST never be shown for a row whose predicate did not reach the query.
 
 When a row is in the Applied state:
 - The button label MUST read `Applied`.
 - The row's value input MUST render with the `--success-soft` background tint and a `--success` border.
 - The button MUST remain clickable; clicking it MUST re-apply only that row (idempotent).
 
-Activating the per-row Apply button MUST set `applied` to `{ rows: [thisRow], combinator: draft.combinator }`. The button MUST NOT modify `draft`. After a per-row Apply with more than one draft row, the dirty indicator MUST reflect that `draft.rows.length !== applied.rows.length`.
+Activating the per-row Apply button on a **complete** row MUST set that row's `enabled` to `true` in `draft` and set `applied` to `{ rows: [thisRowWithEnabledTrue], combinator: draft.combinator }`. Apart from the target row's `enabled` flag, the button MUST NOT modify `draft` — it MUST NOT change `draft.combinator`, any other row, or the target row's `column` / `op` / `value`. After a per-row Apply with more than one draft row, the dirty indicator MUST reflect that `draft.rows.length !== applied.rows.length`.
 
-Editing any of `column`, `op`, `value`, or `enabled` on an Applied row MUST cause structural equality with `applied` to break for that row, and the row's Applied state MUST drop to the neutral `Apply` state on the next render.
+Activating the per-row Apply button on an **incomplete** row MUST be a no-op with respect to both `draft` and `applied`: `applied` MUST retain whatever it held before the gesture, no fetch MUST be triggered, and the bar MUST surface a transient inline status explaining that the row is incomplete. The gesture MUST NOT commit an `applied` model that produces an empty wire payload.
+
+Editing any of `column`, `op`, `value`, or `enabled` on an Applied row MUST cause the "part of `applied`" test to fail for that row, and the row's Applied state MUST drop to the neutral `Apply` state on the next render.
 
 #### Scenario: Applied state is per-row and based on structural equality
 
@@ -1109,6 +1116,13 @@ Editing any of `column`, `op`, `value`, or `enabled` on an Applied row MUST caus
 - **THEN** the draft row renders with the neutral `Apply` label, NOT the green `Applied` badge
 - **AND** the row's value input does NOT render with the `--success` tint
 
+#### Scenario: Unchecked row never shows the Applied badge
+
+- **WHEN** `applied.rows = [{ column: "status", op: "=", value: "ok", enabled: true }]` and the user unchecks the structurally-equal `draft.rows[0]`
+- **THEN** `draft.rows[0]` renders with the neutral `Apply` label, NOT the green `Applied` badge
+- **AND** the row's value input does NOT render with the `--success` tint
+- **AND** the dirty indicator is shown (draft ≠ applied)
+
 #### Scenario: Editing an applied row drops the Applied badge
 
 - **WHEN** a row is in the Applied state and the user changes its `value` from `"ok"` to `"okay"`
@@ -1117,17 +1131,35 @@ Editing any of `column`, `op`, `value`, or `enabled` on an Applied row MUST caus
 
 #### Scenario: Per-row Apply replaces the active filter with that single row
 
-- **WHEN** `draft` contains three rows and the user clicks the per-row Apply button on the second row (`{ column: "status", op: "=", value: "ok" }`)
-- **THEN** `applied.rows === [{ column: "status", op: "=", value: "ok", enabled: ... }]`
+- **WHEN** `draft` contains three enabled rows and the user clicks the per-row Apply button on the second row (`{ column: "status", op: "=", value: "ok" }`)
+- **THEN** `applied.rows === [{ column: "status", op: "=", value: "ok", enabled: true }]`
 - **AND** `applied.combinator === draft.combinator`
-- **AND** `draft` is unchanged
+- **AND** `draft` is unchanged (the row was already enabled)
 - **AND** the dirty indicator shows that `draft ≠ applied`
 - **AND** `postgres.queryTable` is invoked with the single-row `filter_tree`
+
+#### Scenario: Per-row Apply on an unchecked row enables it and filters the query
+
+- **WHEN** `draft.rows = [R0 (checked, applied), R1 (unchecked, complete)]` and the user clicks R1's per-row Apply button
+- **THEN** R1's checkbox becomes checked in `draft`
+- **AND** `applied` becomes `{ rows: [R1 with enabled = true], combinator: draft.combinator }`
+- **AND** `postgres.queryTable` is invoked with a `filter_tree` containing R1's condition (NOT with an absent `filter_tree`)
+- **AND** R1 renders with the green `Applied` badge
+
+#### Scenario: Per-row Apply on an incomplete row leaves the applied filter in force
+
+- **WHEN** `applied.rows = [R0]` and the user clicks the per-row Apply button on an incomplete row R1 (e.g. empty value)
+- **THEN** `applied.rows` still equals `[R0]`
+- **AND** `draft` is unchanged (R1's checkbox is NOT toggled)
+- **AND** no fetch is triggered
+- **AND** the bar shows a transient inline status stating the row is incomplete
+- **AND** R1 continues to render the neutral `Apply` label
 
 #### Scenario: Per-row Apply on an Applied row is idempotent
 
 - **WHEN** a row is already in the Applied state and the user clicks its `Applied` button
 - **THEN** `applied.rows` still equals `[thatRow]`
+- **AND** the row stays checked
 - **AND** no observable state changes (the fetch is debounced / deduped by the data hook)
 
 ### Requirement: Apply All with persistent root combinator
@@ -1228,8 +1260,8 @@ While the filter bar is visible AND focus is somewhere inside the bar AND focus 
 | `⌘↑` / `Ctrl+↑` | Move focus to the same logical control (column / op / value) of the row above the focused row. No wrap at top. |
 | `⌘↓` / `Ctrl+↓` | Move focus to the same logical control of the row below the focused row. No wrap at bottom. |
 | `⌘←` / `Ctrl+←` | Open the column picker dropdown on the focused row. No-op if focus is not on a row. |
-| `Enter` | Apply ONLY the focused row — commit exactly that single row to `applied` (`{ rows: [focusedRow], combinator: draft.combinator }`), identical to that row's per-row `Apply` button and INDEPENDENT of the row's `enabled` checkbox. The focused row is resolved from the active element's enclosing `[data-filter-row-index]`. If no enclosing row can be resolved, the handler falls back to Apply All using the current combinator. Suppressed when focus is in a `ChipInput` (`In` / `NotIn`) and the chip draft is non-empty (Enter commits the chip instead). |
-| `⇧Enter` / `Shift+Enter` | Apply All using the current `draft.combinator` (does NOT force AND or OR) — commit the enabled-complete subset of `draft.rows`. Suppressed when focus is in a `ChipInput` and the chip draft is non-empty. |
+| `Enter` | Apply ONLY the focused row — identical to that row's per-row `Apply` button (see "Per-row Apply and Applied visual state"): set the focused row's `enabled` to `true` in `draft`, then commit `{ rows: [focusedRow with enabled = true], combinator: draft.combinator }` to `applied`. If the focused row is **incomplete**, the gesture is a no-op on both models and the bar surfaces a transient inline status instead. The focused row is resolved from the active element's enclosing `[data-filter-row-index]`. If no enclosing row can be resolved, the handler falls back to Apply All using the current combinator. Suppressed when focus is in a `ChipInput` (`In` / `NotIn`) and the chip draft is non-empty (Enter commits the chip instead). |
+| `⇧Enter` / `Shift+Enter` | Apply All using the current `draft.combinator` (does NOT force AND or OR) — commit the enabled-complete subset of `draft.rows`. Never changes any row's `enabled` flag. Suppressed when focus is in a `ChipInput` and the chip draft is non-empty. |
 | `⌘↵` / `Ctrl+Enter` | Apply All with AND – Default (see "Apply All with persistent root combinator") |
 | `⇧⌘↵` / `Ctrl+Shift+Enter` | Apply All with OR |
 
@@ -1282,15 +1314,27 @@ While the filter bar is visible AND focus is somewhere inside the bar AND focus 
 
 #### Scenario: Plain Enter applies the focused row even when its checkbox is unchecked
 
-- **WHEN** `draft.rows` has R0 (enabled, already applied) and R1 (unchecked, newly typed), focus is in R1's value input, and the user presses `Enter` with no modifier
-- **THEN** `applied` becomes `{ rows: [R1], combinator: draft.combinator }`
-- **AND** R1's `enabled` flag is NOT changed by the Enter gesture
+- **WHEN** `draft.rows` has R0 (checked, already applied) and R1 (unchecked, complete, newly typed), focus is in R1's value input, and the user presses `Enter` with no modifier
+- **THEN** R1's `enabled` flag becomes `true` in `draft` and its checkbox renders as checked
+- **AND** `applied` becomes `{ rows: [R1 with enabled = true], combinator: draft.combinator }`
+- **AND** `postgres.queryTable` is invoked with a `filter_tree` containing R1's condition — the query MUST NOT go out with an absent `filter_tree`
+- **AND** R1 renders the green `Applied` badge
+- **AND** R0's `enabled` flag and value are unchanged in `draft`
+
+#### Scenario: Plain Enter on an incomplete row does not wipe the applied filter
+
+- **WHEN** `applied.rows = [R0]`, focus is in an incomplete row R1's value input, and the user presses `Enter` with no modifier
+- **THEN** `applied.rows` still equals `[R0]`
+- **AND** `draft` is unchanged
+- **AND** no fetch is triggered
+- **AND** the bar shows a transient inline status stating the row is incomplete
 
 #### Scenario: Shift+Enter applies all enabled rows
 
 - **WHEN** `draft.rows` has R0 (checked) and R1 (unchecked), focus is in R1's value input, and the user presses `Shift+Enter`
 - **THEN** `applied` becomes the enabled-complete subset of `draft.rows` joined by `draft.combinator` (so `applied.rows` contains R0 but not R1)
 - **AND** `draft.combinator` is NOT changed
+- **AND** R1's `enabled` flag stays `false`
 
 #### Scenario: Enter in a ChipInput commits the chip instead of applying
 
